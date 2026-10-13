@@ -18,6 +18,44 @@ use crate::paragraph::{
 use crate::rdocx_to_pyerr;
 use crate::table::{PyTable, PyTableCollection};
 
+const CHART_TYPES: [(i64, rdocx::ChartKind); 7] = [
+    (1, rdocx::ChartKind::Area),
+    (51, rdocx::ChartKind::Bar),
+    (-4120, rdocx::ChartKind::Doughnut),
+    (65, rdocx::ChartKind::Line),
+    (5, rdocx::ChartKind::Pie),
+    (81, rdocx::ChartKind::Radar),
+    (74, rdocx::ChartKind::Scatter),
+];
+
+fn checked_chart_inputs(
+    chart_type: &Bound<'_, PyAny>,
+    data: &Bound<'_, PyAny>,
+) -> PyResult<(rdocx::ChartKind, rdocx::ChartData)> {
+    if chart_type.is_instance_of::<pyo3::types::PyBool>() {
+        return Err(PyTypeError::new_err(
+            "chart type must be an XL_CHART_TYPE integer",
+        ));
+    }
+    let value = chart_type.extract::<i64>()?;
+    let kind = CHART_TYPES
+        .iter()
+        .find_map(|(v, k)| (*v == value).then_some(*k))
+        .ok_or_else(|| PyValueError::new_err(format!("unsupported XL_CHART_TYPE value {value}")))?;
+    let (categories, series, number_format) =
+        data.call_method0("_data")?
+            .extract::<(Vec<String>, Vec<(String, Vec<f64>)>, Option<String>)>()?;
+    Ok((
+        kind,
+        rdocx::ChartData {
+            categories,
+            series,
+            number_format,
+            ..Default::default()
+        },
+    ))
+}
+
 #[pyclass(name = "PictureOptions", frozen, skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyPictureOptions {
@@ -6536,6 +6574,62 @@ impl PyDocument {
         self.inner
             .add_numbering_instance(definition_id, &overrides)
             .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    #[pyo3(signature = (chart_type, chart_data, width, height, *, after=None))]
+    fn add_chart(
+        slf: Py<Self>,
+        py: Python<'_>,
+        chart_type: &Bound<'_, PyAny>,
+        chart_data: &Bound<'_, PyAny>,
+        width: &Bound<'_, PyAny>,
+        height: &Bound<'_, PyAny>,
+        after: Option<PyRef<'_, PyParagraph>>,
+    ) -> PyResult<Py<PyParagraph>> {
+        let (kind, data) = checked_chart_inputs(chart_type, chart_data)?;
+        let width =
+            rdocx::Length::emu(checked_section_length(Some(width), "chart width")?.unwrap());
+        let height =
+            rdocx::Length::emu(checked_section_length(Some(height), "chart height")?.unwrap());
+        let after = after
+            .map(|paragraph| {
+                if !paragraph.belongs_to(py, &slf) {
+                    return Err(PyValueError::new_err(
+                        "paragraph belongs to a different document",
+                    ));
+                }
+                let ParagraphLocation::Body(index) = paragraph.validate(py)? else {
+                    return Err(PyValueError::new_err(
+                        "chart insertion requires a direct body paragraph",
+                    ));
+                };
+                Ok(index)
+            })
+            .transpose()?;
+        let mut document = slf.borrow_mut(py);
+        let index = after.map_or(document.inner.paragraph_count(), |index| index + 1);
+        let mut candidate = document.inner.clone_for_staging();
+        match after {
+            Some(after) => candidate.add_chart_after(after, kind, width, height, &data),
+            None => candidate.add_chart(kind, width, height, &data),
+        }
+        .map(drop)
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Document.add_chart", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let path = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![PathSeg::Body(0), PathSeg::Para(index)])
+            .map_err(revision_to_pyerr)?;
+        let result = Py::new(py, PyParagraph::new(slf.clone_ref(py), path))?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(result)
     }
 
     #[pyo3(signature = (text, level = 0))]

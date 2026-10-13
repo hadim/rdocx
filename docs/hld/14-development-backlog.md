@@ -7675,7 +7675,16 @@ Resolve Issue344 with the public shared nesting limit32. The first recognized ow
 **Depends on**: F-X197, F-X206
 **Test gate**: regression
 
-Resolve Issues345 and346 captured at2026-10-11 18:56UTC. Expose supported native chart creation in both Python families with typed CategoryChartData and XyChartData-compatible objects. Read existing chart type, categories and series. Replace caches, formulas and the embedded workbook as one checked transaction, preserving surviving series formatting and applying native new-series defaults. Tests cover bar and line creation, fewer and more series, more categories, package validation, save/reopen and both cache and workbook values. Word and PowerPoint open without repair. PowerPoint Edit Data and actual render show the replacement.
+Both Python families expose native chart creation with concrete category and
+shared-X data objects. Word returns a checked body paragraph and supports
+same-document direct paragraph-relative insertion. PowerPoint returns the
+owned graphic frame and exposes live unique-ID chart data, including nested
+owners. Replacement stages caches, formulas and formula-owned workbook cells
+together. Surviving series formatting, unselected workbook entries and shared
+chart/workbook owners remain preserved through copy-on-write. Regression
+acceptance covers bar/line authoring, replacement cardinalities, checked owner
+and genuine returned-allocation refusals, exact no-op, installed typing,
+qualified corpus cells, native viewer/Edit Data and data-specific renders.
 
 ### F-X216, Import complete slides and merge decks with source formatting
 

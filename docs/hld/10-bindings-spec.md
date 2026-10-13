@@ -132,8 +132,22 @@ The shared native `ChartData` input includes optional category-axis and
 value-axis titles plus a typed `Vec<RgbColor>` palette. `oxml-chart`, `rdocx`,
 and `rpptx` re-export the same `RgbColor`. `ChartData::default()` supplies empty
 optional styling fields for callers using update syntax. The added fields are
-an intentional pre-1.0 struct-literal break and add no Python, WASM, or CLI
-chart entrypoints.
+an intentional pre-1.0 struct-literal break. Python roots expose concrete
+`CategoryChartData`, `XyChartData` and seven-kind `XL_CHART_TYPE` values. Word
+`add_chart(chart_type, chart_data, width, height, after=None)` returns a prepared
+owned Paragraph and accepts only a checked same-document direct body owner.
+PowerPoint shapes add charts through the existing owned frame handle. Its live
+Chart reads category and series snapshots and replaces data through the native
+unique-ID graph transaction, including nested groups. Returned allocations
+precede publication. Invalid or retired owners, invalid data and exact no-op
+leave bytes and captured authority unchanged. The Python data objects do not
+add WASM or CLI chart entrypoints.
+
+A Chart view captures its frame XML-child authority. Checked Shape XML
+replacement retires old Chart views while retaining the proven Shape owner.
+Fresh chart lookup resolves the current owned graph. Data-only replacement
+retains the chart and frame, isolating shared chart/workbook targets through
+the native copy-on-write transaction.
 
 **Threading.** `Document` remains `Send` and `Sync`. Its normal and
 deterministic layouts live in separate

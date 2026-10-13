@@ -5920,3 +5920,58 @@ def test_fx220_word_embedded_faces_and_caller_override_reach_exports(method):
         assert set(caller) <= bodies(override)
         assert not set(embedded) & bodies(off)
     assert document.to_bytes() == before and held.text == "iiiiWWWW font route"
+
+
+@pytest.mark.parametrize("kind", [51, 65])
+def test_fx215_word_public_creation_after_owner_and_atomic_refusal(kind):
+    from rdocx import Document, CategoryChartData, Inches, Paragraph
+    data = CategoryChartData()
+    data.categories = ["East", "West"]
+    data.add_series("Sales", [11.0, 23.0])
+    doc = Document()
+    doc.add_paragraph("before")
+    doc.add_table(1, 1)
+    doc.add_paragraph("after")
+    result = doc.add_chart(kind, data, Inches(4), Inches(2), after=doc.paragraphs[0])
+    assert isinstance(result, Paragraph)
+    package = doc.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(package)) as archive:
+        names = archive.namelist()
+        charts = [name for name in names if name.startswith("word/charts/chart") and name.endswith(".xml")]
+        assert len(charts) == 1
+        assert b"Sales" in archive.read(charts[0]) and b"23" in archive.read(charts[0])
+        assert any(name.startswith("word/embeddings/") for name in names)
+        from xml.etree import ElementTree as ET
+        body = ET.fromstring(archive.read("word/document.xml")).find("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}body")
+        assert [element.tag.rsplit("}", 1)[-1] for element in list(body)[:4]] == ["p", "p", "tbl", "p"]
+    foreign = Document(); foreign.add_paragraph("foreign")
+    with pytest.raises(ValueError):
+        doc.add_chart(kind, data, Inches(4), Inches(2), after=foreign.paragraphs[0])
+    assert doc.to_bytes() == package
+    bad = CategoryChartData(); bad.categories = ["East"]; bad.add_series("Bad", [float("nan")])
+    with pytest.raises(Exception):
+        doc.add_chart(kind, bad, Inches(4), Inches(2))
+    assert doc.to_bytes() == package
+
+
+def test_fx215_word_chart_refuses_retired_and_non_body_after_handles():
+    from rdocx import Document, CategoryChartData, Inches, StaleElementError
+    data = CategoryChartData(); data.categories = ["A"]; data.add_series("Series", [7.0])
+    doc = Document(); doc.add_paragraph("body witness"); doc.add_paragraph("retire")
+    retired = doc.paragraphs[1]
+    assert doc.remove_content(doc.find_content_index(retired))
+    before = doc.to_bytes()
+    with pytest.raises(StaleElementError):
+        doc.add_chart(51, data, Inches(4), Inches(2), after=retired)
+    assert doc.to_bytes() == before
+    doc.add_table(1, 1)
+    cell = doc.tables[0].cell(0, 0).paragraphs[0]
+    before = doc.to_bytes()
+    with pytest.raises(ValueError, match="direct body"):
+        doc.add_chart(51, data, Inches(4), Inches(2), after=cell)
+    assert doc.to_bytes() == before
+    header = doc.section(0).header.add_paragraph("header witness")
+    before = doc.to_bytes()
+    with pytest.raises(ValueError, match="direct body"):
+        doc.add_chart(51, data, Inches(4), Inches(2), after=header)
+    assert doc.to_bytes() == before

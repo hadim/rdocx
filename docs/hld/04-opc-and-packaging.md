@@ -1049,6 +1049,15 @@ document state. The mutation becomes visible only after the typed ChartML,
 SpreadsheetML workbook, relationships, content types, structured drawing,
 theme projection, and shared identifier owner all validate.
 
+Chart data replacement resolves the unique current graphic-frame identity,
+its namespace-owned relationship and the actual chart/workbook graph. Shared
+chart or workbook parts use copy-on-write, including style and colour edges.
+Case-equivalent occupied part names cannot be overwritten. Replacement retains
+unselected package entries and source-splices owned relationship/frame targets
+so namespace aliases, foreign attributes and opaque children survive. Cache,
+formula and worksheet changes publish together after validation. Exact no-op
+and failed candidates leave the complete live graph unchanged.
+
 An authored Word chart requires one effective internal document-theme edge.
 Its target must exist, carry the exact theme content type, and parse as a
 DrawingML theme. A valid related theme is reused. Otherwise the facade stages

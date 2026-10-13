@@ -747,3 +747,20 @@ def fx220_licensed_embedding_recipe(font_path: Path, output_path: Path) -> None:
     assert_type(value.embedded_fonts, tuple[EmbeddedTypeface, ...])
     value.embed_true_type_fonts = False
     value.remove_embedded_font("My Face", "regular")
+
+
+def fx215_chart_typing() -> None:
+    from rpptx import CategoryChartData, XyChartData, XL_CHART_TYPE
+    data = CategoryChartData()
+    data.categories = ["East", "West"]
+    series = data.add_series("Sales", [11.0, 23.0])
+    assert_type(series.values, tuple[float, ...])
+    xy = XyChartData()
+    xy.add_series("A").add_data_point(1.0, 2.0)
+    from rpptx import Presentation, Chart, Inches
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    chart = slide.shapes.add_chart(XL_CHART_TYPE.LINE, Inches(1), Inches(1), Inches(4), Inches(2), data).chart
+    assert_type(chart, Chart)
+    assert_type(chart.categories, tuple[str, ...])
+    chart.replace_data(data)

@@ -4089,3 +4089,23 @@ Native application normalization remains separate from the library's exact
 unrelated-edit preservation controls. Known absent historical movie and PNG
 oracles remain unqualified under their S92 disposition. Original failed
 commands and distinct successful successors retain their actual membership.
+
+Chart authoring controls exercise installed bar/line creation in both families,
+checked Word paragraph-relative insertion, actual returned owners and cache
+plus embedded worksheet cells. Replacement covers fewer/more series, more
+categories, nested and shared owners, surviving formatting, workbook opaque
+payload and source-qualified relationships. Foreign, retired and unsupported
+story owners, nonfinite values and exact no-op require complete package and
+live-handle comparisons. A process-isolated exact returned-type allocator
+refusal checks prepublication rollback without a production fault switch.
+Checked frame XML property and chart-relationship replacement retire held
+Chart views while preserving the Shape and unrelated chart graph. Fresh
+lookup, data-only replacement and shared-target isolation have distinct
+controls, with exact no-op and stale-view refusal preserving bytes.
+
+Pinned python-pptx 1.0.2 compares category and shared-X data structurally.
+python-docx 1.2.0 qualifies surrounding Word ownership, not a nonexistent chart
+creation API. Fresh paired source-matched wheels require explicit node
+membership, strict mypy and complete stubtest. Native Word/PowerPoint opens,
+PowerPoint Edit Data, normal save/reopen and deterministic value-specific
+renders remain separate required acceptance, including stale-value negatives.

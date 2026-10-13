@@ -33,6 +33,8 @@ type Crop = (
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyPlaceholderFormat>()?;
     module.add_class::<PyShape>()?;
+    module.add_class::<PyChart>()?;
+    module.add_class::<PyChartSeries>()?;
     module.add_class::<PyShapeClickAction>()?;
     module.add_class::<PyShapeHyperlink>()?;
     module.add_class::<PyShapeCollection>()?;
@@ -167,6 +169,44 @@ pub(crate) fn native_shape_mut_at<'a>(
     let owner = shape_owner(path).ok()?;
     let indices = shape_indices(path).collect::<Vec<_>>();
     presentation.shape_mut_at(owner, &indices).ok()
+}
+
+const CHART_TYPES: [(i64, rpptx::ChartKind); 7] = [
+    (1, rpptx::ChartKind::Area),
+    (51, rpptx::ChartKind::Bar),
+    (-4120, rpptx::ChartKind::Doughnut),
+    (65, rpptx::ChartKind::Line),
+    (5, rpptx::ChartKind::Pie),
+    (81, rpptx::ChartKind::Radar),
+    (74, rpptx::ChartKind::Scatter),
+];
+
+fn checked_chart_inputs(
+    chart_type: &Bound<'_, PyAny>,
+    data: &Bound<'_, PyAny>,
+) -> PyResult<(rpptx::ChartKind, rpptx::ChartData)> {
+    if chart_type.is_instance_of::<pyo3::types::PyBool>() {
+        return Err(PyTypeError::new_err(
+            "chart type must be an XL_CHART_TYPE integer",
+        ));
+    }
+    let value = chart_type.extract::<i64>()?;
+    let kind = CHART_TYPES
+        .iter()
+        .find_map(|(v, k)| (*v == value).then_some(*k))
+        .ok_or_else(|| PyValueError::new_err(format!("unsupported XL_CHART_TYPE value {value}")))?;
+    let (categories, series, number_format) =
+        data.call_method0("_data")?
+            .extract::<(Vec<String>, Vec<(String, Vec<f64>)>, Option<String>)>()?;
+    Ok((
+        kind,
+        rpptx::ChartData {
+            categories,
+            series,
+            number_format,
+            ..Default::default()
+        },
+    ))
 }
 
 #[pyclass(name = "Shape")]
@@ -1193,6 +1233,32 @@ impl PyShape {
     }
 
     #[getter]
+    fn has_chart(&self, py: Python<'_>) -> PyResult<bool> {
+        Ok(self.read(py, |shape| shape.shape_type())? == Some(rpptx::ShapeType::Chart))
+    }
+
+    #[getter]
+    fn chart(&self, py: Python<'_>) -> PyResult<Py<PyChart>> {
+        self.validate(py)?;
+        if !self.has_chart(py)? {
+            return Err(PyValueError::new_err("shape has no chart"));
+        }
+        let presentation = self.presentation.borrow(py);
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("chart owner is absent"))?;
+        let path = presentation.capture_xml_children_path(current.segs)?;
+        drop(presentation);
+        Py::new(
+            py,
+            PyChart {
+                presentation: self.presentation.clone_ref(py),
+                path,
+            },
+        )
+    }
+
+    #[getter]
     fn has_table(&self, py: Python<'_>) -> PyResult<bool> {
         self.validate(py)?;
         let presentation = self.presentation.borrow(py);
@@ -1873,6 +1939,55 @@ impl PyShapeCollection {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn add_chart(
+        &self,
+        py: Python<'_>,
+        chart_type: &Bound<'_, PyAny>,
+        left: i64,
+        top: i64,
+        width: i64,
+        height: i64,
+        chart_data: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyShape>> {
+        self.require_slide_root()?;
+        let (kind, data) = checked_chart_inputs(chart_type, chart_data)?;
+        self.validate(py)?;
+        let index = self.len(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("chart owner is absent"))?;
+        let mut candidate = presentation.inner.clone();
+        candidate
+            .add_chart(
+                slide_index(&current)?,
+                kind,
+                rpptx::Emu(left),
+                rpptx::Emu(top),
+                rpptx::Emu(width),
+                rpptx::Emu(height),
+                &data,
+            )
+            .map(drop)
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        let survivors = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "ShapeCollection.add_chart",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        let mut segments = current.segs;
+        segments.push(PathSeg::Shape(index));
+        let path = presentation.capture_prepared_path(&prepared, segments, None)?;
+        let result = Py::new(py, PyShape::new(self.presentation.clone_ref(py), path))?;
+        presentation.publish_owners(candidate, prepared)?;
+        Ok(result)
+    }
+
     fn add_textbox(
         &mut self,
         py: Python<'_>,
@@ -2335,4 +2450,106 @@ fn image_extension(content_type: &str, part_name: &str) -> String {
         },
         str::to_owned,
     )
+}
+
+#[pyclass(name = "Chart")]
+pub struct PyChart {
+    presentation: Py<PyPresentation>,
+    path: ContentPath,
+}
+
+impl PyChart {
+    fn owner(&self, py: Python<'_>) -> PyResult<(usize, u32)> {
+        validate_path(
+            py,
+            &self.presentation.borrow(py),
+            &self.path,
+            "chart",
+            "Re-fetch it with shape.chart.",
+        )?;
+        let presentation = self.presentation.borrow(py);
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("chart owner is absent"))?;
+        Ok((
+            slide_index(&current)?,
+            presentation.checked_shape_id(&self.path)?,
+        ))
+    }
+    fn data(&self, py: Python<'_>) -> PyResult<(rpptx::ChartKind, rpptx::ChartData)> {
+        let (slide, id) = self.owner(py)?;
+        self.presentation
+            .borrow(py)
+            .inner
+            .chart_data(slide, id)
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+}
+
+#[pymethods]
+impl PyChart {
+    #[getter]
+    fn chart_type(&self, py: Python<'_>) -> PyResult<i64> {
+        let kind = self.data(py)?.0;
+        Ok(CHART_TYPES
+            .iter()
+            .find_map(|(v, k)| (*k == kind).then_some(*v))
+            .expect("supported chart kind"))
+    }
+    #[getter]
+    fn categories<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.data(py)?.1.categories)
+    }
+    #[getter]
+    fn series<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let values = self
+            .data(py)?
+            .1
+            .series
+            .into_iter()
+            .map(|(name, values)| Py::new(py, PyChartSeries { name, values }))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, values)
+    }
+    fn replace_data(&self, py: Python<'_>, chart_data: &Bound<'_, PyAny>) -> PyResult<()> {
+        let (slide, id) = self.owner(py)?;
+        let kind = self.data(py)?.0;
+        let chart_type = CHART_TYPES
+            .iter()
+            .find_map(|(v, k)| (*k == kind).then_some(*v))
+            .expect("supported kind");
+        let chart_type = chart_type.into_pyobject(py)?;
+        let (_, data) = checked_chart_inputs(chart_type.as_any(), chart_data)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut candidate = presentation.inner.clone();
+        candidate
+            .replace_chart_data(slide, id, &data)
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        if candidate
+            .to_bytes()
+            .map_err(|error| rpptx_to_pyerr(py, error))?
+            == presentation
+                .inner
+                .to_bytes()
+                .map_err(|error| rpptx_to_pyerr(py, error))?
+        {
+            return Ok(());
+        }
+        let survivors = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Chart.replace_data",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)
+    }
+}
+
+#[pyclass(name = "ChartSeries", frozen, get_all)]
+pub struct PyChartSeries {
+    name: String,
+    values: Vec<f64>,
 }

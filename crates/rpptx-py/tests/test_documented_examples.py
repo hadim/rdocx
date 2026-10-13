@@ -9793,3 +9793,134 @@ def test_fx220_ppt_embedded_faces_and_caller_override_reach_exports(method):
     else:
         assert positive == expected and override == expected_override
     assert deck.to_bytes() == source and held.shapes[0].text == "iiiiWWWW route " * 4
+
+
+@pytest.mark.parametrize("kind", [51, 65])
+def test_fx215_ppt_public_create_live_replace_and_atomic_noop(kind):
+    from rpptx import Presentation, CategoryChartData, Inches, GraphicFrame
+    data = CategoryChartData()
+    data.categories = ["East", "West"]
+    data.add_series("Sales", [11.0, 23.0])
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    frame = slide.shapes.add_chart(kind, Inches(1), Inches(1), Inches(4), Inches(2), data)
+    assert isinstance(frame, GraphicFrame) and frame.has_chart
+    chart = frame.chart
+    assert chart.chart_type == kind and chart.categories == ("East", "West")
+    assert chart.series[0].name == "Sales" and chart.series[0].values == [11.0, 23.0]
+    before = prs.to_bytes()
+    chart.replace_data(data)
+    assert prs.to_bytes() == before and frame.has_chart
+    bad = CategoryChartData(); bad.categories = ["East"]; bad.add_series("Bad", [float("inf")])
+    with pytest.raises(Exception): chart.replace_data(bad)
+    assert prs.to_bytes() == before and chart.categories == ("East", "West")
+    replacement = CategoryChartData(); replacement.categories = ["North", "South", "Central"]
+    replacement.add_series("Updated", [31.0, 47.0, 59.0])
+    chart.replace_data(replacement)
+    assert chart.categories == ("North", "South", "Central")
+    assert chart.series[0].values == [31.0, 47.0, 59.0]
+    output = prs.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(output)) as archive:
+        name = next(name for name in archive.namelist() if name.startswith("ppt/charts/chart") and name.endswith(".xml"))
+        assert b"Updated" in archive.read(name) and b"59" in archive.read(name)
+
+
+def test_fx215_shared_xy_refuses_heterogeneous_coordinates_before_publish():
+    from rpptx import Presentation, XyChartData, Inches
+    data = XyChartData(); a = data.add_series("A"); b = data.add_series("B")
+    for x, y in [(1.0, 3.0), (2.0, 5.0)]: a.add_data_point(x, y); b.add_data_point(x, y + 1)
+    prs = Presentation(); slide = prs.slides.add_slide(prs.slide_layouts[6])
+    frame = slide.shapes.add_chart(74, Inches(1), Inches(1), Inches(4), Inches(2), data)
+    assert frame.chart.categories == ("1", "2") or frame.chart.categories == ("1.0", "2.0")
+    before = prs.to_bytes()
+    b.add_data_point(3.0, 8.0)
+    with pytest.raises(ValueError, match="same x values"):
+        slide.shapes.add_chart(74, Inches(1), Inches(1), Inches(4), Inches(2), data)
+    assert prs.to_bytes() == before
+
+
+def test_fx215_ppt_live_chart_follows_grouped_owner_and_refuses_retired_owner():
+    from rpptx import Presentation, CategoryChartData, Inches, StaleElementError
+    data = CategoryChartData(); data.categories = ["A"]; data.add_series("Series", [7.0])
+    prs = Presentation(); slide = prs.slides.add_slide(prs.slide_layouts[6])
+    frame = slide.shapes.add_chart(51, Inches(1), Inches(1), Inches(4), Inches(2), data)
+    chart = frame.chart
+    group = slide.shapes.group([frame])
+    assert chart.categories == ("A",) and group.shapes[0].chart.categories == ("A",)
+    replacement = CategoryChartData(); replacement.categories = ["Updated"]; replacement.add_series("New", [19.0])
+    chart.replace_data(replacement)
+    assert chart.categories == ("Updated",) and group.shapes[0].chart.series[0].values == [19.0]
+    slide.shapes.remove(group)
+    before = prs.to_bytes()
+    with pytest.raises(StaleElementError): chart.replace_data(data)
+    assert prs.to_bytes() == before
+
+
+@pytest.mark.parametrize("replacement", ["properties", "graphic_data"])
+def test_fx215_chart_xml_retires_old_view_and_data_edits_preserve_owned_graph(replacement):
+    import posixpath
+    import xml.etree.ElementTree as ET
+    from rpptx import CategoryChartData, Inches, Presentation, StaleElementError
+
+    def data(category, value):
+        result = CategoryChartData()
+        result.categories = [category]
+        result.add_series("Sales", [value])
+        return result
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    first = slide.shapes.add_chart(51, Inches(1), Inches(1), Inches(3), Inches(2), data("First", 11.0))
+    other = slide.shapes.add_chart(51, Inches(5), Inches(1), Inches(3), Inches(2), data("Other", 23.0))
+    held = first.chart
+    other_chart = other.chart
+    first_id = first.shape_id
+    other_xml = other.element.xml
+    c = "{http://schemas.openxmlformats.org/drawingml/2006/chart}"
+    r = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    rel = "{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"
+    other_id = ET.fromstring(other_xml).find(".//" + c + "chart").get(r + "id")
+
+    def other_graph():
+        with zipfile.ZipFile(io.BytesIO(prs.to_bytes())) as package:
+            slide_rels = ET.fromstring(package.read("ppt/slides/_rels/slide1.xml.rels"))
+            target = next(node.get("Target") for node in slide_rels.findall(rel) if node.get("Id") == other_id)
+            chart_part = posixpath.normpath(posixpath.join("ppt/slides", target))
+            chart_rels = posixpath.join(posixpath.dirname(chart_part), "_rels", posixpath.basename(chart_part) + ".rels")
+            relationships = ET.fromstring(package.read(chart_rels))
+            workbook = next(node.get("Target") for node in relationships.findall(rel) if node.get("Type").endswith("/package"))
+            workbook_part = posixpath.normpath(posixpath.join(posixpath.dirname(chart_part), workbook))
+            return tuple(package.read(part) for part in (chart_part, chart_rels, workbook_part))
+
+    original_other_graph = other_graph()
+    xml = first.element.xml
+    expected = "First"
+    if replacement == "properties":
+        xml = re.sub(r'(name=")[^"]*', r'\1checked chart', xml, count=1)
+    else:
+        old_id = ET.fromstring(xml).find(".//" + c + "chart").get(r + "id")
+        assert old_id != other_id and f'r:id="{old_id}"' in xml
+        xml = xml.replace(f'r:id="{old_id}"', f'r:id="{other_id}"', 1)
+        expected = "Other"
+    first.element.replace_xml(xml)
+    assert first.has_chart and first.shape_id == first_id
+    before_refusal = prs.to_bytes()
+    with pytest.raises(StaleElementError, match="Element.replace_xml"):
+        _ = held.categories
+    with pytest.raises(StaleElementError, match="Element.replace_xml"):
+        held.replace_data(data("Refused", 99.0))
+    assert prs.to_bytes() == before_refusal
+
+    current = first.chart
+    assert current.categories == (expected,)
+    current.replace_data(data("Updated", 47.0))
+    assert current.categories == ("Updated",) and current.series[0].values == [47.0]
+    assert first.has_chart and first.shape_id == first_id
+    assert other_chart.categories == ("Other",) and other_chart.series[0].values == [23.0]
+    assert other.element.xml == other_xml and other_graph() == original_other_graph
+    saved = prs.to_bytes()
+    current.replace_data(data("Updated", 47.0))
+    assert prs.to_bytes() == saved and current.categories == ("Updated",)
+    reopened = Presentation.from_bytes(saved)
+    assert reopened.slides[0].shapes[0].chart.categories == ("Updated",)
+    assert reopened.slides[0].shapes[1].chart.categories == ("Other",)

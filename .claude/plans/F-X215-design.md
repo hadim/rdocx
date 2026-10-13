@@ -1,12 +1,12 @@
 # F-X215, Create charts in Python and replace existing chart data
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X197, F-X206
 **Issues**: 345, 346
 **Test gate**: regression
-**Implementation**: not claimed, no code or execution
+**Implementation**: Native and both Python chart creation/read/replacement surfaces are qualified. Current table-header repair, verified affected archives, fresh paired installed controls, all twelve native Office linked-data/save/reopen cases and independent completion composition are accepted through the root scoped gate. Worker preparation retains integration and final sprint verification as separate steps.
 
 ## Problem
 
@@ -79,16 +79,16 @@ Existing default samples expected unchanged. Newly authored/replaced requested c
 
 ## Implementation checklist
 
-- [ ] Approve complete exact native-supported data contract and wait for F197/F206 done.
-- [ ] Preserve genuine Base behavioral/capability controls after valid owner/data setup.
-- [ ] Implement native read/replace, source-aware workbook merge and atomic ownership.
-- [ ] Expose both authoring bindings, returned chart owners and every new stub/export.
-- [ ] Complete creation/replacement corpus, native Office/Edit Data and deterministic render evidence.
-- [ ] Run changed crates, fresh installed/typing, WASM/package/hash/policy and zero-finding review.
+- [x] Approve complete exact native-supported data contract and wait for F197/F206 done.
+- [x] Preserve genuine Base behavioral/capability controls after valid owner/data setup.
+- [x] Implement native read/replace, source-aware workbook merge and atomic ownership.
+- [x] Expose both authoring bindings, returned chart owners and every new stub/export.
+- [x] Complete creation/replacement corpus, native Office/Edit Data and deterministic render evidence.
+- [x] Run changed crates, fresh installed/typing, WASM/package/hash/policy and zero-finding review.
 
 ## Open questions
 
-No blocking product choice. Existing shared numeric-category XY scope is explicit. Optional CLI exposure is assessed against actual established commands and is not a prerequisite substitute. Canonical F197 is done and F206 is in-progress at the captured source. Draft design-all-first is allowed, implementation waits for the actual dependency completion.
+No blocking product choice. Existing shared numeric-category XY scope is explicit. Optional CLI exposure is assessed against actual established commands and is not a prerequisite substitute. Canonical F197 and F206 are complete. Implementation uses the completed provider and exclusive worker source ownership.
 
 ## Batch approval, 2026-10-11
 

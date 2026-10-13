@@ -23492,6 +23492,34 @@ impl Document {
         Ok(Paragraph { inner: paragraph })
     }
 
+    /// Insert an editable chart immediately after a direct body paragraph.
+    /// Validation and package assembly complete on a candidate before publication.
+    pub fn add_chart_after(
+        &mut self,
+        after: usize,
+        kind: ChartKind,
+        width: Length,
+        height: Length,
+        data: &ChartData,
+    ) -> Result<Paragraph<'_>> {
+        let index = self.content_index_of_paragraph(after).ok_or_else(|| {
+            Error::Other("chart insertion requires a direct body paragraph".to_owned())
+        })? + 1;
+        let mut candidate = self.clone_for_staging();
+        candidate.add_chart(kind, width, height, data)?;
+        let paragraph =
+            candidate.document.body.content.pop().ok_or_else(|| {
+                Error::Other("chart assembly did not create a paragraph".to_owned())
+            })?;
+        candidate.document.body.content.insert(index, paragraph);
+        candidate.document.to_xml()?;
+        self.commit_staged_mutation(candidate);
+        let BodyContent::Paragraph(paragraph) = &mut self.document.body.content[index] else {
+            unreachable!("chart assembly creates a paragraph");
+        };
+        Ok(Paragraph { inner: paragraph })
+    }
+
     /// Add an inline image at its native size using 72 DPI when none is declared.
     ///
     /// Returns an error without changing the document when the image dimensions
@@ -41374,6 +41402,63 @@ mod tests {
                 before
             );
         }
+    }
+
+    #[test]
+    fn fx215_word_chart_after_direct_paragraph_is_atomic_and_ordered() {
+        let mut document = Document::new();
+        document.add_paragraph("before");
+        document.add_table(1, 1);
+        document.add_paragraph("after");
+        document
+            .add_chart_after(
+                0,
+                ChartKind::Bar,
+                Length::inches(4.0),
+                Length::inches(2.0),
+                &f158_chart_data(2),
+            )
+            .unwrap();
+        assert!(matches!(
+            document.document.body.content[1],
+            BodyContent::Paragraph(_)
+        ));
+        assert!(matches!(
+            document.document.body.content[2],
+            BodyContent::Table(_)
+        ));
+        assert_eq!(document.paragraph(0).unwrap().text(), "before");
+        assert_eq!(document.paragraph(2).unwrap().text(), "after");
+        let before = document.to_bytes().unwrap();
+        assert!(
+            document
+                .add_chart_after(
+                    usize::MAX,
+                    ChartKind::Line,
+                    Length::inches(4.0),
+                    Length::inches(2.0),
+                    &f158_chart_data(2)
+                )
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let mut invalid = f158_chart_data(2);
+        invalid.series[0].1[0] = f64::NAN;
+        assert!(
+            document
+                .add_chart_after(
+                    0,
+                    ChartKind::Line,
+                    Length::inches(4.0),
+                    Length::inches(2.0),
+                    &invalid
+                )
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let reopened = Document::from_bytes(&before).unwrap();
+        assert_eq!(reopened.paragraph_count(), 3);
+        assert_eq!(reopened.table_count(), 1);
     }
 
     #[test]

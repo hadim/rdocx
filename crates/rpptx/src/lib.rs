@@ -10030,6 +10030,226 @@ impl Presentation {
         self.commit_candidate(staged)
     }
 
+    /// Reads the current cached data of the uniquely identified chart frame.
+    pub fn chart_data(&self, slide_index: usize, shape_id: u32) -> Result<(ChartKind, ChartData)> {
+        let (_, _, chart_part, _, _) =
+            self.chart_owner(slide_index, shape_id, "read chart data")?;
+        oxml_chart::read_chart_data(required_part(&self.package, &chart_part)?)
+            .map_err(|error| invalid_chart_mutation("read chart data", error.to_string()))
+    }
+
+    fn chart_owner(
+        &self,
+        slide_index: usize,
+        shape_id: u32,
+        operation: &'static str,
+    ) -> Result<(Vec<usize>, String, String, String, String)> {
+        let owner = ShapeOwner::Slide(slide_index);
+        let data = self.owner_data(owner)?;
+        if chart_shape_id_count(&data.shape_tree.children, shape_id) != 1 {
+            return Err(invalid_chart_mutation(
+                operation,
+                format!("shape id {shape_id} is missing or ambiguous"),
+            ));
+        }
+        let path = path_of_id(&data.shape_tree.children, shape_id)
+            .ok_or_else(|| invalid_chart_mutation(operation, "chart has no physical owner"))?;
+        let Some(ShapeTreeChild::GraphicFrame(frame)) = child_at(&data.shape_tree.children, &path)
+        else {
+            return Err(invalid_chart_mutation(
+                operation,
+                "the selected shape is not a chart frame",
+            ));
+        };
+        let relationship_id = frame
+            .chart_relationship_id()
+            .filter(|_| matches!(frame.graphic_data.payload(), GraphicDataPayload::Chart(_)))
+            .ok_or_else(|| {
+                invalid_chart_mutation(operation, "the selected graphic frame is not a chart")
+            })?;
+        let slide_part = self.owner_part_name(owner)?;
+        let chart_part = chart_internal_part(
+            &self.package,
+            slide_part,
+            relationship_id,
+            rel_types::CHART,
+            operation,
+        )?;
+        if self.package.content_types.content_type_for(&chart_part) != Some(content_types::CHART) {
+            return Err(invalid_chart_mutation(
+                operation,
+                "chart target has an invalid content type",
+            ));
+        }
+        let chart_xml = required_part(&self.package, &chart_part)?;
+        let workbook_id = oxml_chart::chart_workbook_relationship_id(chart_xml)
+            .map_err(|error| invalid_chart_mutation(operation, error.to_string()))?
+            .ok_or_else(|| {
+                invalid_chart_mutation(operation, "chart has no embedded workbook reference")
+            })?;
+        let workbook_part = chart_internal_part(
+            &self.package,
+            &chart_part,
+            &workbook_id,
+            rel_types::PACKAGE,
+            operation,
+        )?;
+        if self.package.content_types.content_type_for(&workbook_part)
+            != Some(content_types::EMBEDDED_WORKBOOK)
+        {
+            return Err(invalid_chart_mutation(
+                operation,
+                "workbook target has an invalid content type",
+            ));
+        }
+        // Retained style, colour and opaque relationships must keep their actual targets.
+        if let Some(relationships) = self.package.get_part_rels(&chart_part) {
+            for relationship in &relationships.items {
+                if !relationship_is_external(relationship) {
+                    required_part(
+                        &self.package,
+                        &OpcPackage::resolve_rel_target(&chart_part, &relationship.target),
+                    )?;
+                }
+            }
+        }
+        Ok((
+            path,
+            relationship_id.to_owned(),
+            chart_part,
+            workbook_id,
+            workbook_part,
+        ))
+    }
+
+    /// Replaces one live chart's data and workbook together, isolating shared owners.
+    pub fn replace_chart_data(
+        &mut self,
+        slide_index: usize,
+        shape_id: u32,
+        data: &ChartData,
+    ) -> Result<()> {
+        const OPERATION: &str = "replace chart data";
+        let (path, relationship_id, old_chart, workbook_id, old_workbook) =
+            self.chart_owner(slide_index, shape_id, OPERATION)?;
+        let chart_bytes = required_part(&self.package, &old_chart)?;
+        let workbook_bytes = required_part(&self.package, &old_workbook)?;
+        let (chart_candidate, workbook_candidate) =
+            oxml_chart::replace_chart_data(chart_bytes, workbook_bytes, data)
+                .map_err(|error| invalid_chart_mutation(OPERATION, error.to_string()))?;
+        if chart_candidate == chart_bytes && workbook_candidate == workbook_bytes {
+            return Ok(());
+        }
+        let owner = ShapeOwner::Slide(slide_index);
+        let slide_part = self.owner_part_name(owner)?.to_owned();
+        let source_xml = self.slides[slide_index]
+            .slide
+            .to_xml()
+            .map_err(|error| invalid_chart_mutation(OPERATION, error.to_string()))?;
+        let relationship_uses = relationship_ids(&source_xml)
+            .map_err(|error| invalid_chart_mutation(OPERATION, error.to_string()))?
+            .into_iter()
+            .filter(|id| *id == relationship_id)
+            .count();
+        let shared_chart = relationship_uses > 1 || chart_part_users(&self.package, &old_chart) > 1;
+        let shared_workbook = shared_chart || chart_part_users(&self.package, &old_workbook) > 1;
+        let mut staged = self.clone();
+        let chart_part = if shared_chart {
+            chart_unused_part(&staged.package, "/ppt/charts/chart", ".xml")
+        } else {
+            old_chart.clone()
+        };
+        let workbook_part = if shared_workbook {
+            chart_unused_part(&staged.package, "/ppt/embeddings/Workbook", ".xlsx")
+        } else {
+            old_workbook.clone()
+        };
+        let mut chart_relationships = staged
+            .package
+            .get_part_rels(&old_chart)
+            .cloned()
+            .ok_or_else(|| invalid_chart_mutation(OPERATION, "chart has no relationship graph"))?;
+        for relationship in &mut chart_relationships.items {
+            if !relationship_is_external(relationship) {
+                let target = if relationship.id == workbook_id {
+                    workbook_part.clone()
+                } else {
+                    OpcPackage::resolve_rel_target(&old_chart, &relationship.target)
+                };
+                relationship.target = relative_part_target(&chart_part, &target);
+            }
+        }
+        let original_slide_relationships = staged
+            .package
+            .get_part_rels(&slide_part)
+            .cloned()
+            .ok_or_else(|| invalid_chart_mutation(OPERATION, "slide has no relationship graph"))?;
+        let mut relationships = original_slide_relationships.clone();
+        if relationship_uses > 1 {
+            let isolated_id = relationships.add(
+                rel_types::CHART,
+                &relative_part_target(&slide_part, &chart_part),
+            );
+            let Some(ShapeTreeChild::GraphicFrame(frame)) = child_at_mut(
+                &mut staged.slides[slide_index]
+                    .slide
+                    .common_slide_data
+                    .shape_tree
+                    .children,
+                &path,
+            ) else {
+                return Err(invalid_chart_mutation(
+                    OPERATION,
+                    "selected chart owner disappeared",
+                ));
+            };
+            let source = frame
+                .to_xml()
+                .map_err(|error| invalid_chart_mutation(OPERATION, error.to_string()))?;
+            let source = chart_frame_relationship(&source, &isolated_id)?;
+            **frame = CT_GraphicFrame::from_xml(&source)
+                .map_err(|error| invalid_chart_mutation(OPERATION, error.to_string()))?;
+        } else {
+            let relationship = relationships
+                .items
+                .iter_mut()
+                .find(|item| item.id == relationship_id)
+                .ok_or_else(|| {
+                    invalid_chart_mutation(OPERATION, "selected chart relationship disappeared")
+                })?;
+            relationship.target = relative_part_target(&slide_part, &chart_part);
+        }
+        let original_chart_relationships = self
+            .package
+            .get_part_rels(&old_chart)
+            .expect("validated chart graph");
+        let chart_relationships =
+            chart_relationships_candidate(original_chart_relationships, &chart_relationships)?;
+        let relationships =
+            chart_relationships_candidate(&original_slide_relationships, &relationships)?;
+        staged.package.set_part_rels(&slide_part, relationships);
+        staged.package.set_part(&chart_part, chart_candidate);
+        staged.package.set_part(&workbook_part, workbook_candidate);
+        staged
+            .package
+            .set_part_rels(&chart_part, chart_relationships);
+        staged
+            .package
+            .content_types
+            .add_override(&chart_part, content_types::CHART);
+        staged
+            .package
+            .content_types
+            .add_override(&workbook_part, content_types::EMBEDDED_WORKBOOK);
+        prune_unreachable_parts(
+            &mut staged.package,
+            &HashSet::from([old_chart, old_workbook]),
+        );
+        staged.commit_owned_parts()?;
+        *self = staged;
+        Ok(())
+    }
+
     /// Appends an editable relationship-backed chart to one slide.
     #[allow(clippy::too_many_arguments)]
     pub fn add_chart(
@@ -10052,11 +10272,8 @@ impl Presentation {
         validate_chart_extents(width, height)?;
         let slide_part = slide.part_name.clone();
         let id = ShapeIdAllocator::scan(&slide.slide.common_slide_data.shape_tree).allocate();
-        let chart_number = next_numbered_part_number(&self.package, "/ppt/charts/chart", ".xml");
-        let workbook_number =
-            next_numbered_part_number(&self.package, "/ppt/embeddings/Workbook", ".xlsx");
-        let chart_part = format!("/ppt/charts/chart{chart_number}.xml");
-        let workbook_part = format!("/ppt/embeddings/Workbook{workbook_number}.xlsx");
+        let chart_part = chart_unused_part(&self.package, "/ppt/charts/chart", ".xml");
+        let workbook_part = chart_unused_part(&self.package, "/ppt/embeddings/Workbook", ".xlsx");
 
         let mut package = self.package.clone();
         let slide_relationship_id = package.get_or_create_part_rels(&slide_part).add(
@@ -10295,6 +10512,296 @@ fn render_prepared_timeline_request(
         },
         incoming_media,
     ))
+}
+
+fn chart_shape_id_count(children: &[ShapeTreeChild], id: u32) -> usize {
+    children
+        .iter()
+        .map(|child| {
+            usize::from(child.non_visual_id() == Some(id))
+                + match child {
+                    ShapeTreeChild::GroupShape(group) => chart_shape_id_count(&group.children, id),
+                    ShapeTreeChild::AlternateContent(alternate) => alternate
+                        .selected_fallback()
+                        .map_or(0, |children| chart_shape_id_count(children, id)),
+                    _ => 0,
+                }
+        })
+        .sum()
+}
+
+fn chart_unused_part(package: &OpcPackage, prefix: &str, suffix: &str) -> String {
+    let mut number = next_numbered_part_number(package, prefix, suffix);
+    loop {
+        let candidate = format!("{prefix}{number}{suffix}");
+        let occupied = package
+            .parts
+            .keys()
+            .chain(package.part_rels.keys())
+            .chain(package.content_types.overrides.keys())
+            .any(|part| part.eq_ignore_ascii_case(&candidate));
+        if !occupied {
+            return candidate;
+        }
+        number += 1;
+    }
+}
+
+// Keep namespace aliases, foreign attributes and opaque .rels children when changing chart targets.
+fn chart_relationships_candidate(
+    original: &Relationships,
+    candidate: &Relationships,
+) -> Result<Relationships> {
+    const NS: &[u8] = b"http://schemas.openxmlformats.org/package/2006/relationships";
+    const OPERATION: &str = "replace chart data";
+    let source = original
+        .to_xml()
+        .map_err(|error| invalid_chart_mutation(OPERATION, error.to_string()))?;
+    let mut reader = NsReader::from_reader(source.as_slice());
+    let mut buffer = Vec::new();
+    let mut depth = 0;
+    let mut edits = Vec::new();
+    let mut root_end = None;
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| invalid_chart_mutation(OPERATION, error.to_string()))?;
+        let qualified = matches!(namespace, XmlResolveResult::Bound(uri) if uri.as_ref() == NS);
+        match event {
+            XmlEvent::Start(ref start) | XmlEvent::Empty(ref start) => {
+                if qualified
+                    && depth == 1
+                    && xml_local_name(start.name().as_ref()) == b"Relationship"
+                {
+                    let mut id = None;
+                    let mut target = None;
+                    for attribute in start.attributes() {
+                        let attribute = attribute.map_err(|error| {
+                            invalid_chart_mutation(OPERATION, error.to_string())
+                        })?;
+                        if attribute.key.as_ref() == b"Id" {
+                            id = Some(
+                                attribute
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        start.decoder(),
+                                    )
+                                    .map_err(|error| {
+                                        invalid_chart_mutation(OPERATION, error.to_string())
+                                    })?
+                                    .into_owned(),
+                            );
+                        } else if attribute.key.as_ref() == b"Target" {
+                            let offset = (attribute.value.as_ptr() as usize)
+                                .checked_sub(start.as_ptr() as usize)
+                                .filter(|offset| offset + attribute.value.len() <= start.len())
+                                .ok_or_else(|| {
+                                    invalid_chart_mutation(
+                                        OPERATION,
+                                        "relationship target is outside its tag",
+                                    )
+                                })?;
+                            target = Some(
+                                begin + 1 + offset..begin + 1 + offset + attribute.value.len(),
+                            );
+                        }
+                    }
+                    if let Some(id) = id {
+                        let old = original.get_by_id(&id).ok_or_else(|| {
+                            invalid_chart_mutation(
+                                OPERATION,
+                                "unmodelled relationship cannot be edited",
+                            )
+                        })?;
+                        let new = candidate.get_by_id(&id).ok_or_else(|| {
+                            invalid_chart_mutation(
+                                OPERATION,
+                                "chart relationship removal is unsupported",
+                            )
+                        })?;
+                        if old.rel_type != new.rel_type || old.target_mode != new.target_mode {
+                            return Err(invalid_chart_mutation(
+                                OPERATION,
+                                "chart relationship role changed",
+                            ));
+                        }
+                        if old.target != new.target {
+                            edits.push((
+                                target.ok_or_else(|| {
+                                    invalid_chart_mutation(
+                                        OPERATION,
+                                        "relationship target is missing",
+                                    )
+                                })?,
+                                quick_xml::escape::escape(&new.target).as_bytes().to_vec(),
+                            ));
+                        }
+                    }
+                }
+                if matches!(event, XmlEvent::Start(_)) {
+                    depth += 1;
+                }
+            }
+            XmlEvent::End(ref end) => {
+                depth -= 1;
+                if depth == 0
+                    && qualified
+                    && xml_local_name(end.name().as_ref()) == b"Relationships"
+                {
+                    root_end = Some(begin);
+                }
+            }
+            XmlEvent::DocType(_) => {
+                return Err(invalid_chart_mutation(
+                    OPERATION,
+                    "chart relationships contain a DTD",
+                ));
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut additions = String::new();
+    for item in &candidate.items {
+        if original.get_by_id(&item.id).is_none() {
+            additions.push_str(&format!("<Relationship xmlns='http://schemas.openxmlformats.org/package/2006/relationships' Id=\"{}\" Type=\"{}\" Target=\"{}\"/>", quick_xml::escape::escape(&item.id), quick_xml::escape::escape(&item.rel_type), quick_xml::escape::escape(&item.target)));
+        }
+    }
+    if !additions.is_empty() {
+        let at = root_end.ok_or_else(|| {
+            invalid_chart_mutation(
+                OPERATION,
+                "relationship root cannot receive a chart relationship",
+            )
+        })?;
+        edits.push((at..at, additions.into_bytes()));
+    }
+    let mut result = source;
+    edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    for (range, value) in edits {
+        result.splice(range, value);
+    }
+    Relationships::from_xml(&result)
+        .map_err(|error| invalid_chart_mutation(OPERATION, error.to_string()))
+}
+
+fn chart_internal_part(
+    package: &OpcPackage,
+    source: &str,
+    id: &str,
+    relationship_type: &'static str,
+    operation: &'static str,
+) -> Result<String> {
+    let matches = package.get_part_rels(source).map_or(0, |items| {
+        items.items.iter().filter(|item| item.id == id).count()
+    });
+    if matches != 1 {
+        return Err(invalid_chart_mutation(
+            operation,
+            format!("relationship {id} is missing or ambiguous in {source}"),
+        ));
+    }
+    require_internal_related_part(package, source, id, relationship_type)
+}
+
+fn chart_part_users(package: &OpcPackage, target: &str) -> usize {
+    std::iter::once(("/", &package.package_rels))
+        .chain(
+            package
+                .part_rels
+                .iter()
+                .map(|(source, items)| (source.as_str(), items)),
+        )
+        .flat_map(|(source, items)| items.items.iter().map(move |item| (source, item)))
+        .filter(|(source, item)| {
+            !relationship_is_external(item)
+                && OpcPackage::resolve_rel_target(source, &item.target).eq_ignore_ascii_case(target)
+        })
+        .count()
+}
+
+// Splice only the namespace-owned relationship value. The rest of the frame stays exact.
+fn chart_frame_relationship(xml: &[u8], relationship_id: &str) -> Result<Vec<u8>> {
+    const CHART_NS: &[u8] = b"http://schemas.openxmlformats.org/drawingml/2006/chart";
+    const OPERATION: &str = "replace chart data";
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut parents = Vec::new();
+    let mut selected = None;
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| invalid_chart_mutation(OPERATION, error.to_string()))?;
+        let uri = match namespace {
+            XmlResolveResult::Bound(uri) => uri.as_ref().to_vec(),
+            _ => Vec::new(),
+        };
+        let qualified = uri == CHART_NS;
+        match event {
+            XmlEvent::Start(ref start) | XmlEvent::Empty(ref start) => {
+                let direct = parents.len() == 3
+                    && parents[0] == (P_NS.as_bytes().to_vec(), b"graphicFrame".to_vec())
+                    && parents[1] == (A_NS.as_bytes().to_vec(), b"graphic".to_vec())
+                    && parents[2] == (A_NS.as_bytes().to_vec(), b"graphicData".to_vec());
+                if qualified && xml_local_name(start.name().as_ref()) == b"chart" && direct {
+                    for attribute in start.attributes() {
+                        let attribute = attribute.map_err(|error| {
+                            invalid_chart_mutation(OPERATION, error.to_string())
+                        })?;
+                        let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                        if matches!(namespace, XmlResolveResult::Bound(uri) if uri.as_ref() == R_NS.as_bytes())
+                            && local.as_ref() == b"id"
+                        {
+                            if selected.is_some() {
+                                return Err(invalid_chart_mutation(
+                                    OPERATION,
+                                    "ambiguous chart relationship attribute",
+                                ));
+                            }
+                            let offset = (attribute.value.as_ptr() as usize)
+                                .checked_sub(start.as_ptr() as usize)
+                                .filter(|offset| offset + attribute.value.len() <= start.len())
+                                .ok_or_else(|| {
+                                    invalid_chart_mutation(
+                                        OPERATION,
+                                        "relationship value is outside its tag",
+                                    )
+                                })?;
+                            selected = Some(
+                                begin + 1 + offset..begin + 1 + offset + attribute.value.len(),
+                            );
+                        }
+                    }
+                }
+                if matches!(event, XmlEvent::Start(_)) {
+                    parents.push((uri, xml_local_name(start.name().as_ref()).to_vec()));
+                }
+            }
+            XmlEvent::End(_) => {
+                parents.pop();
+            }
+            XmlEvent::DocType(_) => {
+                return Err(invalid_chart_mutation(
+                    OPERATION,
+                    "chart frame contains a DTD",
+                ));
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let range = selected.ok_or_else(|| {
+        invalid_chart_mutation(OPERATION, "chart frame has no qualified relationship")
+    })?;
+    let mut result = Vec::with_capacity(xml.len() + relationship_id.len());
+    result.extend_from_slice(&xml[..range.start]);
+    result.extend_from_slice(relationship_id.as_bytes());
+    result.extend_from_slice(&xml[range.end..]);
+    Ok(result)
 }
 
 fn validate_chart_extents(width: Emu, height: Emu) -> Result<()> {
@@ -23536,6 +24043,577 @@ impl Presentation {
 
 #[cfg(test)]
 mod write_tests {
+    fn fx215_native_data() -> ChartData {
+        ChartData {
+            categories: vec!["North".into(), "South".into()],
+            series: vec![("Revenue".into(), vec![10.0, 20.0])],
+            number_format: Some("0.00%".into()),
+            ..ChartData::default()
+        }
+    }
+
+    fn fx215_native_deck() -> (Presentation, u32, ChartData) {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        let data = fx215_native_data();
+        let id = deck
+            .add_chart(
+                0,
+                ChartKind::Bar,
+                Emu(0),
+                Emu(0),
+                Emu(2_000_000),
+                Emu(1_000_000),
+                &data,
+            )
+            .unwrap()
+            .child
+            .non_visual_id()
+            .unwrap();
+        (deck, id, data)
+    }
+
+    fn fx215_native_replacement() -> ChartData {
+        ChartData {
+            categories: vec!["East".into(), "West".into(), "Central".into()],
+            series: vec![
+                ("Sales".into(), vec![0.15, 0.35, 0.65]),
+                ("Costs".into(), vec![0.05, 0.10, 0.20]),
+            ],
+            number_format: Some("0.000%".into()),
+            ..ChartData::default()
+        }
+    }
+
+    fn fx215_second_frame(
+        deck: &mut Presentation,
+        slide_index: usize,
+        relationship_id: &str,
+    ) -> u32 {
+        let id =
+            ShapeIdAllocator::scan(&deck.slides[slide_index].slide.common_slide_data.shape_tree)
+                .allocate();
+        let frame = CT_GraphicFrame::new_chart(
+            id,
+            "Second chart",
+            positioned_transform(Emu(0), Emu(0), Emu(2_000_000), Emu(1_000_000)),
+            relationship_id,
+        )
+        .unwrap();
+        deck.slides[slide_index]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .push(ShapeTreeChild::GraphicFrame(Box::new(frame)));
+        id
+    }
+
+    #[test]
+    fn fx215_native_read_replace_and_noop_preserve_exact_pair() {
+        let (mut deck, id, old) = fx215_native_deck();
+        assert_eq!(
+            deck.chart_data(0, id).unwrap(),
+            (ChartKind::Bar, old.clone())
+        );
+        let before = deck.to_bytes().unwrap();
+        deck.replace_chart_data(0, id, &old).unwrap();
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        let (_, _, chart, _, workbook) = deck.chart_owner(0, id, "test").unwrap();
+        let replacement = fx215_native_replacement();
+        let expected = oxml_chart::replace_chart_data(
+            deck.package.get_part(&chart).unwrap(),
+            deck.package.get_part(&workbook).unwrap(),
+            &replacement,
+        )
+        .unwrap();
+        deck.replace_chart_data(0, id, &replacement).unwrap();
+        assert_eq!(
+            deck.chart_data(0, id).unwrap(),
+            (ChartKind::Bar, replacement.clone())
+        );
+        assert_eq!(deck.package.get_part(&chart).unwrap(), expected.0);
+        assert_eq!(deck.package.get_part(&workbook).unwrap(), expected.1);
+        let reopened = Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.chart_data(0, id).unwrap().1, replacement);
+    }
+
+    #[test]
+    fn fx215_native_nested_unique_owner_and_ambiguity() {
+        let (mut deck, id, old) = fx215_native_deck();
+        let child = deck.slides[0]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .pop()
+            .unwrap();
+        let mut group = rpptx_oxml::shape_tree::CT_GroupShape::new_empty(100, "Chart group");
+        group.children.push(child.clone());
+        deck.slides[0]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .push(ShapeTreeChild::GroupShape(Box::new(group)));
+        assert_eq!(deck.chart_data(0, id).unwrap().1, old);
+        deck.replace_chart_data(0, id, &fx215_native_replacement())
+            .unwrap();
+        assert_eq!(deck.chart_owner(0, id, "test").unwrap().0.len(), 2);
+        let selected = deck.slides[0].slide.common_slide_data.shape_tree.children[0].clone();
+        deck.slides[0]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .push(selected);
+        let before = format!("{deck:?}");
+        assert!(
+            deck.chart_data(0, id)
+                .unwrap_err()
+                .to_string()
+                .contains("ambiguous")
+        );
+        assert!(deck.replace_chart_data(0, id, &old).is_err());
+        assert_eq!(format!("{deck:?}"), before);
+    }
+
+    #[test]
+    fn fx215_native_shared_slide_relationship_isolates_only_selected_frame() {
+        let (mut deck, id, old) = fx215_native_deck();
+        let (_, rid, chart, _, workbook) = deck.chart_owner(0, id, "test").unwrap();
+        let other = fx215_second_frame(&mut deck, 0, &rid);
+        let old_chart = deck.package.get_part(&chart).unwrap().to_vec();
+        let old_workbook = deck.package.get_part(&workbook).unwrap().to_vec();
+        deck.replace_chart_data(0, id, &fx215_native_replacement())
+            .unwrap();
+        assert_eq!(deck.chart_data(0, other).unwrap().1, old);
+        let selected = deck.chart_owner(0, id, "test").unwrap();
+        let retained = deck.chart_owner(0, other, "test").unwrap();
+        assert_ne!(selected.1, retained.1);
+        assert_ne!(selected.2, retained.2);
+        assert_ne!(selected.4, retained.4);
+        assert_eq!(deck.package.get_part(&chart).unwrap(), old_chart);
+        assert_eq!(deck.package.get_part(&workbook).unwrap(), old_workbook);
+    }
+
+    #[test]
+    fn fx215_native_shared_chart_across_slides_retains_style_colour_and_opaque_graph() {
+        let (mut deck, id, old) = fx215_native_deck();
+        let (_, _, chart, _, workbook) = deck.chart_owner(0, id, "test").unwrap();
+        let style = "/ppt/custom/chart-style.xml";
+        let colour = "/ppt/custom/chart-colour.xml";
+        for (part, kind, bytes) in [
+            (
+                style,
+                "chartStyle",
+                b"<style xmlns='urn:test' marker='style'/>".as_slice(),
+            ),
+            (
+                colour,
+                "chartColorStyle",
+                b"<colour xmlns='urn:test' marker='colour'/>".as_slice(),
+            ),
+        ] {
+            deck.package.set_part(part, bytes.to_vec());
+            deck.package
+                .content_types
+                .add_override(part, "application/xml");
+            deck.package.get_or_create_part_rels(&chart).add(
+                &format!("http://schemas.microsoft.com/office/2011/relationships/{kind}"),
+                &relative_part_target(&chart, part),
+            );
+        }
+        deck.add_slide(6).unwrap();
+        let other_part = deck.slides[1].part_name.clone();
+        let rid = deck
+            .package
+            .get_or_create_part_rels(&other_part)
+            .add(rel_types::CHART, &relative_part_target(&other_part, &chart));
+        let other = fx215_second_frame(&mut deck, 1, &rid);
+        let other_xml = deck.slides[1].slide.to_xml().unwrap();
+        let old_chart = deck.package.get_part(&chart).unwrap().to_vec();
+        let old_workbook = deck.package.get_part(&workbook).unwrap().to_vec();
+        let old_rels = deck.package.get_part_rels(&chart).unwrap().clone();
+        deck.replace_chart_data(0, id, &fx215_native_replacement())
+            .unwrap();
+        let (_, _, new_chart, _, new_workbook) = deck.chart_owner(0, id, "test").unwrap();
+        assert_ne!(new_chart, chart);
+        assert_ne!(new_workbook, workbook);
+        assert_eq!(deck.chart_data(1, other).unwrap().1, old);
+        assert_eq!(deck.slides[1].slide.to_xml().unwrap(), other_xml);
+        assert_eq!(deck.package.get_part(&chart).unwrap(), old_chart);
+        assert_eq!(deck.package.get_part(&workbook).unwrap(), old_workbook);
+        assert_eq!(
+            deck.package
+                .get_part_rels(&chart)
+                .unwrap()
+                .to_xml()
+                .unwrap(),
+            old_rels.to_xml().unwrap()
+        );
+        let new_rels = deck.package.get_part_rels(&new_chart).unwrap();
+        assert_eq!(new_rels.items.len(), old_rels.items.len());
+        for part in [style, colour] {
+            assert!(
+                new_rels
+                    .items
+                    .iter()
+                    .any(|item| OpcPackage::resolve_rel_target(&new_chart, &item.target) == part)
+            );
+        }
+        assert_eq!(
+            deck.package.get_part(style).unwrap(),
+            b"<style xmlns='urn:test' marker='style'/>"
+        );
+        assert_eq!(
+            deck.package.get_part(colour).unwrap(),
+            b"<colour xmlns='urn:test' marker='colour'/>"
+        );
+    }
+
+    #[test]
+    fn fx215_native_shared_workbook_isolates_exclusive_chart() {
+        let (mut deck, id, old) = fx215_native_deck();
+        let (_, _, chart, _, workbook) = deck.chart_owner(0, id, "test").unwrap();
+        let other = deck
+            .add_chart(
+                0,
+                ChartKind::Bar,
+                Emu(0),
+                Emu(0),
+                Emu(2_000_000),
+                Emu(1_000_000),
+                &old,
+            )
+            .unwrap()
+            .child
+            .non_visual_id()
+            .unwrap();
+        let (_, _, other_chart, other_workbook_id, _) = deck.chart_owner(0, other, "test").unwrap();
+        let rel = deck
+            .package
+            .get_part_rels_mut(&other_chart)
+            .unwrap()
+            .items
+            .iter_mut()
+            .find(|item| item.id == other_workbook_id)
+            .unwrap();
+        rel.target = relative_part_target(&other_chart, &workbook);
+        let old_workbook = deck.package.get_part(&workbook).unwrap().to_vec();
+        let other_bytes = deck.package.get_part(&other_chart).unwrap().to_vec();
+        deck.replace_chart_data(0, id, &fx215_native_replacement())
+            .unwrap();
+        let (_, _, selected_chart, _, selected_workbook) = deck.chart_owner(0, id, "test").unwrap();
+        assert_eq!(selected_chart, chart);
+        assert_ne!(selected_workbook, workbook);
+        assert_eq!(deck.package.get_part(&workbook).unwrap(), old_workbook);
+        assert_eq!(deck.package.get_part(&other_chart).unwrap(), other_bytes);
+        assert_eq!(deck.chart_data(0, other).unwrap().1, old);
+    }
+
+    #[test]
+    fn fx215_native_invalid_data_and_graph_are_atomic() {
+        let (original, id, old) = fx215_native_deck();
+        for mutation in 0..6 {
+            let mut deck = original.clone();
+            let (_, _, chart, workbook_id, _) = deck.chart_owner(0, id, "test").unwrap();
+            let mut data = fx215_native_replacement();
+            match mutation {
+                0 => data.series[0].1[0] = f64::NAN,
+                1 => {
+                    data.series[0].1.pop();
+                }
+                2 => {
+                    let rel = deck
+                        .package
+                        .get_part_rels_mut(&chart)
+                        .unwrap()
+                        .items
+                        .iter_mut()
+                        .find(|item| item.id == workbook_id)
+                        .unwrap();
+                    rel.target_mode = Some("External".into());
+                }
+                3 => {
+                    let rel = deck
+                        .package
+                        .get_part_rels(&chart)
+                        .unwrap()
+                        .get_by_id(&workbook_id)
+                        .unwrap()
+                        .clone();
+                    deck.package
+                        .get_part_rels_mut(&chart)
+                        .unwrap()
+                        .items
+                        .push(rel);
+                }
+                4 => {
+                    let bytes = String::from_utf8(deck.package.get_part(&chart).unwrap().to_vec())
+                        .unwrap()
+                        .replace("Sheet1!", "[outside.xlsx]Sheet1!");
+                    deck.package.set_part(&chart, bytes.into_bytes());
+                }
+                5 => deck
+                    .package
+                    .content_types
+                    .add_override(&chart, "application/xml"),
+                _ => unreachable!(),
+            }
+            let before = format!("{deck:?}");
+            assert!(
+                deck.replace_chart_data(0, id, &data).is_err(),
+                "case {mutation}"
+            );
+            assert_eq!(format!("{deck:?}"), before, "case {mutation}");
+        }
+        let mut deck = original;
+        let before = format!("{deck:?}");
+        assert!(deck.replace_chart_data(0, id + 1000, &old).is_err());
+        assert!(deck.replace_chart_data(10, id, &old).is_err());
+        assert_eq!(format!("{deck:?}"), before);
+    }
+
+    #[test]
+    fn fx215_native_relationship_source_aliases_and_opaque_payload_survive_cow() {
+        let (mut deck, id, _) = fx215_native_deck();
+        let (_, rid, chart, _, _) = deck.chart_owner(0, id, "test").unwrap();
+        fx215_second_frame(&mut deck, 0, &rid);
+        let slide_part = deck.slides[0].part_name.clone();
+        for part in [&slide_part, &chart] {
+            let raw =
+                String::from_utf8(deck.package.get_part_rels(part).unwrap().to_xml().unwrap())
+                    .unwrap();
+            let raw = raw.replace("<Relationships ", "<q:Relationships xmlns:q='http://schemas.openxmlformats.org/package/2006/relationships' xmlns:f='urn:foreign' f:root='retained' ")
+                .replace("</Relationships>", "<f:opaque marker='retained'/></q:Relationships>")
+                .replace("<Relationship ", "<q:Relationship f:attribute='untouched' ");
+            let relationships = Relationships::from_xml(raw.as_bytes()).unwrap();
+            deck.package.set_part_rels(part, relationships);
+        }
+        let retained_chart_graph = deck
+            .package
+            .get_part_rels(&chart)
+            .unwrap()
+            .to_xml()
+            .unwrap();
+        deck.replace_chart_data(0, id, &fx215_native_replacement())
+            .unwrap();
+        let (_, _, new_chart, _, _) = deck.chart_owner(0, id, "test").unwrap();
+        assert_eq!(
+            deck.package
+                .get_part_rels(&chart)
+                .unwrap()
+                .to_xml()
+                .unwrap(),
+            retained_chart_graph
+        );
+        for part in [&slide_part, &new_chart] {
+            let raw =
+                String::from_utf8(deck.package.get_part_rels(part).unwrap().to_xml().unwrap())
+                    .unwrap();
+            assert!(raw.contains("f:root='retained'"));
+            assert!(raw.contains("f:attribute='untouched'"));
+            assert!(raw.contains("<f:opaque marker='retained'/>"));
+            assert!(raw.contains("<q:Relationships"));
+        }
+    }
+
+    #[test]
+    fn fx215_native_copy_part_allocation_respects_case_insensitive_collisions() {
+        let (mut deck, id, _) = fx215_native_deck();
+        let (_, rid, _, _, _) = deck.chart_owner(0, id, "test").unwrap();
+        fx215_second_frame(&mut deck, 0, &rid);
+        deck.package
+            .set_part("/ppt/charts/CHART2.XML", b"<foreign/>".to_vec());
+        deck.package
+            .content_types
+            .add_override("/ppt/charts/CHART2.XML", "application/xml");
+        deck.package.set_part(
+            "/ppt/embeddings/WORKBOOK2.XLSX",
+            b"foreign workbook".to_vec(),
+        );
+        deck.package
+            .content_types
+            .add_override("/ppt/embeddings/WORKBOOK2.XLSX", "application/octet-stream");
+        deck.replace_chart_data(0, id, &fx215_native_replacement())
+            .unwrap();
+        let (_, _, chart, _, workbook) = deck.chart_owner(0, id, "test").unwrap();
+        assert_eq!(chart, "/ppt/charts/chart3.xml");
+        assert_eq!(workbook, "/ppt/embeddings/Workbook3.xlsx");
+        assert_eq!(
+            deck.package.get_part("/ppt/charts/CHART2.XML").unwrap(),
+            b"<foreign/>"
+        );
+        assert_eq!(
+            deck.package
+                .get_part("/ppt/embeddings/WORKBOOK2.XLSX")
+                .unwrap(),
+            b"foreign workbook"
+        );
+    }
+
+    #[test]
+    fn fx215_native_authenticated_corpus_replacement_roundtrips_owned_pair() {
+        use sha2::Digest;
+        use std::path::PathBuf;
+        let corpus = std::env::var_os("RDOCX_PPTX_CORPUS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/pptx"));
+        assert!(corpus.is_dir(), "F-X215 requires the authenticated corpus");
+        let manifest = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
+        let mut candidate_count = 0;
+        for name in ["bar-chart.pptx", "line-chart.pptx", "chart-picture-bg.pptx"] {
+            let input = std::fs::read(corpus.join(name)).unwrap();
+            let expected = manifest
+                .lines()
+                .find(|line| line.starts_with(&format!("{name}\t")))
+                .unwrap()
+                .split('\t')
+                .nth(2)
+                .unwrap();
+            assert_eq!(
+                sha2::Sha256::digest(&input)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>(),
+                expected
+            );
+            let original = Presentation::from_bytes(&input).unwrap();
+            let (slide_index, id) = original
+                .slides
+                .iter()
+                .enumerate()
+                .find_map(|(index, record)| {
+                    record
+                        .slide
+                        .common_slide_data
+                        .shape_tree
+                        .children
+                        .iter()
+                        .find_map(|child| match child {
+                            ShapeTreeChild::GraphicFrame(frame)
+                                if frame.chart_relationship_id().is_some() =>
+                            {
+                                Some((index, child.non_visual_id().unwrap()))
+                            }
+                            _ => None,
+                        })
+                })
+                .expect("qualifying original chart owner");
+            let (kind, data) = original.chart_data(slide_index, id).unwrap();
+            let (_, _, chart, _, workbook) = original.chart_owner(slide_index, id, "test").unwrap();
+            let baseline =
+                OpcPackage::from_reader(Cursor::new(original.to_bytes().unwrap())).unwrap();
+            let mut variants = Vec::new();
+            if data.series.len() > 1 {
+                let mut fewer = data.clone();
+                fewer.series.pop();
+                variants.push(("fewer", fewer));
+            }
+            let mut more = data.clone();
+            more.series.push((
+                "Added exact values".into(),
+                (0..more.categories.len())
+                    .map(|index| 100.0 + index as f64)
+                    .collect(),
+            ));
+            variants.push(("more", more));
+            let mut categories = data;
+            categories.categories.push("Added category".into());
+            for (_, values) in &mut categories.series {
+                values.push(777.0);
+            }
+            variants.push(("categories", categories));
+            for (label, replacement) in variants {
+                let mut candidate = original.clone();
+                let expected_pair = oxml_chart::replace_chart_data(
+                    original.package.get_part(&chart).unwrap(),
+                    original.package.get_part(&workbook).unwrap(),
+                    &replacement,
+                )
+                .unwrap();
+                candidate
+                    .replace_chart_data(slide_index, id, &replacement)
+                    .unwrap_or_else(|error| panic!("{name}/{label}: {error}"));
+                assert_eq!(
+                    candidate.chart_data(slide_index, id).unwrap(),
+                    (kind, replacement.clone())
+                );
+                assert_eq!(candidate.package.get_part(&chart).unwrap(), expected_pair.0);
+                assert_eq!(
+                    candidate.package.get_part(&workbook).unwrap(),
+                    expected_pair.1
+                );
+                let output = candidate.to_bytes().unwrap();
+                let reopened = Presentation::from_bytes(&output).unwrap();
+                assert_eq!(reopened.chart_data(slide_index, id).unwrap().1, replacement);
+                for (part, bytes) in &baseline.parts {
+                    if part != &chart && part != &workbook {
+                        assert_eq!(
+                            reopened.package.get_part(part).unwrap(),
+                            bytes,
+                            "{name}/{label}: unrelated {part}"
+                        );
+                    }
+                }
+                for (part, graph) in &baseline.part_rels {
+                    assert_eq!(
+                        reopened
+                            .package
+                            .get_part_rels(part)
+                            .unwrap()
+                            .to_xml()
+                            .unwrap(),
+                        graph.to_xml().unwrap(),
+                        "{name}/{label}: graph {part}"
+                    );
+                }
+                if let Some(directory) = std::env::var_os("RDOCX_FX215_NATIVE_CANDIDATES_DIR") {
+                    let directory = PathBuf::from(directory);
+                    std::fs::create_dir_all(&directory).unwrap();
+                    std::fs::write(directory.join(format!("{name}-{label}.pptx")), output).unwrap();
+                }
+                candidate_count += 1;
+            }
+        }
+        assert_eq!(candidate_count, 7);
+    }
+
+    #[test]
+    fn fx215_native_qualified_frame_relationship_splice_preserves_foreign_attributes() {
+        let (deck, id, _) = fx215_native_deck();
+        let path = deck.chart_owner(0, id, "test").unwrap().0;
+        let ShapeTreeChild::GraphicFrame(frame) = child_at(
+            &deck.slides[0].slide.common_slide_data.shape_tree.children,
+            &path,
+        )
+        .unwrap() else {
+            unreachable!()
+        };
+        let raw = String::from_utf8(frame.to_xml().unwrap()).unwrap();
+        let raw = raw
+            .replace("r:id=", "alias:id=")
+            .replace("xmlns:r=", "xmlns:alias=")
+            .replace(
+                "<c:chart ",
+                "<c:chart xmlns:f='urn:foreign' f:id='opaque-id' ",
+            );
+        assert!(raw.contains("f:id='opaque-id'"));
+        let result = chart_frame_relationship(raw.as_bytes(), "rId987").unwrap();
+        let expected = raw.replace(
+            &format!("alias:id=\"{}\"", frame.chart_relationship_id().unwrap()),
+            "alias:id=\"rId987\"",
+        );
+        assert_eq!(result, expected.as_bytes());
+        assert_eq!(
+            CT_GraphicFrame::from_xml(&result)
+                .unwrap()
+                .chart_relationship_id(),
+            Some("rId987")
+        );
+    }
+
     #[cfg(all(feature = "default-template", feature = "render"))]
     #[test]
     fn fx209_hidden_picture_source_inventory_matches_resolution_order() {

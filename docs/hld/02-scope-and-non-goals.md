@@ -149,9 +149,12 @@ by the render API, so a user can tell approximation from fidelity.
 
 ## Non-goals, permanently
 
-**`oxml-sml` is not a spreadsheet library.** It writes one worksheet with the
-cells a chart needs. It is not a foundation for an `rxlsx` and should not grow
-into one without a separate decision.
+**`oxml-sml` is not a spreadsheet library.** It writes chart workbooks and
+merges explicitly formula-owned chart cells in qualified embedded worksheets.
+Unrelated sheets, entries and styles remain preserved. Unsupported formulas
+or unowned populated-cell collisions refuse replacement. This bounded chart
+operation is not a foundation for an `rxlsx` and must not grow into one without
+a separate decision.
 
 **Drop-in `python-docx` and `python-pptx` compatibility is not promised.** Those
 libraries' real-world surface is inseparable from lxml, and a large fraction of
