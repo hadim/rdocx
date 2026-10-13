@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 retains twenty-nine top-level stories, twenty-six completed, one running,
-two approved pending implementation. F-X211 also has three delivery children
+S91 retains twenty-nine top-level stories, twenty-six completed, two running,
+one approved pending implementation. F-X211 also has three delivery children
 for parallel Word and PowerPoint work followed by integrated compatibility. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
 
 ## Spec references
@@ -50,7 +50,7 @@ for parallel Word and PowerPoint work followed by integrated compatibility. The 
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | done | - |
 | F-X214 | Bound recursive PowerPoint parsing and traversal | L | done | - |
 | F-X215 | Create charts in Python and replace existing chart data | L | done | - |
-| F-X216 | Import complete slides and merge decks with source formatting | L | pending | - |
+| F-X216 | Import complete slides and merge decks with source formatting | L | in-progress | codex |
 | F-X217 | Import HTML and Markdown through public Word surfaces | L | done | - |
 | F-X218 | Export presentations as semantic HTML and Markdown | L | done | - |
 | F-X220 | Embed fonts through both native and public package families | L | done | - |
