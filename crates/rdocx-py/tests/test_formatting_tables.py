@@ -158,12 +158,13 @@ def test_format_subhandles_become_stale_after_structure_change():
     font = paragraph.add_run("held").font
     paragraph_format = document.paragraphs[0].paragraph_format
 
-    document.add_paragraph("invalidates both")
+    spacing = paragraph_format.space_after
+    document.add_paragraph("retires the earlier run")
 
     with pytest.raises(StaleElementError):
         _ = font.bold
-    with pytest.raises(StaleElementError):
-        _ = paragraph_format.space_after
+    assert paragraph_format.space_after == spacing
+    assert paragraph.text == "held"
 
 
 def test_nested_paragraph_stale_error_names_complete_recovery_path():
@@ -172,8 +173,10 @@ def test_nested_paragraph_stale_error_names_complete_recovery_path():
     document = Document()
     cell = document.add_table(rows=1, cols=1).rows[0].cells[0]
     nested = cell.add_paragraph("held")
+    retired_run = nested.runs[0]
 
-    document.add_paragraph("invalidates nested paragraph")
+    document.add_paragraph("retires the earlier nested run")
+    assert nested.text == "held"
 
     with pytest.raises(
         StaleElementError,
@@ -182,7 +185,7 @@ def test_nested_paragraph_stale_error_names_complete_recovery_path():
             r"\.paragraphs\[1\]"
         ),
     ):
-        _ = nested.text
+        _ = retired_run.text
 
 
 def test_cell_text_replacement_invalidates_nested_run_and_font():

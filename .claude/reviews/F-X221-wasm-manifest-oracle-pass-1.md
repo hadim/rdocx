@@ -5,7 +5,7 @@
 
 ## D1, WASM control still requires render-only media-validation dependencies
 
-`crates/rpptx-wasm/src/lib.rs:490` requires `dep:gif` and `dep:tiny-skia` in the render feature. Its second loop at line501 additionally requires their optional dependency declarations. Both assumptions predate the approved semantic export provider. The real failing assertion is retained in `/private/tmp/S91-F-X221-implementation-1/rpptx-wasm-version-consumer-runtime.log:14`; this run is failed and does not qualify the sixth or seventh consumer.
+`crates/rpptx-wasm/src/lib.rs:490` requires `dep:gif` and `dep:tiny-skia` in the render feature. Its second loop at line501 additionally requires their optional dependency declarations. Both assumptions predate the approved semantic export provider. The real failing assertion is retained in `/private/tmp/S91-F-X221-implementation-1/rpptx-wasm-version-consumer-runtime.log:14`. This run is failed and does not qualify the sixth or seventh consumer.
 
 `.claude/plans/F-X218-design.md:85` explicitly admits existing pinned tiny-skia, gif, zune-jpeg and tiff as unconditional facade edges for bounded semantic-media validation, including no-default, MSRV and WASM obligations. `crates/rpptx/src/lib.rs:409` actually calls PNG decoding and line434 calls GIF decoding from that existing validation path. These are concrete non-render consumers, not an unused dependency retained merely because compilation succeeds. Current `crates/rpptx/Cargo.toml:45` and line58 declare the approved unconditional edges. Rendering-specific jpeg-encoder, lopdf/miniz, PDF/layout/render remain optional in the render feature at lines25-33. F-X221 changes only this manifest's package version, not any edge or feature.
 

@@ -169,9 +169,11 @@ def test_stale_handles_raise_the_public_stale_element_error_class():
     live = Document()
     live.add_paragraph("zero")
     held = live.paragraphs[0]
+    retired_run = held.runs[0]
     live.add_paragraph("one")
+    assert held.text == "zero"
     with pytest.raises(StaleElementError) as raised:
-        _ = held.text
+        _ = retired_run.text
     assert isinstance(raised.value, RdocxError)
 
 
@@ -181,10 +183,12 @@ def test_fx206_word_first_cause_survives_later_unrelated_edits():
     document = Document()
     document.add_paragraph("original")
     paragraph = document.paragraphs[0]
+    retired_run = paragraph.runs[0]
     document.add_table(1, 1)
     document.add_paragraph("later")
+    assert paragraph.text == "original"
     with pytest.raises(StaleElementError) as raised:
-        _ = paragraph.text
+        _ = retired_run.text
     assert "First invalidated by Document.add_table at committed revision 2." in str(raised.value)
     assert "Document.add_paragraph" not in str(raised.value)
 

@@ -361,8 +361,12 @@ def test_whole_text_replacement_stales_descendant_handles_once():
     paragraph = frame.paragraphs[0]
     run = paragraph.runs[0]
     paragraph.text = "after"
-    for operation in (lambda: paragraph.text, lambda: run.text):
-        _assert_stale_after_exactly_one_bump(rpptx, operation)
+    assert paragraph.text == "after"
+    _assert_exact_stale(
+        rpptx, lambda: run.text, "run", 3, 4,
+        "Re-fetch it with prs.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].",
+        "Paragraph.text",
+    )
     assert prs.slides[0].shapes[-1].text_frame.paragraphs[0].text == "after"
 
 
@@ -675,9 +679,13 @@ def test_pinned_python_pptx_bidirectional_seven_example_records(tmp_path):
 
     image_path = tmp_path / "monty-truth.png"
     _write_tiny_png(image_path)
+    # Compare writers against one explicit independent template.
+    template = io.BytesIO()
+    OraclePresentation().save(template)
+    template_bytes = template.getvalue()
     authored = (
         _author_documented_decks(
-            rpptx.Presentation,
+            lambda: rpptx.Presentation.from_bytes(template_bytes),
             RpptxInches,
             RpptxPt,
             RpptxShape,
@@ -685,7 +693,7 @@ def test_pinned_python_pptx_bidirectional_seven_example_records(tmp_path):
             image_path,
         ),
         _author_documented_decks(
-            OraclePresentation,
+            lambda: OraclePresentation(io.BytesIO(template_bytes)),
             OracleInches,
             OraclePt,
             OracleShape,
@@ -707,53 +715,32 @@ def test_pinned_python_pptx_bidirectional_seven_example_records(tmp_path):
 
 
 def _add_speaker_notes(source, target, text):
-    with zipfile.ZipFile(source) as archive:
-        parts = {name: archive.read(name) for name in archive.namelist()}
+    from pptx import Presentation as OraclePresentation
+    from pptx.enum.shapes import PP_PLACEHOLDER
+    from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+    from pptx.oxml import parse_xml
 
-    content_types = parts["[Content_Types].xml"].decode()
-    parts["[Content_Types].xml"] = content_types.replace(
-        "</Types>",
-        '<Override PartName="/ppt/notesSlides/notesSlide1.xml" '
-        'ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>'
-        "</Types>",
-    ).encode()
-    slide_rels = parts["ppt/slides/_rels/slide1.xml.rels"].decode()
-    parts["ppt/slides/_rels/slide1.xml.rels"] = slide_rels.replace(
-        "</Relationships>",
-        '<Relationship Id="rId2" '
-        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" '
-        'Target="../notesSlides/notesSlide1.xml"/>'
-        "</Relationships>",
-    ).encode()
-    parts["ppt/notesSlides/notesSlide1.xml"] = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
-        'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
-        "<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/>"
-        "<p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>"
-        "<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Notes Placeholder\"/>"
-        "<p:cNvSpPr/><p:nvPr><p:ph type=\"body\" idx=\"1\"/></p:nvPr>"
-        "</p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p>"
-        '<a:r><a:rPr b="1"><a:extLst>'
+    assert importlib.metadata.version("python-pptx") == "1.0.2"
+    oracle = OraclePresentation(source)
+    notes = oracle.slides[0].notes_slide
+    kinds = [shape.placeholder_format.type for shape in notes.placeholders]
+    for kind in (PP_PLACEHOLDER.SLIDE_IMAGE, PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.SLIDE_NUMBER):
+        assert kinds.count(kind) == 1
+    local_masters = [rel for rel in notes.part.rels.values() if rel.reltype == RT.NOTES_MASTER]
+    global_masters = [rel for rel in oracle.part.rels.values() if rel.reltype == RT.NOTES_MASTER]
+    assert len(local_masters) == len(global_masters) == 1
+    assert not local_masters[0].is_external and not global_masters[0].is_external
+    assert local_masters[0].target_part.partname == global_masters[0].target_part.partname
+    assert oracle._element.xpath("./p:notesMasterIdLst/p:notesMasterId/@r:id") == [global_masters[0].rId]
+    notes.notes_text_frame.text = text
+    run = notes.notes_text_frame.paragraphs[0].runs[0]
+    run.font.bold = True
+    run._r.get_or_add_rPr().append(parse_xml(
+        '<a:extLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
         '<a:ext uri="{6D487B31-4C56-4F45-AED3-4C741AC43E77}">'
-        '<x:payload xmlns:x="urn:rdocx:test"/></a:ext></a:extLst></a:rPr>'
-        f"<a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp>"
-        "</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/>"
-        "</p:clrMapOvr></p:notes>"
-    ).encode()
-    parts["ppt/notesSlides/_rels/notesSlide1.xml.rels"] = (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        '<Relationship Id="rId1" '
-        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster" '
-        'Target="../notesMasters/notesMaster1.xml"/>'
-        '<Relationship Id="rId2" '
-        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" '
-        'Target="../slides/slide1.xml"/></Relationships>'
-    ).encode()
-    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
-        for name, data in parts.items():
-            archive.writestr(name, data)
+        '<x:payload xmlns:x="urn:rdocx:test"/></a:ext></a:extLst>'
+    ))
+    oracle.save(target)
 
 
 def test_presentation_render_comments_and_notes_match_native_snapshots(tmp_path):
@@ -995,7 +982,12 @@ def test_notes_mutation_preserves_text_through_save_and_reopen(tmp_path):
     assert rpptx.Presentation(output).slides[0].notes_text == "Final speaker note"
     with zipfile.ZipFile(output) as archive:
         notes_xml = archive.read("ppt/notesSlides/notesSlide1.xml").decode()
-    assert '<p:ph type="body" idx="1"' in notes_xml
+    import xml.etree.ElementTree as ET
+    ns = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    source_notes = ET.fromstring(_package_parts(with_notes.read_bytes())["ppt/notesSlides/notesSlide1.xml"])
+    expected_body = next(ph.attrib for ph in source_notes.iter(ns + "ph") if ph.get("type") == "body")
+    actual_body = next(ph.attrib for ph in ET.fromstring(notes_xml).iter(ns + "ph") if ph.get("type") == "body")
+    assert actual_body == expected_body
     assert 'b="1"' in notes_xml
     assert "x:payload" in notes_xml
 
@@ -1180,10 +1172,15 @@ def test_text_frame_margins_anchor_wrap_and_auto_size_round_trip_and_clear(tmp_p
     output = tmp_path / "frame.pptx"
     presentation.save(output)
 
-    assert _text_body_xml(output).startswith(
-        '<p:txBody><a:bodyPr lIns="228600" tIns="38100" rIns="0" bIns="50800" '
-        'anchor="b" wrap="none"><a:spAutoFit/></a:bodyPr>'
-    )
+    import xml.etree.ElementTree as ET
+    p_ns = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    a_ns = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    body = ET.fromstring(_package_parts(output.read_bytes())["ppt/slides/slide1.xml"]).find(".//" + p_ns + "txBody")
+    assert body is not None and body.tag == p_ns + "txBody"
+    assert [child.tag for child in body] == [a_ns + "bodyPr", a_ns + "lstStyle", a_ns + "p"]
+    properties = body.find(a_ns + "bodyPr")
+    assert properties.attrib == {"lIns": "228600", "tIns": "38100", "rIns": "0", "bIns": "50800", "anchor": "b", "wrap": "none"}
+    assert [child.tag for child in properties] == [a_ns + "spAutoFit"]
     presentation = rpptx.Presentation(output)
     frame = presentation.slides[0].shapes[0].text_frame
     assert (
@@ -1208,7 +1205,9 @@ def test_text_frame_margins_anchor_wrap_and_auto_size_round_trip_and_clear(tmp_p
     ):
         setattr(frame, name, None)
     presentation.save(output)
-    assert _text_body_xml(output).startswith("<p:txBody><a:bodyPr/>")
+    body = ET.fromstring(_package_parts(output.read_bytes())["ppt/slides/slide1.xml"]).find(".//" + p_ns + "txBody")
+    properties = body.find(a_ns + "bodyPr")
+    assert properties is not None and properties.attrib == {} and list(properties) == []
 
 
 def test_text_frame_margins_read_universal_measures_and_the_justified_anchors(tmp_path):
@@ -2043,8 +2042,11 @@ def test_slide_layout_hidden_and_background_round_trip_through_python_pptx(tmp_p
     background.fill.fore_color.rgb = RGBColor(0x12, 0x34, 0x56)
     assert background.fill.type == MSO_FILL_TYPE.SOLID
     assert first.follow_master_background is False
+    inherited_paint = prs.render_slide_to_png(1, dpi=72)
     second.follow_master_background = False
-    assert second.background.fill.type == MSO_FILL_TYPE.BACKGROUND
+    # Detaching preserves the actual inherited reference, not a fabricated no-fill.
+    assert second.background.fill.type is None
+    assert prs.render_slide_to_png(1, dpi=72) == inherited_paint
     output = tmp_path / "slides-out.pptx"
     prs.save(output)
 
@@ -2054,6 +2056,8 @@ def test_slide_layout_hidden_and_background_round_trip_through_python_pptx(tmp_p
     assert oracle.slides[0].follow_master_background is False
     assert oracle.slides[0].background.fill.fore_color.rgb == pptx.dml.color.RGBColor(0x12, 0x34, 0x56)
     assert oracle.slides[1].follow_master_background is False
+    assert oracle.slides[1]._element.xpath("./p:cSld/p:bg/p:bgRef/@idx") == ["1001"]
+    assert oracle.slides[1]._element.xpath("./p:cSld/p:bg/p:bgRef/a:schemeClr/@val") == ["bg1"]
 
     prs.slides[0].follow_master_background = True
     prs.slides[0].hidden = False
@@ -3335,8 +3339,14 @@ def test_shapes_and_slides_are_removed_and_reordered_with_stale_handles(tmp_path
     group = prs.slides[0].shapes.add_group_shape()
     assert len(prs.slides[0].shapes) == 3
     shapes = prs.slides[0].shapes
-    with pytest.raises(ValueError, match="shape is not in this collection"):
+    selected = shapes[0]
+    selected_id, selected_xml = selected.shape_id, selected.xml
+    before_foreign_removal = prs.to_bytes()
+    with pytest.raises(ValueError, match=r"^shape owner is not in this presentation collection$"):
         prs.slides[1].shapes.remove(shapes[0])
+    assert prs.to_bytes() == before_foreign_removal
+    assert selected.shape_id == shapes[0].shape_id == selected_id
+    assert selected.xml == selected_xml
     shapes.remove(picture)
     with pytest.raises(rpptx.StaleElementError, match=r"First invalidated by ShapeCollection.remove "):
         _ = picture.name
@@ -4330,6 +4340,9 @@ def test_issue_217_complete_deck_chain(tmp_path):
     card = deck.slides[0].shapes[0]
     card.text = "Card TOKEN"
     card = deck.slides[0].shapes[0]
+    # Compare shadow paint without unrelated endpoint-gradient interpolation.
+    card.fill.solid()
+    card.fill.fore_color.rgb = RGBColor(0x4F, 0x81, 0xBD)
     card.shadow.color.rgb = RGBColor(0x12, 0x34, 0x56)
     card.shadow.alpha = 0.5
     card.shadow.blur_radius = rpptx.Pt(6)
@@ -4757,15 +4770,20 @@ def test_cell_text_frame_structural_edits_stale_every_earlier_nested_handle():
     assert new_paragraph.text == ""
     assert frame.text == cell.text
     fresh_frame = cell.text_frame
+    retired_runs = new_paragraph.runs
     new_run = new_paragraph.add_run("new run")
     assert new_run.text == "new run"
-    with pytest.raises(StaleElementError):
-        _ = new_paragraph.text
+    assert new_paragraph.text == "new run"
+    with pytest.raises(StaleElementError, match=r"First invalidated by Paragraph.add_run at committed revision"):
+        len(retired_runs)
     assert fresh_frame.text == cell.text
     paragraph = cell.text_frame.paragraphs[0]
+    held_run = paragraph.runs[0]
     paragraph.text = "replacement"
-    with pytest.raises(StaleElementError):
-        _ = paragraph.text
+    assert paragraph.text == "replacement"
+    _assert_stale_after_exactly_one_bump(__import__("rpptx"), lambda: held_run.text)
+    with pytest.raises(StaleElementError, match=r"First invalidated by Paragraph.text at committed revision"):
+        _ = held_run.text
     assert cell.text.startswith("replacement")
     assert prs.slides[0].shapes[0].table.cell(0, 0).text == cell.text
 
@@ -5821,7 +5839,7 @@ def test_fx206_noncontiguous_group_and_foreign_selection_are_atomic():
         slide.shapes.group([shapes[0],shapes[2]])
     assert type(failure.value) is RpptxError
     assert p.to_bytes()==before
-    with pytest.raises(ValueError,match="not in this collection"):
+    with pytest.raises(ValueError, match=r"^shape owner is not in this presentation collection$"):
         slide.shapes.align([shapes[0],other],"left")
     assert p.to_bytes()==before
     assert [s.left for s in shapes]==[0,100,200]
@@ -5995,7 +6013,7 @@ def test_fx206_imported_identity_raw_ungroup_and_nested_namespace_roundtrip(tmp_
     import io
     import zipfile
     import xml.etree.ElementTree as ET
-    from rpptx import Presentation
+    from rpptx import Presentation, StaleElementError
     for shadow in [False, True]:
         p = Presentation()
         slide = p.slides.add_slide(p.slide_layouts[6])
@@ -6011,10 +6029,14 @@ def test_fx206_imported_identity_raw_ungroup_and_nested_namespace_roundtrip(tmp_
         patched = _fx206_replace_slide_source(p.to_bytes(), insert_outer)
         q = Presentation.from_bytes(patched)
         outer_shape = q.slides[0].shapes[0]
+        outer_children = outer_shape.shapes
         nested = outer_shape.shapes[0]
         held = nested.shapes[0]
         outer_shape.ungroup()
         assert nested.shape_id == 51 and held.text == "retained"
+        for retired in (lambda: outer_shape.xml, lambda: len(outer_children)):
+            with pytest.raises(StaleElementError, match=r"First invalidated by Shape.ungroup "):
+                retired()
         target = tmp_path / f"promoted-{shadow}.pptx"
         q.save(target)
         r = Presentation(target)
@@ -6034,6 +6056,15 @@ def test_fx206_imported_identity_raw_ungroup_and_nested_namespace_roundtrip(tmp_
             "{urn:ancestor}after",
         ]
         assert root.find('.//{urn:ancestor}after').text == "  unchanged  "
+        nested_children = nested.shapes
+        held_paragraph = held.text_frame.paragraphs[0]
+        q.slides[0].shapes.remove(nested)
+        for retired in (lambda: nested.xml, lambda: len(nested_children),
+                        lambda: held.text, lambda: held_paragraph.text):
+            with pytest.raises(StaleElementError, match=r"First invalidated by ShapeCollection.remove "):
+                retired()
+        remaining = _package_parts(q.to_bytes())["ppt/slides/slide1.xml"]
+        assert b"<f:before/>" in remaining and b"unchanged" in remaining
 
 
 def test_fx206_imported_opaque_composition_and_group_owner_refusals_are_atomic():
@@ -8578,7 +8609,7 @@ def test_fx208_transition_public_base():
     assert transition.advance_after is None and transition.advance_on_click is None
 
 
-def test_fx208_master_theme_public_base():
+def test_fx208_master_theme_public_base(tmp_path):
     from rpptx import Presentation
     prs = Presentation()
     assert len(prs.slide_layouts) >= 2
@@ -8589,9 +8620,18 @@ def test_fx208_master_theme_public_base():
     assert len(master.slide_layouts) == len(prs.slide_layouts)
     theme = master.theme
     before = prs.to_bytes()
-    with pytest.raises(AttributeError):
-        theme.name = "changed"
-    assert prs.to_bytes() == before
+    theme.name = "changed"
+    assert theme.name == master.theme.name == "changed"
+    after = prs.to_bytes()
+    original_parts, changed_parts = _package_parts(before), _package_parts(after)
+    assert original_parts.keys() == changed_parts.keys()
+    assert [name for name in original_parts if original_parts[name] != changed_parts[name]] == ["ppt/theme/theme1.xml"]
+    with pytest.raises(TypeError):
+        theme.name = 17
+    assert prs.to_bytes() == after and theme.name == "changed"
+    output = tmp_path / "named-theme.pptx"
+    prs.save(output)
+    assert Presentation(output).slide_masters[0].theme.name == "changed"
     prs.slides.add_slide(prs.slide_layouts[1])
     assert theme.name == master.theme.name
 

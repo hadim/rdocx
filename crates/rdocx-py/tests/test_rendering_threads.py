@@ -319,8 +319,12 @@ def test_render_errors_reacquire_and_map_cleanly():
 
     document = _document_with_invalid_embedded_font()
 
+    # The preserved orphan font is not registered in a Word font table.
+    # Feed the same malformed sfnt through the checked caller-font entrypoint.
+    before = document.to_bytes()
     with pytest.raises(LayoutError) as raised:
-        document.to_pdf()
+        document.to_pdf(fonts=(("FaultyX", _font_with_zero_units_per_em()),))
+    assert document.to_bytes() == before
     assert isinstance(raised.value, RdocxError)
     assert "font parsing error" in str(raised.value)
 
