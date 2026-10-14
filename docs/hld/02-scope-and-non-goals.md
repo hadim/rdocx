@@ -573,3 +573,9 @@ namespace-complete element.xml snapshot and checked element.replace_xml. This
 is a concrete owner boundary, not a mutable lxml tree. Unsupported owner
 profiles return named atomic refusals. General lxml compatibility remains
 outside scope.
+
+Bounded Python compatibility names delegate to their existing checked native
+owners. Matching public fields do not grant a manually constructed snapshot
+captured authority. Compatibility does not imply automatic owner refetch,
+fuzzy option coercion or a mutable lxml object model. Unsupported operations
+retain named atomic refusal and actionable causal errors.

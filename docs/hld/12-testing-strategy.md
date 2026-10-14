@@ -4191,3 +4191,21 @@ no-op revision preservation. Native conversion checks use pinned tools and
 private headless profiles. Ignored tests and collection-only observations do
 not supply acceptance evidence. This scoped qualification does not replace
 the final immutable100 measurement or the integrated sprint gate.
+
+## Integrated Python compatibility qualification
+
+The immutable corpus contains100 scripts,49 Word and51 PowerPoint, with
+BASE24, XML14, LIFE16 and AREA46 membership. The17 Word and7 PowerPoint
+documentation cases retain their declared adaptations. Body, input, source,
+interpreter, wheel, native library and first-attempt identities are pinned.
+Correct-file qualification requires at least90 percent of that unchanged
+denominator. Exit zero alone does not qualify a saved file or render.
+
+Every required XML owner, lifetime and native/render obligation remains a hard
+gate. Typed observations bind actual and expected values to authenticated
+source and output evidence. Pending facts leave the full metric unset. Named
+reviewed specimen conflicts require exact current-candidate failure evidence
+and independently admitted companion controls. They remain in the denominator
+without successful-file credit. Unexpected failures, missing or duplicate IDs,
+changed bodies and unsafe process cleanup reject the report and CI gate.
+Original failed candidates remain distinct from genuinely changed successors.

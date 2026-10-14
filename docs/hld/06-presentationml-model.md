@@ -501,6 +501,11 @@ a checked owner part, descendant path and optional cell coordinate with a
 source fingerprint. `fit_text_at` refuses a stale location and publishes one
 uniform-size change. Field text, breaks, hyperlinks and unrelated formatting
 remain owned by their original elements. Refresh does not run during save.
+Font sizing trials retain the loaded face cache but start a fresh usage epoch
+for final rendering diagnostics. Approximation reports describe actual
+physical font contributions, deduplicated in first-use order. A supplied
+physical face that satisfies the requested family suppresses that family's
+approximation report. Trial-only contributions do not appear as final use.
 Imported autofit choices with opaque attributes or comments retain their lexical
 XML and original text-body wrapper attribute scope. Owned choice-name and scale
 edits preserve foreign payload, quoting and entities. Fully modeled choices keep

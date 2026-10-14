@@ -58,8 +58,11 @@ to be paragraph 4. python-docx does not have this problem because it holds an
 lxml element pointer that follows the element.
 
 Captured paths carry owner authority and the first causal retirement, not
-only a numeric revision. Word retains conservative document-wide structural
-invalidation. Presentation scopes bind physical slides, shapes, grids and text
+only a numeric revision. Word captures a finite prepared inventory of physical
+paragraph, table, cell, section and hyperlink owners. Regular runs retain
+conservative document-wide structural invalidation, and frozen Story and
+StoryItem captures retain snapshot-inventory authority. Presentation scopes
+bind physical slides, shapes, grids and text
 owners. Unrelated edits and supported owner relocation retain handles, while a
 removed and later reused numeric shape id cannot resurrect an old handle.
 Stale errors name the actual public operation and recovery path. Foreign
@@ -909,6 +912,8 @@ place and do not advance the revision. `rpptx` and `rpptx.enum.text` export
   a preserved picture bullet. `False` writes `a:buNone`, `None` removes the
   direct bullet, and `True` raises because a scheme is required.
   `auto_number` selects the concrete scheme and optional start instead.
+  `bullet_char` is a checked alias with the same str, bool or None contract,
+  including clear/no-op behavior and atomic invalid-value refusal.
 - `Paragraph.add_run(text="")` stages an append and allocates the new returned
   run against prepared successor scopes before publication. The owning
   paragraph and text frame remain live, while prior affected run descendants
@@ -1024,9 +1029,21 @@ handles valid.
 
 ### Checked presentation surfaces
 
+`Row.cells` returns a tuple of checked live cell views. `Theme.name` reads and
+updates the owned theme root. An absent `CoreProperties.author` reads as None,
+while an explicitly empty creator remains an empty string. `Paragraph.text`
+retains its paragraph and properties, replacing its run children and retiring
+the affected captured runs.
+
 `Shape` exposes title, alternative text, decorative state and direct flips.
+`alt_title`, `alt_text` and `decorative` use the actual shape's cNvPr owner.
 `ShapeCollection.group`, `Shape.ungroup`, `align` and `distribute` stage selected
-physical owners and preallocate returned handles before publication. Connector
+physical owners and preallocate returned handles before publication.
+The `relative_to` compatibility argument uses the existing arrangement
+reference provider. Conflicting explicit reference arguments refuse before
+publication. Cardinality refusal states the actual required minimum, selected
+count and reference context while retaining the public exception class and
+existing operation cause. Connector
 endpoint methods validate actual connection sites and current target owners.
 `Shape.insert_picture(image_file)` fills a picture placeholder under its
 existing identity with checked crop-to-fill. Invalid image or unrepresentable
@@ -1037,7 +1054,8 @@ names follow native type/orientation/collision rules, without renaming imports.
 jumps under checked relationship ownership. External addresses and action-only
 clicks retain their distinct semantics. A live `Font.highlight` colour view
 shares the RGB/theme/brightness contract and refuses destructive unknown
-transform edits. `Font.small_caps` and `Font.all_caps` select mutually exclusive
+transform edits. `Font.highlight_color` names that same checked colour view.
+`Font.small_caps` and `Font.all_caps` select mutually exclusive
 direct modes. These getter reads create no owner nodes or scope generations.
 
 ## Native Word facade stability
@@ -1440,11 +1458,11 @@ a hyperlink relationship that nothing references any more. Only links that
 `w:fldSimple`, a link in a text box inside `mc:AlternateContent`, and a
 HYPERLINK field are not. Python exposes
 `Document.set_hyperlink_url` and `Document.remove_hyperlink` for a `Hyperlink`
-record. A snapshot from `Document.hyperlinks` resolves at its recorded position
-only while its story keeps the same link paths and texts and the link keeps
-its fields, and a record built from the public fields resolves only when
-exactly one link matches. Neither call moves content, so live handles stay
-valid.
+record. A captured snapshot from `Document.hyperlinks` resolves its surviving
+physical owner and current ordinal. Removal retires that authority even when
+another link has identical public fields. A record built from public fields
+resolves only when exactly one link matches. These operations preserve proven
+surviving content owners and retain conservative regular-run invalidation.
 `Document::set_picture_size` resizes every main-document `pic:pic` drawing
 whose blip names one image relationship. It writes `wp:extent` and the `a:ext`
 of `pic:spPr/a:xfrm`, scales `wp:effectExtent` with the extent on each axis,

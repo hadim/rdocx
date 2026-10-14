@@ -4,7 +4,11 @@
 
 `oxml-py-support` owns captured path authority, owner scopes and prepared
 revision publication. It does not own native presentation objects or keep a
-second handle registry. Word bindings capture a conservative document scope.
+second handle registry. Word bindings prepare a finite inventory of current
+physical paragraph, table, cell, section and captured hyperlink owners.
+Supported publication retains only proven surviving owners. Regular runs keep
+the conservative document epoch, while frozen Story and StoryItem captures
+also retain snapshot-inventory authority.
 Presentation bindings capture concrete slide, shape, table-grid and text-owner
 scopes, then locate retained physical owners in their current source graph.
 Manual native snapshot constructors remain unbound and visible snapshot

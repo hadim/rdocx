@@ -7538,7 +7538,10 @@ lifetime, invalid units, ignored options and actionable error residuals once
 under their actual owner. Preserve the complete frozen100 bodies and their
 Word49/PowerPoint51 allocation, Base17/100 evidence and honest per-area rates.
 Qualify source-built paired bindings, saved files, the complete lifetime
-contract and CI reporting. No corpus rewriting or provider duplication.
+contract and candidate-bound CI reporting. Bounded aliases reuse checked
+native providers, and causal errors retain their first public invalidator.
+Named reviewed non-successes remain in the denominator without correct-file
+credit. No corpus rewriting or provider duplication.
 
 **Depends on**: F-X211a, F-X211b, F-X200 through F-X210, F-X215, F-X217,
 F-X218, F-X220, F-X211d for final integrated capability acceptance.
