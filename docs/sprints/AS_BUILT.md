@@ -19427,3 +19427,21 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** Exactly HLD02,03,04,06,10,12 and14, preserving font/B/F217 and F223 contracts.
 
 **Notes for future sessions.** Keep worker branches through final verification and close and preserve required evidence before clean worktree retirement. Parent F-X211 remains running and compatibility child c remains pending. Frozen40 issues/30 PRs, excluded/open264/281 and S92 deferrals remain unchanged. No remote closure, push, main merge, tag or publication is claimed.
+
+
+### F-X216, Import complete slides and merge decks with source formatting
+
+**Completed.** 2026-10-14, S91 scoped dependency-prefix checkpoint
+**Size.** L, actual not recorded
+
+**What was built.** Transactional complete slide graph import and deck merge preserve source formatting, owned relationships, comments, sections, notes, charts, workbooks, embedded fonts, OLE previews, hyperlinks and shared sounds through native, Python and CLI surfaces. Issues347,348,349 and PR357 are locally addressed.
+
+**Tests.** The defining transactional graph regression passes on current source and has genuine retained Base failure evidence. Scoped policy, current installed controls, typing/fullstubs, verified archives and native acceptance retain their recorded scopes. Native PowerPoint comparisons qualify notes and two corpus imports, discriminate the wrong-theme control, preserve graph-kind resources and validate a primary-factory OLE/jump/sound source through two save/reopen cycles. Independent production, appearance, routing, HLD, measurements and integration reviews report zero defects and smells. Four missing historical native oracle assets remain uncredited and deferred to S92.
+
+**Integrated evidence.** Prepared feature58ee85bcaf4c001370598e416bda14f8519d442c and tip2e87d02e integrate at501144b4. Handoff validates and is consumed. Source bridge5046eacaa816cdefc416bd2dfe506c32c07b56389f4c972681550726c27baf89 authenticates unchanged product carriers. Native admission4ef81fbd1ad0b768302ca116233ab3437fec192d6709e3c4fb06a87d23c51978 authenticates21 receipt paths. Current defining completion receipt9c29f81311bb83176d9c4c789cd1897373b73a1e67241c1ea572cf185623be01 and final scoped policy307a5f7f78a7f3b60727492278ebe7d12e1b49d4844166c8d2ee0255f35d53a9 remain distinct from prior failures. Integration review782232f275143a159dc3d57d9cead92e4255678336b07b2768f066c3589cca4e is clean.
+
+**Hash harness.**49 unchanged deterministic outputs on the authenticated worker source. Final full integrated verification, both mandatory focused external-artifact appearance riders and sprint review remain due.
+
+**Spec sections touched.** Exactly HLD02,04,05,06,08,10,12 and14. Canonical Word0.16.1 and PowerPoint0.14.1 release targets are preserved.
+
+**Notes for future sessions.** Required worker scratch evidence is preserved under /private/tmp/S91-F-X216-preserved-worker-evidence-1, with1662 file, symlink and mode entries authenticated by manifest188034b0b47fff99b8ff2ce8e205c0eefd11bd41a2f408095254b65bbf1f29cc. Keep the worker branch through final verification and close. Parent F-X211 and child c remain running, release F-X221 remains pending. Frozen40 issues/30 PRs, excluded/open264/281 and S92 deferrals remain unchanged. No remote closure, push, main merge, tag or publication is claimed.
