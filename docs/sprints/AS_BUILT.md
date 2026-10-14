@@ -19463,3 +19463,21 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** Exactly HLD04,10,12 and14, including the canonical style ID and decoded-root-attribute versus exact opaque-child distinction.
 
 **Notes for future sessions.** Required worker evidence is preserved at /private/tmp/S91-F-X211d-preserved-worker-evidence-1 with90 entries and manifest844cf0c2ed7561de775273bf31ed3b0bd0a62a747b0e01a1db7a074832918774. Keep the worker branch through sprint close. Parent F-X211 and child c retain the complete unchanged100 and native/rendered acceptance. Release F-X221 remains pending. Intake stays frozen40 issues/30 PRs, excluded/open264/281 and S92 deferrals remain unchanged. No remote closure, main merge, tag, publication or push is claimed.
+
+
+### F-X211c, Integrated Python compatibility and causal errors
+
+**Completed.** 2026-10-14, S91 scoped dependency-prefix checkpoint
+**Size.** L, actual not recorded
+
+**What was built.** Residual aliases, checked shape metadata, surviving table collections, indexed-member retirement with the first real mutation cause, source-qualified font diagnostics and stable header-cache consumers. Existing report and CI entrypoints retain immutable first-attempt qualification without replay or score stitching.
+
+**Tests.** Actual runtime source383416c1cc7d97f64a974120055a950dfb9a2ab36229670923a57eccaa228afa runs the unchanged100 once, with96 assertion exits0. Independent saved-file, native and render admission qualifies95 correct files, all42 hard gates and51 native clauses, with no unexpected failures. Five documented divergences receive no correct-file credit. All24 documentation cases qualify. Current paired PPT20 and both typing/fullstub controls pass. Native Word original Symbol/Wingdings morphology survives save/reopen, nine original-font raster positives score1.0 and36 negatives reject below0.99. Native/resource, WASM, MSRV, docs and deny evidence retains exact scope. All22 verified archives remain below10MiB. Full policy156 has154 passes and two platform skips. Final format, README, prose and26 adapters pass.
+
+**Integrated evidence.** Source8ff2552a63d18e2b28445a395e5582b561f286ab and tip8b2437a812d42213e88b915f2cd4df8113b08934 integrate atf62976d382d713659007f06739c30b64bc1be32f. Handoff validates and is consumed. Whole reviewde777e1e and integration reviewec04e1be have zero defects and smells. All346 product/build/test/README blobs and modes match the verified worker. Reporter stdoutf8c254c1ad4887ae02580d3d4772ec00226932a0de8e6acee5f90b559f3ae250 and packet063c7aab134839aa9efec1b4a437f6a9c6d350f31187224870d524a6c6cc319c are retained under /private/tmp/S91-F-X211c-current-output-qualification-preparation-1/root-final-admission-and-report-successor-2. Scoped matrix5e186a02e6ed08d796d58678766183750e54ac9dda8a465d44f482fd4ea9e313, metadata bridgef2a0c456 and HLD bridge7d4ba49d retain original runtime provenance. Failed100 candidates, compiler/runtime and automation failures and the first reporter refusal remain distinct and unmodified.
+
+**Hash harness.**49 unchanged deterministic outputs on authenticated identical product source. Final full integrated verification and review remain due.
+
+**Spec sections touched.** Exactly HLD02,03,04,06,10,12 and14, preserving current canonical intent through manually reviewed HLD reconciliation.
+
+**Notes for future sessions.** Progress is preserved under /private/tmp/S91-F-X211c-preserved-worker-evidence-1. Keep required immutable producer/native/corpus/compiler artifacts through final verification and release. The clean worker is temporarily required for evidence custody. Parent aggregate completion and release F-X221 remain due. Intake stays frozen40 issues/30 PRs,264/281 stay open and S92 carryovers are untouched. No main merge, push, tag, publication or remote closure is claimed.

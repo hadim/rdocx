@@ -988,3 +988,5 @@ Issues264 and281 remain excluded and open.
 
 
 | F-X211d | S91 | L | not recorded | not recorded | 2026-10-14 | Scoped Word compatibility dependency completion. Installed32 and typing, ordinary2MiB12, pinned native complements, verified22 archives, full141 policy and README qualified. Independent completion and integration reviews clean. Parent unchanged100 and final sprint gates remain due |
+
+| F-X211c | S91 | L | not recorded | not recorded | 2026-10-14 | Scoped completion,95 qualified files from unchanged100, all42hard51native gates and24documentation cases, five no-credit divergences. Paired controls, nine raster and native Word morphology, verified22 archives, policy154pass2skip and clean whole/integration reviews. Final full sprint gate remains due |

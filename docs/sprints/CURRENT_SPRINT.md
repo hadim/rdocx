@@ -45,7 +45,7 @@ for parallel Word and PowerPoint work followed by integrated compatibility. The 
 | F-X211 | Complete Python script compatibility and safe XML access | L | in-progress | - |
 | F-X211a | Word checked XML owners and resource admission | L | done | - |
 | F-X211b | PowerPoint checked XML owners | L | done | - |
-| F-X211c | Integrated Python compatibility and causal errors | L | in-progress | codex |
+| F-X211c | Integrated Python compatibility and causal errors | L | done | - |
 | F-X211d | Repair Word compatibility owners and aliases | L | done | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | done | - |
@@ -1238,3 +1238,8 @@ Parent F-X211 and release preparation F-X221 remain unfinished. Full integrated
 verification, focused appearance riders and sprint review remain due. Intake
 stays frozen40 issues/30 PRs, with264/281 excluded and open. No remote closure,
 main merge, tag, publication or push is claimed.
+
+
+## F-X211c compatibility checkpoint, 2026-10-14
+
+Child c is completed and integrated atf62976d3. The unchanged100 qualifies95 correct files, all42 hard gates and51 native clauses, with24of24 documentation cases and no unexpected failures. Five documented divergences remain in the denominator without successful-file credit. Actual source383 and outputs retain independent build/install/native authority. Whole-feature and integration reviews are clean. Parent aggregate completion and F-X221 release preparation remain due. Intake stays closed40 issues/30 PRs,264/281 stay open and S92 deferrals remain unchanged. No publication or remote closure is claimed.
