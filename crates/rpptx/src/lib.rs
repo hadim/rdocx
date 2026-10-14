@@ -4971,9 +4971,19 @@ impl Presentation {
 
     /// Reads one physical child path in a slide, layout or master.
     pub fn part_shape_at(&self, owner: ShapeOwner, path: &[usize]) -> Result<ShapeRef<'_>> {
-        child_at(&self.owner_data(owner)?.shape_tree.children, path)
+        let missing = || invalid_shape_mutation("shape owner", "missing physical path");
+        let (first, rest) = path.split_first().ok_or_else(missing)?;
+        let mut shape = self
+            .owner_data(owner)?
+            .shape_tree
+            .children
+            .get(*first)
             .map(shape_ref)
-            .ok_or_else(|| invalid_shape_mutation("shape owner", "missing physical path"))
+            .ok_or_else(missing)?;
+        for index in rest {
+            shape = shape.child(*index).ok_or_else(missing)?;
+        }
+        Ok(shape)
     }
 
     /// Edits the actual part-owned child, including group descendants.
