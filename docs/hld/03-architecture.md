@@ -1063,10 +1063,14 @@ formatting, the prior holds no `w:rPr` and reads like Word's form, so rejecting
 it keeps the edited mark formatting. Contextual markers act on their owning
 run, paragraph mark, numbering property, or row. A removed paragraph mark
 merges with the next paragraph across a table that immediately follows it when
-every row of that table is removed by the same resolution. A removed paragraph
+every row of that table is removed by the same resolution. Before a table
+that stays, it has no merge partner, so the paragraph goes when nothing of it
+but proofing marks remains, and is refused otherwise. A removed paragraph
 mark inside removed content, such as a cell paragraph of a removed row, needs
 no merge partner. The merged paragraph keeps the resolved properties of the
-last paragraph, whose mark remains. Resolution stages every affected package part, resolves
+last paragraph, whose mark remains. A hyperlink whose every child is a revision
+the resolution removes is removed with them, since Word reads a hyperlink as a
+field and an empty one shows nothing. Resolution stages every affected package part, resolves
 selected descendants before their enclosing subtree, reparses the complete
 candidate package, and commits once only after validation succeeds.
 
@@ -1081,7 +1085,11 @@ Unicode word, whitespace, and punctuation-or-symbol units, and applies
 left-biased ignores for formatting, textual whitespace, fields, comments, and
 selected story categories. Selected categories leave the original story bytes
 untouched and are excluded before shell checks and revision-id allocation.
-Non-text content remains atomic. Unmatched identical owners become move pairs
+Non-text content remains atomic. Between matched owners of a story or control,
+the remaining owners pair by kind in order, a paragraph with a paragraph, a
+table with a table and a control with a control, and the others are deleted,
+then inserted, before the next pair, so a table edited beside a deleted
+paragraph is compared in place. Unmatched identical owners become move pairs
 only within one story. A changed run of consecutive paragraphs that holds a
 pair whose hyperlinks, bookmarks, comment ranges, preserved raw children, or
 inline controls differ, that gains or loses a modeled field, or that holds a
@@ -1091,10 +1099,12 @@ neighbouring paragraphs until each side holds every complex field it begins or
 ends, so a table of contents, whose end Word writes in a paragraph of its own,
 is deleted and inserted whole, which Word needs to accept or reject it. A
 whole deleted, inserted, or moved paragraph carries its bookmarks and comment
-ranges inside its revision wrappers, and its hyperlinks and simple fields only
-inside a complex field deleted or inserted whole with it, since neither may
-sit in a revision wrapper and Word reads each as a field whose codes stay
-untracked. Comparison refuses otherwise, and when the two sides of such a run
+ranges inside its revision wrappers. A hyperlink may not sit in a revision
+wrapper but may hold one, so the wrappers go inside each of its hyperlinks, as
+Word writes a tracked hyperlink run. A simple field may not sit in a revision
+wrapper either, and rdocx resolves no revision inside one, so the paragraph
+carries its simple fields only inside a complex field deleted or inserted
+whole with it. Comparison refuses otherwise, and when the two sides of such a run
 share a bookmark or comment range, or a moved paragraph holds one, since the
 redline would hold it twice. Deleted content writes a field code as
 `w:delInstrText`, since Word refuses to open a deletion that holds
@@ -1105,7 +1115,7 @@ When a matched paragraph changes its comment range, hyperlink, inline control,
 or preserved child boundary without moving a bookmark, comparison writes a
 paired paragraph deletion and insertion. This also covers a TOC entry whose
 cached text becomes a hyperlink and PAGEREF field. Unmatched paragraphs with a
-hyperlink outside a carried complex field still refuse the pair.
+simple field outside a carried complex field still refuse the pair.
 Changed field results remain inside their field owner, while instruction or
 form changes replace that complete owner. Supported run, paragraph, table, and
 section properties emit property revisions that retain the original property
@@ -1151,6 +1161,10 @@ paragraph mark as the story or control terminator. A self-closing original
 final paragraph expands around its marker without creating a raw sibling. This
 ownership lets acceptance retain every appended paragraph and rejection
 reconstruct the original without an empty terminal residue.
+Any other inserted or deleted paragraph carries the change on its own mark,
+also when a table follows it, as Word writes it. Resolving that change merges
+the paragraph into the next one across the tables it removes, or removes the
+paragraph before a table that stays.
 When an inserted or deleted table stands between that boundary and a final
 inserted or deleted paragraph, the paragraph mark before the table carries the
 boundary, because resolving that change removes every row of the table.
