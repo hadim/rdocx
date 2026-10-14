@@ -5168,12 +5168,7 @@ impl SeriesParseState {
                 self.boundary = self.boundary.max(3);
             }
             b"spPr" => {
-                reject_conflicting_prefix_in_xml(&raw, b"a", A_NS)?;
-                let properties = CT_ShapeProperties::from_xml(&raw)?;
-                let mut writer = Writer::new(Vec::new());
-                properties.write_xml_as(&mut writer, "c:spPr")?;
-                reject_rewritten_foreign_elements(&raw, &writer.into_inner(), namespaces, b"spPr")?;
-                set_once(&mut self.sp_pr, properties, "c:spPr")?;
+                parse_chart_shape_properties(&raw, namespaces, &mut self.sp_pr)?;
                 self.boundary = self.boundary.max(4);
             }
             b"dLbls" => {
@@ -7708,12 +7703,7 @@ impl AxisParseState {
                 self.boundary = self.boundary.max(11);
             }
             b"spPr" => {
-                reject_conflicting_prefix_in_xml(&raw, b"a", A_NS)?;
-                let properties = CT_ShapeProperties::from_xml(&raw)?;
-                let mut writer = Writer::new(Vec::new());
-                properties.write_xml_as(&mut writer, "c:spPr")?;
-                reject_rewritten_foreign_elements(&raw, &writer.into_inner(), namespaces, b"spPr")?;
-                set_once(&mut self.sp_pr, properties, "c:spPr")?;
+                parse_chart_shape_properties(&raw, namespaces, &mut self.sp_pr)?;
                 self.boundary = self.boundary.max(12);
             }
             b"txPr" => {
@@ -8070,7 +8060,7 @@ impl ChartLines {
                                 let name = chart_child_local(&child, &namespaces)?;
                                 let raw = capture_element(&mut reader, &child)?;
                                 if name.as_deref() == Some(b"spPr") {
-                                    parse_chart_lines_shape(&raw, &namespaces, &mut sp_pr)?;
+                                    parse_chart_shape_properties(&raw, &namespaces, &mut sp_pr)?;
                                     boundary = 1;
                                 } else {
                                     raw_children.push(boundary, raw);
@@ -8080,7 +8070,7 @@ impl ChartLines {
                                 let name = chart_child_local(&child, &namespaces)?;
                                 let raw = capture_empty_element(&child)?;
                                 if name.as_deref() == Some(b"spPr") {
-                                    parse_chart_lines_shape(&raw, &namespaces, &mut sp_pr)?;
+                                    parse_chart_shape_properties(&raw, &namespaces, &mut sp_pr)?;
                                     boundary = 1;
                                 } else {
                                     raw_children.push(boundary, raw);
@@ -8158,13 +8148,24 @@ impl ChartLines {
     }
 }
 
-fn parse_chart_lines_shape(
+fn parse_chart_shape_properties(
     raw: &[u8],
     namespaces: &NamespaceBindings,
     slot: &mut Option<CT_ShapeProperties>,
 ) -> Result<()> {
     reject_conflicting_prefix_in_xml(raw, b"a", A_NS)?;
-    let properties = CT_ShapeProperties::from_xml(raw)?;
+    let inherited = namespaces
+        .iter()
+        .map(|(prefix, uri)| {
+            Ok((
+                std::str::from_utf8(prefix)
+                    .map_err(OxmlError::from)?
+                    .to_owned(),
+                uri.clone(),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let properties = CT_ShapeProperties::from_xml_with_inherited_namespaces(raw, &inherited)?;
     let mut writer = Writer::new(Vec::new());
     properties.write_xml_as(&mut writer, "c:spPr")?;
     reject_rewritten_foreign_elements(raw, &writer.into_inner(), namespaces, b"spPr")?;
@@ -11180,12 +11181,7 @@ impl ChartSpaceParseState {
                 self.boundary = self.boundary.max(8);
             }
             b"spPr" => {
-                reject_conflicting_prefix_in_xml(&raw, b"a", A_NS)?;
-                let properties = CT_ShapeProperties::from_xml(&raw)?;
-                let mut writer = Writer::new(Vec::new());
-                properties.write_xml_as(&mut writer, "c:spPr")?;
-                reject_rewritten_foreign_elements(&raw, &writer.into_inner(), namespaces, b"spPr")?;
-                set_once(&mut self.sp_pr, properties, "c:spPr")?;
+                parse_chart_shape_properties(&raw, namespaces, &mut self.sp_pr)?;
                 self.boundary = self.boundary.max(9);
             }
             b"txPr" => {
@@ -15370,6 +15366,17 @@ mod tests {
         assert_eq!(parsed.values.values, vec![1.5, 2.5]);
         assert!(matches!(parsed.categories, Some(AxisData::String(_))));
         assert_eq!(parsed, Series::from_xml(&parsed.to_xml().unwrap()).unwrap());
+
+        let foreign = br#"<c:ser xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:x="urn:producer"><c:idx val="0"/><c:order val="0"/><c:spPr><x:solidFill><x:srgbClr val="112233"/></x:solidFill></c:spPr><c:val><c:numRef><c:f>S!$A$1</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="0"/></c:numCache></c:numRef></c:val></c:ser>"#;
+        let parsed = Series::from_xml(foreign).unwrap();
+        assert!(parsed.sp_pr.as_ref().unwrap().fill.is_none());
+        let written = parsed.to_xml().unwrap();
+        assert!(
+            std::str::from_utf8(&written)
+                .unwrap()
+                .contains(r#"<x:solidFill><x:srgbClr val="112233"/></x:solidFill>"#)
+        );
+        assert_eq!(parsed, Series::from_xml(&written).unwrap());
     }
 
     #[test]
@@ -15403,7 +15410,6 @@ mod tests {
             br#"<c:ser xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:f>S!$A$1:$A$2</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="2"><c:v>2</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#,
             br#"<c:ser xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:f>S!$A$1</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>NaN</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#,
             br#"<c:ser xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="urn:producer"><c:idx val="0"/><c:order val="0"/><a:marker/><c:val><c:numRef><c:f>S!$A$1</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="0"/></c:numCache></c:numRef></c:val></c:ser>"#,
-            br#"<c:ser xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:x="urn:producer"><c:idx val="0"/><c:order val="0"/><c:spPr><x:solidFill><x:srgbClr val="112233"/></x:solidFill></c:spPr><c:val><c:numRef><c:f>S!$A$1</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="0"/></c:numCache></c:numRef></c:val></c:ser>"#,
             br#"<c:ser xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:idx val="0"/><c:order val="0"/><c:tx><c:v>opaque</c:v></c:tx><c:tx><c:strRef><c:f>S!$A$1</c:f><c:strCache><c:ptCount val="0"/></c:strCache></c:strRef></c:tx><c:val><c:numRef><c:f>S!$B$1</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="0"/></c:numCache></c:numRef></c:val></c:ser>"#,
             br#"<c:ser xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:idx val="0"/><c:order val="0"/><c:cat><c:multiLvlStrRef/></c:cat><c:cat><c:numRef><c:f>S!$A$1</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="0"/></c:numCache></c:numRef></c:cat><c:val><c:numRef><c:f>S!$B$1</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="0"/></c:numCache></c:numRef></c:val></c:ser>"#,
             br#"<c:ser xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:f>S!$B$1</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="0"/></c:numCache></c:numRef></c:val><c:bubbleSize><c:numLit/></c:bubbleSize><c:bubbleSize><c:numRef><c:f>S!$C$1</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="0"/></c:numCache></c:numRef></c:bubbleSize></c:ser>"#,
@@ -15609,7 +15615,7 @@ mod tests {
         assert_eq!(parsed.chart.disp_blanks_as, DispBlanksAs::Span);
         assert!(parsed.chart.title.is_some());
         assert!(parsed.chart.legend.is_some());
-        assert!(parsed.sp_pr.is_some());
+        assert!(parsed.sp_pr.as_ref().unwrap().fill.is_some());
         assert!(parsed.tx_pr.is_some());
 
         let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
