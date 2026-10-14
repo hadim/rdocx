@@ -4180,3 +4180,14 @@ named atomic refusal. Both WASM graphs and49 unchanged hashes gate the current
 source. The immutable100-script cross-family measurement belongs the
 integrated compatibility child and retains the independently reviewed W-XML-02
 non-success conflict with W-LIFE-06.
+
+The corrective Word qualification executes32 installed controls from a fresh
+source-qualified wheel, plus strict mypy and native/root stubtest. Twelve
+ordinary-stack controls exercise the32-table and weighted256-control limits,
+namespace ownership and lifecycle behavior. Exact root metadata and adjacent
+opaque-child checks cover replacement, scalar edits and reopen. Merge tests
+require atomic refusal for removed opaque cell properties and borders, with
+no-op revision preservation. Native conversion checks use pinned tools and
+private headless profiles. Ignored tests and collection-only observations do
+not supply acceptance evidence. This scoped qualification does not replace
+the final immutable100 measurement or the integrated sprint gate.

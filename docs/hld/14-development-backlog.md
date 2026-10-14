@@ -7541,7 +7541,7 @@ Qualify source-built paired bindings, saved files, the complete lifetime
 contract and CI reporting. No corpus rewriting or provider duplication.
 
 **Depends on**: F-X211a, F-X211b, F-X200 through F-X210, F-X215, F-X217,
-F-X218, F-X220 for final integrated capability acceptance.
+F-X218, F-X220, F-X211d for final integrated capability acceptance.
 **Test gate**: regression. Installed isolated bindings execute the immutable100
 and saved-file assertions, actual per-area rates and named causal invalidation
 errors, with all remaining parent native, render, publication and risk gates.
@@ -7552,8 +7552,9 @@ Resolve the Word failures exposed by the actual unchanged first100 candidate:
 checked table/cell/section XML retains exact opaque attributes and adjacent
 children, held sections and paragraphs survive supported header/note/equation
 publication, section margin aliases consume canonical units, Cell.merge uses
-checked physical grid ownership, and the requested canonical built-in table
-style is defined before use. Transfer the four reviewed Word binding/test
+checked physical grid ownership with atomic refusal for removed opaque cell
+properties and borders, and the requested canonical built-in table style is
+defined lazily before use without changing the default factory. Transfer the four reviewed Word binding/test
 carriers from c once, without reimplementing them. All original parent
 acceptance, conservative Run retirement, manual/foreign refusal, atomicity,
 source preservation and frozen100 identities remain unchanged.

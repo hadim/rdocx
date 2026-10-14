@@ -3816,3 +3816,18 @@ successors and returned Python allocations all complete before the single
 prepared publication. The five Word element objects return namespace-complete
 str and replace_xml(str) returns None through the concrete checked native
 operation.
+
+Section margin aliases use the canonical EMU length interface and truncating
+Twips conversion. Header/footer paragraph append preserves the selected held
+Section and independent physical header aliases, while retiring unsafe
+furniture descendants. Note and equation append preserve a surviving held
+Paragraph and retire affected content descendants. These operations do not
+relax the conservative regular-Run document epoch.
+
+Cell.merge admits both checked owners in the same physical table and prepares
+the surviving returned cell before publication. A no-op preserves revisions.
+Removing another cell with opaque cell children, cell-property children or
+border children refuses atomically rather than losing those bytes.
+The style ID `LightShading-Accent1` and name `Light Shading Accent 1` resolve
+to the same actual canonical style definition. Lazy admission preserves
+custom definitions and leaves the default document factory unchanged.

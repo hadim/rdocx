@@ -1895,6 +1895,13 @@ inclusive32 boundary. Iterative borrowed-model admission precedes staging
 clones and serialization. Opaque foreign routes do not consume modeled nesting
 authority.
 
+Checked table, cell and section replacement retains expanded root attribute
+names and decoded values, with the required namespace bindings. Attribute
+quoting and entity spelling may be normalized by reconstruction. Captured
+adjacent foreign children retain their exact bytes through replacement,
+scalar edits and save/reopen cycles. Namespace closure supplies the emitted
+owner bindings without rewriting the preserved foreign child payload.
+
 ## Picture extraction and one-shot publication
 
 Word picture occurrences retain physical story ownership separately from
