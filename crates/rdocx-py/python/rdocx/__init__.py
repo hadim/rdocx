@@ -2,7 +2,7 @@
 
 from .enum import MSO_THEME_COLOR
 from .enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE, WD_TABLE_ALIGNMENT
-from .enum.text import WD_ALIGN_PARAGRAPH, WD_UNDERLINE
+from .enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT, WD_TAB_LEADER, WD_UNDERLINE
 from .shared import Cm, Emu, Inches, Length, Mm, Pt, RGBColor, Twips
 
 
@@ -221,6 +221,8 @@ __all__ = [
     "WD_ALIGN_PARAGRAPH",
     "WD_CELL_VERTICAL_ALIGNMENT",
     "WD_ROW_HEIGHT_RULE",
+    "WD_TAB_ALIGNMENT",
+    "WD_TAB_LEADER",
     "WD_TABLE_ALIGNMENT",
     "WD_UNDERLINE",
     "XmlError",
