@@ -1,12 +1,12 @@
 # F-X216, Import complete slides and merge decks with source formatting
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X206, F-X215
 **Issues**: 347, 348, 349
 **Test gate**: regression
-**Implementation**: claimed on work/f-x216-codex at 5b0f63d95e4ea82a05a3082fe74a6d8e19d9f572, implementation and acceptance in progress
+**Implementation**: claimed on work/f-x216-codex at 5b0f63d95e4ea82a05a3082fe74a6d8e19d9f572, implementation and scoped acceptance complete
 
 ## Problem
 
@@ -72,7 +72,7 @@ Existing carriers: oxml-drawing/src/text/paragraph.rs and list_style.rs, oxml-dr
 
 | Category | Test | Asserts |
 |---|---|---|
-| regression | `fx216_import_full_relationship_graph_is_transactional` | Separate chart/workbook/style/colour, OLE/preview, classic/modern comments/authors and slide-jump cases save/reopen and package-validate, late unknown type yields no mutation |
+| regression | `fx216_import_full_relationship_graph_is_transactional_chart_base` | Separate chart/workbook/style/colour, OLE/preview, classic/modern comments/authors and slide-jump cases save/reopen and package-validate, late unknown type yields no mutation |
 | round-trip | `fx216_foreign_relationship_tokens_and_graph_sharing_preserved` | Alias/local rebound namespaces, raw unknown nodes/child order, shared media and sounds, part collisions and source package byte retention |
 | regression | `fx216_batch_jumps_map_or_drop_with_diagnostics` | Forward/backward/imported/existing/self/notes jumps map exactly, absent targets release owned links only with explicit diagnostics, nonselected source slides remain unchanged |
 | regression | `fx216_source_formatting_reuses_equal_layout_master_theme` | Different-theme import resolves source fonts/colours/placeholders and copies one shared layout/master/theme, repeated calls reuse equal graphs, unequal names/opaque payload are not collapsed |
@@ -86,7 +86,7 @@ Existing carriers: oxml-drawing/src/text/paragraph.rs and list_style.rs, oxml-dr
 | regression | `add_table_round_trips_cells_formatting_banding_and_widths` | Existing constructor executes in the documented 8 MiB corpus-test environment, retained Base and candidate 2 MiB overflows remain diagnostic-only |
 | differential | `fx216_imported_native_source_formatting_matches` | Source versus imported deterministic geometry/fonts/colours/render, comparison metric fixed before measured output, wrong destination-theme negative differs |
 
-Native PowerPoint opens each copied relationship kind and merged source-format deck without repair, normal save/reopen retains graph and comments/authors, actual source/imported slide renders are compared. Record exact application build and source/output hashes. Existing corpus manifests bind the actual two decks and their dependencies. Missing corpus/native work is uncredited, never a silent selfskip. Source-built fixtures supply all relationship kinds without new checked-in binary assets. Pin python-pptx1.0.2 only where its public model answers the comparison. Fresh binding wheel, exact installed nodes, strict typing/stubtest and CLI integration must execute against the reviewed current union. Native graphical evidence is not replaced by successful ZIP validation.
+Native PowerPoint opens each copied relationship kind and merged source-format deck without repair, normal save/reopen retains graph and comments/authors, actual source/imported slide renders are compared. Record exact application build and source/output hashes. Existing corpus manifests bind the actual two decks and their dependencies. Missing corpus/native work is uncredited, never a silent selfskip. Source-built fixtures supply all relationship kinds without new checked-in binary assets. Pin python-pptx1.0.2 only where its public model answers the comparison. Fresh binding wheel, exact installed nodes, strict typing/stubtest and CLI integration must execute against the reviewed current union. Native graphical evidence is not replaced by successful ZIP validation. The two task-input appearance nodes are explicit ignored external-artifact riders in ordinary workspace execution. Their exact focused commands must run with `--ignored` and the admitted `FX216_NEGATIVE_INPUT_DIR` and `FX216_CURRENT_NOTES_DIR` against the final integrated source. Missing configured inputs fail those mandatory focused riders, not silently return.
 
 ## HLD impact
 
@@ -109,12 +109,12 @@ Existing defaults and samples expected unchanged. Source-format option and expan
 
 ## Implementation checklist
 
-- [ ] Approve complete options/diagnostics/section selection contract and wait for F206/F215 done.
-- [ ] Preserve genuine Base missing graph/formatting/merge controls with valid setup.
-- [ ] Implement checked whole-graph transfer, IDs/authors/jumps and graph-based deduplication.
-- [ ] Implement batch/native/Python/CLI atomic publication and all returned owners/stubs.
-- [ ] Prove corpus source-format and native PowerPoint repair-free open/render/save/reopen.
-- [ ] Complete scoped current-source gates, HLD and independent zero-finding review.
+- [x] Approve complete options/diagnostics/section selection contract and wait for F206/F215 done.
+- [x] Preserve genuine Base missing graph/formatting/merge controls with valid setup.
+- [x] Implement checked whole-graph transfer, IDs/authors/jumps and graph-based deduplication.
+- [x] Implement batch/native/Python/CLI atomic publication and all returned owners/stubs.
+- [x] Prove corpus source-format and native PowerPoint repair-free open/render/save/reopen.
+- [x] Complete scoped current-source gates, HLD and independent zero-finding review.
 
 ## Open questions
 
@@ -138,3 +138,57 @@ The existing source-format acceptance requires complete source-master text defau
 ## Corpus-test environment correction, 2026-10-14
 
 The initial parser diagnostic revision imposed a 2 MiB default test-thread hard gate beyond the existing import acceptance. The canonical HLD15 runtime and Test/MSRV CI jobs already pin 8 MiB for the corpus-heavy broad tests, with policy assertions at scripts/test_sprint_workflow.py:885. Retain the genuine 2 MiB Base and candidate failures without crediting a new product defect. Revert unnecessary experimental storage changes and return to the approved source-format implementation. No product acceptance, scope, CI setting, public parser API or final gate is waived.
+
+## Completion evidence
+
+The defining regression gate is
+`fx216_import_full_relationship_graph_is_transactional_chart_base`. Actual
+Base import refusal and source-font loss are retained in
+`.claude/scratch/F-X216-start/actual-native-Base-1/receipt.json`, SHA-256
+`a3723fb254d9709e4603db4bf3b3f52c22b312ffe0c1e937bc5c5e204c03d73c`.
+The completion run, including that exact named gate, scoped current Clippy,
+format, prose and adapter checks, is
+`.claude/scratch/F-X216-start/actual-completion-defining-gate-1/receipt.json`,
+SHA-256 `9c29f81311bb83176d9c4c789cd1897373b73a1e67241c1ea572cf185623be01`.
+
+Whole production microscope pass 2, effective appearance, routing, HLD pass 2
+and final measurements each report zero findings. Current native import
+controls, standard changed-crate tests, required source-corpus oracles, both
+WASM graphs and all 49 unchanged hash outputs are retained in
+`.claude/scratch/F-X216-start/final-scoped-acceptance-checkpoint-1.json`,
+with final routing and archive successors in
+`.claude/scratch/F-X216-start/appearance-rider-routing-frozen-1/manifest.json`
+and `.claude/scratch/F-X216-start/final-archive-metadata-frozen-2/manifest.json`.
+The final five archives authenticate every ordinary member and generated
+metadata. Their README tuples and measured dates match current source, with
+only the documented 64-byte compressed-size tolerance.
+
+The actual fresh installed provider and seven exact Python controls, strict
+mypy and both full stubtests are qualified in
+`/private/tmp/S91-F-X216-current-PPT-producer-preparation-4/actual-installed-1/receipt.json`,
+SHA-256 `82ae1c1a250a2337175357127b587ee041dc654e6fcc602445abf16a14008f2f`.
+All 35 installed distribution members remain authenticated, Word unchanged.
+Later changes are test routing and documentation or measurement metadata,
+with exact production-prefix inverse proof. They do not claim a rebuilt wheel.
+
+Root final native admission is
+`/private/tmp/S91-F-X216-native-acceptance-recipe-1/root-final-native-admission-1.json`,
+SHA-256 `4ef81fbd1ad0b768302ca116233ab3437fec192d6709e3c4fb06a87d23c51978`.
+It authenticates actual repair-free open, save and normal reopen, source
+fixed points, notes and corpus appearance, the wrong-theme negative, all
+copied graph kinds and native bidirectional slide-jump activation. Sound
+retention is qualified without an audible-playback claim. The original classic
+Plain font reference and native save notice remain recorded, while actual
+active embedded regular and bold faces are separately qualified. Native
+classic timestamp lexical conversion is retained without claiming instant
+equality. Source-native fixture repair diagnostics remain genuine failures,
+not acceptance evidence.
+
+Historical mandatory-oracle execution with six failures remains failed.
+Owned-cache successors qualify its two source-corpus setup cases. Four missing
+historical native assets remain unavailable and uncredited, carried separately
+to S92. Two-MiB stack experiments are diagnostic only under the documented
+8 MiB corpus-test contract. The final integrated full verification and sprint
+review remain root obligations. Both explicitly ignored external-artifact
+appearance nodes must run as mandatory exact focused riders with `--ignored`
+and the admitted input directories against the final integrated source.

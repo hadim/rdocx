@@ -300,21 +300,51 @@ the normal `MediaStore`. Notes are copied to a new part whose slide
 relationship points back to the duplicate. Custom-show membership is not
 copied.
 
-`import_slide(source, index, layout_index, insert_index)` copies one slide of
-another presentation through the same staged graph copy, like PowerPoint's
-reuse with the destination theme. The copy relates to the given destination
-layout, or else to the first destination layout named like the source slide's
-layout, and an unnamed or unmatched layout is refused. Notes relate to the
-destination notes master, which the bundled template supplies when the
-destination has none. Images, audio and video reuse equal destination media
-parts, SmartArt graphs are copied as by the bounded transfer, and external
-relationships such as hyperlinks keep their targets. A preflight refuses
-comments, charts, embedded objects, jumps to another source slide from the
-slide or its notes, and every other internal relationship type before anything
-is staged, so a refused import leaves the destination unchanged. Actions that
-name no relationship, such as `ppaction://customshow`, are carried unchanged
-and may name a custom show the destination lacks. A caller can rebuild a
-refused slide in the destination deck using supported shape operations.
+`import_slide(source, index, layout_index, insert_index)` retains the existing
+destination-formatting default. `ImportSlideOptions` carries optional layout
+and insertion indexes, `keep_source_formatting` and `keep_sections`.
+`import_slides(source, indexes, options, existing_slide_map)` returns immediate
+native destination indexes and ordered diagnostics. Explicit selection retains
+caller order, rejects repeated or invalid indexes before publication, and an
+empty selection is a true no-op. Same-deck import uses a stable source snapshot.
+A late failure rolls back the complete selected batch and leaves source intact.
+
+Destination formatting uses an explicit destination layout or supported name
+matching. Source formatting carries the source layout, master, theme and
+required source-owned resources. An explicit destination layout conflicts with
+source formatting and refuses before publication. Shared and repeated imported
+branding graphs are reused by complete supported semantic graph equality,
+including opaque metadata and remapped relationships, rather than equal names.
+Notes retain their checked slide backlink and required owner closure. The
+presentation registers one global notes master before authored or imported
+notes are published, including reuse of an existing bundled master. A proposed
+registration that would change existing unregistered destination notes refuses
+before mutation. Source-formatting notes retain actual source placeholder
+occupancy, text and fields. Matched placeholders inherit properties without
+manufacturing absent master placeholders or sample content. Non-placeholder
+master decorations are materialized with their original namespace authority. Retained qualified shape
+references to a skipped master placeholder refuse before publication, rather
+than creating a dangling target or manufacturing a placeholder.
+Source-formatting notes materialize the selected source-master surface,
+matched placeholder defaults,
+background and text appearance into each imported local notes owner, then
+suppress global master shapes for that imported owner. Unrelated destination
+notes retain their master visibility. Copied master and presentation-default
+resource references transfer from their actual original relationship scopes.
+Source theme, font and style references resolve before the local owner loses
+its source inheritance context. Foreign lookalikes and unrelated opaque
+payload remain unchanged, and ambiguous ownership refuses atomically.
+
+Charts, workbook/style/colour parts, embedded objects and previews, classic or
+modern comments and author/person graphs join the supported import closure.
+Slide jumps map to selected copied slides or explicit existing destination
+indexes. Unmapped jumps produce diagnostics and remove only their owned action
+and unused relationship scope. `keep_sections` preserves selected source
+section blocks in caller order with collision-free section IDs, retaining
+unselected destination section sidecars. Source table style and embedded font
+closure preserves destination global resources or refuses a conflict that
+cannot preserve both owners. Unsupported graph types remain named atomic
+refusals, not silent omissions.
 
 Duplication, transfer and import rewrite each copied notes or diagram part
 with one exact pass over its complete relationship map, including the
@@ -931,10 +961,16 @@ Native notes-page export uses the presentation `p:notesSz` as the page size and
 emits one page for every source slide, including a slide without a notes part.
 Notes-master shapes form the page base. Notes-slide placeholders then match
 their master placeholders by explicit index first and compatible type second.
-Each match must be unique and consumed once. Missing, unmatched, or ambiguous
-ownership fails before output. Slide-image placeholders receive the source
-slide as a vector subtree. Header, footer, date, and slide-number placeholders
-obey the typed master flags and stored text.
+Each match must be unique and consumed once. With an actual notes owner,
+only its instantiated placeholders join the page. Unmatched local overlays
+receive diagnostics, while absent master placeholders do not paint sample
+content. Ambiguous ownership and a missing required slide-image placeholder
+fail before output. The matched slide-image placeholder receives the source
+slide as a vector subtree. Header, footer and date preserve actual local text.
+Only actual local slide-number fields resolve to the exported page number,
+including fields with empty caches. Empty or absent local text bodies remain
+empty. Notes without a notes owner and handouts retain their separate master
+composition behavior.
 
 Audience handouts use the same relationship-resolved handout master and expose
 the six fixed `HandoutLayout` choices: one, two, three, four, six, and nine

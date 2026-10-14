@@ -545,6 +545,16 @@ Theme application accepts a selected PPTX or POTX master or one THMX theme,
 imports supported selected dependencies atomically and preserves direct slide
 content. Google Slides compatibility remains best effort.
 
+Selected slide import and deck merge retain destination formatting by default.
+Opt-in source formatting carries the checked source layout, master, theme and
+required resource closure. Single-slide and selected or all-slide batch Python
+operations expose checked insertion, source order, section blocks, jump maps
+and explicit diagnostics. CLI selected import uses one-based ranges and
+insertion, preserves caller order, and writes a separate atomic output while
+protecting both inputs. Unsafe or ambiguous transfers refuse before
+publication. These operations do not imply browser layout or arbitrary Office
+object support beyond the admitted native graph.
+
 ## Native one-shot automation surfaces
 
 Word CLI ordered literal/regex replacement, combined field-cache updates,

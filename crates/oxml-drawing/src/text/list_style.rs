@@ -34,6 +34,7 @@ pub struct CT_TextListStyle {
     raw_attributes: Vec<(String, String)>,
     source_root: Vec<String>,
     source_tag: String,
+    source_namespaces: Vec<(String, String)>,
     raw_children: OrderedRawChildren,
 }
 impl PartialEq for CT_TextListStyle {
@@ -109,6 +110,7 @@ impl CT_TextListStyle {
                 Event::Empty(element) if is_list_style_root(element.name().as_ref()) => {
                     validate_list_style_root(&element)?;
                     let mut style = Self::from_start(&element)?;
+                    style.source_namespaces = text_fragment_scope(&element, inherited)?.physical;
                     style.source_root = text_root_spellings_scoped(
                         &element,
                         inherited,
@@ -149,6 +151,7 @@ impl CT_TextListStyle {
         let mut namespaces = text_fragment_scope(start, inherited)?;
         namespaces.fixed_list_style_children = true;
         let mut style = Self::from_start(start)?;
+        style.source_namespaces = namespaces.physical.clone();
         style.source_root = text_root_spellings_scoped(
             start,
             inherited,
@@ -238,6 +241,46 @@ impl CT_TextListStyle {
             .push((*boundary).max(schema_boundary), raw);
         *boundary = (*boundary).max(schema_boundary);
         Ok(())
+    }
+
+    /// Returns local list defaults over the inherited default and each level.
+    pub fn with_inherited_defaults(&self, defaults: &Self) -> Result<Self> {
+        let mut local = Writer::new(Vec::new());
+        self.write_xml(&mut local)?;
+        let mut inherited = Writer::new(Vec::new());
+        defaults.write_xml(&mut inherited)?;
+        let xml = super::paragraph::text_inherit_property_xml(
+            &local.into_inner(),
+            &self.source_namespaces,
+            &inherited.into_inner(),
+            &defaults.source_namespaces,
+        )?;
+        let mut result = Self::from_xml_with_inherited_namespaces(&xml, &self.source_namespaces)?;
+        for level in 1..=9 {
+            if defaults.default_paragraph_properties.is_none()
+                && defaults.level(level).is_none()
+                && self.default_paragraph_properties.is_none()
+                && self.level(level).is_none()
+            {
+                continue;
+            }
+            let mut properties = defaults
+                .default_paragraph_properties
+                .clone()
+                .unwrap_or_default();
+            for overlay in [
+                defaults.level(level),
+                self.default_paragraph_properties.as_ref(),
+                self.level(level),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                properties = overlay.with_inherited_defaults(&properties)?;
+            }
+            result.set_level(level, properties);
+        }
+        Ok(result)
     }
 
     /// Writes the list style with fixed prefixes and ascending level order.

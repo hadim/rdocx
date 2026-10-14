@@ -1592,6 +1592,24 @@ impl PartialEq for CT_TextCharacterProperties {
 impl Eq for CT_TextCharacterProperties {}
 
 impl CT_TextCharacterProperties {
+    /// Returns local character properties with absent groups inherited from defaults.
+    pub fn with_inherited_defaults(&self, defaults: &Self) -> Result<Self> {
+        let mut local = Writer::new(Vec::new());
+        self.write_xml(&mut local, "a:rPr")?;
+        let mut inherited = Writer::new(Vec::new());
+        defaults.write_xml(&mut inherited, "a:rPr")?;
+        let xml = text_inherit_property_xml(
+            &local.into_inner(),
+            &self.source_namespaces,
+            &inherited.into_inner(),
+            &defaults.source_namespaces,
+        )?;
+        Self::from_xml_with_namespaces(
+            &xml,
+            &TextNamespaceScope::inherited(&self.source_namespaces),
+        )
+    }
+
     fn highlight_scope_attributes(&self) -> Vec<(String, String)> {
         let mut attributes = self.raw_attributes.clone();
         for (prefix, uri) in &self.source_namespaces {
@@ -2792,6 +2810,20 @@ impl PartialEq for CT_TextParagraphProperties {
 impl Eq for CT_TextParagraphProperties {}
 
 impl CT_TextParagraphProperties {
+    /// Returns local paragraph properties with absent groups inherited from defaults.
+    pub fn with_inherited_defaults(&self, defaults: &Self) -> Result<Self> {
+        let xml = text_inherit_property_xml(
+            &self.to_xml()?,
+            &self.source_namespaces,
+            &defaults.to_xml()?,
+            &defaults.source_namespaces,
+        )?;
+        Self::from_xml_with_namespaces(
+            &xml,
+            &TextNamespaceScope::inherited(&self.source_namespaces),
+        )
+    }
+
     /// Parses one complete paragraph-property element with any prefix.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         let expected = root_local_name(xml)?;
@@ -5939,4 +5971,391 @@ mod tests {
             CT_TextParagraphProperties::from_xml(changed_body.as_bytes()).unwrap()
         );
     }
+}
+
+/// Close an inherited property at its original owner scope without guessing
+/// which opaque attribute or text values might contain producer QNames.
+fn text_close_inherited_property(raw: &[u8], inherited: &[(String, String)]) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(raw);
+    let event = reader.read_event().map_err(OxmlError::from)?;
+    let empty = matches!(&event, Event::Empty(_));
+    let start = match event {
+        Event::Start(start) | Event::Empty(start) => start,
+        _ => return Ok(raw.to_vec()),
+    };
+    let mut content = std::str::from_utf8(start.as_ref())
+        .map_err(OxmlError::from)?
+        .to_owned();
+    let declared = start
+        .attributes()
+        .map(|attribute| attribute.map(|attribute| attribute.key.as_ref().to_vec()))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(OxmlError::from)?;
+    for (prefix, uri) in inherited {
+        let key = if prefix.is_empty() {
+            "xmlns".to_owned()
+        } else {
+            format!("xmlns:{prefix}")
+        };
+        if !declared.iter().any(|old| old == key.as_bytes()) {
+            content.push_str(&format!(" {key}=\"{}\"", quick_xml::escape::escape(uri)));
+        }
+    }
+    if !inherited.iter().any(|(prefix, _)| prefix.is_empty())
+        && !declared.iter().any(|key| key == b"xmlns")
+    {
+        content.push_str(" xmlns=\"\"");
+    }
+    let start = BytesStart::from_content(content, start.name().as_ref().len());
+    let mut writer = Writer::new(Vec::new());
+    if empty {
+        write_empty(&mut writer, start)?;
+    } else {
+        write_start(&mut writer, start)?;
+    }
+    let mut closed = writer.into_inner();
+    closed.extend_from_slice(&raw[reader.buffer_position() as usize..]);
+    Ok(closed)
+}
+
+/// Combine only the known DrawingML inheritance groups. Every inherited opaque
+/// child carries its original namespace closure, and local groups stay dominant.
+pub(crate) fn text_inherit_property_xml(
+    local: &[u8],
+    local_scope: &[(String, String)],
+    inherited: &[u8],
+    inherited_scope: &[(String, String)],
+) -> Result<Vec<u8>> {
+    let read = |xml: &[u8], scope: &[(String, String)]| -> Result<_> {
+        let mut reader = Reader::from_reader(xml);
+        let start = match reader.read_event().map_err(OxmlError::from)? {
+            Event::Start(start) | Event::Empty(start) => start.into_owned(),
+            _ => {
+                return Err(invalid_attribute(
+                    "inherit text properties",
+                    "root",
+                    "missing owner",
+                ));
+            }
+        };
+        let empty = xml[reader.buffer_position() as usize - 2] == b'/';
+        let scope = text_fragment_scope(&start, &TextNamespaceScope::inherited(scope))?;
+        let root_name = local_name(start.name().as_ref()).to_vec();
+        let mut children = Vec::new();
+        let mut boundary = 0;
+        if !empty {
+            loop {
+                let event = reader.read_event().map_err(OxmlError::from)?;
+                let raw = match event {
+                    Event::Start(child) | Event::Empty(child) => {
+                        let child_empty = xml[reader.buffer_position() as usize - 2] == b'/';
+                        let name = text_owned_name(&child, &scope)?;
+                        let slot = if is_character_property_tag(&root_name) {
+                            character_property_slot(&name)
+                        } else if is_paragraph_property_tag(&root_name) {
+                            paragraph_property_slot(&name)
+                        } else if name == b"defPPr" {
+                            Some(1)
+                        } else if root_name != b"extLst" && name == b"extLst" {
+                            Some(11)
+                        } else if root_name != b"extLst" {
+                            name.strip_prefix(b"lvl")
+                                .and_then(|tail| tail.strip_suffix(b"pPr"))
+                                .and_then(|level| {
+                                    std::str::from_utf8(level).ok()?.parse::<usize>().ok()
+                                })
+                                .filter(|level| (1..=9).contains(level))
+                                .map(|level| level + 1)
+                        } else {
+                            None
+                        };
+                        if let Some(slot) = slot {
+                            boundary = boundary.max(slot);
+                        }
+                        let raw = if child_empty {
+                            capture_empty_element(&child)?
+                        } else {
+                            capture_element(&mut reader, &child)?
+                        };
+                        children.push((boundary, slot, raw));
+                        continue;
+                    }
+                    Event::End(_) => break,
+                    Event::Eof => return Err(missing_end("inherited property owner")),
+                    event @ (Event::Comment(_)
+                    | Event::PI(_)
+                    | Event::Text(_)
+                    | Event::CData(_)) => text_capture_opaque_event(event)?,
+                    _ => continue,
+                };
+                children.push((boundary, None, raw));
+            }
+        }
+        Ok((start, scope, children))
+    };
+    let (mut start, local_scope, mut children) = read(local, local_scope)?;
+    let (parent, inherited_scope, inherited_children) = read(inherited, inherited_scope)?;
+    let root_name = local_name(start.name().as_ref()).to_vec();
+    let attribute_identity = |key: &[u8], scope: &TextNamespaceScope| -> Result<_> {
+        let key = std::str::from_utf8(key).map_err(OxmlError::from)?;
+        let (prefix, name) = key.split_once(':').unwrap_or(("", key));
+        let uri = if prefix.is_empty() {
+            None
+        } else if prefix == "xml" {
+            Some("http://www.w3.org/XML/1998/namespace".to_owned())
+        } else {
+            scope
+                .physical
+                .iter()
+                .find(|(p, _)| p == prefix)
+                .map(|(_, uri)| uri.clone())
+        };
+        if !prefix.is_empty() && uri.is_none() {
+            return Err(invalid_attribute(
+                "inherit text properties",
+                "namespace",
+                "unbound attribute prefix",
+            ));
+        }
+        Ok((uri, name.to_owned()))
+    };
+    let known_attribute = |key: &[u8]| {
+        if is_character_property_tag(&root_name) {
+            matches!(
+                key,
+                b"sz"
+                    | b"b"
+                    | b"i"
+                    | b"cap"
+                    | b"u"
+                    | b"strike"
+                    | b"spc"
+                    | b"baseline"
+                    | b"lang"
+                    | b"altLang"
+                    | b"kern"
+                    | b"kumimoji"
+                    | b"normalizeH"
+                    | b"noProof"
+                    | b"dirty"
+                    | b"err"
+                    | b"smtClean"
+                    | b"smtId"
+                    | b"bmk"
+            )
+        } else if is_paragraph_property_tag(&root_name) {
+            matches!(
+                key,
+                b"marL"
+                    | b"marR"
+                    | b"lvl"
+                    | b"indent"
+                    | b"algn"
+                    | b"rtl"
+                    | b"defTabSz"
+                    | b"eaLnBrk"
+                    | b"latinLnBrk"
+                    | b"hangingPunct"
+                    | b"fontAlgn"
+            )
+        } else {
+            false
+        }
+    };
+    let namespaces = |scope: &TextNamespaceScope| {
+        scope
+            .physical
+            .iter()
+            .filter(|(prefix, uri)| !prefix.is_empty() || !uri.is_empty())
+            .cloned()
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let local_tokens = text_attribute_tokens(&start)?;
+    let parent_tokens = text_attribute_tokens(&parent)?;
+    let mut additions = String::new();
+    for attribute in parent.attributes() {
+        let attribute = attribute.map_err(OxmlError::from)?;
+        let key = attribute.key.as_ref();
+        if key == b"xmlns" || key.starts_with(b"xmlns:") {
+            continue;
+        }
+        let identity = attribute_identity(key, &inherited_scope)?;
+        let mut existing = None;
+        for old in start.attributes() {
+            let old = old.map_err(OxmlError::from)?;
+            if old.key.as_ref() != b"xmlns"
+                && !old.key.as_ref().starts_with(b"xmlns:")
+                && attribute_identity(old.key.as_ref(), &local_scope)? == identity
+            {
+                existing = Some(old);
+                break;
+            }
+        }
+        if let Some(old) = existing {
+            if !known_attribute(key)
+                && (old
+                    .decoded_and_normalized_value(
+                        quick_xml::XmlVersion::Implicit1_0,
+                        start.decoder(),
+                    )
+                    .map_err(OxmlError::from)?
+                    != attribute
+                        .decoded_and_normalized_value(
+                            quick_xml::XmlVersion::Implicit1_0,
+                            parent.decoder(),
+                        )
+                        .map_err(OxmlError::from)?
+                    || namespaces(&local_scope) != namespaces(&inherited_scope))
+            {
+                return Err(invalid_attribute(
+                    "inherit text properties",
+                    "metadata",
+                    "conflicting opaque attribute authority",
+                ));
+            }
+            continue;
+        }
+        if !known_attribute(key)
+            && (!children.is_empty()
+                || local_tokens
+                    .iter()
+                    .any(|(key, _)| !key.starts_with("xmlns") && !known_attribute(key.as_bytes())))
+            && namespaces(&local_scope) != namespaces(&inherited_scope)
+        {
+            return Err(invalid_attribute(
+                "inherit text properties",
+                "metadata",
+                "unrepresentable opaque namespace contexts",
+            ));
+        }
+        if !known_attribute(key) {
+            for (prefix, uri) in &inherited_scope.physical {
+                if let Some((_, old)) = local_scope.physical.iter().find(|(old, _)| old == prefix) {
+                    if old != uri {
+                        return Err(invalid_attribute(
+                            "inherit text properties",
+                            "namespace",
+                            "conflicting inherited root binding",
+                        ));
+                    }
+                } else {
+                    let key = if prefix.is_empty() {
+                        "xmlns".to_owned()
+                    } else {
+                        format!("xmlns:{prefix}")
+                    };
+                    if !additions.contains(&format!(" {key}=")) {
+                        additions
+                            .push_str(&format!(" {key}=\"{}\"", quick_xml::escape::escape(uri)));
+                    }
+                }
+            }
+        }
+        let (_, token) = parent_tokens
+            .iter()
+            .find(|(old, _)| old.as_bytes() == key)
+            .ok_or_else(|| {
+                invalid_attribute(
+                    "inherit text properties",
+                    "attribute",
+                    "missing source token",
+                )
+            })?;
+        additions.push_str(token);
+    }
+    for (boundary, slot, raw) in inherited_children {
+        if let Some(slot) = slot
+            && let Some(index) = children.iter().position(|(_, old, _)| *old == Some(slot))
+        {
+            let name = raw_local_name(&raw);
+            if matches!(name, b"defRPr" | b"defPPr" | b"extLst") || name.starts_with(b"lvl") {
+                children[index].2 = text_inherit_property_xml(
+                    &children[index].2,
+                    &local_scope.physical,
+                    &raw,
+                    &inherited_scope.physical,
+                )?;
+            }
+            continue;
+        }
+        let raw = text_close_inherited_property(&raw, &inherited_scope.physical)?;
+        if children.iter().any(|(_, _, old)| old == &raw) {
+            continue;
+        }
+        let position = children
+            .iter()
+            .position(|(old_boundary, _, _)| *old_boundary > boundary)
+            .unwrap_or(children.len());
+        children.insert(position, (boundary, slot, raw));
+    }
+    if !additions.is_empty() {
+        let name_len = start.name().as_ref().len();
+        let content = format!(
+            "{}{additions}",
+            std::str::from_utf8(start.as_ref()).map_err(OxmlError::from)?
+        );
+        start = BytesStart::from_content(content, name_len);
+    }
+    let name = std::str::from_utf8(start.name().as_ref())
+        .map_err(OxmlError::from)?
+        .to_owned();
+    let mut writer = Writer::new(Vec::new());
+    if children.is_empty() {
+        write_empty(&mut writer, start)?;
+    } else {
+        write_start(&mut writer, start)?;
+        for (_, _, raw) in children {
+            writer.get_mut().write_all(&raw).map_err(OxmlError::from)?;
+        }
+        write_end(&mut writer, &name)?;
+    }
+    Ok(writer.into_inner())
+}
+
+#[cfg(test)]
+#[test]
+fn fx216_inherited_scalar_retains_local_opaque_namespace_authority() {
+    let local = br#"<a:rPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><opaque/></a:rPr>"#;
+    let inherited = br#"<a:rPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns="urn:parent" b="1"/>"#;
+    let local = CT_TextCharacterProperties::from_xml(local).unwrap();
+    let inherited = CT_TextCharacterProperties::from_xml(inherited).unwrap();
+    let merged = local.with_inherited_defaults(&inherited).unwrap();
+    let mut writer = Writer::new(Vec::new());
+    merged.write_xml(&mut writer, "a:rPr").unwrap();
+    let xml = writer.into_inner();
+    let mut reader = quick_xml::NsReader::from_reader(xml.as_slice());
+    let mut seen = false;
+    loop {
+        let (namespace, event) = reader.read_resolved_event().unwrap();
+        match event {
+            Event::Empty(element) if element.local_name().as_ref() == b"opaque" => {
+                assert!(matches!(namespace, quick_xml::name::ResolveResult::Unbound));
+                seen = true;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    assert!(seen);
+    assert_eq!(merged.bold, Some(true));
+}
+
+#[cfg(test)]
+#[test]
+fn fx216_inherited_scalars_keep_false_zero_and_harmless_aliases() {
+    let local = CT_TextCharacterProperties::from_xml(br#"<q:rPr xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main" b="0" i="false" spc="0" baseline="0"/>"#).unwrap();
+    let inherited = CT_TextCharacterProperties::from_xml(br#"<a:defRPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns="urn:unused" b="1" i="1" spc="200" baseline="5000" sz="2400"/>"#).unwrap();
+    let merged = local.with_inherited_defaults(&inherited).unwrap();
+    assert_eq!(merged.bold, Some(false));
+    assert_eq!(merged.italic, Some(false));
+    assert_eq!(merged.spacing, Some(TextPointValue::Centipoints(0)));
+    assert_eq!(merged.baseline.as_deref(), Some("0"));
+    assert_eq!(merged.font_size, Some(2400));
+    let mut writer = Writer::new(Vec::new());
+    merged.write_xml(&mut writer, "a:rPr").unwrap();
+    let xml = writer.into_inner();
+    assert!(!String::from_utf8_lossy(&xml).contains("urn:unused"));
+    assert_eq!(CT_TextCharacterProperties::from_xml(&xml).unwrap(), merged);
+    assert_eq!(local.bold, Some(false));
+    assert_eq!(inherited.bold, Some(true));
 }

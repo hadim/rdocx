@@ -623,11 +623,46 @@ live `FillFormat` over the direct background fill that never changes the slide
 when read, and `follow_master_background` reports and sets whether the slide
 has no `p:bg`. `SlideCollection.remove` and `SlideCollection.move(from_, to)`
 use the native staged slide operations and advance the revision once.
-`SlideCollection.import_slide(slide, layout=None, index=None)` wraps the native
-import. `layout` must be a layout of the destination. `index` is an insertion
-position counted from the end when negative, and one outside the collection is
-an `IndexError`. A slide of the same presentation is imported from a snapshot
-and keeps its own layout unless `layout` is given.
+`SlideCollection.import_slide(slide, layout=None, index=None, *,
+keep_source_formatting=False)` returns one live imported Slide. Existing
+positional arguments and the destination-formatting default remain supported.
+`layout` must belong to the destination. Python insertion positions are
+zero-based, count from the end when negative, and refuse out-of-range positions
+with `IndexError`. In destination-formatting mode, a same-presentation import
+reads a source snapshot and keeps its own layout unless an explicit layout is
+given. Source-formatting mode uses
+the checked source layout, master, theme and required resource closure.
+Combining source formatting with an explicit destination layout is refused
+before publication.
+`import_slide_with_diagnostics` accepts the same arguments and returns
+`(Slide, tuple[str, ...])`, exposing import diagnostics without changing the
+ordinary single-slide return type.
+
+`SlideCollection.import_slides(source, indexes=None, *, layout=None,
+index=None, keep_source_formatting=False, keep_sections=False, slide_map=None)`
+returns `(tuple[Slide, ...], tuple[str, ...])`. Omitted indexes select every
+source slide in source order. Explicit zero-based indexes retain caller order
+and reject duplicates and out-of-range selections before publication. Valid
+negative source indexes count from the end, without modulo wrapping. An empty
+selection changes nothing. Duplicate selection is a native operation refusal
+reported as `RpptxError`. Out-of-range source indexes raise `IndexError` before
+the native transfer. `keep_sections` preserves selected source section
+blocks without reordering the selection. Explicit `slide_map` pairs identify
+source-to-destination jump targets through checked existing slide indexes.
+Both map endpoints accept valid negative indexes counted from their respective
+source or pre-insertion destination collection ends, without modulo wrapping.
+The destination layout and insertion rules match the single-slide method.
+All returned Slide objects and diagnostics are allocated before the one
+success-only publication. Foreign owners, bad mappings and refused native
+transfers leave the destination and held-owner state unchanged.
+
+The CLI command is `rpptx slide import DEST SOURCE [--slides 1,3-5] [--at N]
+[--keep-source-formatting] -o OUT`. CLI source ranges and insertion positions
+are one-based. Omitted selection imports all slides, omitted insertion appends,
+and `--at 1` inserts before the first destination slide. Selection retains
+caller order and rejects duplicates and out-of-range values. Structured or
+human diagnostics use the existing CLI channel. Atomic output publication
+never overwrites either input.
 `SlideCollection.duplicate(slide)` copies a slide of the same presentation,
 with its speaker notes, to the position right after it through the native
 staged `duplicate_slide`, advances the revision once, and returns the new slide

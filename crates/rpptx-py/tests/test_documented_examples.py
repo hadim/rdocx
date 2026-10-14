@@ -3687,8 +3687,41 @@ def test_import_slide_carries_pictures_links_notes_and_background_from_another_d
     source = rpptx.Presentation(_python_pptx_deck(tmp_path / "source.pptx", build_source))
     prs = rpptx.Presentation(_python_pptx_deck(tmp_path / "target.pptx", build_target))
     before = prs.to_bytes()
-    with pytest.raises(rpptx.RpptxError, match="has a chart, which is not carried"):
-        prs.slides.import_slide(source.slides[1])
+    source_before = source.to_bytes()
+    chart_target = rpptx.Presentation()
+    existing = chart_target.slides.add_slide(chart_target.slide_layouts[6])
+    existing.shapes.add_textbox(0, 0, 914400, 914400).text = "Retained destination"
+    existing_xml = existing.element.xml
+    existing_parts = _package_parts(chart_target.to_bytes())
+    chart_slide = chart_target.slides.import_slide(source.slides[1])
+    chart_shapes = [shape for shape in chart_slide.shapes if shape.has_chart]
+    assert len(chart_shapes) == 1
+    chart = chart_shapes[0].chart
+    assert chart.categories == ("a", "b")
+    assert chart.series[0].name == "s" and chart.series[0].values == [1.0, 2.0]
+    chart_output = tmp_path / "imported-chart.pptx"
+    chart_target.save(chart_output)
+    source_workbooks = sorted(
+        value for name, value in _package_parts(source_before).items()
+        if name.startswith("ppt/embeddings/") and name.endswith(".xlsx")
+    )
+    imported_workbooks = sorted(
+        value for name, value in _package_parts(chart_output.read_bytes()).items()
+        if name.startswith("ppt/embeddings/") and name.endswith(".xlsx")
+    )
+    assert len(source_workbooks) == 1 and imported_workbooks == source_workbooks
+    imported_parts = _package_parts(chart_output.read_bytes())
+    assert existing.element.xml == existing_xml
+    assert imported_parts["ppt/slides/slide1.xml"] == existing_parts["ppt/slides/slide1.xml"]
+    assert imported_parts["ppt/slides/_rels/slide1.xml.rels"] == existing_parts["ppt/slides/_rels/slide1.xml.rels"]
+    reopened = rpptx.Presentation(chart_output)
+    assert reopened.slides[0].shapes[0].text == "Retained destination"
+    reopened_charts = [shape for shape in reopened.slides[1].shapes if shape.has_chart]
+    assert len(reopened_charts) == 1
+    reopened_chart = reopened_charts[0].chart
+    assert reopened_chart.categories == ("a", "b")
+    assert reopened_chart.series[0].values == [1.0, 2.0]
+    assert source.to_bytes() == source_before
     assert prs.to_bytes() == before
     with pytest.raises(ValueError, match="layout is not a layout of this presentation"):
         prs.slides.import_slide(source.slides[0], layout=source.slide_layouts[1])
@@ -9978,3 +10011,81 @@ def test_fx218_detached_semantic_export_and_atomic_publication(format, tmp_path)
     assert prs.to_bytes() == before
     assert held.text == "Visible & literal <text>"
     assert rpptx.Presentation.from_bytes(before).slides[0].notes_text == "Private speaker note"
+
+
+@pytest.mark.parametrize("method", ["add", "add_at", "single", "diagnostics", "batch"])
+def test_fx216_foreign_layout_precedes_stale_collection_without_publication(method):
+    import rpptx
+
+    destination = rpptx.Presentation()
+    local_layout = destination.slide_layouts[6]
+    held = destination.slides
+    original = held.add_slide(local_layout)
+    source = rpptx.Presentation()
+    foreign_layout = source.slide_layouts[6]
+    source_slide = source.slides.add_slide(foreign_layout)
+    original_xml = original.element.xml
+    before = destination.to_bytes(), source.to_bytes()
+
+    def operation(layout):
+        if method == "add":
+            return held.add_slide(layout)
+        if method == "add_at":
+            return held.add_slide_at(layout, 0)
+        if method == "single":
+            return held.import_slide(source_slide, layout=layout)
+        if method == "diagnostics":
+            return held.import_slide_with_diagnostics(source_slide, layout=layout)
+        return held.import_slides(source, [0], layout=layout)
+
+    message = (
+        "layout belongs to a different presentation"
+        if method in ("add", "add_at")
+        else "layout is not a layout of this presentation"
+    )
+    with pytest.raises(ValueError, match=message):
+        operation(foreign_layout)
+    _assert_exact_stale(rpptx, lambda: operation(local_layout), "slide collection", 0, 1,
+                        "Re-fetch it with prs.slides.", "SlideCollection.add_slide")
+    assert (destination.to_bytes(), source.to_bytes()) == before
+    assert len(destination.slides) == len(source.slides) == 1
+    assert original.element.xml == original_xml and len(original.shapes) == 0
+    assert local_layout.name == destination.slide_layouts[6].name
+    assert foreign_layout.name == source.slide_layouts[6].name
+
+
+def test_fx216_batch_returns_live_ordered_owners_and_empty_selection_is_noop():
+    import rpptx
+
+    source = rpptx.Presentation()
+    source_layout = source.slide_layouts[6]
+    for text in ("first", "second", "third"):
+        slide = source.slides.add_slide(source_layout)
+        slide.shapes.add_textbox(0, 0, 914400, 914400).text = text
+    source_before = source.to_bytes()
+    destination = rpptx.Presentation()
+    layout = destination.slide_layouts[6]
+    existing = destination.slides.add_slide(layout)
+    existing.shapes.add_textbox(0, 0, 914400, 914400).text = "existing"
+    imported, diagnostics = destination.slides.import_slides(source, [2, 0], layout=layout, index=0)
+    assert diagnostics == ()
+    assert isinstance(imported, tuple) and len(imported) == 2
+    assert [slide.shapes[0].text for slide in imported] == ["third", "first"]
+    assert [slide.shapes[0].text for slide in destination.slides] == ["third", "first", "existing"]
+    assert existing.shapes[0].text == "existing"
+    held = destination.slides
+    before = destination.to_bytes()
+    assert held.import_slides(source, [], layout=layout) == ((), ())
+    assert len(held) == 3 and destination.to_bytes() == before
+    with pytest.raises(rpptx.RpptxError, match="duplicate selected source slide"):
+        held.import_slides(source, [0, 0], layout=layout)
+    with pytest.raises(IndexError):
+        held.import_slides(source, [0, 99], layout=layout)
+    assert len(held) == 3 and destination.to_bytes() == before
+    next_slide, next_diagnostics = held.import_slide_with_diagnostics(source.slides[1], layout=layout, index=0)
+    assert next_diagnostics == () and next_slide.shapes[0].text == "second"
+    assert [slide.shapes[0].text for slide in imported] == ["third", "first"]
+    assert existing.shapes[0].text == "existing"
+    assert source.to_bytes() == source_before
+    reopened = rpptx.Presentation.from_bytes(destination.to_bytes())
+    assert [slide.shapes[0].text for slide in reopened.slides] == ["second", "third", "first", "existing"]

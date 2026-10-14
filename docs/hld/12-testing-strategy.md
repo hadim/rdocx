@@ -4020,6 +4020,32 @@ Physical picture controls distinguish two occurrences sharing one relationship, 
 
 Paired text-box controls inspect every physical counterpart, unequal typed run formatting, descendant cells, unselected owners and comment closure. Genuine logical counts, zero matches, asymmetric mapping, foreign MC and late failure determine atomicity. Passing a substring assertion or one selected branch never substitutes for complete physical-copy evidence.
 
+Selected slide-import regression controls cover caller order, duplicate and
+out-of-range refusal, empty selection, insertion, explicit jump maps and late
+batch rollback. Source formatting requires graph-equal reuse and distinct
+same-name graphs, source-default table styles, unequal style-ID collisions,
+raw namespace metadata, embedded face conflicts, note owners and repeated
+imports without duplicate resources. Classic and modern comment controls
+include required parent-thread closure and full author/person identity. Notes
+controls distinguish actual placeholder occupancy, absent and empty local text,
+empty-cache fields, copied decorations and skipped-ID reference refusal.
+Renderer fixtures retain thumbnail geometry, actual metadata, page order and
+unmatched-overlay diagnostics. Named late failures preserve both input owners.
+
+The installed Python and CLI gates check exact return shapes, prepared owner
+allocation before publication, foreign identity before stale lookup, one-based
+CLI ranges and protected input paths. Package save/reopen validates all copied
+relationships and preserves unrelated source and destination bytes. Actual
+native PowerPoint open/save/normal-reopen must retain the admitted graphs and
+comments without repair. Deterministic source-versus-imported render controls
+check geometry, colours and fonts, with a wrong destination-theme negative.
+Missing corpus or native evidence cannot be inferred from helper controls or
+silently skipped.
+Task-input appearance controls are explicit ignored external-artifact riders
+in ordinary workspace execution. Their exact focused selectors remain
+mandatory with `--ignored`, admitted input directories and final integrated
+source provenance. An absent required focused input fails qualification.
+
 ## PowerPoint checked XML qualification
 
 Native controls exercise all nine owners and five shape variants with actual

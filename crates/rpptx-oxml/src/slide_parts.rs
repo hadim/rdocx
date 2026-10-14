@@ -963,6 +963,46 @@ impl CT_SlideLayout {
 }
 
 impl CT_SlideMaster {
+    /// Makes presentation text defaults explicit on this source-owned master.
+    pub fn inherit_presentation_text_defaults(
+        &mut self,
+        defaults: &CT_TextListStyle,
+    ) -> Result<()> {
+        let styles = match &self.text_styles {
+            Some(styles) => CT_MasterTextStyles {
+                title_style: styles
+                    .title_style
+                    .with_inherited_defaults(defaults)
+                    .map_err(map_drawing_error)?,
+                body_style: styles
+                    .body_style
+                    .with_inherited_defaults(defaults)
+                    .map_err(map_drawing_error)?,
+                other_style: styles
+                    .other_style
+                    .with_inherited_defaults(defaults)
+                    .map_err(map_drawing_error)?,
+                raw_attributes: styles.raw_attributes.clone(),
+                raw_children: styles.raw_children.clone(),
+            },
+            None => CT_MasterTextStyles {
+                title_style: CT_TextListStyle::default()
+                    .with_inherited_defaults(defaults)
+                    .map_err(map_drawing_error)?,
+                body_style: CT_TextListStyle::default()
+                    .with_inherited_defaults(defaults)
+                    .map_err(map_drawing_error)?,
+                other_style: CT_TextListStyle::default()
+                    .with_inherited_defaults(defaults)
+                    .map_err(map_drawing_error)?,
+                raw_attributes: Vec::new(),
+                raw_children: OrderedRawChildren::default(),
+            },
+        };
+        self.text_styles = Some(styles);
+        Ok(())
+    }
+
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         let parsed = parse_root(xml, RootKind::Master)?;
         let color_map = required(parsed.color_map, "p:clrMap")?;

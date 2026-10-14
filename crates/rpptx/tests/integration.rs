@@ -9250,9 +9250,18 @@ fn f226_notes_slide_xml(text: &str) -> Vec<u8> {
         r#"<p:sp><p:nvSpPr><p:cNvPr id="2" name="Notes"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="3"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"/><a:t>{text}</a:t></a:r><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp>"#
     );
     let picture = f226_picture(3, "image", (3_657_600, 152_400, 304_800, 304_800));
+    let preview = r#"<p:sp><p:nvSpPr><p:cNvPr id="4" name="Actual slide preview"/><p:cNvSpPr/><p:nvPr><p:ph type="sldImg" idx="2"/></p:nvPr></p:nvSpPr><p:spPr/></p:sp>"#;
+    let metadata = [
+        f226_shape(5, "Actual header", "hdr", 0, (0, 0, 2_971_800, 457_200), "Actual header"),
+        f226_shape(6, "Actual date", "dt", 1, (3_884_613, 0, 2_971_800, 457_200), "2030-01-02"),
+        f226_shape(7, "Actual footer", "ftr", 4, (0, 8_685_213, 2_971_800, 457_200), "Actual footer"),
+        f226_shape(8, "Actual number", "sldNum", 5, (3_884_613, 8_685_213, 2_971_800, 457_200), "stored")
+            .replace("<a:r><a:t>stored</a:t></a:r>", "<a:fld id=\"{B5AB83B6-1A34-4CF4-B103-404340AB02DE}\" type=\"slidenum\"><a:rPr lang=\"en-US\"/><a:t>stored</a:t></a:fld>"),
+    ].join("");
+    assert!(metadata.contains("type=\"slidenum\""));
     let group = f226_group_scaffold();
     format!(
-        r#"<p:notes xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:cSld><p:spTree>{group}{body}{picture}</p:spTree></p:cSld></p:notes>"#
+        r#"<p:notes xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}"><p:cSld><p:spTree>{group}{body}{picture}{preview}{metadata}</p:spTree></p:cSld></p:notes>"#
     )
     .into_bytes()
 }
@@ -10231,6 +10240,9 @@ fn notes_pdf_skips_only_unmatched_slide_placeholder_overlays() {
     );
 
     let build = |placeholder_index: u32| {
+        if placeholder_index == 5 {
+            return f226_fixture_bytes();
+        }
         let mut package = open_opc(&f226_fixture_bytes(), "F-X129 unmatched notes placeholder");
         let notes_part = "/custom/notes/notes1.xml";
         let notes = String::from_utf8(package.get_part(notes_part).unwrap().to_vec()).unwrap();
@@ -16962,38 +16974,7 @@ fn duplicate_slide_keeps_notes_links_and_shares_media_outside_the_media_folder()
 }
 
 #[test]
-fn import_slide_refuses_what_it_does_not_carry_without_mutation() {
-    let chart = Presentation::from_bytes(&import_source_bytes(|package, slide_part, _| {
-        package.set_part("/ppt/charts/chart1.xml", b"<c:chartSpace/>".to_vec());
-        package
-            .content_types
-            .add_override("/ppt/charts/chart1.xml", content_types::CHART);
-        package
-            .get_or_create_part_rels(slide_part)
-            .add(rel_types::CHART, "../charts/chart1.xml");
-    }))
-    .unwrap();
-    let jump = Presentation::from_bytes(&import_source_bytes(|package, slide_part, _| {
-        package
-            .get_or_create_part_rels(slide_part)
-            .add(rel_types::SLIDE, "slide2.xml");
-    }))
-    .unwrap();
-    let notes_jump = Presentation::from_bytes(&import_source_bytes(|package, _, notes_part| {
-        assert!(package.get_part("/ppt/slides/slide2.xml").is_some());
-        let jump = package
-            .get_or_create_part_rels(notes_part)
-            .add(rel_types::SLIDE, "../slides/slide2.xml");
-        let xml = String::from_utf8(package.get_part(notes_part).unwrap().to_vec())
-            .unwrap()
-            .replacen(
-                r#"<a:hlinkClick r:id="rId3"/>"#,
-                &format!(r#"<a:hlinkClick r:id="{jump}" action="ppaction://hlinksldjump"/>"#),
-                1,
-            );
-        package.set_part(notes_part, xml.into_bytes());
-    }))
-    .unwrap();
+fn import_slide_refuses_unsupported_layout_selection_without_mutation() {
     let renamed = Presentation::from_bytes(&import_source_bytes(|package, slide_part, _| {
         let layout = package
             .get_part_rels(slide_part)
@@ -17013,25 +16994,13 @@ fn import_slide_refuses_what_it_does_not_carry_without_mutation() {
     destination.add_slide(0).unwrap();
     let before = destination.to_bytes().unwrap();
 
-    for (source, expected) in [
-        (&chart, "slide1.xml has a chart, which is not carried"),
-        (
-            &jump,
-            "slide1.xml has a hyperlink that jumps to another slide",
-        ),
-        (
-            &notes_jump,
-            "notesSlide1.xml has a hyperlink that jumps to another slide",
-        ),
-        (&renamed, "no layout named \"Module "),
-    ] {
-        let error = match destination.import_slide(source, 0, None, None) {
-            Ok(_) => panic!("import should fail with {expected}"),
-            Err(error) => error.to_string(),
-        };
-        assert!(error.contains(expected), "{error}");
-        assert_eq!(destination.to_bytes().unwrap(), before);
-    }
+    let error = destination
+        .import_slide(&renamed, 0, None, None)
+        .err()
+        .expect("renamed layout must refuse")
+        .to_string();
+    assert!(error.contains("no layout named \"Module "), "{error}");
+    assert_eq!(destination.to_bytes().unwrap(), before);
     assert!(matches!(
         destination.import_slide(&renamed, 0, Some(99), None),
         Err(Error::UnknownLayoutIndex { .. })
@@ -31682,9 +31651,27 @@ fn fx211b_native_relationship_actual_target_and_mode_refusal() {
                 target: target.into(),
                 target_mode: external.then(|| "External".into()),
             });
+        let slide_part = "/ppt/slides/slide1.xml";
+        let slide = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+        assert!(
+            !slide.contains("<p:extLst>"),
+            "controlled producer has no extension list"
+        );
+        let reservation = r#"<p:extLst><p:ext uri="urn:fx216:reserved-source-ref"><z:reservation xmlns:z="urn:fx216:reservation" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rIdXml"/></p:ext></p:extLst>"#;
+        package.set_part(
+            slide_part,
+            slide
+                .replacen("</p:sld>", &format!("{reservation}</p:sld>"), 1)
+                .into_bytes(),
+        );
         let mut bytes = std::io::Cursor::new(Vec::new());
         package.write_to(&mut bytes).unwrap();
         let mut deck = Presentation::from_bytes(&bytes.into_inner()).unwrap();
+        assert!(
+            deck.validate().is_empty(),
+            "source setup must be valid: {:?}",
+            deck.validate()
+        );
         let before = deck.to_bytes().unwrap();
         let xml = format!(
             r#"<a:r xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><a:rPr>{child}</a:rPr><a:t>source</a:t></a:r>"#
@@ -32434,9 +32421,27 @@ fn fx211b_native_review_image_targets_refuse_truncation_and_mime_mismatch() {
                 target: "../media/checked.png".into(),
                 target_mode: None,
             });
+        let slide_part = "/ppt/slides/slide1.xml";
+        let slide = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+        assert!(
+            !slide.contains("<p:extLst>"),
+            "controlled producer has no extension list"
+        );
+        let reservation = r#"<p:extLst><p:ext uri="urn:fx216:reserved-source-ref"><z:reservation xmlns:z="urn:fx216:reservation" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rIdCheckedImage"/></p:ext></p:extLst>"#;
+        package.set_part(
+            slide_part,
+            slide
+                .replacen("</p:sld>", &format!("{reservation}</p:sld>"), 1)
+                .into_bytes(),
+        );
         let mut output = std::io::Cursor::new(Vec::new());
         package.write_to(&mut output).unwrap();
         let mut deck = Presentation::from_bytes(&output.into_inner()).unwrap();
+        assert!(
+            deck.validate().is_empty(),
+            "source setup must be valid: {:?}",
+            deck.validate()
+        );
         let before = deck.to_bytes().unwrap();
         let xml = r#"<a:r xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><a:rPr><a:blip r:embed="rIdCheckedImage"/></a:rPr><a:t>source</a:t></a:r>"#;
         let result = deck.replace_run_xml_at(ShapeOwner::Slide(0), &[0], None, 0, 0, xml);
@@ -32811,5 +32816,2724 @@ fn fx211b_native_text_body_consumer_tuples_do_not_allow_foreign_roots() {
             r#"<q:{local} xmlns:q="{uri}" xmlns:a="urn:foreign"><a:bodyPr/><a:p/></q:{local}>"#
         );
         assert!(CT_TextBody::from_xml_as(xml.as_bytes(), local.as_bytes()).is_err());
+    }
+}
+
+fn related_part(package: &OpcPackage, part: &str, relationship_type: &str) -> String {
+    let relationship = package
+        .get_part_rels(part)
+        .and_then(|relationships| relationships.get_by_type(relationship_type))
+        .unwrap_or_else(|| panic!("{part} has no {relationship_type} relationship"));
+    OpcPackage::resolve_rel_target(part, &relationship.target)
+}
+
+#[test]
+fn fx216_import_full_relationship_graph_is_transactional_chart_base() {
+    const CHART_STYLE: &str = "http://schemas.microsoft.com/office/2011/relationships/chartStyle";
+    const CHART_COLORS: &str =
+        "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle";
+    let source_bytes = {
+        let bytes = presentation_with_authored_chart().to_bytes().unwrap();
+        let mut package = open_opc(&bytes, "chart import source");
+        let chart_part = related_part(&package, "/ppt/slides/slide1.xml", rel_types::CHART);
+        package.set_part(
+            "/ppt/charts/style1.xml",
+            br#"<cs:chartStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" id="201"/>"#.to_vec(),
+        );
+        package.set_part(
+            "/ppt/charts/colors1.xml",
+            br#"<cs:colorStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" meth="cycle" id="10"/>"#.to_vec(),
+        );
+        package.content_types.add_override(
+            "/ppt/charts/style1.xml",
+            "application/vnd.ms-office.chartstyle+xml",
+        );
+        package.content_types.add_override(
+            "/ppt/charts/colors1.xml",
+            "application/vnd.ms-office.chartcolorstyle+xml",
+        );
+        let relationships = package.get_or_create_part_rels(&chart_part);
+        relationships.add(CHART_STYLE, "style1.xml");
+        relationships.add(CHART_COLORS, "colors1.xml");
+        package_bytes(package)
+    };
+    let source = Presentation::from_bytes(&source_bytes).unwrap();
+    let source_package = open_opc(&source_bytes, "chart import source");
+    let source_chart = related_part(&source_package, "/ppt/slides/slide1.xml", rel_types::CHART);
+    let mut destination = presentation_with_authored_chart();
+    let own_chart = "/ppt/charts/chart1.xml";
+
+    destination.import_slide(&source, 0, None, None).unwrap();
+    destination.import_slide(&source, 0, None, Some(0)).unwrap();
+
+    let package = saved_valid_package(&destination, "imported charts");
+    let slide_parts = saved_slide_parts(&package);
+    assert_eq!(
+        related_part(&package, &slide_parts[1], rel_types::CHART),
+        own_chart
+    );
+    let mut charts = HashSet::new();
+    for slide_part in [&slide_parts[0], &slide_parts[2]] {
+        let chart_part = related_part(&package, slide_part, rel_types::CHART);
+        assert!(chart_part != own_chart && charts.insert(chart_part.clone()));
+        assert_eq!(
+            package.content_types.content_type_for(&chart_part),
+            Some(content_types::CHART)
+        );
+        assert_eq!(
+            package.get_part(&chart_part),
+            source_package.get_part(&source_chart),
+            "the copy keeps its relationship ids, so its bytes are unchanged"
+        );
+        let chart_id = &package
+            .get_part_rels(slide_part)
+            .unwrap()
+            .get_by_type(rel_types::CHART)
+            .unwrap()
+            .id;
+        let slide_xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+        assert!(
+            slide_xml.contains(&format!(r#"r:id="{chart_id}""#)),
+            "{slide_xml}"
+        );
+        for relationship_type in [rel_types::PACKAGE, CHART_STYLE, CHART_COLORS] {
+            let copied = related_part(&package, &chart_part, relationship_type);
+            let original = related_part(&source_package, &source_chart, relationship_type);
+            assert_eq!(
+                package.get_part(&copied),
+                source_package.get_part(&original)
+            );
+            assert_eq!(
+                package.content_types.content_type_for(&copied),
+                source_package.content_types.content_type_for(&original)
+            );
+        }
+    }
+    let count = |prefix: &str| {
+        package
+            .parts
+            .keys()
+            .filter(|part| part.starts_with(prefix))
+            .count()
+    };
+    assert_eq!(count("/ppt/charts/chart"), 3);
+    assert_eq!(count("/ppt/charts/style"), 2);
+    assert_eq!(count("/ppt/charts/colors"), 2);
+    assert_eq!(count("/ppt/embeddings/"), 3);
+}
+
+fn saved_valid_package(presentation: &Presentation, label: &str) -> OpcPackage {
+    let bytes = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert!(
+        reopened.validate().is_empty(),
+        "{label}: {:?}",
+        reopened.validate()
+    );
+    open_opc(&bytes, label)
+}
+
+#[test]
+fn fx216_source_formatting_preserves_source_and_destination_default() {
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(5).unwrap();
+    source
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_text("Kept source title")
+        .unwrap();
+    let mut package = open_opc(&source.to_bytes().unwrap(), "format source");
+    let theme = related_part(
+        &package,
+        "/ppt/slideMasters/slideMaster1.xml",
+        rel_types::THEME,
+    );
+    let xml = String::from_utf8(package.get_part(&theme).unwrap().to_vec()).unwrap();
+    assert!(xml.contains("<a:majorFont><a:latin typeface=\"Calibri\""));
+    package.set_part(
+        &theme,
+        xml.replacen(
+            "<a:majorFont><a:latin typeface=\"Calibri\"",
+            "<a:majorFont><a:latin typeface=\"Georgia\"",
+            1,
+        )
+        .into_bytes(),
+    );
+    let source_bytes = package_bytes(package);
+    let source = Presentation::from_bytes(&source_bytes).unwrap();
+    assert!(source.validate().is_empty());
+    let mut destination = Presentation::new().unwrap();
+    destination.import_slide(&source, 0, None, None).unwrap();
+    let imported = saved_valid_package(&destination, "format import");
+    let slide = &saved_slide_parts(&imported)[0];
+    let layout = related_part(&imported, slide, rel_types::SLIDE_LAYOUT);
+    let master = related_part(&imported, &layout, rel_types::SLIDE_MASTER);
+    let imported_theme = related_part(&imported, &master, rel_types::THEME);
+    assert!(
+        !String::from_utf8_lossy(imported.get_part(&imported_theme).unwrap())
+            .contains("<a:majorFont><a:latin typeface=\"Georgia\""),
+        "legacy destination-theme default stays unchanged"
+    );
+    let before = destination.to_bytes().unwrap();
+    let (indices, diagnostics) = destination
+        .import_slides(
+            &source,
+            &[0],
+            &rpptx::ImportSlideOptions {
+                keep_source_formatting: true,
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap();
+    assert_eq!(indices, [1]);
+    assert!(diagnostics.is_empty());
+    let preserved = saved_valid_package(&destination, "source-format positive");
+    let part = &saved_slide_parts(&preserved)[1];
+    let layout = related_part(&preserved, part, rel_types::SLIDE_LAYOUT);
+    let master = related_part(&preserved, &layout, rel_types::SLIDE_MASTER);
+    let theme_part = related_part(&preserved, &master, rel_types::THEME);
+    assert!(
+        String::from_utf8_lossy(preserved.get_part(&theme_part).unwrap())
+            .contains("<a:majorFont><a:latin typeface=\"Georgia\"")
+    );
+    assert_ne!(destination.to_bytes().unwrap(), before);
+    let count = destination.layout_count();
+    destination
+        .import_slides(
+            &source,
+            &[0],
+            &rpptx::ImportSlideOptions {
+                keep_source_formatting: true,
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap();
+    assert_eq!(
+        destination.layout_count(),
+        count,
+        "repeated source graph reused"
+    );
+    assert_eq!(source.to_bytes().unwrap(), source_bytes);
+}
+
+#[test]
+fn fx216_batch_shared_chart_graph_and_preflight_rollback() {
+    let mut source = presentation_with_authored_chart();
+    source.add_slide(6).unwrap();
+    let mut package = open_opc(&source.to_bytes().unwrap(), "shared source");
+    let xml = package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec();
+    let rels = package
+        .get_part_rels("/ppt/slides/slide1.xml")
+        .unwrap()
+        .clone();
+    package.set_part("/ppt/slides/slide2.xml", xml);
+    package.set_part_rels("/ppt/slides/slide2.xml", rels);
+    let source = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert!(source.validate().is_empty());
+    let before_source = source.to_bytes().unwrap();
+    let mut destination = Presentation::new().unwrap();
+    let before = destination.to_bytes().unwrap();
+    assert!(
+        destination
+            .import_slides(&source, &[0, 0], &Default::default(), &[])
+            .is_err()
+    );
+    assert!(
+        destination
+            .import_slides(&source, &[0, 99], &Default::default(), &[])
+            .is_err()
+    );
+    assert_eq!(destination.to_bytes().unwrap(), before);
+    let (indices, diagnostics) = destination
+        .import_slides(&source, &[1, 0], &Default::default(), &[])
+        .unwrap();
+    assert_eq!(indices, [0, 1]);
+    assert!(diagnostics.is_empty());
+    let imported = saved_valid_package(&destination, "shared batch");
+    let parts = saved_slide_parts(&imported);
+    let first = related_part(&imported, &parts[0], rel_types::CHART);
+    assert_eq!(related_part(&imported, &parts[1], rel_types::CHART), first);
+    assert_eq!(
+        imported
+            .parts
+            .keys()
+            .filter(|p| p.starts_with("/ppt/charts/chart"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        imported
+            .parts
+            .keys()
+            .filter(|p| p.starts_with("/ppt/embeddings/"))
+            .count(),
+        1
+    );
+    let before = destination.to_bytes().unwrap();
+    assert!(
+        destination
+            .import_slides(&source, &[0], &Default::default(), &[(1, 0), (1, 1)])
+            .is_err()
+    );
+    assert!(
+        destination
+            .import_slides(&source, &[0], &Default::default(), &[(0, 0)])
+            .is_err()
+    );
+    assert_eq!(destination.to_bytes().unwrap(), before);
+    assert_eq!(
+        destination
+            .import_slides(&source, &[], &Default::default(), &[])
+            .unwrap(),
+        (Vec::new(), Vec::new())
+    );
+    assert_eq!(destination.to_bytes().unwrap(), before);
+    assert_eq!(source.to_bytes().unwrap(), before_source);
+}
+
+#[test]
+fn fx216_import_full_relationship_graph_ole_preview_and_legacy_drawing() {
+    const OLE_BYTES: &[u8] = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 embedded object";
+    const VML: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing";
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(6).unwrap();
+    let mut package = open_opc(&source.to_bytes().unwrap(), "embedded object source");
+    let slide_part = "/ppt/slides/slide1.xml";
+    package.set_part("/ppt/embeddings/oleObject1.bin", OLE_BYTES.to_vec());
+    // The template declares `bin` as printer settings, as PowerPoint does.
+    package.content_types.add_override(
+        "/ppt/embeddings/oleObject1.bin",
+        "application/vnd.openxmlformats-officedocument.oleObject",
+    );
+    package.set_part("/ppt/media/image1.png", png_header(8, 8));
+    package.content_types.add_default("png", "image/png");
+    package.set_part(
+        "/ppt/drawings/vmlDrawing1.vml",
+        br#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:shape id="_x0000_s1026"><v:imagedata o:relid="rId1"/></v:shape></xml>"#.to_vec(),
+    );
+    package.content_types.add_default(
+        "vml",
+        "application/vnd.openxmlformats-officedocument.vmlDrawing",
+    );
+    package
+        .get_or_create_part_rels("/ppt/drawings/vmlDrawing1.vml")
+        .add(rel_types::IMAGE, "../media/image1.png");
+    let relationships = package.get_or_create_part_rels(slide_part);
+    relationships.add(VML, "../drawings/vmlDrawing1.vml");
+    let ole = relationships.add(rel_types::OLE_OBJECT, "../embeddings/oleObject1.bin");
+    let preview = relationships.add(rel_types::IMAGE, "../media/image1.png");
+    let xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "</p:spTree>",
+            &format!(
+                r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="4" name="Object 3"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/presentationml/2006/ole"><p:oleObj spid="_x0000_s1026" name="Packager Shell Object" r:id="{ole}" imgW="914400" imgH="914400" progId="Package"><p:embed/><p:pic><p:nvPicPr><p:cNvPr id="0" name=""/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="{preview}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic></p:oleObj></a:graphicData></a:graphic></p:graphicFrame></p:spTree>"#
+            ),
+            1,
+        );
+    package.set_part(slide_part, xml.into_bytes());
+    let source = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert_eq!(source.embedded_content().unwrap().len(), 1);
+    let mut destination = Presentation::new().unwrap();
+    destination.add_slide(6).unwrap();
+
+    destination.import_slide(&source, 0, None, None).unwrap();
+    destination.import_slide(&source, 0, None, None).unwrap();
+
+    let package = saved_valid_package(&destination, "imported embedded objects");
+    let reopened = Presentation::from_bytes(&destination.to_bytes().unwrap()).unwrap();
+    let embedded = reopened.embedded_content().unwrap();
+    assert_eq!(embedded.len(), 2, "{embedded:?}");
+    let slide_parts = saved_slide_parts(&package);
+    let mut objects = HashSet::new();
+    let mut drawings = HashSet::new();
+    for (info, slide_part) in embedded.iter().zip(&slide_parts[1..]) {
+        assert_eq!(info.kind, EmbeddedContentKind::OleObject);
+        assert_eq!(&info.source_part, slide_part);
+        assert!(objects.insert(info.target_part.clone()));
+        assert_eq!(
+            reopened
+                .extract_embedded_content(&info.source_part, &info.relationship_id)
+                .unwrap(),
+            OLE_BYTES
+        );
+        assert_eq!(
+            package.content_types.content_type_for(&info.target_part),
+            Some("application/vnd.openxmlformats-officedocument.oleObject")
+        );
+        let preview = related_part(&package, slide_part, rel_types::IMAGE);
+        assert_eq!(package.get_part(&preview).unwrap(), png_header(8, 8));
+        let drawing = related_part(&package, slide_part, VML);
+        assert!(drawings.insert(drawing.clone()));
+        assert_eq!(
+            related_part(&package, &drawing, rel_types::IMAGE),
+            preview,
+            "the drawing and the preview share one media part"
+        );
+        let slide_xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+        assert!(slide_xml.contains(&format!(r#"r:id="{}""#, info.relationship_id)));
+    }
+}
+
+#[test]
+fn fx216_import_full_relationship_graph_modern_comments_and_authors() {
+    use rpptx::{Comment, CommentAuthor, CommentReply};
+    let ada = CommentAuthor::new(
+        "{11111111-1111-4111-8111-111111111111}",
+        "Ada",
+        Some("A"),
+        "ada@example.test",
+        "local",
+    )
+    .unwrap();
+    let bob = CommentAuthor::new(
+        "{22222222-2222-4222-8222-222222222222}",
+        "Bob",
+        Some("B"),
+        "bob@example.test",
+        "local",
+    )
+    .unwrap();
+    let comment_id = "{33333333-3333-4333-8333-333333333333}";
+    let reply_id = "{44444444-4444-4444-8444-444444444444}";
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(6).unwrap();
+    for top in [0, 1_828_800] {
+        source
+            .slide_mut(0)
+            .unwrap()
+            .add_textbox(Emu(457_200), Emu(top), Emu(4_572_000), Emu(914_400))
+            .unwrap()
+            .set_text("Commented")
+            .unwrap();
+    }
+    // A gap in the source ids makes the copy renumber the anchored shape.
+    let mut package = open_opc(&source.to_bytes().unwrap(), "comment source");
+    let xml = String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec())
+        .unwrap()
+        .replacen(r#"<p:cNvPr id="3""#, r#"<p:cNvPr id="7""#, 1);
+    package.set_part("/ppt/slides/slide1.xml", xml.into_bytes());
+    let mut source = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let anchored = source
+        .slide(0)
+        .unwrap()
+        .shape(1)
+        .unwrap()
+        .non_visual_id()
+        .unwrap();
+    assert_eq!(anchored, 7);
+    source.add_comment_author(ada.clone()).unwrap();
+    source.add_comment_author(bob.clone()).unwrap();
+    let mut comment = Comment::new(comment_id, &ada.id, "2026-10-01T09:00:00Z", "Check").unwrap();
+    comment
+        .add_reply(CommentReply::new(reply_id, &bob.id, "2026-10-01T10:00:00Z", "Done").unwrap())
+        .unwrap();
+    source
+        .add_comment_at_shape(0, comment, anchored, None)
+        .unwrap();
+
+    let mut destination = Presentation::new().unwrap();
+    destination.add_slide(6).unwrap();
+    let same_ada = "{55555555-5555-4555-8555-555555555555}";
+    destination
+        .add_comment_author(
+            CommentAuthor::new(same_ada, "Ada", Some("A"), "ada@example.test", "local").unwrap(),
+        )
+        .unwrap();
+    destination
+        .add_comment_author(
+            CommentAuthor::new(&bob.id, "Carol", Some("C"), "carol@example.test", "local").unwrap(),
+        )
+        .unwrap();
+
+    destination.import_slide(&source, 0, None, None).unwrap();
+    destination.import_slide(&source, 0, None, None).unwrap();
+
+    let package = saved_valid_package(&destination, "imported comments");
+    let reopened = Presentation::from_bytes(&destination.to_bytes().unwrap()).unwrap();
+    let authors = reopened.comment_authors();
+    assert_eq!(
+        authors
+            .iter()
+            .map(|author| author.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Ada", "Carol", "Bob"]
+    );
+    let new_bob = &authors[2].id;
+    assert_ne!(new_bob, &bob.id, "Bob's id was taken by Carol");
+    let slide_parts = saved_slide_parts(&package);
+    let mut comment_parts = HashSet::new();
+    for (slide, expected_ids) in [
+        (1, [comment_id, reply_id]),
+        (
+            2,
+            [
+                "{00000000-0000-4000-8000-000000000002}",
+                "{00000000-0000-4000-8000-000000000003}",
+            ],
+        ),
+    ] {
+        let comments = reopened.comments(slide).unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].id, expected_ids[0]);
+        assert_eq!(comments[0].author_id, same_ada);
+        assert_eq!(comments[0].text(), "Check");
+        assert_eq!(comments[0].replies()[0].id, expected_ids[1]);
+        assert_eq!(&comments[0].replies()[0].author_id, new_bob);
+        let copied_shape = reopened
+            .slide(slide)
+            .unwrap()
+            .shape(1)
+            .unwrap()
+            .non_visual_id()
+            .unwrap();
+        assert_ne!(copied_shape, anchored);
+        let anchor = std::str::from_utf8(comments[0].anchor_xml()).unwrap();
+        assert!(
+            anchor.contains(&format!(
+                r#"sldId="{}""#,
+                reopened.slide(slide).unwrap().id()
+            )),
+            "{anchor}"
+        );
+        assert!(
+            anchor.contains(&format!(r#"<ac:spMk id="{copied_shape}""#)),
+            "{anchor}"
+        );
+        let comment_part = related_part(
+            &package,
+            &slide_parts[slide],
+            rel_types::POWERPOINT_COMMENTS,
+        );
+        assert!(comment_parts.insert(comment_part.clone()));
+        assert_eq!(
+            package.content_types.content_type_for(&comment_part),
+            Some(content_types::POWERPOINT_COMMENTS)
+        );
+    }
+    assert_eq!(
+        source.comments(0).unwrap()[0].id,
+        comment_id,
+        "the source is unchanged"
+    );
+}
+
+#[test]
+fn fx216_sections_preserve_selected_sidecars_and_split_destination_middle() {
+    use rpptx::{ImportSlideOptions, Section};
+    let mut package = fixture_package();
+    let xml = String::from_utf8(package.get_part(PRESENTATION_PART).unwrap().to_vec()).unwrap();
+    let section = r#"<p:extLst><p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"><q:sectionLst xmlns:q="http://schemas.microsoft.com/office/powerpoint/2010/main"><q:section name="Shared name" id="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}" xmlns:z="urn:fx216:opaque" z:identity="source"><z:before/><q:sldIdLst z:list="keep"><q:sldId id="900" z:mark="first"><z:child/></q:sldId><z:between/><q:sldId id="256" z:mark="second"/></q:sldIdLst><z:after/></q:section></q:sectionLst></p:ext></p:extLst>"#;
+    package.set_part(
+        PRESENTATION_PART,
+        xml.replace("</p:presentation>", &format!("{section}</p:presentation>"))
+            .into_bytes(),
+    );
+    let source = open_package(package).unwrap();
+    let before = source.to_bytes().unwrap();
+    let mut destination = Presentation::new().unwrap();
+    destination.add_slide(0).unwrap();
+    destination.add_slide(0).unwrap();
+    let old_ids = destination
+        .slides()
+        .map(|slide| slide.id())
+        .collect::<Vec<_>>();
+    destination
+        .set_sections(vec![
+            Section::new(
+                "{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}",
+                "Shared name",
+                old_ids.clone(),
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+    let options = ImportSlideOptions {
+        insert_index: Some(1),
+        layout_index: Some(0),
+        keep_sections: true,
+        ..Default::default()
+    };
+    let (inserted, diagnostics) = destination
+        .import_slides(&source, &[1, 0], &options, &[])
+        .unwrap();
+    assert_eq!(inserted, [1, 2]);
+    assert!(diagnostics.is_empty());
+    let saved = destination.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    assert!(reopened.validate().is_empty());
+    let current_ids = reopened
+        .slides()
+        .map(|slide| slide.id())
+        .collect::<Vec<_>>();
+    let sections = reopened.sections();
+    assert_eq!(sections.len(), 3);
+    assert_eq!(sections[0].slide_ids, [old_ids[0]]);
+    assert_eq!(sections[1].slide_ids, current_ids[1..3]);
+    assert_eq!(sections[2].slide_ids, [old_ids[1]]);
+    assert_eq!(
+        sections
+            .iter()
+            .filter_map(|section| section.id.as_ref())
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        3
+    );
+    let saved_package = open_opc(&saved, "section sidecars");
+    let xml = String::from_utf8(
+        saved_package
+            .get_part("/ppt/presentation.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(xml.contains("z:identity=\"source\""));
+    assert!(
+        xml.contains("<z:before/>") && xml.contains("<z:after/>") && xml.contains("<z:between/>")
+    );
+    assert!(xml.contains(&format!("id=\"{}\" z:mark=\"second\"", current_ids[1])));
+    assert!(xml.contains(&format!("id=\"{}\" z:mark=\"first\"", current_ids[2])));
+    assert!(xml.contains("<z:child/>"));
+    assert_eq!(source.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn fx216_classic_comments_preserve_opaque_identity_and_numeric_references() {
+    const PRESENTATION_PART: &str = "/ppt/presentation.xml";
+    const AUTHORS_REL: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/commentAuthors";
+    fn classic_source(label: &str) -> Presentation {
+        let mut authored = Presentation::new().unwrap();
+        authored.add_slide(0).unwrap();
+        let mut package = saved_valid_package(&authored, "classic source carrier");
+        let authors = format!(
+            r#"<p:cmAuthorLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:z="urn:fx216:classic"><p:cmAuthor id="0" name="Same name" initials="S" lastIdx="1" clrIdx="0" z:identity="{label}"><z:payload/></p:cmAuthor></p:cmAuthorLst>"#
+        );
+        let comments = format!(
+            r#"<p:cmLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:z="urn:fx216:classic"><p:cm authorId="0" dt="2026-10-13T10:00:00Z" idx="1"><p:pos x="1" y="2"/><p:text>{label}</p:text><p:extLst><p:ext uri="urn:fx216:classic"><z:opaque authorId="0" idx="1"/></p:ext></p:extLst></p:cm></p:cmLst>"#
+        );
+        package.set_part("/ppt/commentAuthors.xml", authors.into_bytes());
+        package.set_part("/ppt/comments/classic.xml", comments.into_bytes());
+        package.content_types.add_override(
+            "/ppt/commentAuthors.xml",
+            "application/vnd.openxmlformats-officedocument.presentationml.commentAuthors+xml",
+        );
+        package.content_types.add_override(
+            "/ppt/comments/classic.xml",
+            "application/vnd.openxmlformats-officedocument.presentationml.comments+xml",
+        );
+        let mut relationships = package.get_part_rels(PRESENTATION_PART).unwrap().clone();
+        relationships.add(AUTHORS_REL, "commentAuthors.xml");
+        package.set_part_rels(PRESENTATION_PART, relationships);
+        let mut relationships = package
+            .get_part_rels("/ppt/slides/slide1.xml")
+            .unwrap()
+            .clone();
+        relationships.add(rel_types::COMMENTS, "../comments/classic.xml");
+        package.set_part_rels("/ppt/slides/slide1.xml", relationships);
+        open_package(package).unwrap()
+    }
+    let source = classic_source("source");
+    let source_before = source.to_bytes().unwrap();
+    let mut destination = classic_source("destination");
+    destination.import_slide(&source, 0, Some(0), None).unwrap();
+    let package = saved_valid_package(&destination, "classic copied comments");
+    let author_part = related_part(&package, PRESENTATION_PART, AUTHORS_REL);
+    let authors = String::from_utf8(package.get_part(&author_part).unwrap().to_vec()).unwrap();
+    assert!(
+        authors.contains("z:identity=\"source\"") && authors.contains("z:identity=\"destination\"")
+    );
+    assert_eq!(authors.matches("<z:payload/>").count(), 2);
+    let imported_slide = package
+        .get_part_rels(PRESENTATION_PART)
+        .unwrap()
+        .items
+        .iter()
+        .rfind(|relationship| relationship.rel_type == rel_types::SLIDE)
+        .unwrap();
+    let imported_slide = OpcPackage::resolve_rel_target(PRESENTATION_PART, &imported_slide.target);
+    let imported = related_part(&package, &imported_slide, rel_types::COMMENTS);
+    assert_ne!(imported, "/ppt/comments/classic.xml");
+    let comments = String::from_utf8(package.get_part(&imported).unwrap().to_vec()).unwrap();
+    assert!(comments.contains("<p:cm authorId=\"1\""));
+    assert!(comments.contains("<z:opaque authorId=\"0\" idx=\"1\"/>"));
+    assert!(
+        comments.contains("2026-10-13T10:00:00Z") && comments.contains("<p:text>source</p:text>")
+    );
+    assert_eq!(source.to_bytes().unwrap(), source_before);
+}
+
+#[test]
+fn fx216_partial_classic_thread_carries_parent_scope_and_refuses_missing_parent_atomically() {
+    const P: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
+    const A: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/commentAuthors";
+    const R: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+    let mut authored = Presentation::new().unwrap();
+    authored.add_slide(0).unwrap();
+    authored.add_slide(0).unwrap();
+    let mut package = saved_valid_package(&authored, "partial classic valid source");
+    package.set_part("/ppt/commentAuthors.xml", format!(r#"<p:cmAuthorLst xmlns:p="{P}"><p:cmAuthor id="0" name="Thread owner" initials="T" lastIdx="2" clrIdx="0"/></p:cmAuthorLst>"#).into_bytes());
+    package.content_types.add_override(
+        "/ppt/commentAuthors.xml",
+        "application/vnd.openxmlformats-officedocument.presentationml.commentAuthors+xml",
+    );
+    let mut rels = package
+        .get_part_rels("/ppt/presentation.xml")
+        .unwrap()
+        .clone();
+    rels.add(A, "commentAuthors.xml");
+    package.set_part_rels("/ppt/presentation.xml", rels);
+    let parent = format!(
+        r#"<p:cmLst xmlns:p="{P}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:z="urn:fx216:parent"><p:cm authorId="0" idx="1" dt="2026-10-13T10:00:00Z"><p:pos x="1" y="2"/><p:text>original parent</p:text><p:extLst><p:ext uri="urn:opaque"><z:payload r:id="same"/><z:parentCm authorId="0" idx="100"/></p:ext></p:extLst></p:cm></p:cmLst>"#
+    );
+    let child = format!(
+        r#"<p:cmLst xmlns:p="{P}" xmlns:p15="http://schemas.microsoft.com/office/powerpoint/2012/main" xmlns:z="urn:fx216:child" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cm authorId="0" idx="2" dt="2026-10-13T10:01:00Z"><p:pos x="1" y="2"/><p:text>selected child</p:text><p:extLst><p:ext uri="{{C676402C-5697-4E1C-873F-D02D1690AC5C}}"><p15:threadingInfo><p15:parentCm authorId="0" idx="1"/></p15:threadingInfo></p:ext><p:ext uri="urn:foreign"><z:link r:id="same"/><z:capsule><p15:parentCm authorId="0" idx="100"/></z:capsule></p:ext></p:extLst></p:cm></p:cmLst>"#
+    );
+    for (index, content) in [(1, parent), (2, child)] {
+        let comment_part = format!("/ppt/comments/classic{index}.xml");
+        package.set_part(&comment_part, content.into_bytes());
+        package.content_types.add_override(
+            &comment_part,
+            "application/vnd.openxmlformats-officedocument.presentationml.comments+xml",
+        );
+        let slide = format!("/ppt/slides/slide{index}.xml");
+        let mut rels = package.get_part_rels(&slide).unwrap().clone();
+        rels.add(
+            rel_types::COMMENTS,
+            &format!("../comments/classic{index}.xml"),
+        );
+        package.set_part_rels(&slide, rels);
+        let scope = format!(
+            r#"<Relationships xmlns="{R}" xmlns:z="urn:fx216:scope" z:scope{index}="keep"><Relationship Id="same" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/{index}" TargetMode="External" z:record="keep"><z:child/></Relationship><z:capsule><Relationship Id="ghost" Type="urn:metadata" Target="ghost"/></z:capsule></Relationships>"#
+        );
+        package.set_part_rels(
+            &comment_part,
+            oxml_opc::relationship::Relationships::from_xml(scope.as_bytes()).unwrap(),
+        );
+    }
+    let source = open_package(package.clone()).unwrap();
+    assert!(source.validate().is_empty(), "{:?}", source.validate());
+    let source_before = source.to_bytes().unwrap();
+    let mut destination = Presentation::new().unwrap();
+    let (inserted, diagnostics) = destination
+        .import_slides(
+            &source,
+            &[1],
+            &rpptx::ImportSlideOptions {
+                layout_index: Some(0),
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap();
+    assert_eq!(inserted, vec![0]);
+    assert!(diagnostics.is_empty());
+    let output = saved_valid_package(&destination, "partial thread output");
+    let slide = related_part(&output, "/ppt/presentation.xml", rel_types::SLIDE);
+    let part = related_part(&output, &slide, rel_types::COMMENTS);
+    let xml = String::from_utf8(output.get_part(&part).unwrap().to_vec()).unwrap();
+    assert!(xml.contains("original parent") && xml.contains("selected child"));
+    assert!(xml.contains("<p15:parentCm authorId=\"0\" idx=\"2\"/>"));
+    assert!(xml.contains("<z:capsule><p15:parentCm authorId=\"0\" idx=\"100\"/></z:capsule>"));
+    let rels = output.get_part_rels(&part).unwrap();
+    assert_eq!(rels.items.len(), 2);
+    assert_ne!(rels.items[0].id, rels.items[1].id);
+    assert!(
+        rels.items
+            .iter()
+            .any(|rel| rel.target == "https://example.com/1")
+    );
+    let raw = String::from_utf8(rels.to_xml().unwrap()).unwrap();
+    assert!(
+        raw.contains("z:scope1=\"keep\"")
+            && raw.contains("z:scope2=\"keep\"")
+            && raw.contains("z:record=\"keep\"")
+            && raw.contains("Id=\"ghost\"")
+    );
+    assert!(xml.contains(&format!(
+            "r:id=\"{}\"",
+            rels.items
+                .iter()
+                .find(|rel| rel.target.ends_with("/1"))
+                .unwrap()
+                .id
+        )));
+    assert_eq!(source.to_bytes().unwrap(), source_before);
+    package.set_part("/ppt/comments/classic1.xml", format!(r#"<p:cmLst xmlns:p="{P}"><p:cm authorId="0" idx="3"><p:pos x="1" y="2"/><p:text>not the parent</p:text></p:cm></p:cmLst>"#).into_bytes());
+    let invalid = open_package(package).unwrap();
+    let before = destination.to_bytes().unwrap();
+    let error = destination
+        .import_slides(
+            &invalid,
+            &[1],
+            &rpptx::ImportSlideOptions {
+                layout_index: Some(0),
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("parent comment 0,1 is absent"),
+        "{error}"
+    );
+    assert_eq!(destination.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn fx216_missing_embedded_face_preserves_opaque_source_scope_and_existing_face() {
+    use rpptx_oxml::presentation::{CT_Presentation, EmbeddedFontKind};
+    let p = "http://schemas.openxmlformats.org/presentationml/2006/main";
+    let r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let source_xml = format!(
+        r#"<p:presentation xmlns:p="{p}" xmlns:r="{r}" xmlns:z="urn:source"><p:embeddedFontLst><p:embeddedFont><p:font typeface="FX216"/><p:italic r:id="source" z:marker="keep"><z:payload/></p:italic></p:embeddedFont></p:embeddedFontLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
+    );
+    let destination_xml = format!(
+        r#"<p:presentation xmlns:p="{p}" xmlns:r="{r}" xmlns:z="urn:destination"><p:embeddedFontLst><p:embeddedFont><p:font typeface="FX216"/><p:regular r:id="destination"/></p:embeddedFont></p:embeddedFontLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
+    );
+    let source = CT_Presentation::from_xml(source_xml.as_bytes()).unwrap();
+    let source_before = source.to_xml().unwrap();
+    let source_face = source.embedded_fonts().next().unwrap();
+    let mut destination = CT_Presentation::from_xml(destination_xml.as_bytes()).unwrap();
+    let face = destination.embedded_font_mut("FX216").unwrap().unwrap();
+    face.import_face(source_face, EmbeddedFontKind::Italic, "imported")
+        .unwrap();
+    assert_eq!(face.face(EmbeddedFontKind::Regular), Some("destination"));
+    assert_eq!(face.face(EmbeddedFontKind::Italic), Some("imported"));
+    let saved = destination.to_xml().unwrap();
+    let raw = std::str::from_utf8(&saved).unwrap();
+    assert!(
+        raw.contains("z:marker=\"keep\"")
+            && raw.contains("<z:payload/>")
+            && raw.contains("xmlns:z=\"urn:source\"")
+    );
+    let mut reopened = CT_Presentation::from_xml(&saved).unwrap();
+    reopened
+        .embedded_font_mut("FX216")
+        .unwrap()
+        .unwrap()
+        .import_face(source_face, EmbeddedFontKind::Italic, "imported")
+        .unwrap();
+    assert_eq!(reopened.to_xml().unwrap(), saved);
+    assert_eq!(source.to_xml().unwrap(), source_before);
+    let conflicting_xml = source_xml.replace("marker=\"keep\"", "marker=\"different\"");
+    let conflicting = CT_Presentation::from_xml(conflicting_xml.as_bytes()).unwrap();
+    let before = reopened.to_xml().unwrap();
+    assert!(
+        reopened
+            .embedded_font_mut("FX216")
+            .unwrap()
+            .unwrap()
+            .import_face(
+                conflicting.embedded_fonts().next().unwrap(),
+                EmbeddedFontKind::Italic,
+                "imported"
+            )
+            .is_err()
+    );
+    assert_eq!(reopened.to_xml().unwrap(), before);
+}
+
+#[test]
+fn fx216_embedded_face_refuses_inherited_namespace_value_reinterpretation() {
+    use rpptx_oxml::presentation::{CT_Presentation, EmbeddedFontKind};
+    let p = "http://schemas.openxmlformats.org/presentationml/2006/main";
+    let r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let mc = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+    let fixture = |uri: &str, description: bool| {
+        format!(
+            r#"<p:presentation xmlns:p="{p}" xmlns:r="{r}" xmlns:mc="{mc}" xmlns:z="{uri}"><p:embeddedFontLst><p:embeddedFont {}><p:font typeface="FX216"/><p:regular r:id="face" {}/></p:embeddedFont></p:embeddedFontLst><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#,
+            if description {
+                "mc:Ignorable=\"z\""
+            } else {
+                ""
+            },
+            if description {
+                ""
+            } else {
+                "mc:Ignorable=\"z\""
+            }
+        )
+    };
+    for description in [false, true] {
+        let source =
+            CT_Presentation::from_xml(fixture("urn:source", description).as_bytes()).unwrap();
+        let source_before = source.to_xml().unwrap();
+        let mut destination =
+            CT_Presentation::from_xml(fixture("urn:destination", description).as_bytes()).unwrap();
+        let before = destination.to_xml().unwrap();
+        let result = destination
+            .embedded_font_mut("FX216")
+            .unwrap()
+            .unwrap()
+            .import_face(
+                source.embedded_fonts().next().unwrap(),
+                EmbeddedFontKind::Regular,
+                "face",
+            );
+        assert!(
+            result.is_err(),
+            "opaque namespace value authority was reinterpreted, description={description}"
+        );
+        assert_eq!(destination.to_xml().unwrap(), before);
+        assert_eq!(source.to_xml().unwrap(), source_before);
+    }
+    // Fully modeled faces carry no opaque namespace-valued payload.
+    let plain = fixture("urn:source", false).replace("mc:Ignorable=\"z\"", "");
+    let alias = plain
+        .replace("xmlns:p=", &format!("xmlns:q=\"{p}\" xmlns:p="))
+        .replace("<p:font ", "<q:font ")
+        .replace("<p:regular ", "<q:regular ");
+    let source = CT_Presentation::from_xml(alias.as_bytes()).unwrap();
+    let mut destination = CT_Presentation::from_xml(plain.as_bytes()).unwrap();
+    let before = destination.to_xml().unwrap();
+    destination
+        .embedded_font_mut("FX216")
+        .unwrap()
+        .unwrap()
+        .import_face(
+            source.embedded_fonts().next().unwrap(),
+            EmbeddedFontKind::Regular,
+            "face",
+        )
+        .unwrap();
+    assert_eq!(destination.to_xml().unwrap(), before);
+}
+
+#[test]
+fn fx216_imported_table_styles_remap_collisions_and_preserve_destination_default() {
+    for image_backed in [false, true] {
+        let id = "{11111111-1111-4111-8111-111111111111}";
+        let a = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        let mut source = Presentation::new().unwrap();
+        source.add_slide(0).unwrap();
+        source
+            .slide_mut(0)
+            .unwrap()
+            .add_table(1, 1, Emu(0), Emu(0), Emu(914400), Emu(914400))
+            .unwrap()
+            .table_mut()
+            .unwrap()
+            .set_style_id(None)
+            .unwrap();
+        source
+            .slide_mut(0)
+            .unwrap()
+            .add_table(1, 1, Emu(1000000), Emu(0), Emu(914400), Emu(914400))
+            .unwrap()
+            .table_mut()
+            .unwrap()
+            .set_style_id(Some(id.into()))
+            .unwrap();
+        let mut source_package = saved_valid_package(&source, "table source");
+        let source_style = related_part(
+            &source_package,
+            "/ppt/presentation.xml",
+            oxml_opc::relationship::rel_types::TABLE_STYLES,
+        );
+        let fill = if image_backed {
+            r#"<a:blipFill><a:blip r:embed="stylePicture"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>"#
+        } else {
+            r#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#
+        };
+        let source_xml = format!(
+            r#"<a:tblStyleLst xmlns:a="{a}" def="{id}"><a:tblStyle styleId="{id}" styleName="Source" xmlns:z="urn:source" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><a:wholeTbl><a:tcStyle><a:fill>{fill}</a:fill></a:tcStyle></a:wholeTbl><z:payload value='&#65;'/></a:tblStyle><z:root xmlns:z="urn:source" value='&#66;'/></a:tblStyleLst>"#
+        );
+        source_package.set_part(&source_style, source_xml.into_bytes());
+        if image_backed {
+            source_package.set_part("/ppt/media/style-source.png", f226_blue_pixel_png());
+            source_package
+                .content_types
+                .add_override("/ppt/media/style-source.png", "image/png");
+            let uri = "http://schemas.openxmlformats.org/package/2006/relationships";
+            let image = oxml_opc::relationship::rel_types::IMAGE;
+            source_package.set_part_rels(&source_style, oxml_opc::Relationships::from_xml(format!(r#"<Relationships xmlns="{uri}" xmlns:z="urn:style-record"><Relationship Id="stylePicture" Type="{image}" Target="media/style-source.png" z:keep='&#69;'/></Relationships>"#).as_bytes()).unwrap());
+        }
+        let source = open_package(source_package).unwrap();
+        let source_before = source.to_bytes().unwrap();
+        let mut destination = Presentation::new().unwrap();
+        destination.add_slide(0).unwrap();
+        destination
+            .slide_mut(0)
+            .unwrap()
+            .add_table(1, 1, Emu(0), Emu(0), Emu(914400), Emu(914400))
+            .unwrap()
+            .table_mut()
+            .unwrap()
+            .set_style_id(Some(id.into()))
+            .unwrap();
+        let mut destination_package = saved_valid_package(&destination, "table destination");
+        let destination_style = related_part(
+            &destination_package,
+            "/ppt/presentation.xml",
+            oxml_opc::relationship::rel_types::TABLE_STYLES,
+        );
+        let destination_definition = format!(
+            r#"<a:tblStyle styleId='{id}' styleName='Destination'><a:wholeTbl><a:tcStyle><a:fill><a:solidFill><a:srgbClr val='0000FF'/></a:solidFill></a:fill></a:tcStyle></a:wholeTbl></a:tblStyle>"#
+        );
+        let destination_xml = format!(
+            r#"<a:tblStyleLst xmlns:a="{a}" xmlns:z="urn:destination" def='{id}' z:keep='&#67;'>{destination_definition}<z:outside keep='&#68;'/></a:tblStyleLst>"#
+        );
+        destination_package.set_part(&destination_style, destination_xml.into_bytes());
+        let mut destination = open_package(destination_package).unwrap();
+        let options = rpptx::ImportSlideOptions {
+            layout_index: Some(0),
+            ..Default::default()
+        };
+        destination
+            .import_slides(&source, &[0], &options, &[])
+            .unwrap();
+        let ids = destination
+            .slide(1)
+            .unwrap()
+            .shapes()
+            .filter_map(|shape| shape.table())
+            .map(|table| table.style_id().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(ids.len(), 2);
+        assert_eq!(ids[0], ids[1]);
+        assert_ne!(ids[0], id);
+        assert_eq!(
+            destination
+                .slide(0)
+                .unwrap()
+                .shapes()
+                .find_map(|shape| shape.table())
+                .unwrap()
+                .style_id(),
+            Some(id)
+        );
+        let saved = saved_valid_package(&destination, "imported custom table");
+        let raw = std::str::from_utf8(saved.get_part(&destination_style).unwrap()).unwrap();
+        assert!(raw.contains(&format!("def='{id}'")) && raw.contains(&destination_definition));
+        assert!(
+            raw.contains("z:keep='&#67;'")
+                && raw.contains("<z:outside keep='&#68;'/>")
+                && raw.contains("<z:payload value='&#65;'/>")
+                && raw.contains("value='&#66;'")
+        );
+        let count = raw.matches("styleName=\"Source\"").count();
+        assert_eq!(count, 1);
+        destination
+            .import_slides(&source, &[0], &options, &[])
+            .unwrap();
+        let repeated = saved_valid_package(&destination, "repeat custom table");
+        if let Some(directory) = std::env::var_os("FX216_TRACE_DIR") {
+            let directory = PathBuf::from(directory);
+            for (label, package) in [
+                ("source", &saved_valid_package(&source, "trace source")),
+                ("first", &saved),
+                ("repeated", &repeated),
+            ] {
+                std::fs::write(
+                    directory.join(format!("{image_backed}-{label}-styles.xml")),
+                    package.get_part(&destination_style).unwrap(),
+                )
+                .unwrap();
+                if let Some(rels) = package.get_part_rels(&destination_style) {
+                    std::fs::write(
+                        directory.join(format!("{image_backed}-{label}-style-rels.xml")),
+                        rels.to_xml().unwrap(),
+                    )
+                    .unwrap();
+                }
+            }
+        }
+        assert_eq!(
+            repeated
+                .get_part(&destination_style)
+                .map(|xml| std::str::from_utf8(xml).unwrap()),
+            saved
+                .get_part(&destination_style)
+                .map(|xml| std::str::from_utf8(xml).unwrap())
+        );
+        assert_eq!(
+            repeated
+                .get_part_rels(&destination_style)
+                .map(|rels| rels.to_xml().unwrap()),
+            saved
+                .get_part_rels(&destination_style)
+                .map(|rels| rels.to_xml().unwrap())
+        );
+        assert_eq!(source.to_bytes().unwrap(), source_before);
+    }
+}
+
+#[test]
+fn fx216_notes_master_registration_preserves_single_global_and_opaque_scope() {
+    let p = "http://schemas.openxmlformats.org/presentationml/2006/main";
+    let r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let xml = format!(
+        r#"<p:presentation xmlns:p="{p}" xmlns:r="{r}" xmlns:z="urn:opaque"><p:sldMasterIdLst/><p:sldIdLst/><p:notesSz cx="6858000" cy="9144000"/><z:opaque keep='&#65;'/></p:presentation>"#
+    );
+    let mut model = rpptx_oxml::presentation::CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+    model
+        .ensure_notes_master_relationship("notesMaster")
+        .unwrap();
+    let first = model.to_xml().unwrap();
+    let text = std::str::from_utf8(&first).unwrap();
+    assert!(text.find("p:notesMasterIdLst").unwrap() < text.find("p:notesSz").unwrap());
+    assert!(text.contains("<z:opaque keep='&#65;'/>") && text.contains("r:id=\"notesMaster\""));
+    model
+        .ensure_notes_master_relationship("notesMaster")
+        .unwrap();
+    assert_eq!(model.to_xml().unwrap(), first);
+    assert!(model.ensure_notes_master_relationship("different").is_err());
+    assert_eq!(model.to_xml().unwrap(), first);
+    let mut reopened = rpptx_oxml::presentation::CT_Presentation::from_xml(&first).unwrap();
+    reopened
+        .ensure_notes_master_relationship("notesMaster")
+        .unwrap();
+    assert_eq!(reopened.to_xml().unwrap(), first);
+}
+
+#[test]
+fn fx216_text_inheritance_char_explicit_false_zero() {
+    let local = oxml_drawing::text::CT_TextCharacterProperties::from_xml(r####"<a:rPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" b="0" i="false" spc="0" baseline="0"/>"####.as_bytes()).unwrap();
+    let defaults = oxml_drawing::text::CT_TextCharacterProperties::from_xml(r####"<a:defRPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" b="1" i="1" spc="200" baseline="5000" sz="2400"/>"####.as_bytes()).unwrap();
+    let before_local = local.clone();
+    let before_defaults = defaults.clone();
+    let merged = local.with_inherited_defaults(&defaults).unwrap();
+    let mut writer = quick_xml::Writer::new(Vec::new());
+    merged.write_xml(&mut writer, "a:rPr").unwrap();
+    let xml = writer.into_inner();
+    assert_eq!(local, before_local);
+    assert_eq!(defaults, before_defaults);
+    assert_eq!(
+        oxml_drawing::text::CT_TextCharacterProperties::from_xml(&xml).unwrap(),
+        merged
+    );
+    let text = String::from_utf8_lossy(&xml);
+    assert_eq!(merged.bold, Some(false));
+    assert_eq!(merged.italic, Some(false));
+    assert_eq!(merged.font_size, Some(2400));
+    assert_eq!(merged.baseline.as_deref(), Some("0"));
+    assert!(text.contains("spc=\"0\""));
+}
+
+#[test]
+fn fx216_text_inheritance_paragraph_explicit_zero() {
+    let local = oxml_drawing::text::CT_TextParagraphProperties::from_xml(r####"<a:pPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" marL="0" indent="0" lvl="0" rtl="0"/>"####.as_bytes()).unwrap();
+    let defaults = oxml_drawing::text::CT_TextParagraphProperties::from_xml(r####"<a:pPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" marL="100" marR="200" indent="-50" lvl="3" rtl="1" algn="ctr"/>"####.as_bytes()).unwrap();
+    let before_local = local.clone();
+    let before_defaults = defaults.clone();
+    let merged = local.with_inherited_defaults(&defaults).unwrap();
+    let xml = merged.to_xml().unwrap();
+    assert_eq!(local, before_local);
+    assert_eq!(defaults, before_defaults);
+    assert_eq!(
+        oxml_drawing::text::CT_TextParagraphProperties::from_xml(&xml).unwrap(),
+        merged
+    );
+    let text = String::from_utf8_lossy(&xml);
+    assert!(text.contains("marL=\"0\"") && text.contains("indent=\"0\""));
+    assert_eq!(merged.left_margin, Some(0));
+    assert_eq!(merged.right_margin, Some(200));
+    assert_eq!(merged.indent, Some(0));
+    assert_eq!(merged.level, Some(0));
+    assert_eq!(merged.right_to_left, Some(false));
+}
+
+#[test]
+fn fx216_text_inheritance_bullet_four_groups() {
+    let local = oxml_drawing::text::CT_TextParagraphProperties::from_xml(r####"<a:pPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:buClrTx/><a:buNone/></a:pPr>"####.as_bytes()).unwrap();
+    let defaults = oxml_drawing::text::CT_TextParagraphProperties::from_xml(r####"<a:pPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:buClr><a:srgbClr val="FF0000"/></a:buClr><a:buSzPct val="125000"/><a:buFont typeface="Wingdings"/><a:buChar char="*"/></a:pPr>"####.as_bytes()).unwrap();
+    let before_local = local.clone();
+    let before_defaults = defaults.clone();
+    let merged = local.with_inherited_defaults(&defaults).unwrap();
+    let xml = merged.to_xml().unwrap();
+    assert_eq!(local, before_local);
+    assert_eq!(defaults, before_defaults);
+    assert_eq!(
+        oxml_drawing::text::CT_TextParagraphProperties::from_xml(&xml).unwrap(),
+        merged
+    );
+    let text = String::from_utf8_lossy(&xml);
+    assert!(text.contains("<a:buClrTx/>"));
+    assert!(text.contains("buNone"));
+    assert!(text.contains("125000"));
+    assert!(text.contains("Wingdings"));
+    assert!(!text.contains("buChar"));
+    assert!(text.find("buSzPct").unwrap() < text.find("buFont").unwrap());
+}
+
+#[test]
+fn fx216_text_inheritance_nested_run_defaults() {
+    let local = oxml_drawing::text::CT_TextParagraphProperties::from_xml(r####"<a:pPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:defRPr b="0"><a:latin typeface="Local"/></a:defRPr></a:pPr>"####.as_bytes()).unwrap();
+    let defaults = oxml_drawing::text::CT_TextParagraphProperties::from_xml(r####"<a:pPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:lnSpc><a:spcPct val="120000"/></a:lnSpc><a:defRPr b="1" i="1" sz="1800"><a:latin typeface="Parent"/><a:ea typeface="East"/></a:defRPr></a:pPr>"####.as_bytes()).unwrap();
+    let before_local = local.clone();
+    let before_defaults = defaults.clone();
+    let merged = local.with_inherited_defaults(&defaults).unwrap();
+    let xml = merged.to_xml().unwrap();
+    assert_eq!(local, before_local);
+    assert_eq!(defaults, before_defaults);
+    assert_eq!(
+        oxml_drawing::text::CT_TextParagraphProperties::from_xml(&xml).unwrap(),
+        merged
+    );
+    let text = String::from_utf8_lossy(&xml);
+    let run = merged.default_run_properties.as_ref().unwrap();
+    assert_eq!(run.bold, Some(false));
+    assert_eq!(run.italic, Some(true));
+    assert_eq!(run.font_size, Some(1800));
+    assert_eq!(run.latin.as_ref().unwrap().typeface, "Local");
+    assert_eq!(run.east_asian.as_ref().unwrap().typeface, "East");
+    assert!(text.find("lnSpc").unwrap() < text.find("defRPr").unwrap());
+}
+
+#[test]
+fn fx216_text_inheritance_list_alias_level() {
+    let local = oxml_drawing::text::CT_TextListStyle::from_xml(r####"<q:lstStyle xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main"><q:lvl1pPr marL="0"><q:defRPr b="0"/></q:lvl1pPr></q:lstStyle>"####.as_bytes()).unwrap();
+    let defaults = oxml_drawing::text::CT_TextListStyle::from_xml(r####"<a:lstStyle xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:defPPr algn="ctr"/><a:lvl1pPr marL="10" marR="20"><a:defRPr b="1" i="1"/></a:lvl1pPr><a:lvl2pPr lvl="1"/></a:lstStyle>"####.as_bytes()).unwrap();
+    let before_local = local.clone();
+    let before_defaults = defaults.clone();
+    let merged = local.with_inherited_defaults(&defaults).unwrap();
+    let xml = merged.to_xml().unwrap();
+    assert_eq!(local, before_local);
+    assert_eq!(defaults, before_defaults);
+    assert_eq!(
+        oxml_drawing::text::CT_TextListStyle::from_xml(&xml).unwrap(),
+        merged
+    );
+    let text = String::from_utf8_lossy(&xml);
+    assert!(text.contains("marL=\"0\"") && text.contains("marR=\"20\""));
+    let level = merged.level(1).unwrap();
+    assert_eq!(level.left_margin, Some(0));
+    assert_eq!(level.right_margin, Some(20));
+    assert_eq!(
+        level.default_run_properties.as_ref().unwrap().bold,
+        Some(false)
+    );
+    assert_eq!(
+        level.default_run_properties.as_ref().unwrap().italic,
+        Some(true)
+    );
+    assert!(merged.level(2).is_some());
+    assert!(merged.default_paragraph_properties.is_some());
+}
+
+#[test]
+fn fx216_text_inheritance_foreign_fill_lookalike() {
+    let local = oxml_drawing::text::CT_TextCharacterProperties::from_xml(r####"<a:rPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:f="urn:producer"><f:solidFill keep='&#65;'/></a:rPr>"####.as_bytes()).unwrap();
+    let defaults = oxml_drawing::text::CT_TextCharacterProperties::from_xml(r####"<a:defRPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></a:defRPr>"####.as_bytes()).unwrap();
+    let before_local = local.clone();
+    let before_defaults = defaults.clone();
+    let merged = local.with_inherited_defaults(&defaults).unwrap();
+    let mut writer = quick_xml::Writer::new(Vec::new());
+    merged.write_xml(&mut writer, "a:rPr").unwrap();
+    let xml = writer.into_inner();
+    assert_eq!(local, before_local);
+    assert_eq!(defaults, before_defaults);
+    assert_eq!(
+        oxml_drawing::text::CT_TextCharacterProperties::from_xml(&xml).unwrap(),
+        merged
+    );
+    let text = String::from_utf8_lossy(&xml);
+    assert!(merged.fill.is_some());
+    assert!(text.contains("<f:solidFill keep='&#65;'/>"));
+    assert!(text.contains("00FF00"));
+    let mut reader = quick_xml::NsReader::from_reader(xml.as_slice());
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        let (namespace, event) = reader.read_resolved_event().unwrap();
+        match event {
+            quick_xml::events::Event::Start(element) | quick_xml::events::Event::Empty(element) => {
+                if let quick_xml::name::ResolveResult::Bound(namespace) = namespace {
+                    seen.insert((
+                        String::from_utf8_lossy(element.local_name().as_ref()).into_owned(),
+                        String::from_utf8_lossy(namespace.as_ref()).into_owned(),
+                    ));
+                }
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+    }
+    assert!(
+        seen.contains(&("solidFill".to_owned(), "urn:producer".to_owned())),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn fx216_text_inheritance_opaque_mc_conflict() {
+    let local = oxml_drawing::text::CT_TextCharacterProperties::from_xml(r####"<a:rPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:z="urn:local" mc:Ignorable="z"><z:local/></a:rPr>"####.as_bytes()).unwrap();
+    let defaults = oxml_drawing::text::CT_TextCharacterProperties::from_xml(r####"<a:defRPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:z="urn:parent"><z:parent mc:Ignorable="z"/></a:defRPr>"####.as_bytes()).unwrap();
+    let before_local = local.clone();
+    let before_defaults = defaults.clone();
+    let merged = local.with_inherited_defaults(&defaults).unwrap();
+    let mut writer = quick_xml::Writer::new(Vec::new());
+    merged.write_xml(&mut writer, "a:rPr").unwrap();
+    let xml = writer.into_inner();
+    assert_eq!(local, before_local);
+    assert_eq!(defaults, before_defaults);
+    assert_eq!(
+        oxml_drawing::text::CT_TextCharacterProperties::from_xml(&xml).unwrap(),
+        merged
+    );
+    let text = String::from_utf8_lossy(&xml);
+    assert!(text.contains("<z:local/>"));
+    assert!(text.contains("urn:parent"));
+    assert!(text.contains("urn:local"));
+    let mut reader = quick_xml::NsReader::from_reader(xml.as_slice());
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        let (namespace, event) = reader.read_resolved_event().unwrap();
+        match event {
+            quick_xml::events::Event::Start(element) | quick_xml::events::Event::Empty(element) => {
+                if let quick_xml::name::ResolveResult::Bound(namespace) = namespace {
+                    seen.insert((
+                        String::from_utf8_lossy(element.local_name().as_ref()).into_owned(),
+                        String::from_utf8_lossy(namespace.as_ref()).into_owned(),
+                    ));
+                }
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+    }
+    assert!(
+        seen.contains(&("local".to_owned(), "urn:local".to_owned())),
+        "{seen:?}"
+    );
+    assert!(
+        seen.contains(&("parent".to_owned(), "urn:parent".to_owned())),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn fx216_text_inheritance_opaque_local_default_shadow() {
+    let local = oxml_drawing::text::CT_TextParagraphProperties::from_xml(r####"<a:pPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns="urn:local"><opaque value='&#65;'/></a:pPr>"####.as_bytes()).unwrap();
+    let defaults = oxml_drawing::text::CT_TextParagraphProperties::from_xml(r####"<a:pPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns="urn:parent"><payload value='&#66;'/><a:defRPr i="1"/></a:pPr>"####.as_bytes()).unwrap();
+    let before_local = local.clone();
+    let before_defaults = defaults.clone();
+    let merged = local.with_inherited_defaults(&defaults).unwrap();
+    let xml = merged.to_xml().unwrap();
+    assert_eq!(local, before_local);
+    assert_eq!(defaults, before_defaults);
+    assert_eq!(
+        oxml_drawing::text::CT_TextParagraphProperties::from_xml(&xml).unwrap(),
+        merged
+    );
+    let text = String::from_utf8_lossy(&xml);
+    assert!(text.contains("urn:local"));
+    assert!(text.contains("urn:parent"));
+    assert!(merged.default_run_properties.is_some());
+    let mut reader = quick_xml::NsReader::from_reader(xml.as_slice());
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        let (namespace, event) = reader.read_resolved_event().unwrap();
+        match event {
+            quick_xml::events::Event::Start(element) | quick_xml::events::Event::Empty(element) => {
+                if let quick_xml::name::ResolveResult::Bound(namespace) = namespace {
+                    seen.insert((
+                        String::from_utf8_lossy(element.local_name().as_ref()).into_owned(),
+                        String::from_utf8_lossy(namespace.as_ref()).into_owned(),
+                    ));
+                }
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+    }
+    assert!(
+        seen.contains(&("opaque".to_owned(), "urn:local".to_owned())),
+        "{seen:?}"
+    );
+    assert!(
+        seen.contains(&("payload".to_owned(), "urn:parent".to_owned())),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn fx216_shape_defaults_keep_sparse_geometry_false_and_opaque_scopes() {
+    use oxml_drawing::shape_props::CT_ShapeProperties;
+    let local = CT_ShapeProperties::from_xml(br#"<a:spPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:xfrm rot="0" flipH="0"><a:off x="10" y="20"/></a:xfrm><a:noFill/><opaque value='&#65;'/></a:spPr>"#).unwrap();
+    let defaults = CT_ShapeProperties::from_xml(br#"<a:spPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns="urn:parent" xmlns:z="urn:source" bwMode="gray"><a:xfrm rot="60000" flipH="1"><a:off x="30" y="40"/><a:ext cx="50" cy="60"/></a:xfrm><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:effectDag><z:payload keep='&#66;'/></a:effectDag></a:spPr>"#).unwrap();
+    let before_local = local.to_xml().unwrap();
+    let before_defaults = defaults.to_xml().unwrap();
+    let merged = local.with_inherited_defaults(&defaults).unwrap();
+    let transform = merged.transform.as_ref().unwrap();
+    assert_eq!(transform.offset.unwrap().x.0, 10);
+    assert_eq!(transform.extent.unwrap().cx.0, 50);
+    assert_eq!(transform.rotation.0, 0);
+    assert!(!transform.flip_horizontal);
+    assert!(matches!(
+        merged.fill,
+        Some(oxml_drawing::fill::Fill::NoFill(_))
+    ));
+    let xml = merged.to_xml().unwrap();
+    let text = String::from_utf8_lossy(&xml);
+    assert!(text.contains("<opaque value='&#65;'/>"));
+    assert!(text.contains("<z:payload keep='&#66;'/>"));
+    let mut reader = quick_xml::NsReader::from_reader(xml.as_slice());
+    let mut opaque_seen = false;
+    let mut payload_seen = false;
+    loop {
+        let (namespace, event) = reader.read_resolved_event().unwrap();
+        match event {
+            quick_xml::events::Event::Empty(element)
+                if element.local_name().as_ref() == b"opaque" =>
+            {
+                assert!(matches!(namespace, quick_xml::name::ResolveResult::Unbound));
+                opaque_seen = true;
+            }
+            quick_xml::events::Event::Empty(element)
+                if element.local_name().as_ref() == b"payload" =>
+            {
+                assert!(
+                    matches!(namespace,quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref()==b"urn:source")
+                );
+                payload_seen = true;
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+    }
+    assert!(opaque_seen && payload_seen);
+    assert_eq!(local.to_xml().unwrap(), before_local);
+    assert_eq!(defaults.to_xml().unwrap(), before_defaults);
+    assert_eq!(
+        CT_ShapeProperties::from_xml(&xml)
+            .unwrap()
+            .to_xml()
+            .unwrap(),
+        xml
+    );
+}
+
+#[test]
+fn fx216_shape_defaults_refuse_conflicting_opaque_owner_context_without_mutation() {
+    use oxml_drawing::shape_props::CT_ShapeProperties;
+    let local=CT_ShapeProperties::from_xml(br#"<a:spPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:z="urn:local" z:meaning="z:item"><z:local/></a:spPr>"#).unwrap();
+    let defaults=CT_ShapeProperties::from_xml(br#"<a:spPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:z="urn:source" z:meaning="z:item"><z:source/></a:spPr>"#).unwrap();
+    let before_local = local.to_xml().unwrap();
+    let before_defaults = defaults.to_xml().unwrap();
+    let error = local
+        .with_inherited_defaults(&defaults)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("unrepresentable inherited shape-property namespace authority"),
+        "{error}"
+    );
+    assert_eq!(local.to_xml().unwrap(), before_local);
+    assert_eq!(defaults.to_xml().unwrap(), before_defaults);
+}
+
+#[test]
+fn fx216_source_notes_materializes_master_theme_geometry_and_retains_destination() {
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(6).unwrap();
+    source.set_notes_text(0, "Source notes appearance").unwrap();
+    let mut package = open_opc(&source.to_bytes().unwrap(), "notes source");
+    let note = related_part(&package, "/ppt/slides/slide1.xml", rel_types::NOTES_SLIDE);
+    let master = related_part(&package, &note, rel_types::NOTES_MASTER);
+    let theme = related_part(&package, &master, rel_types::THEME);
+    let mut xml = String::from_utf8(package.get_part(&master).unwrap().to_vec()).unwrap();
+    let begin = xml.find("<p:notesStyle>").unwrap();
+    let style = xml[begin..]
+        .replace("sz=\"1200\"", "sz=\"2800\"")
+        .replace("typeface=\"+mn-lt\"", "typeface=\"Georgia\"")
+        .replace("val=\"tx1\"", "val=\"accent1\"");
+    xml.replace_range(begin.., &style);
+    xml = xml
+        .replace("x=\"685800\" y=\"4343400\"", "x=\"900000\" y=\"3000000\"")
+        .replace(
+            "cx=\"5486400\" cy=\"4114800\"",
+            "cx=\"5000000\" cy=\"4000000\"",
+        );
+    let decoration = r#"<p:sp><p:nvSpPr><p:cNvPr id="40" name="SOURCE decoration"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="100000" y="200000"/><a:ext cx="300000" cy="400000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="7777" cap="rnd"/></p:spPr><p:style><a:lnRef idx="1"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="1"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"/><a:fontRef idx="minor"/></p:style></p:sp>"#;
+    xml = xml.replace("</p:spTree>", &format!("{decoration}</p:spTree>"));
+    rpptx_oxml::notes_parts::CT_NotesMaster::from_xml(xml.as_bytes()).unwrap();
+    package.set_part(&master, xml.into_bytes());
+    let xml = String::from_utf8(package.get_part(&theme).unwrap().to_vec()).unwrap();
+    package.set_part(
+        &theme,
+        xml.replacen(
+            "<a:accent1><a:srgbClr val=\"4F81BD\"",
+            "<a:accent1><a:srgbClr val=\"FF0000\"",
+            1,
+        )
+        .into_bytes(),
+    );
+    let source = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let source_before = source.to_bytes().unwrap();
+    let mut destination = Presentation::new().unwrap();
+    destination.add_slide(6).unwrap();
+    destination
+        .set_notes_text(0, "Destination notes unchanged")
+        .unwrap();
+    let before = saved_valid_package(&destination, "notes destination");
+    let old_note = related_part(&before, "/ppt/slides/slide1.xml", rel_types::NOTES_SLIDE);
+    let old_master = related_part(&before, &old_note, rel_types::NOTES_MASTER);
+    destination
+        .import_slides(
+            &source,
+            &[0],
+            &rpptx::ImportSlideOptions {
+                keep_source_formatting: true,
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap();
+    let saved = saved_valid_package(&destination, "source notes positive");
+    assert_eq!(saved.get_part(&old_note), before.get_part(&old_note));
+    assert_eq!(saved.get_part(&old_master), before.get_part(&old_master));
+    let imported = related_part(
+        &saved,
+        &saved_slide_parts(&saved)[1],
+        rel_types::NOTES_SLIDE,
+    );
+    assert_eq!(
+        related_part(&saved, &imported, rel_types::NOTES_MASTER),
+        old_master
+    );
+    let original_source_package = open_opc(&source_before, "source placeholder authority");
+    let source_note =
+        CT_NotesSlide::from_xml(original_source_package.get_part(&note).unwrap()).unwrap();
+    let imported_note = CT_NotesSlide::from_xml(saved.get_part(&imported).unwrap()).unwrap();
+    let placeholders = |note: &CT_NotesSlide| {
+        note.common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .filter_map(|child| {
+                if let ShapeTreeChild::Shape(shape) = child {
+                    shape
+                        .placeholder
+                        .as_ref()
+                        .map(|ph| format!("{:?}", ph.key()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        placeholders(&imported_note),
+        placeholders(&source_note),
+        "master hints are not instantiated source placeholders"
+    );
+    let slide_number_body = |note: &CT_NotesSlide| {
+        note.common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .find_map(|child| {
+                if let ShapeTreeChild::Shape(shape) = child {
+                    if shape
+                        .placeholder
+                        .as_ref()
+                        .is_some_and(|ph| ph.effective_type() == PhType::SlideNumber)
+                    {
+                        Some(shape.text_body.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+    };
+    assert_eq!(slide_number_body(&source_note), Some(None));
+    assert_eq!(
+        slide_number_body(&imported_note),
+        Some(None),
+        "empty local placeholder must not gain master fields"
+    );
+    let raw = String::from_utf8_lossy(saved.get_part(&imported).unwrap());
+    assert!(
+        raw.contains("showMasterSp=\"0\"") && raw.contains("SOURCE decoration"),
+        "{raw}"
+    );
+    assert!(
+        raw.contains("typeface=\"Georgia\"")
+            && raw.contains("sz=\"2800\"")
+            && raw.contains("val=\"FF0000\""),
+        "{raw}"
+    );
+    assert!(raw.contains("w=\"7777\" cap=\"rnd\""), "{raw}");
+    assert!(
+        raw.contains("x=\"900000\" y=\"3000000\"") && raw.contains("cx=\"5000000\" cy=\"4000000\""),
+        "{raw}"
+    );
+    assert_eq!(source.to_bytes().unwrap(), source_before);
+    if let Ok(dir) = std::env::var("FX216_NOTES_ARTIFACT_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(Path::new(&dir).join("source-notes.pptx"), &source_before).unwrap();
+        std::fs::write(
+            Path::new(&dir).join("imported-notes.pptx"),
+            destination.to_bytes().unwrap(),
+        )
+        .unwrap();
+        #[cfg(feature = "render")]
+        {
+            std::fs::write(
+                Path::new(&dir).join("source-notes-own.pdf"),
+                source.to_notes_pdf_deterministic().unwrap(),
+            )
+            .unwrap();
+            std::fs::write(
+                Path::new(&dir).join("imported-notes-own.pdf"),
+                destination.to_notes_pdf_deterministic().unwrap(),
+            )
+            .unwrap();
+            let source_pages = source.notes_page_pngs_deterministic(144.0).unwrap();
+            let imported_pages = destination.notes_page_pngs_deterministic(144.0).unwrap();
+            std::fs::write(
+                Path::new(&dir).join("source-notes-own.png"),
+                &source_pages[0],
+            )
+            .unwrap();
+            std::fs::write(
+                Path::new(&dir).join("imported-notes-own.png"),
+                &imported_pages[1],
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn fx216_active_font_programs_and_inactive_source_flags_preserve_appearance_authority() {
+    use rpptx::{EmbeddedFont, EmbeddedFontKind, FontEmbeddingLicense};
+    let license = FontEmbeddingLicense::new(true, "SIL Open Font License 1.1");
+    let regular = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+    let bold = include_bytes!("../../oxml-layout/fonts/Caladea-Bold.ttf");
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(6).unwrap();
+    source
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(1000000), Emu(1000000))
+        .unwrap()
+        .set_text("Selected font")
+        .unwrap();
+    source
+        .embed_font(
+            "Caladea",
+            EmbeddedFont::new(EmbeddedFontKind::Regular, regular.to_vec(), license.clone()),
+        )
+        .unwrap();
+    let mut package = open_opc(&source.to_bytes().unwrap(), "stored source font");
+    let raw =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    assert!(raw.contains("<a:r><a:t>Selected font</a:t>"));
+    package.set_part(
+        "/ppt/slides/slide1.xml",
+        raw.replace(
+            "<a:r><a:t>Selected font</a:t>",
+            "<a:r><a:rPr><a:latin typeface=\"Caladea\"/></a:rPr><a:t>Selected font</a:t>",
+        )
+        .into_bytes(),
+    );
+    let source = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let source_before = source.to_bytes().unwrap();
+    let mut active = Presentation::new().unwrap();
+    active.import_slide(&source, 0, None, None).unwrap();
+    let stored = active.embedded_fonts().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].faces[0].data.as_deref(), Some(regular.as_slice()));
+    let stored_part = stored[0].faces[0].part_name.clone();
+    active.import_slide(&source, 0, None, None).unwrap();
+    assert_eq!(
+        active.embedded_fonts().unwrap()[0].faces[0].part_name,
+        stored_part
+    );
+    for flag in [Some(false), None] {
+        let mut inactive = source.clone();
+        inactive.set_embed_true_type_fonts(flag).unwrap();
+        let source_before = inactive.to_bytes().unwrap();
+        let mut destination = Presentation::new().unwrap();
+        destination.import_slide(&inactive, 0, None, None).unwrap();
+        assert!(destination.embedded_fonts().unwrap().is_empty());
+        assert_eq!(destination.embed_true_type_fonts().unwrap(), None);
+        let before = active.to_bytes().unwrap();
+        assert!(
+            active
+                .import_slide(&inactive, 0, None, None)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("inactive source font appearance")
+        );
+        assert_eq!(active.to_bytes().unwrap(), before);
+        assert_eq!(inactive.to_bytes().unwrap(), source_before);
+    }
+    let mut conflict = Presentation::new().unwrap();
+    conflict
+        .embed_font(
+            "Caladea",
+            EmbeddedFont::new(EmbeddedFontKind::Regular, bold.to_vec(), license),
+        )
+        .unwrap();
+    let before = conflict.to_bytes().unwrap();
+    assert!(conflict.import_slide(&source, 0, None, None).is_err());
+    assert_eq!(conflict.to_bytes().unwrap(), before);
+    conflict.set_embed_true_type_fonts(None).unwrap();
+    let before = conflict.to_bytes().unwrap();
+    assert!(
+        conflict
+            .import_slide(&source, 0, None, None)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("unrelated inactive destination")
+    );
+    assert_eq!(conflict.to_bytes().unwrap(), before);
+    assert_eq!(source.to_bytes().unwrap(), source_before);
+}
+
+#[test]
+fn fx216_source_master_defaults_remain_source_owned_and_repeated_graphs_reuse() {
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(6).unwrap();
+    source
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(2000000), Emu(1000000))
+        .unwrap()
+        .set_text("Presentation defaults")
+        .unwrap();
+    let mut package = open_opc(&source.to_bytes().unwrap(), "source default style");
+    let main = package.main_document_part().unwrap();
+    let mut presentation = CT_Presentation::from_xml(package.get_part(&main).unwrap()).unwrap();
+    presentation.default_text_style = Some(oxml_drawing::text::CT_TextListStyle::from_xml(br#"<p:defaultTextStyle xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:lvl1pPr><a:defRPr sz="2800"><a:latin typeface="Georgia"/></a:defRPr></a:lvl1pPr></p:defaultTextStyle>"#).unwrap());
+    package.set_part(&main, presentation.to_xml().unwrap());
+    let master = "/ppt/slideMasters/slideMaster1.xml";
+    let mut raw = String::from_utf8(package.get_part(master).unwrap().to_vec()).unwrap();
+    let begin = raw.find("<p:txStyles>").unwrap();
+    let end = raw.find("</p:txStyles>").unwrap() + "</p:txStyles>".len();
+    raw.replace_range(begin..end, "");
+    package.set_part(master, raw.into_bytes());
+    let source = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let before = source.to_bytes().unwrap();
+    let mut destination = Presentation::new().unwrap();
+    let default_style = CT_Presentation::from_xml(
+        open_opc(&destination.to_bytes().unwrap(), "destination defaults")
+            .get_part("/ppt/presentation.xml")
+            .unwrap(),
+    )
+    .unwrap()
+    .default_text_style;
+    let options = rpptx::ImportSlideOptions {
+        keep_source_formatting: true,
+        ..Default::default()
+    };
+    destination
+        .import_slides(&source, &[0], &options, &[])
+        .unwrap();
+    let saved = saved_valid_package(&destination, "source master defaults");
+    let layout = related_part(
+        &saved,
+        &saved_slide_parts(&saved)[0],
+        rel_types::SLIDE_LAYOUT,
+    );
+    let master = related_part(&saved, &layout, rel_types::SLIDE_MASTER);
+    let raw = String::from_utf8_lossy(saved.get_part(&master).unwrap());
+    assert!(
+        raw.contains("typeface=\"Georgia\"") && raw.contains("sz=\"2800\""),
+        "{raw}"
+    );
+    assert_eq!(
+        CT_Presentation::from_xml(saved.get_part("/ppt/presentation.xml").unwrap())
+            .unwrap()
+            .default_text_style,
+        default_style
+    );
+    let count = destination.layout_count();
+    destination
+        .import_slides(&source, &[0], &options, &[])
+        .unwrap();
+    assert_eq!(destination.layout_count(), count);
+    assert_eq!(source.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn fx216_notes_unrepresentable_master_metadata_and_flags_refuse_atomically() {
+    let mut original = Presentation::new().unwrap();
+    original.add_slide(6).unwrap();
+    original.set_notes_text(0, "Source notes").unwrap();
+    let original_package = open_opc(&original.to_bytes().unwrap(), "master admission source");
+    let note = related_part(
+        &original_package,
+        "/ppt/slides/slide1.xml",
+        rel_types::NOTES_SLIDE,
+    );
+    let master = related_part(&original_package, &note, rel_types::NOTES_MASTER);
+    let raw = String::from_utf8(original_package.get_part(&master).unwrap().to_vec()).unwrap();
+    let mut flags = rpptx_oxml::notes_parts::CT_NotesMaster::from_xml(raw.as_bytes()).unwrap();
+    let old = flags
+        .header_footer
+        .as_ref()
+        .is_none_or(rpptx_oxml::slide_parts::CT_HeaderFooter::footer_enabled);
+    flags.header_footer = Some(rpptx_oxml::slide_parts::CT_HeaderFooter::new(
+        None,
+        None,
+        Some(!old),
+        None,
+    ));
+    let variants = [
+        ("flags", String::from_utf8(flags.to_xml().unwrap()).unwrap()),
+        (
+            "group",
+            raw.replacen("<a:off x=\"0\" y=\"0\"/>", "<a:off x=\"10\" y=\"0\"/>", 1),
+        ),
+        (
+            "root",
+            raw.replacen(
+                "<p:notesMaster ",
+                "<p:notesMaster xmlns:z=\"urn:source\" z:authority=\"kept\" ",
+                1,
+            ),
+        ),
+        (
+            "common",
+            raw.replacen(
+                "</p:extLst>",
+                "<p:ext uri=\"urn:source\"><z:payload xmlns:z=\"urn:source\"/></p:ext></p:extLst>",
+                1,
+            ),
+        ),
+        (
+            "nonvisual",
+            raw.replacen(
+                "<p:cNvPr id=\"1\"",
+                "<p:cNvPr xmlns:z=\"urn:source\" z:authority=\"kept\" id=\"1\"",
+                1,
+            ),
+        ),
+    ];
+    let mut rejected = Vec::new();
+    for (name, xml) in variants {
+        rpptx_oxml::notes_parts::CT_NotesMaster::from_xml(xml.as_bytes()).unwrap();
+        let mut package = original_package.clone();
+        package.set_part(&master, xml.into_bytes());
+        let source = Presentation::from_bytes(&package_bytes(package)).unwrap();
+        let source_before = source.to_bytes().unwrap();
+        assert!(
+            source.validate().is_empty(),
+            "{name}: {:?}",
+            source.validate()
+        );
+        let mut destination = Presentation::new().unwrap();
+        let before = destination.to_bytes().unwrap();
+        let result = destination.import_slides(
+            &source,
+            &[0],
+            &rpptx::ImportSlideOptions {
+                keep_source_formatting: true,
+                ..Default::default()
+            },
+            &[],
+        );
+        eprintln!(
+            "master metadata {name}: refusal={} destinationUnchanged={}",
+            result.is_err(),
+            destination.to_bytes().unwrap() == before
+        );
+        rejected.push(result.is_err() && destination.to_bytes().unwrap() == before);
+        assert_eq!(source.to_bytes().unwrap(), source_before);
+    }
+    assert_eq!(rejected, [true, true, true, true, true]);
+}
+
+#[test]
+fn fx216_batch_jumps_map_existing_self_and_drop_only_unmapped_targets() {
+    let (mut source, ids) = click_action_deck();
+    for (id, target) in ids.iter().zip([1, 2, 0, 1, 2, 0]) {
+        source.set_shape_target_slide(0, *id, Some(target)).unwrap();
+    }
+    let source_before = source.to_bytes().unwrap();
+    for mapped_existing in [true, false] {
+        let mut destination = Presentation::new().unwrap();
+        destination.add_slide(6).unwrap();
+        let original = destination.slide_xml(0).unwrap();
+        let map = if mapped_existing {
+            vec![(2, 0)]
+        } else {
+            vec![]
+        };
+        let (inserted, diagnostics) = destination
+            .import_slides(&source, &[1, 0], &Default::default(), &map)
+            .unwrap();
+        assert_eq!(inserted, [1, 2]);
+        assert_eq!(diagnostics.is_empty(), mapped_existing);
+        if !mapped_existing {
+            assert!(
+                diagnostics
+                    .iter()
+                    .all(|value| value.contains("dropped unmapped slide jump")
+                        && value.contains("slide3.xml"))
+            );
+        }
+        for (index, target) in [
+            Some(1),
+            mapped_existing.then_some(0),
+            Some(2),
+            Some(1),
+            mapped_existing.then_some(0),
+            Some(2),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = destination
+                .slide(2)
+                .unwrap()
+                .shape(index)
+                .unwrap()
+                .non_visual_id()
+                .unwrap();
+            assert_eq!(destination.shape_target_slide(2, id).unwrap(), target);
+        }
+        assert_eq!(destination.slide_xml(0).unwrap(), original);
+        let saved = destination.to_bytes().unwrap();
+        let reopened = Presentation::from_bytes(&saved).unwrap();
+        assert!(reopened.validate().is_empty());
+    }
+    assert_eq!(source.to_bytes().unwrap(), source_before);
+}
+
+#[test]
+fn fx216_unsupported_and_missing_reachable_graphs_refuse_before_publication() {
+    let source = presentation_with_authored_chart();
+    let bytes = source.to_bytes().unwrap();
+    for unsupported in [false, true] {
+        let mut package = open_opc(&bytes, "graph refusal source");
+        let expected = if unsupported {
+            package
+                .get_or_create_part_rels("/ppt/slides/slide1.xml")
+                .add("urn:fx216:unsupported", "../theme/theme1.xml");
+            "urn:fx216:unsupported"
+        } else {
+            let chart = related_part(&package, "/ppt/slides/slide1.xml", rel_types::CHART);
+            let workbook = related_part(&package, &chart, rel_types::PACKAGE);
+            package.remove_part(&workbook);
+            "embedded"
+        };
+        let source = Presentation::from_bytes(&package_bytes(package)).unwrap();
+        let mut destination = Presentation::new().unwrap();
+        destination.add_slide(6).unwrap();
+        let before = destination.to_bytes().unwrap();
+        let error = destination
+            .import_slides(&source, &[0], &Default::default(), &[])
+            .unwrap_err()
+            .to_string();
+        if unsupported {
+            assert!(
+                error.contains(expected) && error.contains("slide1.xml"),
+                "{error}"
+            );
+        } else {
+            assert!(
+                error.contains("embeddings") || error.contains("embedded"),
+                "{error}"
+            );
+        }
+        assert_eq!(destination.to_bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn fx216_two_frozen_corpus_merges_preserve_inputs_counts_and_current_graphs() {
+    let root = corpus_dir();
+    let inputs = ["WithMaster.pptx", "backgrounds.pptx"];
+    let bytes: Vec<_> = inputs
+        .iter()
+        .map(|name| fs::read(root.join(name)).expect("required frozen F216 corpus"))
+        .collect();
+    let sources: Vec<_> = bytes
+        .iter()
+        .map(|bytes| Presentation::from_bytes(bytes).unwrap())
+        .collect();
+    for (destination_index, source_index, output) in [
+        (0, 1, "WithMaster-plus-backgrounds.pptx"),
+        (1, 0, "backgrounds-plus-WithMaster.pptx"),
+    ] {
+        let source = &sources[source_index];
+        let mut destination = sources[destination_index].clone();
+        let count = destination.len();
+        let source_before = source.to_bytes().unwrap();
+        let indexes: Vec<_> = (0..source.len()).collect();
+        let (inserted, diagnostics) = destination
+            .import_slides(
+                source,
+                &indexes,
+                &rpptx::ImportSlideOptions {
+                    keep_source_formatting: true,
+                    keep_sections: true,
+                    ..Default::default()
+                },
+                &[],
+            )
+            .unwrap();
+        assert_eq!(inserted, (count..count + source.len()).collect::<Vec<_>>());
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(
+            destination.len(),
+            sources.iter().map(Presentation::len).sum::<usize>()
+        );
+        assert_eq!(source.to_bytes().unwrap(), source_before);
+        let result = destination.to_bytes().unwrap();
+        assert!(
+            Presentation::from_bytes(&result)
+                .unwrap()
+                .validate()
+                .is_empty()
+        );
+        if let Ok(directory) = std::env::var("FX216_CORPUS_ARTIFACT_DIR") {
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(Path::new(&directory).join(output), &result).unwrap();
+        }
+    }
+    for (name, before) in inputs.iter().zip(bytes) {
+        assert_eq!(fs::read(root.join(name)).unwrap(), before);
+    }
+}
+
+#[test]
+fn fx216_notes_jumps_keep_backlink_sound_and_opaque_payload_after_release() {
+    let mut producer = Presentation::new().unwrap();
+    producer.add_slide(6).unwrap();
+    producer.add_slide(6).unwrap();
+    producer.set_notes_text(0, "Source notes jump").unwrap();
+    let mut package = open_opc(&producer.to_bytes().unwrap(), "notes jump source");
+    let note = related_part(&package, "/ppt/slides/slide1.xml", rel_types::NOTES_SLIDE);
+    package.set_part("/ppt/media/click.wav", M21_AUDIO_WAV.to_vec());
+    package
+        .content_types
+        .add_override("/ppt/media/click.wav", "audio/wav");
+    let relationships = package.get_or_create_part_rels(&note);
+    relationships.add_with_id("rJump", rel_types::SLIDE, "../slides/slide2.xml");
+    relationships.add_with_id("rSound", rel_types::AUDIO, "../media/click.wav");
+    let raw = String::from_utf8(package.get_part(&note).unwrap().to_vec()).unwrap();
+    let click = r#"<a:rPr><a:hlinkClick xmlns:z="urn:fx216:foreign" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="z" r:id="rJump" action="ppaction://hlinksldjump" tooltip="Keep tooltip" z:id="rJump"><a:snd r:embed="rSound" name="click"/><a:extLst><a:ext uri="urn:fx216:opaque"><z:metadata keep='&#65;'/></a:ext></a:extLst></a:hlinkClick></a:rPr>"#;
+    let replaced = raw.replacen(
+        "<a:r><a:t>Source notes jump</a:t>",
+        &format!("<a:r>{click}<a:t>Source notes jump</a:t>"),
+        1,
+    );
+    assert_ne!(replaced, raw);
+    package.set_part(&note, replaced.into_bytes());
+    let source = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert!(source.validate().is_empty());
+    let source_before = source.to_bytes().unwrap();
+    for mapped in [true, false] {
+        let mut destination = Presentation::new().unwrap();
+        destination.add_slide(6).unwrap();
+        let map = if mapped { vec![(1, 0)] } else { vec![] };
+        let (_, diagnostics) = destination
+            .import_slides(&source, &[0], &Default::default(), &map)
+            .unwrap();
+        assert_eq!(diagnostics.is_empty(), mapped);
+        let saved = saved_valid_package(&destination, "notes jump result");
+        let slides = saved_slide_parts(&saved);
+        let note = related_part(&saved, &slides[1], rel_types::NOTES_SLIDE);
+        let xml = String::from_utf8(saved.get_part(&note).unwrap().to_vec()).unwrap();
+        assert!(
+            xml.contains("Keep tooltip")
+                && xml.contains("z:id=\"rJump\"")
+                && xml.contains("<z:metadata keep='&#65;'/>")
+                && xml.contains("name=\"click\""),
+            "{xml}"
+        );
+        let rels = saved.get_part_rels(&note).unwrap();
+        let sound = rels.get_by_id("rSound").unwrap();
+        assert_eq!(
+            saved
+                .get_part(&OpcPackage::resolve_rel_target(&note, &sound.target))
+                .unwrap(),
+            M21_AUDIO_WAV
+        );
+        let slide_targets: Vec<_> = rels
+            .get_all_by_type(rel_types::SLIDE)
+            .into_iter()
+            .map(|r| OpcPackage::resolve_rel_target(&note, &r.target))
+            .collect();
+        assert!(slide_targets.contains(&slides[1]));
+        if mapped {
+            assert!(slide_targets.contains(&slides[0]) && xml.contains("ppaction://hlinksldjump"));
+        } else {
+            assert_eq!(slide_targets, [slides[1].clone()]);
+            assert!(!xml.contains("ppaction://hlinksldjump"));
+            assert!(rels.get_by_id("rJump").is_none());
+        }
+    }
+    assert_eq!(source.to_bytes().unwrap(), source_before);
+}
+
+#[test]
+fn fx216_freshly_authored_batch_relationships_publish_in_requested_order() {
+    use rpptx::ImportSlideOptions;
+    let mut source = Presentation::new().unwrap();
+    for (index, text) in ["first", "second", "third"].into_iter().enumerate() {
+        source.add_slide(6).unwrap();
+        source
+            .slide_mut(index)
+            .unwrap()
+            .add_textbox(Emu(0), Emu(0), Emu(914_400), Emu(914_400))
+            .unwrap()
+            .set_text(text)
+            .unwrap();
+    }
+    let source_before = source.to_bytes().unwrap();
+    let mut destination = Presentation::new().unwrap();
+    destination.add_slide(6).unwrap();
+    let existing = destination.slide_xml(0).unwrap();
+    let options = ImportSlideOptions {
+        layout_index: Some(6),
+        insert_index: Some(0),
+        ..Default::default()
+    };
+    let (inserted, diagnostics) = destination
+        .import_slides(&source, &[2, 0], &options, &[])
+        .unwrap();
+    assert_eq!(inserted, [0, 1]);
+    assert!(diagnostics.is_empty());
+    assert_eq!(destination.slide_xml(2).unwrap(), existing);
+    let reopened = Presentation::from_bytes(&destination.to_bytes().unwrap()).unwrap();
+    assert!(reopened.validate().is_empty());
+    for (index, text) in ["third", "first"].into_iter().enumerate() {
+        let xml = String::from_utf8(reopened.slide_xml(index).unwrap()).unwrap();
+        assert!(xml.contains(text));
+    }
+    assert_eq!(source.to_bytes().unwrap(), source_before);
+}
+
+#[test]
+fn fx216_existing_notes_master_registration_survives_creation_and_import() {
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(6).unwrap();
+    source.set_notes_text(0, "Registered source notes").unwrap();
+    let source_before = source.to_bytes().unwrap();
+    let source_package = open_opc(&source_before, "registered source");
+    let main =
+        std::str::from_utf8(source_package.get_part("/ppt/presentation.xml").unwrap()).unwrap();
+    assert_eq!(main.matches("<p:notesMasterId ").count(), 1, "{main}");
+    let mut fresh_destination = Presentation::new().unwrap();
+    fresh_destination
+        .import_slides(
+            &source,
+            &[0],
+            &rpptx::ImportSlideOptions {
+                keep_source_formatting: true,
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap();
+    let fresh = saved_valid_package(&fresh_destination, "fresh destination notes import");
+    let main = std::str::from_utf8(fresh.get_part("/ppt/presentation.xml").unwrap()).unwrap();
+    assert_eq!(main.matches("<p:notesMasterId ").count(), 1, "{main}");
+
+    let mut legacy = open_opc(&source_before, "legacy unregistered notes");
+    let mut main = std::str::from_utf8(legacy.get_part("/ppt/presentation.xml").unwrap())
+        .unwrap()
+        .to_owned();
+    let begin = main.find("<p:notesMasterIdLst>").unwrap();
+    let end = main[begin..].find("</p:notesMasterIdLst>").unwrap()
+        + begin
+        + "</p:notesMasterIdLst>".len();
+    main.replace_range(begin..end, "");
+    legacy.set_part("/ppt/presentation.xml", main.into_bytes());
+    let mut legacy = open_package(legacy).unwrap();
+    let before = legacy.to_bytes().unwrap();
+    let error = legacy
+        .import_slides(
+            &source,
+            &[0],
+            &rpptx::ImportSlideOptions {
+                keep_source_formatting: true,
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("would change existing notes inheritance"),
+        "{error}"
+    );
+    assert_eq!(legacy.to_bytes().unwrap(), before);
+    let mut destination = Presentation::new().unwrap();
+    destination.add_slide(6).unwrap();
+    destination
+        .set_notes_text(0, "Retained destination notes")
+        .unwrap();
+    let before = saved_valid_package(&destination, "destination notes");
+    let old_note = related_part(&before, "/ppt/slides/slide1.xml", rel_types::NOTES_SLIDE);
+    let old_master = related_part(&before, &old_note, rel_types::NOTES_MASTER);
+    destination
+        .import_slides(
+            &source,
+            &[0],
+            &rpptx::ImportSlideOptions {
+                keep_source_formatting: true,
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap();
+    let after = saved_valid_package(&destination, "imported registered notes");
+    let main = std::str::from_utf8(after.get_part("/ppt/presentation.xml").unwrap()).unwrap();
+    assert_eq!(main.matches("<p:notesMasterId ").count(), 1, "{main}");
+    assert_eq!(after.get_part(&old_note), before.get_part(&old_note));
+    assert_eq!(after.get_part(&old_master), before.get_part(&old_master));
+    let reopened = Presentation::from_bytes(&destination.to_bytes().unwrap()).unwrap();
+    assert!(reopened.validate().is_empty());
+    assert_eq!(reopened.len(), 2);
+    assert_eq!(source.to_bytes().unwrap(), source_before);
+}
+
+#[test]
+fn fx216_notes_registration_refusals_preserve_inputs_and_late_publication() {
+    use oxml_opc::relationship::Relationships;
+    let mut authored = Presentation::new().unwrap();
+    authored.add_slide(6).unwrap();
+    authored.set_notes_text(0, "Source notes").unwrap();
+    let original = authored.to_bytes().unwrap();
+    for ambiguous in [false, true] {
+        let mut package = open_opc(&original, "malformed global notes input");
+        let mut relationships = package
+            .get_part_rels("/ppt/presentation.xml")
+            .unwrap()
+            .clone();
+        if ambiguous {
+            let target = relationships
+                .get_by_type(rel_types::NOTES_MASTER)
+                .unwrap()
+                .target
+                .clone();
+            relationships.add(rel_types::NOTES_MASTER, &target);
+        } else {
+            let id = relationships
+                .get_by_type(rel_types::NOTES_MASTER)
+                .unwrap()
+                .id
+                .clone();
+            relationships
+                .items
+                .iter_mut()
+                .find(|item| item.id == id)
+                .unwrap()
+                .target_mode = Some("External".into());
+        }
+        package.set_part_rels("/ppt/presentation.xml", relationships);
+        let bytes = package_bytes(package);
+        let error = match Presentation::from_bytes(&bytes) {
+            Ok(_) => panic!("malformed global notes input was admitted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("presentation.xml"), "{error}");
+        assert!(
+            error.to_string().contains("notesMaster") || error.to_string().contains("external"),
+            "{error}"
+        );
+    }
+    fn root_metadata(package: &mut OpcPackage, value: &str) {
+        let xml = String::from_utf8(
+            package
+                .get_part_rels("/ppt/presentation.xml")
+                .unwrap()
+                .to_xml()
+                .unwrap(),
+        )
+        .unwrap();
+        let xml = xml.replacen(
+            "<Relationships ",
+            &format!("<Relationships xmlns:z=\"urn:fx216:notes-root\" z:ownership=\"{value}\" "),
+            1,
+        );
+        package.set_part_rels(
+            "/ppt/presentation.xml",
+            Relationships::from_xml(xml.as_bytes()).unwrap(),
+        );
+    }
+    let mut source_package = open_opc(&original, "source metadata");
+    root_metadata(&mut source_package, "source");
+    let source = open_package(source_package).unwrap();
+    let source_before = source.to_bytes().unwrap();
+    let mut destination = Presentation::new().unwrap();
+    destination.add_slide(6).unwrap();
+    let mut destination_package =
+        open_opc(&destination.to_bytes().unwrap(), "destination metadata");
+    root_metadata(&mut destination_package, "destination");
+    let mut destination = open_package(destination_package).unwrap();
+    assert!(destination.validate().is_empty());
+    assert!(source.validate().is_empty());
+    let before = destination.to_bytes().unwrap();
+    let old_slide = destination.slide_xml(0).unwrap();
+    let error = destination
+        .import_slides(
+            &source,
+            &[0],
+            &rpptx::ImportSlideOptions {
+                keep_source_formatting: true,
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("invalid relationship XML"),
+        "{error}"
+    );
+    assert_eq!(destination.to_bytes().unwrap(), before);
+    assert_eq!(destination.slide_xml(0).unwrap(), old_slide);
+    assert_eq!(source.to_bytes().unwrap(), source_before);
+}
+
+#[test]
+fn fx216_formatting_opaque_relationship_authority_copies_and_reuses_complete_scopes() {
+    use oxml_opc::relationship::Relationships;
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(6).unwrap();
+    let package = open_opc(&source.to_bytes().unwrap(), "formatting authority source");
+    let source_slide = saved_slide_parts(&package)[0].clone();
+    let layout = related_part(&package, &source_slide, rel_types::SLIDE_LAYOUT);
+    let master = related_part(&package, &layout, rel_types::SLIDE_MASTER);
+    for owner in [&layout, &master] {
+        let mut fixture = package.clone();
+        let rels = fixture.get_part_rels(owner).unwrap();
+        let selected = rels
+            .items
+            .iter()
+            .find(|item| item.rel_type != rel_types::SLIDE_LAYOUT)
+            .unwrap()
+            .id
+            .clone();
+        let mut xml = String::from_utf8(rels.to_xml().unwrap()).unwrap();
+        xml = xml.replacen(
+            "<Relationships",
+            "<Relationships xmlns:z=\"urn:source-format\" z:owner='source'",
+            1,
+        );
+        xml = xml.replace(
+            &format!("Id=\"{selected}\""),
+            &format!("Id=\"{selected}\" z:record='&#65;'"),
+        );
+        xml = xml.replace("</Relationships>", "<z:first/><z:second/></Relationships>");
+        fixture.set_part_rels(owner, Relationships::from_xml(xml.as_bytes()).unwrap());
+        let source = Presentation::from_bytes(&package_bytes(fixture)).unwrap();
+        let source_before = source.to_bytes().unwrap();
+        let mut destination = Presentation::new().unwrap();
+        destination.add_slide(6).unwrap();
+        let before = saved_valid_package(&destination, "formatting destination before");
+        let original_slide = saved_slide_parts(&before)[0].clone();
+        let old_xml = before.get_part(&original_slide).unwrap().to_vec();
+        let options = rpptx::ImportSlideOptions {
+            keep_source_formatting: true,
+            ..Default::default()
+        };
+        destination
+            .import_slides(&source, &[0], &options, &[])
+            .unwrap();
+        let saved = saved_valid_package(&destination, "formatting metadata imported");
+        let imported_slide = saved_slide_parts(&saved)[1].clone();
+        let imported_layout = related_part(&saved, &imported_slide, rel_types::SLIDE_LAYOUT);
+        let imported_master = related_part(&saved, &imported_layout, rel_types::SLIDE_MASTER);
+        let imported_owner = if owner == &layout {
+            &imported_layout
+        } else {
+            &imported_master
+        };
+        let copied = String::from_utf8(
+            saved
+                .get_part_rels(imported_owner)
+                .unwrap()
+                .to_xml()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            copied.contains("z:owner='source'") && copied.contains("z:record='&#65;'"),
+            "{copied}"
+        );
+        assert!(copied.find("<z:first/>").unwrap() < copied.find("<z:second/>").unwrap());
+        assert_ne!(imported_owner, owner);
+        assert_eq!(saved.get_part(&original_slide).unwrap(), old_xml);
+        destination
+            .import_slides(&source, &[0], &options, &[])
+            .unwrap();
+        let repeated = saved_valid_package(&destination, "formatting repeated metadata");
+        let second = related_part(
+            &repeated,
+            &saved_slide_parts(&repeated)[2],
+            rel_types::SLIDE_LAYOUT,
+        );
+        assert_eq!(second, imported_layout);
+        assert_eq!(source.to_bytes().unwrap(), source_before);
+        let reopened = Presentation::from_bytes(&destination.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.len(), 3);
+    }
+}
+
+#[test]
+fn fx216_custom_notes_master_resources_keep_targets_metadata_and_rollback() {
+    use oxml_opc::relationship::Relationships;
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(6).unwrap();
+    source.set_notes_text(0, "Custom notes resources").unwrap();
+    let mut package = open_opc(&source.to_bytes().unwrap(), "custom notes resource source");
+    let slide = saved_slide_parts(&package)[0].clone();
+    let note = related_part(&package, &slide, rel_types::NOTES_SLIDE);
+    let old_master = related_part(&package, &note, rel_types::NOTES_MASTER);
+    let master = "/custom/deep/nested/source-master.xml";
+    let media = "/custom/resources/source.png";
+    let bytes = f226_blue_pixel_png();
+    package.set_part(media, bytes.clone());
+    package.content_types.add_override(media, "image/png");
+    let mut relationships = package.get_part_rels(&old_master).unwrap().clone();
+    for relationship in &mut relationships.items {
+        if relationship.target_mode.as_deref() != Some("External") {
+            relationship.target = OpcPackage::resolve_rel_target(&old_master, &relationship.target);
+        }
+    }
+    relationships.add_with_id("rId2", rel_types::IMAGE, media);
+    let xml = String::from_utf8(relationships.to_xml().unwrap())
+        .unwrap()
+        .replacen(
+            "<Relationships",
+            "<Relationships xmlns:z=\"urn:resource-metadata\"",
+            1,
+        )
+        .replace("Id=\"rId2\"", "Id=\"rId2\" z:keep='&#65;'");
+    let mut master_xml =
+        String::from_utf8(package.get_part(&old_master).unwrap().to_vec()).unwrap();
+    let picture = f226_picture(40, "rId2", (100000, 200000, 300000, 400000));
+    master_xml = master_xml.replace("</p:spTree>", &format!("{picture}</p:spTree>"));
+    package.set_part(master, master_xml.into_bytes());
+    package
+        .content_types
+        .add_override(master, content_types::NOTES_MASTER);
+    package.set_part_rels(master, Relationships::from_xml(xml.as_bytes()).unwrap());
+    for owner in [package.main_document_part().unwrap(), note.clone()] {
+        let mut scope = package.get_part_rels(&owner).unwrap().clone();
+        for relationship in &mut scope.items {
+            if relationship.rel_type == rel_types::NOTES_MASTER {
+                relationship.target = master.into();
+            }
+        }
+        let scope = scope
+            .rebind_for_import(scope.items.clone(), &std::collections::HashMap::new())
+            .unwrap();
+        package.set_part_rels(&owner, scope);
+    }
+    package.remove_part(&old_master);
+    package.remove_part_rels(&old_master);
+    let source = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let source_before = source.to_bytes().unwrap();
+    let mut destination = Presentation::new().unwrap();
+    destination.add_slide(6).unwrap();
+    destination
+        .set_notes_text(0, "Original destination notes")
+        .unwrap();
+    let before = saved_valid_package(&destination, "old destination notes");
+    let old_note = related_part(
+        &before,
+        &saved_slide_parts(&before)[0],
+        rel_types::NOTES_SLIDE,
+    );
+    let options = rpptx::ImportSlideOptions {
+        keep_source_formatting: true,
+        ..Default::default()
+    };
+    destination
+        .import_slides(&source, &[0], &options, &[])
+        .unwrap();
+    let saved = saved_valid_package(&destination, "custom notes imported");
+    let imported = related_part(
+        &saved,
+        &saved_slide_parts(&saved)[1],
+        rel_types::NOTES_SLIDE,
+    );
+    let note_xml = String::from_utf8(saved.get_part(&imported).unwrap().to_vec()).unwrap();
+    assert!(note_xml.contains("Custom notes resources"));
+    let relationships = saved.get_part_rels(&imported).unwrap();
+    let image = relationships
+        .items
+        .iter()
+        .find(|item| item.rel_type == rel_types::IMAGE)
+        .unwrap();
+    let target = OpcPackage::resolve_rel_target(&imported, &image.target);
+    assert_eq!(saved.get_part(&target), Some(bytes.as_slice()));
+    assert!(
+        String::from_utf8(relationships.to_xml().unwrap())
+            .unwrap()
+            .contains("z:keep='&#65;'")
+    );
+    assert!(note_xml.contains(&format!("r:embed=\"{}\"", image.id)));
+    assert_ne!(image.id, "rId2");
+    assert_eq!(saved.get_part(&old_note), before.get_part(&old_note));
+    assert_eq!(source.to_bytes().unwrap(), source_before);
+    let mut invalid = open_opc(&source_before, "late notes refusal");
+    let raw = String::from_utf8(invalid.get_part(master).unwrap().to_vec()).unwrap();
+    let malformed = r#"<p:sp><p:nvSpPr><p:cNvPr id="41" name="Late invalid style"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:style><a:lnRef idx="4294967295"/><a:fillRef idx="0"/><a:effectRef idx="0"/><a:fontRef idx="none"/></p:style></p:sp>"#;
+    invalid.set_part(
+        master,
+        raw.replace("</p:spTree>", &format!("{malformed}</p:spTree>"))
+            .into_bytes(),
+    );
+    let invalid = Presentation::from_bytes(&package_bytes(invalid)).unwrap();
+    let invalid_before = invalid.to_bytes().unwrap();
+    let destination_before = destination.to_bytes().unwrap();
+    assert!(
+        destination
+            .import_slides(&invalid, &[0], &options, &[])
+            .is_err()
+    );
+    assert_eq!(destination.to_bytes().unwrap(), destination_before);
+    assert_eq!(invalid.to_bytes().unwrap(), invalid_before);
+    assert_eq!(
+        Presentation::from_bytes(&destination_before).unwrap().len(),
+        2
+    );
+}
+
+fn fx216_positioned_semantics(
+    elements: &[oxml_layout::PositionedElement],
+    fonts: &[oxml_layout::FontData],
+) -> Vec<String> {
+    use oxml_layout::PositionedElement;
+    use sha2::{Digest, Sha256};
+    let mut facts = Vec::new();
+    for element in elements {
+        match element {
+            PositionedElement::Text(run) => {
+                let font = fonts.iter().find(|font| font.id == run.font_id).unwrap();
+                facts.push(format!(
+                    "font={} family={} face={} bold={} italic={} axes={:?} synthetic={}/{}",
+                    hex32(Sha256::digest(font.data.as_ref()).into()),
+                    font.family,
+                    font.face_index,
+                    font.bold,
+                    font.italic,
+                    font.variations,
+                    font.synthetic_bold,
+                    font.synthetic_italic
+                ));
+                let mut run = run.clone();
+                run.font_id = oxml_layout::FontId(0);
+                run.source = None;
+                run.field_source = None;
+                run.note_reference_source = None;
+                facts.push(format!("glyph={run:?}"));
+            }
+            PositionedElement::MultilingualText(run) => {
+                let font = fonts.iter().find(|font| font.id == run.font_id).unwrap();
+                facts.push(format!(
+                    "font={} family={} face={} bold={} italic={} axes={:?} synthetic={}/{}",
+                    hex32(Sha256::digest(font.data.as_ref()).into()),
+                    font.family,
+                    font.face_index,
+                    font.bold,
+                    font.italic,
+                    font.variations,
+                    font.synthetic_bold,
+                    font.synthetic_italic
+                ));
+                let mut run = run.clone();
+                run.font_id = oxml_layout::FontId(0);
+                run.source = None;
+                run.field_source = None;
+                run.note_reference_source = None;
+                facts.push(format!("multilingual={run:?}"));
+            }
+            PositionedElement::Image {
+                rect,
+                data,
+                content_type,
+                ..
+            } => facts.push(format!(
+                "image rect={rect:?} mime={content_type} sha={}",
+                hex32(Sha256::digest(data).into())
+            )),
+            PositionedElement::Group(group) => {
+                facts.push(format!(
+                    "group transform={:?} clip={:?} opacity={:.17} effects={:?}",
+                    group.transform, group.clip, group.opacity, group.effects
+                ));
+                facts.extend(fx216_positioned_semantics(&group.children, fonts));
+                facts.push("end-group".into());
+            }
+            PositionedElement::MarkedContent { children, .. } => {
+                facts.push("marked-content".into());
+                facts.extend(fx216_positioned_semantics(children, fonts));
+                facts.push("end-marked-content".into());
+            }
+            other => facts.push(format!("paint={other:?}")),
+        }
+    }
+    facts
+}
+
+fn fx216_effective_semantics(presentation: &Presentation) -> Vec<Vec<String>> {
+    use sha2::{Digest, Sha256};
+    let (input, output) = presentation.render_deterministic().unwrap();
+    input
+        .slides
+        .iter()
+        .zip(&output.pages)
+        .map(|(slide, page)| {
+            let mut facts = vec![format!(
+                "page={:.17},{:.17} unresolved={}",
+                slide.size.0, slide.size.1, slide.unresolved_member_count
+            )];
+            let mut background = slide.background.clone();
+            if let Some(rpptx_layout::ResolvedBackground::Image(image)) = &mut background {
+                let media = input.media.get(&image.media).unwrap();
+                facts.push(format!(
+                    "background-media={} {}",
+                    media.content_type,
+                    hex32(Sha256::digest(&media.bytes).into())
+                ));
+                image.media = oxml_layout::MediaId(0);
+            }
+            facts.push(format!("background={background:?}"));
+            for (index, original) in slide.shapes.iter().enumerate() {
+                let transform = rpptx_render::shape_transform(original);
+                for (corner, (x, y)) in [
+                    (0.0, 0.0),
+                    (original.bounds.width, 0.0),
+                    (original.bounds.width, original.bounds.height),
+                    (0.0, original.bounds.height),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let point = transform.apply(oxml_layout::Point { x: *x, y: *y });
+                    facts.push(format!(
+                        "shape={index} corner={corner} x={:.17} y={:.17}",
+                        point.x, point.y
+                    ));
+                }
+                let mut shape = original.clone();
+                let mut images = Vec::new();
+                if let Some(image) = &mut shape.image_fill {
+                    images.push(image.media);
+                    image.media = oxml_layout::MediaId(0);
+                }
+                match &mut shape.content {
+                    ResolvedContent::Image(image) => {
+                        images.push(image.media);
+                        image.media = oxml_layout::MediaId(0);
+                    }
+                    ResolvedContent::Group(group) => {
+                        facts.extend(fx216_positioned_semantics(&group.children, &output.fonts));
+                        group.children.clear();
+                    }
+                    _ => {}
+                }
+                for id in images {
+                    let media = input.media.get(&id).unwrap();
+                    facts.push(format!(
+                        "shape={index} media={} {}",
+                        media.content_type,
+                        hex32(Sha256::digest(&media.bytes).into())
+                    ));
+                }
+                facts.push(format!("shape={index} effective={shape:?}"));
+            }
+            facts.extend(fx216_positioned_semantics(&page.elements, &output.fonts));
+            facts
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "requires admitted F-X216 source-built appearance artifacts"]
+fn fx216_full_effective_source_formatting_properties_match_current_corpus_and_negative() {
+    let root = corpus_dir();
+    let with_master = Presentation::open(root.join("WithMaster.pptx")).unwrap();
+    let backgrounds = Presentation::open(root.join("backgrounds.pptx")).unwrap();
+    let options = rpptx::ImportSlideOptions {
+        keep_source_formatting: true,
+        ..Default::default()
+    };
+    let mut records = Vec::new();
+    for (first, second, name) in [
+        (&with_master, &backgrounds, "WithMaster-plus-backgrounds"),
+        (&backgrounds, &with_master, "backgrounds-plus-WithMaster"),
+    ] {
+        let mut destination = first.clone();
+        let selected = (0..second.len()).collect::<Vec<_>>();
+        destination
+            .import_slides(second, &selected, &options, &[])
+            .unwrap();
+        let a = fx216_effective_semantics(first);
+        let b = fx216_effective_semantics(second);
+        let result = fx216_effective_semantics(&destination);
+        for (index, expected) in a.iter().chain(&b).enumerate() {
+            assert_eq!(
+                &result[index], expected,
+                "effective paired source {name} page {index}"
+            );
+            records.push(format!("{name}\t{index}\t{:?}", expected));
+        }
+    }
+    let negative_root = Path::new(
+        &std::env::var("FX216_NEGATIVE_INPUT_DIR").expect("admitted negative input directory"),
+    )
+    .to_owned();
+    let source_bytes = std::fs::read(negative_root.join("wrong-theme-source.pptx")).unwrap();
+    {
+        use sha2::{Digest, Sha256};
+        assert_eq!(
+            hex32(Sha256::digest(&source_bytes).into()),
+            "30b68d6dcef7bdfe67281f24e49e072644891334d6326e679c6c42a02ea0a11e"
+        );
+    }
+    let source = Presentation::from_bytes(&source_bytes).unwrap();
+    let mut positive = Presentation::new().unwrap();
+    positive
+        .import_slides(&source, &[0], &options, &[])
+        .unwrap();
+    let mut negative = Presentation::new().unwrap();
+    negative
+        .import_slides(&source, &[0], &Default::default(), &[])
+        .unwrap();
+    let source_facts = fx216_effective_semantics(&source);
+    let positive_facts = fx216_effective_semantics(&positive);
+    let negative_facts = fx216_effective_semantics(&negative);
+    assert_eq!(
+        source_facts, positive_facts,
+        "actual current source-format positive"
+    );
+    assert_ne!(
+        source_facts, negative_facts,
+        "wrong-theme negative must fail full effective comparison"
+    );
+    let source_text = source_facts[0].join("\n");
+    let negative_text = negative_facts[0].join("\n");
+    assert!(
+        source_text.contains("Georgia") && negative_text.contains("Calibri"),
+        "resolved font-family distinction"
+    );
+    assert!(
+        source_text.contains("r: 1.0, g: 0.0, b: 0.0")
+            && negative_text.contains("r: 0.0, g: 0.0, b: 0.0"),
+        "resolved color distinction"
+    );
+    records.push(format!("wrong-theme-source\t0\t{:?}", source_facts[0]));
+    records.push(format!("wrong-theme-negative\t0\t{:?}", negative_facts[0]));
+    if let Ok(dir) = std::env::var("FX216_EFFECTIVE_ARTIFACT_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            Path::new(&dir).join("full-effective-corpus.tsv"),
+            records.join("\n"),
+        )
+        .unwrap();
     }
 }

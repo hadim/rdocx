@@ -130,6 +130,11 @@ struct ShapeIdOccurrence {
 
 /// Assigns fresh non-visual shape ids and rewrites connector endpoints.
 pub fn rewrite_shape_ids(raw: &[u8]) -> Result<Vec<u8>> {
+    rewrite_shape_ids_mapped(raw).map(|(rewritten, _)| rewritten)
+}
+
+/// Returns the qualified shape identity map for imported collaboration anchors.
+pub fn rewrite_shape_ids_mapped(raw: &[u8]) -> Result<(Vec<u8>, HashMap<u32, u32>)> {
     let occurrences = shape_id_occurrences(raw, NamespaceBindings::default())?;
     let occupied = occurrences
         .iter()
@@ -152,7 +157,7 @@ pub fn rewrite_shape_ids(raw: &[u8]) -> Result<Vec<u8>> {
         next = next.checked_add(1).ok_or_else(shape_ids_exhausted)?;
     }
     if map.is_empty() {
-        return Ok(raw.to_vec());
+        return Ok((raw.to_vec(), map));
     }
 
     let mut rewritten = Vec::with_capacity(raw.len());
@@ -171,7 +176,7 @@ pub fn rewrite_shape_ids(raw: &[u8]) -> Result<Vec<u8>> {
         copied_through = occurrence.range.end;
     }
     rewritten.extend_from_slice(&raw[copied_through..]);
-    Ok(rewritten)
+    Ok((rewritten, map))
 }
 
 fn shape_id_occurrences(
@@ -538,7 +543,7 @@ pub struct CT_Shape {
 
 /// The four ordered DrawingML references carried by an ordinary shape style.
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct CT_ShapeStyle {
     pub line_reference: StyleMatrixReference,
     pub fill_reference: StyleMatrixReference,
@@ -546,7 +551,21 @@ pub struct CT_ShapeStyle {
     pub font_reference: FontReference,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
+    source_xml: Option<Vec<u8>>,
+    source_namespaces: NamespaceBindings,
 }
+
+impl PartialEq for CT_ShapeStyle {
+    fn eq(&self, other: &Self) -> bool {
+        self.line_reference == other.line_reference
+            && self.fill_reference == other.fill_reference
+            && self.effect_reference == other.effect_reference
+            && self.font_reference == other.font_reference
+            && self.raw_attributes == other.raw_attributes
+            && self.raw_children == other.raw_children
+    }
+}
+impl Eq for CT_ShapeStyle {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ShapeRaw {
@@ -575,7 +594,10 @@ impl CT_ShapeStyle {
                     {
                         return Err(unexpected(&start));
                     }
-                    return Self::from_reader(&mut reader, &start, &namespaces);
+                    let mut style = Self::from_reader(&mut reader, &start, &namespaces)?;
+                    style.source_xml = Some(xml.to_vec());
+                    style.source_namespaces = namespaces;
+                    return Ok(style);
                 }
                 Event::Empty(start) => {
                     return Err(OxmlError::MissingElement(format!(
@@ -654,6 +676,8 @@ impl CT_ShapeStyle {
             font_reference: required(font_reference, "a:fontRef")?,
             raw_attributes: root_attributes(start, FIXED_SHAPE_TREE_PREFIXES)?,
             raw_children,
+            source_xml: None,
+            source_namespaces: namespaces.clone(),
         }))
     }
 
@@ -688,6 +712,246 @@ impl CT_ShapeStyle {
         writer.write_event(Event::End(BytesEnd::new("p:style")))?;
         Ok(())
     }
+}
+
+fn prepare_shape_style_for_materialization(
+    style: &CT_ShapeStyle,
+    neutralize: bool,
+) -> Result<Box<CT_ShapeStyle>> {
+    let generated = style.to_fragment()?;
+    let source = style.source_xml.as_deref().unwrap_or(&generated);
+    let mut reader = Reader::from_reader(source);
+    let mut scopes = vec![style.source_namespaces.clone()];
+    let mut roles: Vec<u8> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut writer = Writer::new(Vec::new());
+    loop {
+        match reader.read_event()? {
+            event @ (Event::Start(_) | Event::Empty(_)) => {
+                let empty = matches!(&event, Event::Empty(_));
+                let start = match &event {
+                    Event::Start(start) | Event::Empty(start) => start,
+                    _ => unreachable!(),
+                };
+                let scope = scopes.last().unwrap().with_start(start)?;
+                let name = start.name();
+                let local = local_name(name.as_ref());
+                let uri = scope.element_uri(name.as_ref());
+                let reference = roles.len() == 1
+                    && uri == Some(A_NS)
+                    && matches!(local, b"lnRef" | b"fillRef" | b"effectRef" | b"fontRef");
+                let color = roles.last().copied() == Some(1)
+                    && matches!(local, b"srgbClr" | b"schemeClr" | b"sysClr" | b"prstClr");
+                let transform = roles.last().copied() == Some(2)
+                    && matches!(
+                        local,
+                        b"tint"
+                            | b"shade"
+                            | b"comp"
+                            | b"inv"
+                            | b"gray"
+                            | b"alpha"
+                            | b"alphaOff"
+                            | b"alphaMod"
+                            | b"hue"
+                            | b"hueOff"
+                            | b"hueMod"
+                            | b"sat"
+                            | b"satOff"
+                            | b"satMod"
+                            | b"lum"
+                            | b"lumOff"
+                            | b"lumMod"
+                            | b"red"
+                            | b"redOff"
+                            | b"redMod"
+                            | b"green"
+                            | b"greenOff"
+                            | b"greenMod"
+                            | b"blue"
+                            | b"blueOff"
+                            | b"blueMod"
+                            | b"gamma"
+                            | b"invGamma"
+                    );
+                if transform && uri != Some(A_NS) {
+                    return Err(OxmlError::InvalidValue(
+                        "unrepresentable foreign style-color transform lookalike".into(),
+                    ));
+                }
+                if color && uri != Some(A_NS) {
+                    return Err(OxmlError::InvalidValue(
+                        "unrepresentable foreign style color lookalike".into(),
+                    ));
+                }
+                if reference && !seen.insert(local.to_vec()) {
+                    return Err(OxmlError::InvalidValue(
+                        "duplicate owned notes style reference".into(),
+                    ));
+                }
+                let mut idx = None;
+                for attribute in start.attributes() {
+                    let attribute = attribute?;
+                    let key = attribute.key.as_ref();
+                    if key == b"xmlns" || key.starts_with(b"xmlns:") {
+                        continue;
+                    }
+                    if reference {
+                        if key != b"idx" {
+                            return Err(OxmlError::InvalidValue(
+                                "unrepresentable opaque style-reference attribute".into(),
+                            ));
+                        }
+                        let value = attribute.decoded_and_normalized_value(
+                            XmlVersion::Implicit1_0,
+                            start.decoder(),
+                        )?;
+                        if local == b"fontRef" {
+                            if !matches!(value.as_ref(), "major" | "minor" | "none") {
+                                return Err(OxmlError::InvalidValue(
+                                    "unsupported source font collection reference".into(),
+                                ));
+                            }
+                            idx = Some(if neutralize {
+                                "none".to_owned()
+                            } else {
+                                match style.font_reference.index {
+                                    oxml_drawing::style_ref::FontCollectionIndex::Major => "major",
+                                    oxml_drawing::style_ref::FontCollectionIndex::Minor => "minor",
+                                    oxml_drawing::style_ref::FontCollectionIndex::None => "none",
+                                }
+                                .to_owned()
+                            });
+                        } else {
+                            value.parse::<u32>().map_err(|_| {
+                                OxmlError::InvalidValue(
+                                    "invalid source style matrix reference".into(),
+                                )
+                            })?;
+                            idx = Some(if neutralize {
+                                "0".to_owned()
+                            } else {
+                                match local {
+                                    b"lnRef" => style.line_reference.index,
+                                    b"fillRef" => style.fill_reference.index,
+                                    _ => style.effect_reference.index,
+                                }
+                                .to_string()
+                            });
+                        }
+                    } else if transform && key != b"val" {
+                        return Err(OxmlError::InvalidValue(
+                            "unrepresentable opaque style-color transform attribute".into(),
+                        ));
+                    } else if color && !matches!(key, b"val" | b"lastClr") {
+                        return Err(OxmlError::InvalidValue(
+                            "unrepresentable opaque source style-color attribute".into(),
+                        ));
+                    }
+                }
+                if reference && idx.is_none() {
+                    return Err(OxmlError::MissingElement("owned source style idx".into()));
+                }
+                let mut prepared = start.to_owned();
+                if let Some(idx) = idx {
+                    let attributes = all_attributes(start)?;
+                    prepared.clear_attributes();
+                    for (key, value) in attributes {
+                        let value = if key == "idx" { idx.as_str() } else { &value };
+                        let escaped = quick_xml::escape::escape(value);
+                        prepared.push_attribute((key.as_str(), escaped.as_ref()));
+                    }
+                }
+                // Every transferred opaque descendant keeps its physical
+                // source scope, including declarations on discarded roots.
+                let attributes = all_attributes(&prepared)?;
+                let mut entries = scope.entries();
+                if !entries.iter().any(|(key, _)| key.is_empty()) {
+                    entries.push((String::new(), String::new()));
+                }
+                for (prefix, value) in entries {
+                    let key = if prefix.is_empty() {
+                        "xmlns".into()
+                    } else {
+                        format!("xmlns:{prefix}")
+                    };
+                    if !attributes.iter().any(|(old, _)| old == &key) {
+                        let escaped = quick_xml::escape::escape(&value);
+                        prepared.push_attribute((key.as_str(), escaped.as_ref()));
+                    }
+                }
+                writer.write_event(if empty {
+                    Event::Empty(prepared)
+                } else {
+                    Event::Start(prepared)
+                })?;
+                if !empty {
+                    scopes.push(scope);
+                    roles.push(if reference {
+                        1
+                    } else if color {
+                        2
+                    } else {
+                        0
+                    });
+                }
+            }
+            Event::End(end) => {
+                writer.write_event(Event::End(end))?;
+                scopes.pop();
+                roles.pop();
+            }
+            Event::Eof => break,
+            event => writer.write_event(event)?,
+        }
+    }
+    if seen.len() != 4 {
+        return Err(OxmlError::MissingElement(
+            "four owned source style references".into(),
+        ));
+    }
+    let xml = writer.into_inner();
+    let staged = CT_ShapeStyle::from_fragment(&xml, &style.source_namespaces)?;
+    if neutralize
+        && (staged.line_reference.index != 0
+            || staged.fill_reference.index != 0
+            || staged.effect_reference.index != 0
+            || staged.font_reference.index != oxml_drawing::style_ref::FontCollectionIndex::None)
+    {
+        return Err(OxmlError::InvalidValue(
+            "source style neutralization failed owning reparse".into(),
+        ));
+    }
+    if style_root_opaque_attribute_bytes(source)?
+        != style_root_opaque_attribute_bytes(&staged.to_fragment()?)?
+    {
+        return Err(OxmlError::InvalidValue(
+            "unrepresentable lexical source style-root metadata".into(),
+        ));
+    }
+    Ok(staged)
+}
+
+fn style_root_opaque_attribute_bytes(xml: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let mut reader = Reader::from_reader(xml);
+    let start = match reader.read_event()? {
+        Event::Start(start) | Event::Empty(start) => start,
+        _ => return Err(OxmlError::MissingElement("source style root".into())),
+    };
+    let body: &[u8] = start.as_ref();
+    let mut result = Vec::new();
+    for attribute in start.attributes() {
+        let attribute = attribute?;
+        let name = attribute.key.as_ref();
+        if name == b"xmlns" || name.starts_with(b"xmlns:") {
+            continue;
+        }
+        let begin = name.as_ptr() as usize - body.as_ptr() as usize;
+        let end =
+            attribute.value.as_ptr() as usize - body.as_ptr() as usize + attribute.value.len() + 1;
+        result.push(body[begin..end].to_vec());
+    }
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1116,6 +1380,24 @@ impl CT_Shape {
     /// Returns the optional typed format-scheme references.
     pub fn style(&self) -> Option<&CT_ShapeStyle> {
         self.raw.style.as_deref()
+    }
+
+    /// Prepares actual source scopes without changing reference selections or owners.
+    pub fn style_for_materialization(&self) -> Result<Option<CT_ShapeStyle>> {
+        self.raw
+            .style
+            .as_ref()
+            .map(|style| prepare_shape_style_for_materialization(style, false).map(|style| *style))
+            .transpose()
+    }
+
+    /// Stages neutral references after their source appearance is materialized.
+    pub fn materialize_style_references(&mut self) -> Result<()> {
+        if let Some(style) = &self.raw.style {
+            let staged = prepare_shape_style_for_materialization(style, true)?;
+            self.raw.style = Some(staged);
+        }
+        Ok(())
     }
 
     /// Sets the `idx` of the style's `a:effectRef`, the theme effect style
@@ -2861,6 +3143,398 @@ fn unexpected(element: &BytesStart<'_>) -> OxmlError {
 }
 
 impl CT_ShapeTree {
+    /// Adds source notes-master members while retaining this note's raw tree authority.
+    pub fn materialize_notes_master_surface(&mut self, master: &Self) -> Result<()> {
+        // Master and note ids belong to distinct original physical owners.
+        // Allocate before merging so a decoration cannot alias a local shape.
+        let local_xml = self.to_xml()?;
+        let master_xml = master.to_xml()?;
+        let mut occupied: HashSet<_> =
+            shape_id_occurrences(&local_xml, NamespaceBindings::default())?
+                .into_iter()
+                .filter(|entry| entry.defines_shape)
+                .map(|entry| entry.id)
+                .collect();
+        let occurrences = shape_id_occurrences(&master_xml, NamespaceBindings::default())?;
+        let mut mapping = HashMap::new();
+        let mut defined = HashSet::new();
+        for entry in occurrences.iter().filter(|entry| entry.defines_shape) {
+            if !defined.insert(entry.id) {
+                return Err(OxmlError::InvalidValue(
+                    "duplicate source notes-master shape identity".into(),
+                ));
+            }
+        }
+        let mut next = 2u32;
+        for occurrence in occurrences
+            .iter()
+            .filter(|entry| entry.defines_shape)
+            .skip(1)
+        {
+            if mapping.contains_key(&occurrence.id) {
+                return Err(OxmlError::InvalidValue(
+                    "duplicate source notes-master shape identity".into(),
+                ));
+            }
+            while occupied.contains(&next) {
+                next = next.checked_add(1).ok_or_else(shape_ids_exhausted)?;
+            }
+            mapping.insert(occurrence.id, next);
+            occupied.insert(next);
+            next = next.checked_add(1).ok_or_else(shape_ids_exhausted)?;
+        }
+        for source in &master.children {
+            let key = match source {
+                ShapeTreeChild::Shape(shape) => shape.placeholder.as_ref().map(CT_Placeholder::key),
+                ShapeTreeChild::Picture(picture) => {
+                    picture.placeholder.as_ref().map(CT_Placeholder::key)
+                }
+                _ => None,
+            };
+            if let (Some(key), Some(source_id)) = (key, source.non_visual_id()) {
+                for local in &self.children {
+                    let local_key = match local {
+                        ShapeTreeChild::Shape(shape) => {
+                            shape.placeholder.as_ref().map(CT_Placeholder::key)
+                        }
+                        ShapeTreeChild::Picture(picture) => {
+                            picture.placeholder.as_ref().map(CT_Placeholder::key)
+                        }
+                        _ => None,
+                    };
+                    if local_key.is_some_and(|local| key.matches(&local))
+                        && let Some(local_id) = local.non_visual_id()
+                    {
+                        mapping.insert(source_id, local_id);
+                    }
+                }
+            }
+        }
+        let mut rewritten = Vec::new();
+        let mut copied = 0;
+        for occurrence in occurrences {
+            if let Some(id) = mapping.get(&occurrence.id) {
+                rewritten.extend_from_slice(&master_xml[copied..occurrence.range.start]);
+                rewritten.extend_from_slice(id.to_string().as_bytes());
+                copied = occurrence.range.end;
+            }
+        }
+        rewritten.extend_from_slice(&master_xml[copied..]);
+        let prepared_master = Self::from_xml(&rewritten)?;
+        let master = &prepared_master;
+        let mut candidate = self.clone();
+        let normalize_group = |group: &GroupProperties| {
+            let mut group = group.clone();
+            if let Some(transform) = &mut group.transform {
+                if transform
+                    .offset
+                    .is_some_and(|point| point.x.0 == 0 && point.y.0 == 0)
+                {
+                    transform.offset = None;
+                }
+                if transform
+                    .extent
+                    .is_some_and(|size| size.cx.0 == 0 && size.cy.0 == 0)
+                {
+                    transform.extent = None;
+                }
+                if transform
+                    .child_offset
+                    .is_some_and(|point| point.x.0 == 0 && point.y.0 == 0)
+                {
+                    transform.child_offset = None;
+                }
+                if transform
+                    .child_extent
+                    .is_some_and(|size| size.cx.0 == 0 && size.cy.0 == 0)
+                {
+                    transform.child_extent = None;
+                }
+                if *transform == CT_Transform2D::default() {
+                    group.transform = None;
+                }
+            }
+            group
+        };
+        if normalize_group(&master.group_properties) != normalize_group(&self.group_properties)
+            || master.non_visual_group_properties != self.non_visual_group_properties
+        {
+            return Err(OxmlError::InvalidValue(
+                "unrepresentable source notes-master tree group authority".into(),
+            ));
+        }
+        let bindings = |tree: &Self| -> Result<NamespaceBindings> {
+            let mut start = BytesStart::new("p:spTree");
+            push_attributes(&mut start, &tree.raw_attributes);
+            NamespaceBindings::from_entries(&[
+                ("p".into(), P_NS.into()),
+                ("a".into(), A_NS.into()),
+                ("r".into(), R_NS.into()),
+                ("mc".into(), MC_NS.into()),
+                ("xml".into(), "http://www.w3.org/XML/1998/namespace".into()),
+            ])
+            .with_start(&start)
+        };
+        let local_scope = bindings(self)?;
+        let source_scope = bindings(master)?;
+        let mut local_context = local_scope
+            .entries()
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut source_context = source_scope
+            .entries()
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>();
+        local_context.entry(String::new()).or_default();
+        source_context.entry(String::new()).or_default();
+        let same_context = local_context == source_context;
+        let identity = |name: &str, scope: &NamespaceBindings| -> Result<(String, String)> {
+            let uri = if name.contains(':') {
+                scope.attribute_uri(name.as_bytes()).ok_or_else(|| {
+                    OxmlError::InvalidValue("unbound notes tree metadata attribute".into())
+                })?
+            } else {
+                ""
+            };
+            Ok((uri.into(), name.rsplit(':').next().unwrap().into()))
+        };
+        for (key, value) in &master.raw_attributes {
+            if key == "xmlns" || key.starts_with("xmlns:") {
+                continue;
+            }
+            let source_identity = identity(key, &source_scope)?;
+            if let Some((_, local)) = candidate
+                .raw_attributes
+                .iter()
+                .filter(|(key, _)| key != "xmlns" && !key.starts_with("xmlns:"))
+                .find(|(key, _)| {
+                    identity(key, &local_scope).is_ok_and(|key| key == source_identity)
+                })
+            {
+                if local != value || !same_context {
+                    return Err(OxmlError::InvalidValue(
+                        "conflicting expanded source notes-master tree metadata authority".into(),
+                    ));
+                }
+                continue;
+            }
+            if !same_context && self != &Self::new() {
+                return Err(OxmlError::InvalidValue(
+                    "source notes-master root context would reinterpret local tree authority"
+                        .into(),
+                ));
+            }
+            candidate.raw_attributes.push((key.clone(), value.clone()));
+        }
+        if !same_context && self != &Self::new() {
+            return Err(OxmlError::InvalidValue(
+                "source notes-master root context would reinterpret local tree authority".into(),
+            ));
+        }
+        for (key, value) in master
+            .raw_attributes
+            .iter()
+            .filter(|(key, _)| key == "xmlns" || key.starts_with("xmlns:"))
+        {
+            if let Some((_, local)) = candidate
+                .raw_attributes
+                .iter()
+                .find(|(name, _)| name == key)
+            {
+                if local != value {
+                    return Err(OxmlError::InvalidValue(
+                        "conflicting source notes-master tree metadata".into(),
+                    ));
+                }
+            } else {
+                candidate.raw_attributes.push((key.clone(), value.clone()));
+            }
+        }
+        let mut matches = HashSet::new();
+        let mut source_positions = Vec::with_capacity(master.children.len());
+        let mut skipped_placeholder_ids = HashSet::new();
+        for source in &master.children {
+            let key = match source {
+                ShapeTreeChild::Shape(shape) => shape.placeholder.as_ref().map(CT_Placeholder::key),
+                ShapeTreeChild::Picture(picture) => {
+                    picture.placeholder.as_ref().map(CT_Placeholder::key)
+                }
+                _ => None,
+            };
+            let matching: Vec<_> = candidate
+                .children
+                .iter()
+                .enumerate()
+                .filter_map(|(index, child)| {
+                    let local = match child {
+                        ShapeTreeChild::Shape(shape) => {
+                            shape.placeholder.as_ref().map(CT_Placeholder::key)
+                        }
+                        ShapeTreeChild::Picture(picture) => {
+                            picture.placeholder.as_ref().map(CT_Placeholder::key)
+                        }
+                        _ => None,
+                    };
+                    match (&key, local) {
+                        (Some(key), Some(local)) if key.matches(&local) => Some(index),
+                        _ => None,
+                    }
+                })
+                .collect();
+            if matching.len() > 1 {
+                return Err(OxmlError::InvalidValue(
+                    "ambiguous imported notes placeholder".into(),
+                ));
+            }
+            if let Some(&index) = matching.first() {
+                source_positions.push(Some(index));
+                if !matches.insert(index) {
+                    return Err(OxmlError::InvalidValue(
+                        "duplicate source notes-master placeholder".into(),
+                    ));
+                }
+                match (&mut candidate.children[index], source) {
+                    (ShapeTreeChild::Shape(local), ShapeTreeChild::Shape(parent)) => {
+                        *local.shape_properties = local
+                            .shape_properties
+                            .with_inherited_defaults(&parent.shape_properties)
+                            .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+                        if local.raw.style.is_none() {
+                            local.raw.style = parent.raw.style.clone();
+                        }
+                    }
+                    (ShapeTreeChild::Picture(local), ShapeTreeChild::Picture(parent)) => {
+                        local.shape_properties = local
+                            .shape_properties
+                            .with_inherited_defaults(&parent.shape_properties)
+                            .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+                    }
+                    _ => {
+                        return Err(OxmlError::InvalidValue(
+                            "notes placeholder changes source member kind".into(),
+                        ));
+                    }
+                }
+            } else {
+                if key.is_some() {
+                    // A master hint is not an instantiated note placeholder.
+                    source_positions.push(None);
+                    if let Some(id) = source.non_visual_id() {
+                        skipped_placeholder_ids.insert(id);
+                    }
+                } else {
+                    source_positions.push(Some(candidate.children.len()));
+                    candidate.append_child(source.clone());
+                }
+            }
+        }
+        let end = candidate.children.len();
+        let retained_raw_children = candidate.raw_children.clone();
+        let mut raw_match_cursors = HashMap::new();
+        let mut appended_raw_boundaries = HashSet::new();
+        for boundary in 0..=master.children.len() {
+            for raw in master.raw_children.at(boundary) {
+                let target = if boundary == master.children.len() {
+                    end
+                } else {
+                    let next = source_positions[boundary..]
+                        .iter()
+                        .flatten()
+                        .next()
+                        .copied()
+                        .unwrap_or(end);
+                    let previous = source_positions[..boundary]
+                        .iter()
+                        .rev()
+                        .flatten()
+                        .next()
+                        .copied();
+                    if previous.is_some_and(|previous| previous >= next) {
+                        return Err(OxmlError::InvalidValue(
+                            "unrepresentable inherited notes raw boundary order".into(),
+                        ));
+                    }
+                    next
+                };
+                let cursor = raw_match_cursors.get(&target).copied().unwrap_or(0);
+                if same_context
+                    && !appended_raw_boundaries.contains(&target)
+                    && let Some((index, _)) = retained_raw_children
+                        .at(target)
+                        .enumerate()
+                        .find(|(index, existing)| *index >= cursor && *existing == raw)
+                {
+                    raw_match_cursors.insert(target, index + 1);
+                    continue;
+                }
+                let mut reader = Reader::from_reader(raw);
+                let extension = match reader.read_event()? {
+                    Event::Start(start) | Event::Empty(start) => {
+                        let scope = source_scope.with_start(&start)?;
+                        scope.element_uri(start.name().as_ref()) == Some(P_NS)
+                            && local_name(start.name().as_ref()) == b"extLst"
+                    }
+                    _ => false,
+                };
+                if extension {
+                    for at in 0..=end {
+                        for existing in candidate.raw_children.at(at) {
+                            let mut reader = Reader::from_reader(existing);
+                            if let Event::Start(start) | Event::Empty(start) =
+                                reader.read_event()?
+                            {
+                                let scope = local_scope.with_start(&start)?;
+                                if scope.element_uri(start.name().as_ref()) == Some(P_NS)
+                                    && local_name(start.name().as_ref()) == b"extLst"
+                                {
+                                    return Err(OxmlError::InvalidValue(
+                                        "conflicting schema-final notes tree extension owners"
+                                            .into(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                appended_raw_boundaries.insert(target);
+                candidate.raw_children.push(target, raw.to_vec());
+            }
+        }
+        for (local, inherited) in candidate
+            .header_comments
+            .iter_mut()
+            .zip(&master.header_comments)
+        {
+            let original = local.clone();
+            let mut cursor = 0;
+            let mut appended = false;
+            for comment in inherited {
+                if !appended
+                    && let Some(offset) = original[cursor..].iter().position(|raw| raw == comment)
+                {
+                    cursor += offset + 1;
+                } else {
+                    local.push(comment.clone());
+                    appended = true;
+                }
+            }
+        }
+        if !skipped_placeholder_ids.is_empty()
+            && shape_id_occurrences(&candidate.to_xml()?, NamespaceBindings::default())?
+                .iter()
+                .any(|reference| {
+                    !reference.defines_shape && skipped_placeholder_ids.contains(&reference.id)
+                })
+        {
+            return Err(OxmlError::InvalidValue(
+                "retained member references an uninstantiated source notes-master placeholder"
+                    .into(),
+            ));
+        }
+        *self = candidate;
+        Ok(())
+    }
+
     pub fn take_children(&mut self, indices: &[usize]) -> Result<Vec<ShapeTreeChild>> {
         if indices.iter().any(|i| *i >= self.children.len())
             || indices.windows(2).any(|p| p[0] >= p[1])
@@ -4012,4 +4686,416 @@ mod fx214_frame_controls {
         assert_eq!(count, 32);
         assert_eq!(first.raw_xml(), alternate(32, &leaf.repeat(64)).as_bytes());
     }
+}
+
+#[cfg(test)]
+#[test]
+fn fx216_style_materialization_prepares_actual_scopes_and_neutralizes_last() {
+    let mut shape = CT_Shape::new_preset(2, "source", "rect", CT_Transform2D::default()).unwrap();
+    shape.set_default_style().unwrap();
+    let mut xml = String::from_utf8(shape.to_xml().unwrap()).unwrap();
+    xml = xml
+        .replace(
+            "<p:style>",
+            r#"<p:style xmlns:z="urn:source" xmlns:f="urn:foreign" z:meaning="z:item">"#,
+        )
+        .replace(
+            "<a:fillRef idx=\"3\">",
+            "<f:fillRef idx='99' keep='&#65;'/><a:fillRef idx=\"3\">",
+        )
+        .replace("</a:fillRef>", "<z:payload meaning='z:item'/></a:fillRef>");
+    let mut shape = CT_Shape::from_xml(xml.as_bytes()).unwrap();
+    shape.set_effect_reference_index(1);
+    let before = shape.to_xml().unwrap();
+    let prepared = shape.style_for_materialization().unwrap().unwrap();
+    assert_eq!(prepared.line_reference.index, 1);
+    assert_eq!(prepared.fill_reference.index, 3);
+    assert_eq!(prepared.effect_reference.index, 1);
+    assert_eq!(
+        prepared.font_reference.index,
+        oxml_drawing::style_ref::FontCollectionIndex::Minor
+    );
+    assert_eq!(shape.to_xml().unwrap(), before);
+    shape.shape_properties.fill = Some(
+        oxml_drawing::fill::Fill::from_xml(
+            br#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#,
+        )
+        .unwrap(),
+    );
+    shape.materialize_style_references().unwrap();
+    let style = shape.style().unwrap();
+    assert_eq!(
+        (
+            style.line_reference.index,
+            style.fill_reference.index,
+            style.effect_reference.index
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        style.font_reference.index,
+        oxml_drawing::style_ref::FontCollectionIndex::None
+    );
+    let xml = shape.to_xml().unwrap();
+    assert!(String::from_utf8_lossy(&xml).contains("idx='99' keep='&#65;'"));
+    assert!(String::from_utf8_lossy(&xml).contains("meaning='z:item'"));
+    let mut reader = quick_xml::NsReader::from_reader(xml.as_slice());
+    let mut payload = false;
+    loop {
+        let (namespace, event) = reader.read_resolved_event().unwrap();
+        match event {
+            Event::Empty(start) if start.local_name().as_ref() == b"payload" => {
+                assert!(
+                    matches!(namespace, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"urn:source")
+                );
+                payload = true;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    assert!(payload);
+    assert_eq!(CT_Shape::from_xml(&xml).unwrap().to_xml().unwrap(), xml);
+    for bad in [
+        DEFAULT_STYLE.replace(
+            "<a:fillRef idx=\"3\">",
+            "<a:fillRef idx=\"3\" z:meaning=\"z:item\">",
+        ),
+        DEFAULT_STYLE.replace(
+            "<a:schemeClr val=\"accent1\"/>",
+            "<f:schemeClr val=\"accent1\"/>",
+        ),
+    ] {
+        let mut original =
+            CT_Shape::new_preset(2, "negative", "rect", CT_Transform2D::default()).unwrap();
+        original.set_default_style().unwrap();
+        let source = String::from_utf8(original.to_xml().unwrap())
+            .unwrap()
+            .replace(
+                DEFAULT_STYLE,
+                &bad.replace(
+                    "<p:style>",
+                    r#"<p:style xmlns:z="urn:source" xmlns:f="urn:foreign">"#,
+                ),
+            );
+        let mut original = CT_Shape::from_xml(source.as_bytes()).unwrap();
+        let before = original.to_xml().unwrap();
+        assert!(original.style_for_materialization().is_err());
+        assert!(original.materialize_style_references().is_err());
+        assert_eq!(original.to_xml().unwrap(), before);
+    }
+}
+
+#[test]
+fn fx216_notes_tree_refuses_local_opaque_default_namespace_rebinding() {
+    let tree = |attrs: &str, raw: &str| {
+        CT_ShapeTree::from_xml(format!(r#"<p:spTree xmlns:p="{P_NS}" {attrs}><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{raw}</p:spTree>"#).as_bytes()).unwrap()
+    };
+    let mut local = tree(
+        "",
+        "<p:extLst><p:ext uri=\"local\"><opaque/></p:ext></p:extLst>",
+    );
+    let master = tree("xmlns=\"urn:source\"", "");
+    let before = local.to_xml().unwrap();
+    let source_before = master.to_xml().unwrap();
+    assert!(local.materialize_notes_master_surface(&master).is_err());
+    assert_eq!(local.to_xml().unwrap(), before);
+    assert_eq!(master.to_xml().unwrap(), source_before);
+}
+
+#[test]
+fn fx216_notes_tree_refuses_expanded_attribute_alias_conflicts() {
+    let tree = |attrs: &str| {
+        CT_ShapeTree::from_xml(format!(r#"<p:spTree xmlns:p="{P_NS}" xmlns:mc="{MC_NS}" xmlns:x="urn:meta" xmlns:y="urn:meta" mc:Ignorable="x y" {attrs}><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree>"#).as_bytes()).unwrap()
+    };
+    let mut local = tree("y:keep=\"A\"");
+    let before = local.to_xml().unwrap();
+    let conflict = tree("x:keep=\"B\"");
+    assert!(local.materialize_notes_master_surface(&conflict).is_err());
+    assert_eq!(local.to_xml().unwrap(), before);
+    let equal = tree("x:keep=\"A\"");
+    local.materialize_notes_master_surface(&equal).unwrap();
+    let xml = local.to_xml().unwrap();
+    let raw = std::str::from_utf8(&xml).unwrap();
+    assert!(raw.contains("y:keep=\"A\"") && !raw.contains("x:keep="));
+    CT_ShapeTree::from_xml(&xml).unwrap();
+}
+
+#[test]
+fn fx216_notes_tree_refuses_two_distinct_final_extension_owners() {
+    let tree = |name: &str| {
+        CT_ShapeTree::from_xml(format!(r#"<p:spTree xmlns:p="{P_NS}"><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:extLst><p:ext uri="{name}"/></p:extLst></p:spTree>"#).as_bytes()).unwrap()
+    };
+    let mut local = tree("local");
+    let master = tree("source");
+    let before = local.to_xml().unwrap();
+    assert!(local.materialize_notes_master_surface(&master).is_err());
+    assert_eq!(local.to_xml().unwrap(), before);
+}
+
+#[test]
+fn fx216_notes_tree_preserves_inherited_raw_boundary_before_its_actual_member() {
+    let shape = |id, name| {
+        CT_Shape::new_textbox(id, name, CT_Transform2D::default())
+            .unwrap()
+            .to_xml()
+            .unwrap()
+    };
+    let first = String::from_utf8(shape(2, "First source")).unwrap();
+    let second = String::from_utf8(shape(3, "Second source")).unwrap();
+    let shell = |body: &str| {
+        format!(
+            r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:z="urn:source"><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{body}</p:spTree>"#
+        )
+    };
+    let mut local = CT_ShapeTree::from_xml(shell("").as_bytes()).unwrap();
+    let master = CT_ShapeTree::from_xml(shell(&format!("<z:before keep='&#65;'/>{first}<z:between keep='&#66;'/>{second}<p:extLst><p:ext uri=\"source\"/></p:extLst>")).as_bytes()).unwrap();
+    local.materialize_notes_master_surface(&master).unwrap();
+    let xml = local.to_xml().unwrap();
+    let raw = std::str::from_utf8(&xml).unwrap();
+    assert!(raw.find("<z:before keep='&#65;'/>").unwrap() < raw.find("First source").unwrap());
+    assert!(raw.find("First source").unwrap() < raw.find("<z:between keep='&#66;'/>").unwrap());
+    assert!(raw.find("<z:between keep='&#66;'/>").unwrap() < raw.find("Second source").unwrap());
+    assert_eq!(raw.matches("<p:extLst>").count(), 1);
+    assert!(raw.find("Second source").unwrap() < raw.find("<p:extLst>").unwrap());
+}
+
+#[test]
+fn fx216_notes_tree_keeps_equal_raw_children_at_distinct_boundaries() {
+    let decoration = String::from_utf8(
+        CT_Shape::new_textbox(2, "Source decoration", CT_Transform2D::default())
+            .unwrap()
+            .to_xml()
+            .unwrap(),
+    )
+    .unwrap();
+    let shell = |body: &str| {
+        format!(
+            r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:z="urn:meta"><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{body}</p:spTree>"#
+        )
+    };
+    let mut local = CT_ShapeTree::from_xml(shell("<z:marker/>").as_bytes()).unwrap();
+    let master =
+        CT_ShapeTree::from_xml(shell(&format!("<z:marker/>{decoration}")).as_bytes()).unwrap();
+    local.materialize_notes_master_surface(&master).unwrap();
+    let bytes = local.to_xml().unwrap();
+    let xml = std::str::from_utf8(&bytes).unwrap();
+    let positions: Vec<_> = xml.match_indices("<z:marker/>").map(|(at, _)| at).collect();
+    assert_eq!(
+        positions.len(),
+        2,
+        "both physical opaque boundaries must survive"
+    );
+    let member = xml.find("Source decoration").unwrap();
+    assert!(positions[0] < member && member < positions[1]);
+}
+
+#[test]
+fn fx216_notes_tree_preserves_source_raw_multiplicity_at_one_boundary() {
+    let decoration = String::from_utf8(
+        CT_Shape::new_textbox(2, "Source decoration", CT_Transform2D::default())
+            .unwrap()
+            .to_xml()
+            .unwrap(),
+    )
+    .unwrap();
+    let shell = |body: &str| {
+        format!(
+            r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:z="urn:meta"><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{body}</p:spTree>"#
+        )
+    };
+    for local_body in ["", "<z:marker/>"] {
+        let mut local = CT_ShapeTree::from_xml(shell(local_body).as_bytes()).unwrap();
+        let master = CT_ShapeTree::from_xml(
+            shell(&format!("<z:marker/><z:marker/>{decoration}")).as_bytes(),
+        )
+        .unwrap();
+        local.materialize_notes_master_surface(&master).unwrap();
+        let bytes = local.to_xml().unwrap();
+        let xml = std::str::from_utf8(&bytes).unwrap();
+        let positions: Vec<_> = xml.match_indices("<z:marker/>").map(|(at, _)| at).collect();
+        assert_eq!(
+            positions.len(),
+            if local_body.is_empty() { 2 } else { 3 },
+            "source-owned multiplicity must survive"
+        );
+        let member = xml.find("Source decoration").unwrap();
+        assert!(positions[0] < member && positions[1] < member);
+        if !local_body.is_empty() {
+            assert!(positions[2] > member);
+        }
+    }
+}
+
+#[test]
+fn fx216_notes_tree_preserves_both_raw_sequences_at_one_boundary() {
+    let shell = |body: &str| {
+        format!(
+            r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:z="urn:meta"><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{body}</p:spTree>"#
+        )
+    };
+    for (local_body, source_body, expected) in [
+        ("<z:b/><z:a/>", "<z:a/><z:b/>", vec!["b", "a", "b"]),
+        ("<z:a/>", "<z:b/><z:a/>", vec!["a", "b", "a"]),
+        ("<z:a/><z:b/>", "<z:a/><z:b/>", vec!["a", "b"]),
+        ("<z:a/>", "<z:a/><z:a/>", vec!["a", "a"]),
+    ] {
+        let mut local = CT_ShapeTree::from_xml(shell(local_body).as_bytes()).unwrap();
+        let master = CT_ShapeTree::from_xml(shell(source_body).as_bytes()).unwrap();
+        local.materialize_notes_master_surface(&master).unwrap();
+        let bytes = local.to_xml().unwrap();
+        let actual: Vec<_> = local
+            .raw_children
+            .at(0)
+            .map(|raw| std::str::from_utf8(raw).unwrap())
+            .collect();
+        let expected: Vec<_> = expected.iter().map(|name| format!("<z:{name}/>")).collect();
+        assert_eq!(actual, expected, "both original raw sequences must survive");
+        let reopened = CT_ShapeTree::from_xml(&bytes).unwrap();
+        assert_eq!(reopened.to_xml().unwrap(), bytes);
+    }
+}
+
+#[test]
+fn fx216_notes_tree_preserves_header_comment_order_and_multiplicity() {
+    let shell = |header: &str| {
+        format!(
+            r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="{A_NS}">{header}<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree>"#
+        )
+    };
+    for (local_header, source_header, expected) in [
+        (
+            "<!--B--><!--A-->",
+            "<!--A--><!--B-->",
+            "<!--B--><!--A--><!--B-->",
+        ),
+        ("<!--A-->", "<!--B--><!--A-->", "<!--A--><!--B--><!--A-->"),
+        ("", "<!--A--><!--A-->", "<!--A--><!--A-->"),
+        ("<!--A--><!--B-->", "<!--A--><!--B-->", "<!--A--><!--B-->"),
+    ] {
+        let mut local = CT_ShapeTree::from_xml(shell(local_header).as_bytes()).unwrap();
+        let master = CT_ShapeTree::from_xml(shell(source_header).as_bytes()).unwrap();
+        local.materialize_notes_master_surface(&master).unwrap();
+        assert_eq!(
+            local.header_comments[0].concat(),
+            expected.as_bytes(),
+            "source header sequence must survive"
+        );
+        let bytes = local.to_xml().unwrap();
+        assert_eq!(
+            CT_ShapeTree::from_xml(&bytes).unwrap().to_xml().unwrap(),
+            bytes
+        );
+    }
+}
+
+#[test]
+fn fx216_notes_tree_keeps_actual_empty_and_field_content_without_master_hints() {
+    let shape = |id: u32, kind: &str, text: &str| {
+        format!(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="{kind}"/><p:cNvSpPr/><p:nvPr><p:ph type="{kind}" idx="{id}"/></p:nvPr></p:nvSpPr><p:spPr/>{text}</p:sp>"#
+        )
+    };
+    let body =
+        |text: &str| format!(r#"<p:txBody><a:bodyPr/><a:lstStyle/><a:p>{text}</a:p></p:txBody>"#);
+    let shell = |text: &str| {
+        format!(
+            r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:z="urn:source"><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{text}</p:spTree>"#
+        )
+    };
+    let field = r#"<a:fld id="{A47B5AC0-96CA-4D3E-87D1-C4D13FDF4080}" type="slidenum"><a:rPr lang="en-US"/><a:t></a:t></a:fld>"#;
+    let mut local = CT_ShapeTree::from_xml(
+        shell(&format!(
+            "{}{}{}",
+            shape(2, "body", ""),
+            shape(3, "sldNum", &body(field)),
+            shape(4, "ftr", &body(""))
+        ))
+        .as_bytes(),
+    )
+    .unwrap();
+    let before_field = match &local.children[1] {
+        ShapeTreeChild::Shape(shape) => shape.text_body.clone(),
+        _ => unreachable!(),
+    };
+    let master = CT_ShapeTree::from_xml(
+        shell(&format!(
+            "{}{}{}<z:before/>{}",
+            shape(2, "body", &body("<a:r><a:t>MASTER SAMPLE</a:t></a:r>")),
+            shape(3, "sldNum", &body("<a:r><a:t>MASTER NUMBER</a:t></a:r>")),
+            shape(5, "hdr", &body("<a:r><a:t>MASTER HEADER</a:t></a:r>")),
+            String::from_utf8(
+                CT_Shape::new_textbox(8, "Decoration", CT_Transform2D::default())
+                    .unwrap()
+                    .to_xml()
+                    .unwrap()
+            )
+            .unwrap()
+        ))
+        .as_bytes(),
+    )
+    .unwrap();
+    local.materialize_notes_master_surface(&master).unwrap();
+    assert_eq!(local.children.len(), 4);
+    if let ShapeTreeChild::Shape(shape) = &local.children[0] {
+        assert!(shape.text_body.is_none());
+    } else {
+        panic!("actual body owner");
+    }
+    if let ShapeTreeChild::Shape(shape) = &local.children[1] {
+        assert_eq!(shape.text_body, before_field);
+    } else {
+        panic!("actual field owner");
+    }
+    if let ShapeTreeChild::Shape(shape) = &local.children[2] {
+        assert!(
+            shape.text_body.as_ref().unwrap().paragraphs()[0]
+                .runs
+                .is_empty()
+        );
+    } else {
+        panic!("actual empty body owner");
+    }
+    let raw = String::from_utf8(local.to_xml().unwrap()).unwrap();
+    assert!(!raw.contains("MASTER"));
+    assert!(raw.find("<z:before/>").unwrap() < raw.find("Decoration").unwrap());
+}
+
+#[test]
+fn fx216_notes_tree_refuses_references_to_uninstantiated_master_placeholders() {
+    let shell = |body: &str| {
+        format!(
+            r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="{A_NS}"><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{body}</p:spTree>"#
+        )
+    };
+    let placeholder = r#"<p:sp><p:nvSpPr><p:cNvPr id="2" name="Header hint"/><p:cNvSpPr/><p:nvPr><p:ph type="hdr" idx="0"/></p:nvPr></p:nvSpPr><p:spPr/></p:sp>"#;
+    let connector = r#"<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="3" name="Source connector"/><p:cNvCxnSpPr><a:stCxn id="2" idx="0"/></p:cNvCxnSpPr><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp>"#;
+    let master =
+        CT_ShapeTree::from_xml(shell(&format!("{placeholder}{connector}")).as_bytes()).unwrap();
+    let master_before = master.to_xml().unwrap();
+    let mut missing = CT_ShapeTree::from_xml(shell("").as_bytes()).unwrap();
+    let before = missing.to_xml().unwrap();
+    assert!(
+        missing
+            .materialize_notes_master_surface(&master)
+            .unwrap_err()
+            .to_string()
+            .contains("uninstantiated source notes-master placeholder")
+    );
+    assert_eq!(missing.to_xml().unwrap(), before);
+    let mut matched =
+        CT_ShapeTree::from_xml(shell(&placeholder.replace("id=\"2\"", "id=\"42\"")).as_bytes())
+            .unwrap();
+    matched.materialize_notes_master_surface(&master).unwrap();
+    let xml = matched.to_xml().unwrap();
+    let ids = shape_id_occurrences(&xml, NamespaceBindings::default()).unwrap();
+    assert!(
+        ids.iter()
+            .any(|value| !value.defines_shape && value.id == 42)
+    );
+    assert!(
+        ids.iter()
+            .any(|value| value.defines_shape && value.id == 42)
+    );
+    assert_eq!(master.to_xml().unwrap(), master_before);
 }

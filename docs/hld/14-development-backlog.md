@@ -7693,7 +7693,23 @@ qualified corpus cells, native viewer/Edit Data and data-specific renders.
 **Depends on**: F-X206, F-X215
 **Test gate**: regression
 
-Resolve Issues347,348 and349 captured at2026-10-11 18:56UTC. Import chart graphs including workbooks and style/colour parts, embedded objects and preview images, comments with merged authors and mapped slide jumps. Unmapped jumps are dropped with diagnostics. Unsupported relationships refuse without mutation. Optional keep-source-formatting copies and deduplicates source layouts, masters and themes while default destination-theme behavior remains. Rust and Python append all or selected slides and optionally retain sections. CLI range and insertion options write a new output file. Corpus merge checks cover count, order, notes, media reuse, package validity, source font/colour/geometry parity and repair-free native open.
+Resolve Issues347,348 and349 through checked all-slide or caller-ordered
+selected import and deck merge. Preserve the destination-formatting default,
+with opt-in source layout/master/theme inheritance and required global table
+style and embedded-font closure. Copy chart/workbook/style/colour graphs,
+embedded objects and previews, notes, classic and modern comments with full
+author/person identities and required parent threads. Map selected or explicit
+existing slide jumps, diagnose unmapped jumps and refuse unsupported internal
+types before publication. Destination resources and source bytes remain intact.
+
+Rust and Python expose checked insertion, optional selected section blocks,
+ordered diagnostics and batch atomicity. Python preserves the old single-slide
+return and adds explicit diagnostic and batch companions with all returned
+objects allocated before publication. CLI import uses one-based selection and
+insertion, caller order and a separate atomic output protecting both inputs.
+Regression, installed, corpus and actual repair-free native open/save/reopen
+plus source-format font/colour/geometry render acceptance are required. No
+helper result, source hash or prospective feature state substitutes for them.
 
 ### F-X217, Import HTML and Markdown through public Word surfaces
 

@@ -3460,3 +3460,185 @@ fn fx218_installed_and_cli_semantic_exports() {
     assert!(String::from_utf8_lossy(&refusal.stderr).contains("require --to html or --to md"));
     assert_eq!(fs::read(&input).unwrap(), source);
 }
+
+#[test]
+fn fx216_import_output_extension_selects_package_class_without_touching_inputs() {
+    let temp = TempWorkspace::new("import-class");
+    let destination = temp.path.join("destination.potx");
+    let source = temp.path.join("source.pptx");
+    let output = temp.path.join("output.pptx");
+    write_deck(&destination, &["destination"]);
+    write_deck(&source, &["source"]);
+    let before_destination = fs::read(&destination).unwrap();
+    let before_source = fs::read(&source).unwrap();
+    assert_eq!(
+        Presentation::open(&destination)
+            .unwrap()
+            .package_class()
+            .unwrap(),
+        PresentationPackageClass::Template
+    );
+    let result = cli(&[
+        "slide",
+        "import",
+        destination.to_str().unwrap(),
+        source.to_str().unwrap(),
+        "--slides",
+        "1",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let reopened = Presentation::open(&output).unwrap();
+    assert_eq!(reopened.len(), 2);
+    assert_eq!(
+        reopened.package_class().unwrap(),
+        PresentationPackageClass::Presentation
+    );
+    assert_eq!(fs::read(&destination).unwrap(), before_destination);
+    assert_eq!(fs::read(&source).unwrap(), before_source);
+}
+
+#[test]
+fn fx216_import_refuses_macro_free_vba_output_before_publication() {
+    let temp = TempWorkspace::new("import-vba");
+    let fixture = temp.path.join("fixture.pptx");
+    let destination = temp.path.join("destination.pptm");
+    let source = temp.path.join("source.pptx");
+    let output = temp.path.join("output.pptx");
+    write_deck(&fixture, &["destination"]);
+    write_deck(&source, &["source"]);
+    let mut package = OpcPackage::open(&fixture).unwrap();
+    fs::remove_file(&fixture).unwrap();
+    package
+        .get_or_create_part_rels("/ppt/presentation.xml")
+        .add(rel_types::VBA_PROJECT, "vbaProject.bin");
+    package.set_part("/ppt/vbaProject.bin", b"vba-project".to_vec());
+    package.content_types.add_override(
+        "/ppt/vbaProject.bin",
+        "application/vnd.ms-office.vbaProject",
+    );
+    package.content_types.add_override(
+        "/ppt/presentation.xml",
+        content_types::PRESENTATION_MACRO_ENABLED,
+    );
+    package.save(&destination).unwrap();
+    let before_destination = fs::read(&destination).unwrap();
+    let before_source = fs::read(&source).unwrap();
+    let result = cli(&[
+        "slide",
+        "import",
+        destination.to_str().unwrap(),
+        source.to_str().unwrap(),
+        "--slides",
+        "1",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert_eq!(result.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("VBA project"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!output.exists());
+    assert_eq!(fs::read(&destination).unwrap(), before_destination);
+    assert_eq!(fs::read(&source).unwrap(), before_source);
+    assert_eq!(fs::read_dir(&temp.path).unwrap().count(), 2);
+}
+
+#[test]
+fn fx216_cli_ranges_insertion_and_atomic_errors_preserve_inputs() {
+    let temp = TempWorkspace::new("import-range");
+    let destination = temp.path.join("destination.pptx");
+    let source = temp.path.join("source.pptx");
+    let output = temp.path.join("merged.pptx");
+    write_deck(&destination, &["destination one", "destination two"]);
+    write_deck(
+        &source,
+        &[
+            "source one",
+            "source two",
+            "source three",
+            "source four",
+            "source five",
+        ],
+    );
+    let inputs = (fs::read(&destination).unwrap(), fs::read(&source).unwrap());
+    let result = cli(&[
+        "slide",
+        "import",
+        destination.to_str().unwrap(),
+        source.to_str().unwrap(),
+        "--slides",
+        "1,3-5",
+        "--at",
+        "2",
+        "--keep-source-formatting",
+        "--output",
+        output.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let merged = Presentation::open(&output).unwrap();
+    let texts: Vec<_> = (0..merged.len())
+        .map(|index| merged.slide(index).unwrap().text())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "destination one",
+            "source one",
+            "source three",
+            "source four",
+            "source five",
+            "destination two"
+        ]
+    );
+    assert!(merged.validate().is_empty());
+    for selection in ["0", "3-2", "1,1", "6", "18446744073709551616"] {
+        let invalid = temp.path.join("invalid.pptx");
+        let result = cli(&[
+            "slide",
+            "import",
+            destination.to_str().unwrap(),
+            source.to_str().unwrap(),
+            "--slides",
+            selection,
+            "--output",
+            invalid.to_str().unwrap(),
+        ]);
+        assert!(
+            !result.status.success(),
+            "selection {selection} must refuse"
+        );
+        assert!(!invalid.exists());
+        assert_eq!(
+            (fs::read(&destination).unwrap(), fs::read(&source).unwrap()),
+            inputs
+        );
+    }
+    for alias in [&destination, &source] {
+        let result = cli(&[
+            "slide",
+            "import",
+            destination.to_str().unwrap(),
+            source.to_str().unwrap(),
+            "--output",
+            alias.to_str().unwrap(),
+        ]);
+        assert!(!result.status.success());
+        assert_eq!(
+            (fs::read(&destination).unwrap(), fs::read(&source).unwrap()),
+            inputs
+        );
+    }
+}

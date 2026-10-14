@@ -27,7 +27,6 @@ pub use oxml_core::app_properties::AppProperties;
 pub use oxml_core::core_properties::CoreProperties;
 pub use oxml_core::custom_properties::{CustomProperties, CustomProperty, CustomPropertyValue};
 pub use oxml_core::units::{Angle, Emu, Percent1000};
-#[cfg(feature = "render")]
 use oxml_drawing::color::ColorMap;
 pub use oxml_drawing::color::{ColorChoice, ColorTransform};
 pub use oxml_drawing::effect::{CT_EffectList, CT_OuterShadowEffect, RectAlignment};
@@ -46,7 +45,6 @@ use oxml_drawing::shape_props::CT_ShapeProperties;
 #[cfg(feature = "render")]
 use oxml_drawing::table::CT_TableStyleList;
 use oxml_drawing::table::{CT_Table, CT_TableCell, CT_TableCellProperties, CT_TableProperties};
-#[cfg(feature = "render")]
 use oxml_drawing::text::CT_TextListStyle;
 use oxml_drawing::text::{
     CT_RegularTextRun, CT_TextBody, CT_TextField, CT_TextParagraph, Coordinate32Value,
@@ -96,7 +94,10 @@ use rpptx_layout::{
     ScopedMediaFailures, ScopedMediaIds, inherited_xfrm,
 };
 pub use rpptx_oxml::comments::{Comment, CommentAuthor, CommentReply};
-use rpptx_oxml::comments::{CommentAuthorList, CommentList};
+use rpptx_oxml::comments::{
+    CommentAuthorList, CommentList, append_classic_comment_dependency,
+    classic_comment_dependencies, import_classic_comments,
+};
 use rpptx_oxml::connector::CT_ConnectionShape;
 pub use rpptx_oxml::diagram::{
     CT_DiagramColorsDefinition, CT_DiagramData, CT_DiagramDrawing, CT_DiagramLayoutDefinition,
@@ -111,7 +112,8 @@ use rpptx_oxml::picture::{CT_Picture, MediaSource as PictureMediaSource, Picture
 use rpptx_oxml::placeholder::PlaceholderKey;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
 use rpptx_oxml::presentation::{
-    CT_EmbeddedFontListEntry, CT_Presentation, CT_SlideId, custom_show_relationship_ids,
+    CT_EmbeddedFontListEntry, CT_Presentation, CT_SlideId, CT_SlideMasterId,
+    custom_show_relationship_ids,
 };
 pub use rpptx_oxml::presentation::{EmbeddedFontKind, Section};
 use rpptx_oxml::relmap::{
@@ -119,9 +121,9 @@ use rpptx_oxml::relmap::{
 };
 use rpptx_oxml::shape_tree::{
     CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild, rewrite_shape_ids,
+    rewrite_shape_ids_mapped,
 };
 use rpptx_oxml::slide_parts::CT_CommonSlideData;
-#[cfg(feature = "render")]
 use rpptx_oxml::slide_parts::ColorMapOverrideKind;
 use rpptx_oxml::slide_parts::{
     BackgroundRendering, CT_HeaderFooter, CT_Slide, CT_SlideLayout, CT_SlideMaster,
@@ -312,8 +314,24 @@ struct AutofitOwner {
 }
 
 const DEFAULT_POWERPOINT_AUTHORS_PART: &str = "/ppt/authors.xml";
+const CLASSIC_COMMENT_AUTHORS_RELATIONSHIP: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/commentAuthors";
 const DEFAULT_POWERPOINT_COMMENTS_PART: &str = "/ppt/comments/comment1.xml";
 const MAX_SMARTART_TRANSFER_DIAGRAM_PARTS: usize = 128;
+const CHART_EX_RELATIONSHIP: &str =
+    "http://schemas.microsoft.com/office/2014/relationships/chartEx";
+const CHART_STYLE_RELATIONSHIP: &str =
+    "http://schemas.microsoft.com/office/2011/relationships/chartStyle";
+const CHART_COLOR_STYLE_RELATIONSHIP: &str =
+    "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle";
+const CHART_USER_SHAPES_RELATIONSHIP: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartUserShapes";
+const THEME_OVERRIDE_RELATIONSHIP: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/themeOverride";
+const VML_DRAWING_RELATIONSHIP: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing";
+const TAGS_RELATIONSHIP: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/tags";
 
 /// A result returned by the `rpptx` read facade.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -770,6 +788,15 @@ pub struct ReplacementCountMismatch {
     pub placeholder: String,
     pub expected: usize,
     pub found: usize,
+}
+
+/// Options for transactional complete-slide import.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ImportSlideOptions {
+    pub layout_index: Option<usize>,
+    pub insert_index: Option<usize>,
+    pub keep_source_formatting: bool,
+    pub keep_sections: bool,
 }
 
 /// An error opening, resolving, or serialising a presentation package.
@@ -7025,6 +7052,24 @@ impl Presentation {
         &self.comment_authors.authors
     }
 
+    /// Relates the default authors part to the presentation when it has none.
+    fn ensure_comment_authors_part(&mut self) -> Result<()> {
+        if self.comment_authors_part.is_some() {
+            return Ok(());
+        }
+        if self.package.contains_part(DEFAULT_POWERPOINT_AUTHORS_PART) {
+            return Err(Error::CollaborationPartCollision {
+                part_name: DEFAULT_POWERPOINT_AUTHORS_PART.to_owned(),
+            });
+        }
+        self.comment_authors_part = Some(DEFAULT_POWERPOINT_AUTHORS_PART.to_owned());
+        let target = relative_part_target(&self.presentation_part, DEFAULT_POWERPOINT_AUTHORS_PART);
+        self.package
+            .get_or_create_part_rels(&self.presentation_part)
+            .add(rel_types::POWERPOINT_AUTHORS, &target);
+        Ok(())
+    }
+
     /// Adds a caller-identified modern comment author atomically.
     pub fn add_comment_author(&mut self, author: CommentAuthor) -> Result<()> {
         if self
@@ -7039,23 +7084,7 @@ impl Presentation {
             ));
         }
         let mut staged = self.clone();
-        if staged.comment_authors_part.is_none() {
-            if staged
-                .package
-                .contains_part(DEFAULT_POWERPOINT_AUTHORS_PART)
-            {
-                return Err(Error::CollaborationPartCollision {
-                    part_name: DEFAULT_POWERPOINT_AUTHORS_PART.to_owned(),
-                });
-            }
-            staged.comment_authors_part = Some(DEFAULT_POWERPOINT_AUTHORS_PART.to_owned());
-            let target =
-                relative_part_target(&staged.presentation_part, DEFAULT_POWERPOINT_AUTHORS_PART);
-            staged
-                .package
-                .get_or_create_part_rels(&staged.presentation_part)
-                .add(rel_types::POWERPOINT_AUTHORS, &target);
-        }
+        staged.ensure_comment_authors_part()?;
         staged.comment_authors.authors.push(author);
         staged.comment_authors_dirty = true;
         self.commit_candidate(staged)
@@ -7489,11 +7518,72 @@ impl Presentation {
         self.commit_candidate(staged)
     }
 
+    fn ensure_notes_master_registration_in_place(&mut self) -> Result<()> {
+        let master_part = self.notes_master_part.as_ref().ok_or_else(|| {
+            footer_malformed(
+                &self.presentation_part,
+                "presentation has no notes master owner",
+            )
+        })?;
+        let relationships = self
+            .package
+            .get_part_rels(&self.presentation_part)
+            .ok_or_else(|| {
+                footer_malformed(
+                    &self.presentation_part,
+                    "notes master has no global relationship",
+                )
+            })?;
+        let global = relationships
+            .items
+            .iter()
+            .filter(|relationship| relationship.rel_type == rel_types::NOTES_MASTER)
+            .collect::<Vec<_>>();
+        if global.len() != 1 {
+            return Err(footer_malformed(
+                &self.presentation_part,
+                "notes master requires exactly one global relationship",
+            ));
+        }
+        let relationship = global[0];
+        reject_external(&self.presentation_part, relationship)?;
+        if OpcPackage::resolve_rel_target(&self.presentation_part, &relationship.target)
+            != *master_part
+        {
+            return Err(footer_malformed(
+                &self.presentation_part,
+                "notes master global relationship disagrees with its owner",
+            ));
+        }
+        let before = self
+            .presentation
+            .to_xml()
+            .map_err(|error| footer_malformed(&self.presentation_part, error.to_string()))?;
+        let mut presentation = self.presentation.clone();
+        presentation
+            .ensure_notes_master_relationship(&relationship.id)
+            .map_err(|error| footer_malformed(&self.presentation_part, error.to_string()))?;
+        if self.slides.iter().any(|slide| slide.notes.is_some())
+            && presentation
+                .to_xml()
+                .map_err(|error| footer_malformed(&self.presentation_part, error.to_string()))?
+                != before
+        {
+            return Err(footer_malformed(
+                &self.presentation_part,
+                "registering a notes master would change existing notes inheritance",
+            ));
+        }
+        self.presentation = presentation;
+        Ok(())
+    }
+
     fn add_notes_slide_in_place(&mut self, slide_index: usize) -> Result<()> {
         const OPERATION: &str = "add notes slide";
         if self.notes_master.is_none() {
             self.add_default_notes_master_in_place()?;
         }
+        self.ensure_notes_master_registration_in_place()?;
         let (Some(master_part), Some(master)) = (&self.notes_master_part, &self.notes_master)
         else {
             return Err(Error::InvalidSlideMutation {
@@ -7633,10 +7723,13 @@ impl Presentation {
             .get_part_rels(&self.presentation_part)
             .cloned()
             .unwrap_or_default();
-        presentation_relationships.add(
+        let relationship_id = presentation_relationships.add(
             rel_types::NOTES_MASTER,
             &relative_part_target(&self.presentation_part, &master_part),
         );
+        self.presentation
+            .ensure_notes_master_relationship(&relationship_id)
+            .map_err(|error| footer_malformed(&self.presentation_part, error.to_string()))?;
         self.package
             .set_part_rels(&self.presentation_part, presentation_relationships);
         self.notes_master_part = Some(master_part);
@@ -7702,15 +7795,17 @@ impl Presentation {
             })?
             .part_name
             .clone();
-        preflight_cross_presentation_transfer(&source.package, &source.slides[index])?;
+        let source_package = source.staged_package(true)?;
+        preflight_cross_presentation_transfer(&source_package, &source.slides[index])?;
         let mut staged = self.clone();
         let inserted = staged.slides.len();
         staged.copy_slide_from_in_place(
-            &source.package,
+            &source_package,
             source.slides[index].clone(),
             inserted,
             "transfer SmartArt slide",
             Some(&destination_layout),
+            None,
         )?;
         self.commit_candidate(staged)?;
         self.slides
@@ -7724,21 +7819,10 @@ impl Presentation {
 
     /// Imports one slide of another presentation, using this presentation's theme.
     ///
-    /// The copy takes the layout at `layout_index` when one is given, and
-    /// otherwise the first layout of this presentation named like the source
-    /// slide's layout. It is inserted at `insert_index`, or appended when that
-    /// is `None`. Shapes, placeholders, the slide background, speaker notes and
-    /// SmartArt graphs are copied, and every relationship attribute is rebound
-    /// to the new relationship scope. Pictures, audio and video reuse equal
-    /// media parts of this presentation. External relationships such as
-    /// hyperlinks keep their targets. A slide with comments, a chart, an
-    /// embedded object, a jump to another slide, or any other internal
-    /// relationship type is rejected without mutation. A notes jump to another
-    /// slide is rejected too. Jumps that name no relationship, such as a
-    /// `ppaction://customshow` action, are carried unchanged and may name a
-    /// custom show this presentation lacks. The name match takes the first
-    /// layout of that name, so a copy inside one multi-master deck should pass
-    /// the source slide's own layout index.
+    /// This is [`Presentation::import_slides`] for one slide, with the layout
+    /// at `layout_index` and the insertion index `insert_index`. It returns
+    /// the copy and drops the diagnostics, so a caller that needs to know
+    /// which slide jumps were dropped calls `import_slides`.
     pub fn import_slide(
         &mut self,
         source: &Presentation,
@@ -7746,69 +7830,482 @@ impl Presentation {
         layout_index: Option<usize>,
         insert_index: Option<usize>,
     ) -> Result<SlideRef<'_>> {
-        const OPERATION: &str = "import slide";
-        let record = source.slides.get(index).ok_or(Error::UnknownSlideIndex {
-            index,
-            slide_count: source.slides.len(),
-        })?;
-        let inserted = insert_index.unwrap_or(self.slides.len());
-        if inserted > self.slides.len() {
-            return Err(Error::UnknownSlideIndex {
-                index: inserted,
-                slide_count: self.slides.len(),
-            });
-        }
-        let layout_index = match layout_index {
-            Some(layout_index) if layout_index >= self.layouts.len() => {
-                return Err(Error::UnknownLayoutIndex {
-                    index: layout_index,
-                    layout_count: self.layouts.len(),
-                });
-            }
-            Some(layout_index) => layout_index,
-            None => {
-                let name = source
-                    .slide_layout_index(index)
-                    .and_then(|layout| source.layout_name(layout))
-                    .ok_or_else(|| {
-                        invalid_presentation_mutation(
-                            OPERATION,
-                            "the source slide's layout has no name, pass the destination layout"
-                                .to_owned(),
-                        )
-                    })?;
-                (0..self.layouts.len())
-                    .find(|&layout| self.layout_name(layout) == Some(name))
-                    .ok_or_else(|| {
-                        invalid_presentation_mutation(
-                            OPERATION,
-                            format!(
-                                "this presentation has no layout named {name:?}, pass the destination layout"
-                            ),
-                        )
-                    })?
-            }
-        };
-        let layout_part = self.layouts[layout_index].part_name.clone();
-        preflight_slide_import(&source.package, record)?;
-        let mut staged = self.clone();
-        if record.notes.is_some() && staged.notes_master.is_none() {
-            staged.add_default_notes_master_in_place()?;
-        }
-        staged.copy_slide_from_in_place(
-            &source.package,
-            record.clone(),
-            inserted,
-            OPERATION,
-            Some(&layout_part),
+        let import = self.import_slides(
+            source,
+            &[index],
+            &ImportSlideOptions {
+                layout_index,
+                insert_index,
+                ..ImportSlideOptions::default()
+            },
+            &[],
         )?;
-        self.commit_candidate(staged)?;
+        let inserted = import.0[0];
         self.slides
             .get(inserted)
             .map(slide_ref)
             .ok_or(Error::UnknownSlideIndex {
                 index: inserted,
                 slide_count: self.slides.len(),
+            })
+    }
+
+    /// Imports slides of another presentation.
+    ///
+    /// The slides at `indexes` are copied in that order to consecutive
+    /// positions starting at `options.insert_index`, or appended when that is
+    /// `None`. Every copy takes the layout at `options.layout_index` when one
+    /// is given, and otherwise the first layout of this presentation named
+    /// like its source slide's layout, so it takes this presentation's theme.
+    /// The name match takes the first layout of that name, so a copy inside
+    /// one multi-master deck should pass the source slide's own layout index.
+    ///
+    /// With `options.keep_source_formatting`, every copy relates to its
+    /// source layout instead. A layout of this presentation equal to it is
+    /// reused, and otherwise the layout is copied and joins an equal master
+    /// of this presentation, or a copy of its source master and theme. Two
+    /// layouts or masters are equal when their bytes and relationship ids are
+    /// equal and their targets are equal by the same rule, a master's layout
+    /// list aside, so the copies of one import, or of an earlier one, are
+    /// reused rather than duplicated.
+    ///
+    /// Shapes, placeholders, the slide background, speaker notes, SmartArt
+    /// graphs, charts with their embedded workbook, style, colour, user-shape
+    /// and theme-override parts, embedded objects with their preview image and
+    /// legacy drawing, and modern comments are copied, and every relationship
+    /// attribute is rebound to the new relationship scope. Pictures, audio and
+    /// video reuse equal media parts of this presentation. External
+    /// relationships such as hyperlinks keep their targets.
+    ///
+    /// Comment authors join this presentation's author list. A source author
+    /// equal to one of this presentation's authors in name, initials, user id
+    /// and provider id is replaced by it. Comment, reply and author ids that
+    /// this presentation already uses are replaced by fresh sequential ids,
+    /// and comment anchors follow the copied slide and its renumbered shapes.
+    ///
+    /// A jump to a slide, from the slide or its notes, is kept when its target
+    /// is copied by this call or is listed in `existing_slide_map`. Any other jump is turned into
+    /// a hyperlink that does nothing, and is reported as a diagnostic. Jumps
+    /// that name no relationship, such as a `ppaction://customshow` action,
+    /// are carried unchanged and may name a custom show this presentation
+    /// lacks.
+    ///
+    /// Legacy comments, controls and any other internal relationship type,
+    /// on the slide, its notes or a copied part, are rejected without
+    /// mutation, and the error names the relationship type.
+    pub fn import_slides(
+        &mut self,
+        source: &Presentation,
+        indexes: &[usize],
+        options: &ImportSlideOptions,
+        existing_slide_map: &[(usize, usize)],
+    ) -> Result<(Vec<usize>, Vec<String>)> {
+        const OPERATION: &str = "import slide";
+        let inserted = options.insert_index.unwrap_or(self.slides.len());
+        if inserted > self.slides.len() {
+            return Err(Error::UnknownSlideIndex {
+                index: inserted,
+                slide_count: self.slides.len(),
+            });
+        }
+        if let Some(layout_index) = options.layout_index {
+            if options.keep_source_formatting {
+                return Err(invalid_presentation_mutation(
+                    OPERATION,
+                    "a destination layout and keep_source_formatting exclude each other".to_owned(),
+                ));
+            }
+            if layout_index >= self.layouts.len() {
+                return Err(Error::UnknownLayoutIndex {
+                    index: layout_index,
+                    layout_count: self.layouts.len(),
+                });
+            }
+        }
+        if indexes.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let selected: HashSet<_> = indexes.iter().copied().collect();
+        if selected.len() != indexes.len() {
+            return Err(invalid_presentation_mutation(
+                OPERATION,
+                "duplicate selected source slide".into(),
+            ));
+        }
+        let mut source_package = source.staged_package(true)?;
+        let mut jump_targets = HashMap::new();
+        for &(source_index, destination_index) in existing_slide_map {
+            let source_record =
+                source
+                    .slides
+                    .get(source_index)
+                    .ok_or(Error::UnknownSlideIndex {
+                        index: source_index,
+                        slide_count: source.slides.len(),
+                    })?;
+            let destination_record =
+                self.slides
+                    .get(destination_index)
+                    .ok_or(Error::UnknownSlideIndex {
+                        index: destination_index,
+                        slide_count: self.slides.len(),
+                    })?;
+            if selected.contains(&source_index)
+                || jump_targets.contains_key(&source_record.part_name)
+            {
+                return Err(invalid_presentation_mutation(
+                    OPERATION,
+                    "duplicate or selected existing slide mapping".into(),
+                ));
+            }
+            jump_targets.insert(
+                source_record.part_name.clone(),
+                destination_record.part_name.clone(),
+            );
+        }
+        let mut slide_namer = MediaNamer::scan(
+            "/ppt/slides",
+            "slide",
+            self.package.parts.keys().map(String::as_str),
+        );
+        let mut copies = Vec::with_capacity(indexes.len());
+        let mut visited_diagrams = HashSet::new();
+        let mut visited_parts = HashSet::new();
+        let mut visited_formatting = HashSet::new();
+        let mut inherited_masters = HashSet::new();
+        let mut copied_targets = HashMap::new();
+        for &index in indexes {
+            let record = source.slides.get(index).ok_or(Error::UnknownSlideIndex {
+                index,
+                slide_count: source.slides.len(),
+            })?;
+            let layout = if options.keep_source_formatting {
+                let layout = source.slide_layout_index(index).ok_or_else(|| {
+                    invalid_presentation_mutation(
+                        OPERATION,
+                        "the source slide's layout is not reached by its masters".to_owned(),
+                    )
+                })?;
+                let part = source.layouts[layout].part_name.clone();
+                let master_relationship = source_package
+                    .get_part_rels(&part)
+                    .and_then(|relationships| relationships.get_by_type(rel_types::SLIDE_MASTER))
+                    .ok_or_else(|| footer_malformed(&part, "source layout has no master"))?;
+                let master = OpcPackage::resolve_rel_target(&part, &master_relationship.target);
+                if inherited_masters.insert(master.clone()) {
+                    stage_source_master_defaults(source, &mut source_package, &master)?;
+                }
+                preflight_source_formatting(&source_package, &part, true, &mut visited_formatting)?;
+                ImportLayout::Source(part)
+            } else {
+                ImportLayout::Destination(match options.layout_index {
+                    Some(layout_index) => layout_index,
+                    None => self.import_layout_index(source, index)?,
+                })
+            };
+            preflight_slide_import(
+                &source_package,
+                record,
+                &mut visited_diagrams,
+                &mut visited_parts,
+            )?;
+            let slide_part = slide_namer.next_part_name("xml");
+            copied_targets
+                .entry(record.part_name.clone())
+                .or_insert_with(|| slide_part.clone());
+            copies.push((index, layout, slide_part));
+        }
+        if copies.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        jump_targets.extend(copied_targets);
+
+        let mut staged = self.clone();
+        staged.package = staged.staged_package(true)?;
+        let original_main_ids = staged
+            .package
+            .get_part_rels(&staged.presentation_part)
+            .map(|relationships| {
+                relationships
+                    .items
+                    .iter()
+                    .map(|item| item.id.clone())
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        if copies
+            .iter()
+            .any(|(index, _, _)| source.slides[*index].notes.is_some())
+        {
+            if staged.notes_master.is_none() {
+                staged.add_default_notes_master_in_place()?;
+            }
+            staged.ensure_notes_master_registration_in_place()?;
+        }
+        if options.keep_source_formatting {
+            for &index in indexes {
+                if let Some(notes) = &source.slides[index].notes {
+                    stage_source_notes_appearance(
+                        source,
+                        &mut source_package,
+                        &notes.part_name,
+                        &staged,
+                    )?;
+                }
+            }
+        }
+        let mut diagnostics = Vec::new();
+        let mut adopted = HashMap::new();
+        let mut part_copies = HashMap::new();
+        let mut diagram_copies = HashMap::new();
+        let mut font_parts = visited_formatting.clone();
+        font_parts.extend(visited_parts.iter().cloned());
+        font_parts.extend(visited_diagrams.iter().cloned());
+        for &index in indexes {
+            font_parts.insert(source.slides[index].part_name.clone());
+            if let Some(notes) = &source.slides[index].notes {
+                font_parts.insert(notes.part_name.clone());
+            }
+            if let Some(comments) = &source.slides[index].comments {
+                font_parts.insert(comments.part_name.clone());
+            }
+        }
+        let table_styles = staged.import_table_style_dependencies(
+            source,
+            &mut source_package,
+            &font_parts,
+            &mut part_copies,
+        )?;
+        let font_names = imported_typefaces(&source_package, &font_parts)?;
+        staged.import_embedded_font_dependencies(
+            source,
+            &source_package,
+            &font_names,
+            &mut part_copies,
+        )?;
+        staged.import_classic_comment_graphs(source, &source_package, indexes, &mut part_copies)?;
+        for (offset, (index, layout, slide_part)) in copies.iter().enumerate() {
+            let layout_part = match layout {
+                ImportLayout::Destination(layout_index) => {
+                    staged.layouts[*layout_index].part_name.clone()
+                }
+                ImportLayout::Source(layout) => {
+                    staged.adopt_source_layout(&source_package, layout, &mut adopted)?
+                }
+            };
+            let mut record = source.slides[*index].clone();
+            if !table_styles.is_empty() {
+                record.slide =
+                    CT_Slide::from_xml(required_part(&source_package, &record.part_name)?)
+                        .map_err(|error| footer_malformed(&record.part_name, error.to_string()))?;
+                if let Some(notes) = &mut record.notes {
+                    notes.notes =
+                        CT_NotesSlide::from_xml(required_part(&source_package, &notes.part_name)?)
+                            .map_err(|error| {
+                                footer_malformed(&notes.part_name, error.to_string())
+                            })?;
+                }
+            }
+            staged.copy_slide_from_in_place(
+                &source_package,
+                record,
+                inserted + offset,
+                OPERATION,
+                Some(&layout_part),
+                Some(SlideImportContext {
+                    source,
+                    source_index: *index,
+                    slide_part,
+                    jump_targets: &jump_targets,
+                    diagnostics: &mut diagnostics,
+                    part_copies: &mut part_copies,
+                    diagram_copies: &mut diagram_copies,
+                }),
+            )?;
+        }
+        if options.keep_sections && !source.sections().is_empty() {
+            let source_indexes = copies
+                .iter()
+                .map(|(index, _, _)| *index)
+                .collect::<Vec<_>>();
+            staged.keep_imported_sections(source, &source_indexes, inserted)?;
+        }
+        let mut main_copies = part_copies;
+        main_copies.extend(
+            adopted
+                .iter()
+                .map(|(source, destination)| (source.clone(), destination.clone())),
+        );
+        for (index, layout, slide_part) in &copies {
+            main_copies.insert(source.slides[*index].part_name.clone(), slide_part.clone());
+            if let ImportLayout::Source(layout) = layout {
+                let source_master =
+                    related_internal_part(&source_package, layout, rel_types::SLIDE_MASTER)?;
+                let destination_layout = &adopted[layout];
+                let destination_master = related_internal_part(
+                    &staged.package,
+                    destination_layout,
+                    rel_types::SLIDE_MASTER,
+                )?;
+                if let (Some(source), Some(destination)) = (source_master, destination_master) {
+                    main_copies.insert(source, destination);
+                }
+            }
+        }
+        if !table_styles.is_empty()
+            && let (Some(source), Some(destination)) = (
+                import_table_style_part(&source_package, &source.presentation_part)?,
+                import_table_style_part(&staged.package, &staged.presentation_part)?,
+            )
+        {
+            main_copies.insert(source, destination);
+        }
+        if indexes
+            .iter()
+            .any(|index| source.slides[*index].comments.is_some())
+            && let (Some(source), Some(destination)) =
+                (&source.comment_authors_part, &staged.comment_authors_part)
+        {
+            main_copies.insert(source.clone(), destination.clone());
+        }
+        staged.reconcile_imported_main_relationships(
+            source,
+            &source_package,
+            &main_copies,
+            &original_main_ids,
+        )?;
+        let inserted_indexes = (inserted..inserted + copies.len()).collect();
+        self.commit_candidate(staged)?;
+        Ok((inserted_indexes, diagnostics))
+    }
+
+    /// Gives the copies of `source_indexes`, inserted from `inserted`, the
+    /// sections of their source slides, as `ImportSlideOptions::keep_sections`
+    /// describes.
+    fn keep_imported_sections(
+        &mut self,
+        source: &Presentation,
+        source_indexes: &[usize],
+        inserted: usize,
+    ) -> Result<()> {
+        const OPERATION: &str = "import slide";
+        let invalid =
+            |error: OxmlError| invalid_presentation_mutation(OPERATION, error.to_string());
+        let mut used = self
+            .sections()
+            .iter()
+            .filter_map(|section| section.id.as_ref())
+            .map(|id| id.to_ascii_uppercase())
+            .collect::<HashSet<_>>();
+        let mut section_id = |preferred: Option<&str>| {
+            if let Some(preferred) = preferred
+                && used.insert(preferred.to_ascii_uppercase())
+            {
+                return preferred.to_owned();
+            }
+            let id = (1_u64..)
+                .map(|index| format!("{{00000000-0000-4000-8000-{index:012X}}}"))
+                .find(|id| !used.contains(id))
+                .expect("a finite set of used ids leaves a sequential id free");
+            used.insert(id.clone());
+            id
+        };
+
+        let mut runs: Vec<(Option<usize>, Vec<u32>)> = Vec::new();
+        for (offset, &index) in source_indexes.iter().enumerate() {
+            let source_id = source.slides[index].id;
+            let section = source
+                .sections()
+                .iter()
+                .position(|section| section.slide_ids.contains(&source_id));
+            let copy_id = self.slides[inserted + offset].id;
+            match runs.last_mut() {
+                Some((last, ids)) if *last == section => ids.push(copy_id),
+                _ => runs.push((section, vec![copy_id])),
+            }
+        }
+        let id_map = source_indexes
+            .iter()
+            .enumerate()
+            .map(|(offset, &index)| (source.slides[index].id, self.slides[inserted + offset].id))
+            .collect::<HashMap<_, _>>();
+        let mut imported = Vec::with_capacity(runs.len());
+        for (section, ids) in runs {
+            let section = section.map(|section| &source.sections()[section]);
+            let id = section_id(section.and_then(|section| section.id.as_deref()));
+            let name = section
+                .and_then(|section| section.name.as_deref())
+                .unwrap_or("Untitled Section");
+            let mut copied = match section {
+                Some(section) => {
+                    let mut copied = section.clone();
+                    copied.remap_slide_ids(&id_map).map_err(invalid)?;
+                    copied.id = Some(id);
+                    copied
+                }
+                None => Section::new(id, name, Vec::new()).map_err(invalid)?,
+            };
+            copied.slide_ids = ids;
+            imported.push(copied);
+        }
+
+        let count = source_indexes.len();
+        let existing = self.sections().to_vec();
+        let mut sections = Vec::new();
+        let mut seen = HashSet::new();
+        for range in [0..inserted, inserted + count..self.slides.len()] {
+            let mut runs: Vec<(Option<usize>, Vec<u32>)> = Vec::new();
+            for record in &self.slides[range] {
+                let owner = existing
+                    .iter()
+                    .position(|section| section.slide_ids.contains(&record.id));
+                match runs.last_mut() {
+                    Some((last, ids)) if *last == owner => ids.push(record.id),
+                    _ => runs.push((owner, vec![record.id])),
+                }
+            }
+            for (owner, ids) in runs {
+                let mut section = match owner {
+                    Some(owner) => existing[owner].clone(),
+                    None => Section::new(section_id(None), "Default Section", Vec::new())
+                        .map_err(invalid)?,
+                };
+                if let Some(owner) = owner
+                    && !seen.insert(owner)
+                {
+                    section.id = Some(section_id(None));
+                }
+                section.slide_ids = ids;
+                sections.push(section);
+            }
+            if !imported.is_empty() {
+                sections.append(&mut imported);
+            }
+        }
+        self.presentation.set_sections(sections).map_err(invalid)
+    }
+
+    /// Returns the first layout named like the layout of `source` slide `index`.
+    fn import_layout_index(&self, source: &Presentation, index: usize) -> Result<usize> {
+        const OPERATION: &str = "import slide";
+        let name = source
+            .slide_layout_index(index)
+            .and_then(|layout| source.layout_name(layout))
+            .ok_or_else(|| {
+                invalid_presentation_mutation(
+                    OPERATION,
+                    "the source slide's layout has no name, pass the destination layout".to_owned(),
+                )
+            })?;
+        (0..self.layouts.len())
+            .find(|&layout| self.layout_name(layout) == Some(name))
+            .ok_or_else(|| {
+                invalid_presentation_mutation(
+                    OPERATION,
+                    format!(
+                        "this presentation has no layout named {name:?}, pass the destination layout"
+                    ),
+                )
             })
     }
 
@@ -7923,9 +8420,22 @@ impl Presentation {
     fn duplicate_slide_in_place(&mut self, index: usize) -> Result<usize> {
         let source_package = self.package.clone();
         let source = self.slides[index].clone();
-        self.copy_slide_from_in_place(&source_package, source, index + 1, "duplicate slide", None)
+        self.copy_slide_from_in_place(
+            &source_package,
+            source,
+            index + 1,
+            "duplicate slide",
+            None,
+            None,
+        )
     }
 
+    /// Copies one slide record, with its notes, into this presentation.
+    ///
+    /// `import` is `None` for a copy whose relationship targets already live
+    /// in this package or are bounded by the caller's preflight. An import
+    /// also copies charts, embedded objects and comments, and maps or drops
+    /// slide jumps.
     fn copy_slide_from_in_place(
         &mut self,
         source_package: &OpcPackage,
@@ -7933,20 +8443,24 @@ impl Presentation {
         inserted: usize,
         operation: &'static str,
         layout_target: Option<&str>,
+        mut import: Option<SlideImportContext<'_>>,
     ) -> Result<usize> {
-        if source.comments.is_some() {
+        if source.comments.is_some() && import.is_none() {
             return Err(Error::InvalidPresentationMutation {
                 operation,
                 message: "slides with modern comments require caller-supplied fresh comment ids"
                     .to_owned(),
             });
         }
-        let slide_part = MediaNamer::scan(
-            "/ppt/slides",
-            "slide",
-            self.package.parts.keys().map(String::as_str),
-        )
-        .next_part_name("xml");
+        let slide_part = match &import {
+            Some(import) => import.slide_part.to_owned(),
+            None => MediaNamer::scan(
+                "/ppt/slides",
+                "slide",
+                self.package.parts.keys().map(String::as_str),
+            )
+            .next_part_name("xml"),
+        };
         let id = self
             .presentation
             .slide_ids
@@ -7957,6 +8471,8 @@ impl Presentation {
             .max(255)
             .checked_add(1)
             .ok_or(Error::SlideIdExhausted)?;
+        let copy_part_graphs = import.is_some();
+        let slide_map = import.as_ref().map(|import| import.jump_targets);
 
         let notes_part = source.notes.as_ref().map(|_| {
             MediaNamer::scan(
@@ -7967,10 +8483,30 @@ impl Presentation {
             .next_part_name("xml")
         });
         let notes = if let (Some(source_notes), Some(notes_part)) = (&source.notes, &notes_part) {
+            let xml = if import.is_some() {
+                required_part(source_package, &source_notes.part_name)?.to_vec()
+            } else {
+                source_notes
+                    .notes
+                    .to_xml()
+                    .map_err(|error| Error::MalformedPart {
+                        part_name: source_notes.part_name.clone(),
+                        message: error.to_string(),
+                    })?
+            };
             let source_relationships = source_package
                 .get_part_rels(&source_notes.part_name)
                 .cloned()
                 .unwrap_or_default();
+            let (xml, source_relationships) = match import.as_mut() {
+                Some(import) => import.release_unmapped_jumps(
+                    &source_notes.part_name,
+                    Some(&source.part_name),
+                    xml,
+                    source_relationships,
+                )?,
+                None => (xml, source_relationships),
+            };
             let (mut relationships, mut relationship_map) = duplicate_relationship_scope(
                 source_package,
                 &mut self.package,
@@ -7980,32 +8516,42 @@ impl Presentation {
                 &source_relationships,
                 RelationshipScopeTargets {
                     slide: Some(&slide_part),
+                    slide_map,
                     notes: None,
+                    comments: None,
                     layout: None,
                     notes_master: self.notes_master_part.as_deref(),
+                    copy_part_graphs,
+                    graph_copies: import.as_mut().map(|context| ImportGraphCopies {
+                        diagrams: &mut *context.diagram_copies,
+                        parts: &mut *context.part_copies,
+                    }),
                 },
             )?;
-            relationships
-                .items
-                .retain(|relationship| relationship.rel_type != rel_types::SLIDE);
-            let back_relationship_id = relationships.add(
-                rel_types::SLIDE,
-                &relative_part_target(notes_part, &slide_part),
-            );
-            for relationship in source_relationships
+            // The relationships back to the copied slide, and any external
+            // one, collapse into one internal back relationship.
+            let back_target = relative_part_target(notes_part, &slide_part);
+            let back_ids = relationships
                 .items
                 .iter()
-                .filter(|relationship| relationship.rel_type == rel_types::SLIDE)
-            {
-                relationship_map.insert(relationship.id.clone(), back_relationship_id.clone());
+                .filter(|relationship| {
+                    relationship.rel_type == rel_types::SLIDE
+                        && (relationship.target == back_target
+                            || relationship_is_external(relationship))
+                })
+                .map(|relationship| relationship.id.clone())
+                .collect::<HashSet<_>>();
+            relationships
+                .items
+                .retain(|relationship| !back_ids.contains(&relationship.id));
+            let back_relationship_id = relationships.add(rel_types::SLIDE, &back_target);
+            relationships =
+                relationships.rebind_for_import(relationships.items.clone(), &HashMap::new())?;
+            for mapped in relationship_map.values_mut() {
+                if back_ids.contains(mapped) {
+                    mapped.clone_from(&back_relationship_id);
+                }
             }
-            let xml = source_notes
-                .notes
-                .to_xml()
-                .map_err(|error| Error::MalformedPart {
-                    part_name: source_notes.part_name.clone(),
-                    message: error.to_string(),
-                })?;
             // One exact pass over the complete map: a second pass would
             // re-map ids the first one had just produced.
             let xml = rewrite_exact_rel_ids(&xml, &relationship_map).map_err(|error| {
@@ -8037,10 +8583,42 @@ impl Presentation {
             None
         };
 
+        let comments_part = source
+            .comments
+            .as_ref()
+            .filter(|_| import.is_some())
+            .map(|_| {
+                MediaNamer::scan(
+                    "/ppt/comments",
+                    "comment",
+                    self.package.parts.keys().map(String::as_str),
+                )
+                .next_part_name("xml")
+            });
+        let slide_xml = if import.is_some() {
+            required_part(source_package, &source.part_name)?.to_vec()
+        } else {
+            source
+                .slide
+                .to_xml()
+                .map_err(|error| Error::MalformedPart {
+                    part_name: source.part_name.clone(),
+                    message: error.to_string(),
+                })?
+        };
         let source_relationships = source_package
             .get_part_rels(&source.part_name)
             .cloned()
             .unwrap_or_default();
+        let (slide_xml, source_relationships) = match import.as_mut() {
+            Some(import) => import.release_unmapped_jumps(
+                &source.part_name,
+                None,
+                slide_xml,
+                source_relationships,
+            )?,
+            None => (slide_xml, source_relationships),
+        };
         let (slide_relationships, relationship_map) = duplicate_relationship_scope(
             source_package,
             &mut self.package,
@@ -8050,32 +8628,66 @@ impl Presentation {
             &source_relationships,
             RelationshipScopeTargets {
                 slide: None,
+                slide_map,
                 notes: notes_part.as_deref(),
+                comments: comments_part.as_deref(),
                 layout: layout_target,
                 notes_master: None,
+                copy_part_graphs,
+                graph_copies: import.as_mut().map(|context| ImportGraphCopies {
+                    diagrams: &mut *context.diagram_copies,
+                    parts: &mut *context.part_copies,
+                }),
             },
         )?;
-        let slide_xml = source
-            .slide
-            .to_xml()
-            .map_err(|error| Error::MalformedPart {
-                part_name: source.part_name.clone(),
-                message: error.to_string(),
-            })?;
         let slide_xml = rewrite_rel_ids(&slide_xml, &relationship_map).map_err(|error| {
             Error::MalformedPart {
                 part_name: source.part_name.clone(),
                 message: error.to_string(),
             }
         })?;
-        let slide_xml = rewrite_shape_ids(&slide_xml).map_err(|error| Error::MalformedPart {
-            part_name: source.part_name.clone(),
-            message: error.to_string(),
-        })?;
+        let (slide_xml, shape_ids) =
+            rewrite_shape_ids_mapped(&slide_xml).map_err(|error| Error::MalformedPart {
+                part_name: source.part_name.clone(),
+                message: error.to_string(),
+            })?;
         let slide = CT_Slide::from_xml(&slide_xml).map_err(|error| Error::MalformedPart {
             part_name: slide_part.clone(),
             message: error.to_string(),
         })?;
+        let comments = match (&import, &source.comments, comments_part) {
+            (Some(import), Some(source_comments), Some(part_name)) => {
+                let mut comments = source_comments.comments.clone();
+                let (ids, author_ids) =
+                    self.merge_imported_comment_identities(import.source, &comments)?;
+                let malformed = |error: OxmlError| Error::MalformedPart {
+                    part_name: source_comments.part_name.clone(),
+                    message: error.to_string(),
+                };
+                comments
+                    .remap_for_copied_slide(&ids, &author_ids, id, &shape_ids)
+                    .map_err(malformed)?;
+                // The part is written now so that the next copy of this call
+                // names its comment part after it.
+                self.package
+                    .set_part(&part_name, comments.to_xml().map_err(malformed)?);
+                self.package
+                    .content_types
+                    .add_override(&part_name, content_types::POWERPOINT_COMMENTS);
+                if let Some(relationships) =
+                    source_package.get_part_rels(&source_comments.part_name)
+                {
+                    self.package
+                        .set_part_rels(&part_name, relationships.clone());
+                }
+                Some(CommentRecord {
+                    part_name,
+                    comments,
+                    dirty: true,
+                })
+            }
+            _ => None,
+        };
 
         let mut presentation_relationships = self
             .package
@@ -8108,10 +8720,1248 @@ impl Presentation {
                 part_name: slide_part,
                 slide,
                 notes,
-                comments: source.comments.clone(),
+                comments,
             },
         );
         Ok(inserted)
+    }
+
+    fn adopt_source_layout(
+        &mut self,
+        source_package: &OpcPackage,
+        layout: &str,
+        adopted: &mut HashMap<String, String>,
+    ) -> Result<String> {
+        if let Some(existing) = adopted.get(layout) {
+            return Ok(existing.clone());
+        }
+        // A layout of the same name comes first, so that a copy within one
+        // presentation keeps its own layout even when another is equal.
+        let (same_name, others): (Vec<_>, Vec<_>) = self
+            .layouts
+            .iter()
+            .partition(|record| record.part_name == layout);
+        for record in same_name.into_iter().chain(others) {
+            if formatting_parts_equal(source_package, layout, &self.package, &record.part_name)? {
+                adopted.insert(layout.to_owned(), record.part_name.clone());
+                return Ok(record.part_name.clone());
+            }
+        }
+        let source_master = related_internal_part(source_package, layout, rel_types::SLIDE_MASTER)?
+            .ok_or_else(|| Error::MalformedPart {
+                part_name: layout.to_owned(),
+                message: "layout has no slide master relationship".to_owned(),
+            })?;
+        let master = self.adopt_source_master(source_package, &source_master, adopted)?;
+
+        let bytes = required_part(source_package, layout)?.to_vec();
+        let copied = CT_SlideLayout::from_xml(&bytes).map_err(|error| Error::MalformedPart {
+            part_name: layout.to_owned(),
+            message: error.to_string(),
+        })?;
+        let part_name = fresh_related_part_name(&self.package, layout);
+        self.package.set_part(&part_name, bytes);
+        self.package
+            .content_types
+            .add_override(&part_name, content_types::SLIDE_LAYOUT);
+        let relationships =
+            self.copy_formatting_relationships(source_package, layout, &part_name, Some(&master))?;
+        self.package.set_part_rels(&part_name, relationships);
+
+        let id = self.next_master_or_layout_id()?;
+        let mut master_relationships = self
+            .package
+            .get_part_rels(&master)
+            .cloned()
+            .unwrap_or_default();
+        let relationship_id = master_relationships.add(
+            rel_types::SLIDE_LAYOUT,
+            &relative_part_target(&master, &part_name),
+        );
+        let master_relationships = master_relationships
+            .rebind_for_import(master_relationships.items.clone(), &HashMap::new())?;
+        self.package.set_part_rels(&master, master_relationships);
+        let malformed = |error: OxmlError| Error::MalformedPart {
+            part_name: master.clone(),
+            message: error.to_string(),
+        };
+        let master_xml = required_part(&self.package, &master)?;
+        let mut model = CT_SlideMaster::from_xml(master_xml).map_err(malformed)?;
+        let master_xml = model
+            .append_slide_layout_id(master_xml, id, &relationship_id)
+            .map_err(malformed)?;
+        self.package.set_part(&master, master_xml);
+        self.layouts.push(LayoutRecord {
+            part_name: part_name.clone(),
+            layout: copied,
+            dirty: false,
+        });
+        adopted.insert(layout.to_owned(), part_name.clone());
+        Ok(part_name)
+    }
+
+    /// Returns this presentation's master equal to the source master, or a
+    /// copy of it, with a copy of its theme and none of its layouts.
+    fn adopt_source_master(
+        &mut self,
+        source_package: &OpcPackage,
+        master: &str,
+        adopted: &mut HashMap<String, String>,
+    ) -> Result<String> {
+        if let Some(existing) = adopted.get(master) {
+            return Ok(existing.clone());
+        }
+        for part_name in self.master_parts() {
+            if formatting_parts_equal(source_package, master, &self.package, &part_name)? {
+                adopted.insert(master.to_owned(), part_name.clone());
+                return Ok(part_name);
+            }
+        }
+        let malformed = |error: OxmlError| Error::MalformedPart {
+            part_name: master.to_owned(),
+            message: error.to_string(),
+        };
+        let mut bytes = required_part(source_package, master)?.to_vec();
+        let mut model = CT_SlideMaster::from_xml(&bytes).map_err(malformed)?;
+        for (_, relationship) in model.slide_layout_ids().map_err(malformed)? {
+            bytes = model
+                .remove_slide_layout_id(&bytes, &relationship)
+                .map_err(malformed)?;
+        }
+        let part_name = fresh_related_part_name(&self.package, master);
+        self.package.set_part(&part_name, bytes);
+        self.package
+            .content_types
+            .add_override(&part_name, content_types::SLIDE_MASTER);
+        let relationships =
+            self.copy_formatting_relationships(source_package, master, &part_name, None)?;
+        self.package.set_part_rels(&part_name, relationships);
+        let id = self.next_master_or_layout_id()?;
+        let relationship_id = self
+            .package
+            .get_or_create_part_rels(&self.presentation_part)
+            .add(
+                rel_types::SLIDE_MASTER,
+                &relative_part_target(&self.presentation_part, &part_name),
+            );
+        self.presentation
+            .slide_master_ids
+            .push(CT_SlideMasterId::new(id, relationship_id));
+        adopted.insert(master.to_owned(), part_name.clone());
+        Ok(part_name)
+    }
+
+    /// Copies the relationships of a source layout, or of a source master
+    /// when `master` is `None`, keeping their ids.
+    ///
+    /// A layout relates to `master`. A master drops its layouts, which
+    /// [`Self::adopt_source_layout`] adds one by one, and gets a copy of its
+    /// theme. Images go through the media store, tags and legacy drawings
+    /// are copied, and any other internal relationship is refused.
+    fn copy_formatting_relationships(
+        &mut self,
+        source_package: &OpcPackage,
+        source_part: &str,
+        destination_part: &str,
+        master: Option<&str>,
+    ) -> Result<Relationships> {
+        let mut relationships = Relationships::new();
+        let mut copies = HashMap::new();
+        let source_relationships = source_package
+            .get_part_rels(source_part)
+            .cloned()
+            .unwrap_or_default();
+        for relationship in &source_relationships.items {
+            let target = if relationship_is_external(relationship) {
+                relationship.target.clone()
+            } else {
+                let resolved = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+                let copied = match (relationship.rel_type.as_str(), master) {
+                    (rel_types::SLIDE_LAYOUT, None) => continue,
+                    (rel_types::SLIDE_MASTER, Some(master)) => master.to_owned(),
+                    (rel_types::IMAGE, _) => {
+                        preflight_internal_transfer_image(
+                            source_package,
+                            &resolved,
+                            "import slide",
+                        )?;
+                        let bytes = required_part(source_package, &resolved)?.to_vec();
+                        self.media_store
+                            .insert(&mut self.package, &bytes, &resolved)
+                    }
+                    (rel_type @ (TAGS_RELATIONSHIP | VML_DRAWING_RELATIONSHIP), _)
+                    | (rel_type @ rel_types::THEME, None) => {
+                        preflight_carried_part_graph(
+                            source_package,
+                            &resolved,
+                            rel_type,
+                            &mut HashSet::new(),
+                        )?;
+                        duplicate_part_graph(
+                            source_package,
+                            &mut self.package,
+                            &mut self.media_store,
+                            &resolved,
+                            &mut copies,
+                        )?
+                    }
+                    (rel_type, _) => {
+                        return Err(invalid_presentation_mutation(
+                            "import slide",
+                            format!(
+                                "{source_part} has an internal relationship of type {rel_type}, which is not carried"
+                            ),
+                        ));
+                    }
+                };
+                relative_part_target(destination_part, &copied)
+            };
+            relationships.add_with_id(&relationship.id, &relationship.rel_type, &target);
+            if let Some(inserted) = relationships.items.last_mut() {
+                inserted.target_mode = relationship.target_mode.clone();
+            }
+        }
+        Ok(source_relationships.rebind_for_import(relationships.items, &HashMap::new())?)
+    }
+
+    /// The master parts that the presentation's master list names.
+    fn master_parts(&self) -> Vec<String> {
+        let relationships = self.package.get_part_rels(&self.presentation_part);
+        self.presentation
+            .slide_master_ids
+            .iter()
+            .filter_map(|master| {
+                relationships
+                    .and_then(|relationships| relationships.get_by_id(&master.relationship_id))
+                    .filter(|relationship| !relationship_is_external(relationship))
+                    .map(|relationship| {
+                        OpcPackage::resolve_rel_target(
+                            &self.presentation_part,
+                            &relationship.target,
+                        )
+                    })
+            })
+            .collect()
+    }
+
+    /// Returns an id above every master and layout id, which share one space
+    /// starting at 2147483648.
+    fn next_master_or_layout_id(&self) -> Result<u32> {
+        let mut highest = 2_147_483_647_u32;
+        for master in &self.presentation.slide_master_ids {
+            highest = highest.max(master.id.unwrap_or_default());
+        }
+        for part_name in self.master_parts() {
+            let ids =
+                master_layout_ids(required_part(&self.package, &part_name)?).map_err(|error| {
+                    Error::MalformedPart {
+                        part_name: part_name.clone(),
+                        message: error.to_string(),
+                    }
+                })?;
+            for (id, _) in ids.entries {
+                highest = highest.max(id);
+            }
+        }
+        highest.checked_add(1).ok_or_else(|| {
+            invalid_presentation_mutation(
+                "import slide",
+                "master and layout ids are exhausted".to_owned(),
+            )
+        })
+    }
+
+    /// Carries selected classic comments and their required parent records.
+    /// Original numeric identities and external scopes are rebound together.
+    /// Transfers selected style definitions without changing destination defaults.
+    fn import_table_style_dependencies(
+        &mut self,
+        source: &Presentation,
+        source_package: &mut OpcPackage,
+        parts: &HashSet<String>,
+        copies: &mut HashMap<String, String>,
+    ) -> Result<HashMap<Option<String>, String>> {
+        let mut selected = HashSet::new();
+        for part in parts {
+            import_table_part(source_package, part, &mut selected, None)?;
+        }
+        if selected.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let source_part = import_table_style_part(source_package, &source.presentation_part)?;
+        let source_xml = source_part
+            .as_deref()
+            .map(|part| required_part(source_package, part).map(<[u8]>::to_vec))
+            .transpose()?;
+        let source_styles = source_xml
+            .as_deref()
+            .map(import_table_styles)
+            .transpose()
+            .map_err(|error| {
+                invalid_presentation_mutation("import table styles", error.to_string())
+            })?;
+        let destination_part = import_table_style_part(&self.package, &self.presentation_part)?;
+        let mut destination_xml = destination_part
+            .as_deref()
+            .map(|part| required_part(&self.package, part).map(<[u8]>::to_vec))
+            .transpose()?
+            .unwrap_or_else(|| format!(r#"<a:tblStyleLst xmlns:a="{A_NS}"/>"#).into_bytes());
+        let original_table_xml = destination_xml.clone();
+        if let Some(source_styles) = &source_styles {
+            destination_xml = merge_import_table_root_metadata(&destination_xml, source_styles)
+                .map_err(|error| {
+                    invalid_presentation_mutation("import table styles", error.to_string())
+                })?;
+        }
+        let destination_styles = import_table_styles(&destination_xml).map_err(|error| {
+            invalid_presentation_mutation("import table styles", error.to_string())
+        })?;
+        let mut used = destination_styles
+            .styles
+            .iter()
+            .map(|(id, _)| id.to_ascii_uppercase())
+            .collect::<HashSet<_>>();
+        let mut mapping = HashMap::new();
+        let mut appended = Vec::new();
+        let source_relationships = source_part
+            .as_deref()
+            .and_then(|part| source_package.get_part_rels(part))
+            .cloned()
+            .unwrap_or_default();
+        let destination_owner = destination_part
+            .clone()
+            .unwrap_or_else(|| fresh_related_part_name(&self.package, "/ppt/tableStyles1.xml"));
+        let mut destination_relationships = self
+            .package
+            .get_part_rels(&destination_owner)
+            .cloned()
+            .unwrap_or_default();
+        let original_resource_ids = destination_relationships
+            .items
+            .iter()
+            .map(|relationship| relationship.id.clone())
+            .collect::<HashSet<_>>();
+        let mut resources = HashMap::new();
+        let mut adopted_styles: HashMap<String, String> = HashMap::new();
+        let mut selected = selected.into_iter().collect::<Vec<_>>();
+        selected.sort();
+        for selection in selected {
+            let resolved = source_styles
+                .as_ref()
+                .and_then(|styles| {
+                    selection
+                        .as_deref()
+                        .filter(|id| {
+                            styles
+                                .styles
+                                .iter()
+                                .any(|(candidate, _)| candidate.eq_ignore_ascii_case(id))
+                        })
+                        .or(styles.default.as_deref())
+                })
+                .or(selection.as_deref());
+            let key = resolved.unwrap_or("").to_ascii_uppercase();
+            if let Some(id) = adopted_styles.get(&key) {
+                mapping.insert(selection, id.clone());
+                continue;
+            }
+            let definition = source_styles.as_ref().and_then(|styles| {
+                resolved.and_then(|id| {
+                    styles
+                        .styles
+                        .iter()
+                        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(id))
+                })
+            });
+            let (preferred, mut fragment) = match definition {
+                Some((id, xml)) => (
+                    id.clone(),
+                    close_import_table_style(xml, &source_styles.as_ref().unwrap().namespaces)
+                        .map_err(|error| {
+                            invalid_presentation_mutation("import table styles", error.to_string())
+                        })?,
+                ),
+                None => {
+                    if let Some(id) = resolved {
+                        if let Some(style) = oxml_drawing::table::CT_TableStyle::builtin(id) {
+                            if !used.contains(&id.to_ascii_uppercase()) {
+                                let id = id.to_owned();
+                                mapping.insert(selection, id);
+                                continue;
+                            }
+                            let mut list = oxml_drawing::table::CT_TableStyleList::from_xml(
+                                format!(r#"<a:tblStyleLst xmlns:a="{A_NS}"/>"#).as_bytes(),
+                            )
+                            .map_err(|error| {
+                                invalid_presentation_mutation(
+                                    "import table styles",
+                                    error.to_string(),
+                                )
+                            })?;
+                            list.styles.push(style);
+                            let xml = list.to_xml().map_err(|error| {
+                                invalid_presentation_mutation(
+                                    "import table styles",
+                                    error.to_string(),
+                                )
+                            })?;
+                            let builtin = import_table_styles(&xml).map_err(|error| {
+                                invalid_presentation_mutation(
+                                    "import table styles",
+                                    error.to_string(),
+                                )
+                            })?;
+                            let fragment =
+                                close_import_table_style(&builtin.styles[0].1, &builtin.namespaces)
+                                    .map_err(|error| {
+                                        invalid_presentation_mutation(
+                                            "import table styles",
+                                            error.to_string(),
+                                        )
+                                    })?;
+                            (id.to_owned(), fragment)
+                        } else {
+                            let id = "{00000000-0000-4000-8000-000000000000}".to_owned();
+                            (id.clone(), format!(r#"<a:tblStyle xmlns:a="{A_NS}" styleId="{id}" styleName="Unstyled"/>"#).into_bytes())
+                        }
+                    } else {
+                        let id = "{00000000-0000-4000-8000-000000000000}".to_owned();
+                        (id.clone(), format!(r#"<a:tblStyle xmlns:a="{A_NS}" styleId="{id}" styleName="Unstyled"/>"#).into_bytes())
+                    }
+                }
+            };
+            let source_scope = ImportTableStyleScope {
+                package: source_package,
+                part: source_part.as_deref().unwrap_or(""),
+                relationships: &source_relationships,
+                namespaces: source_styles
+                    .as_ref()
+                    .map_or(&[], |styles| styles.namespaces.as_slice()),
+            };
+            let destination_scope = ImportTableStyleScope {
+                package: &self.package,
+                part: &destination_owner,
+                relationships: &destination_relationships,
+                namespaces: &destination_styles.namespaces,
+            };
+            let mut equivalent = None;
+            for (id, old) in &destination_styles.styles {
+                if import_table_style_equal(&source_scope, &fragment, &destination_scope, old)? {
+                    equivalent = Some(id.clone());
+                    break;
+                }
+            }
+            if let Some(id) = equivalent {
+                adopted_styles.insert(key, id.clone());
+                mapping.insert(selection, id);
+                continue;
+            }
+            let ids = relationship_ids(&fragment).map_err(|error| {
+                invalid_presentation_mutation("import table styles", error.to_string())
+            })?;
+            for id in ids {
+                if resources.contains_key(&id) {
+                    continue;
+                }
+                let source_scope = ImportTableStyleScope {
+                    package: source_package,
+                    part: source_part.as_deref().unwrap_or(""),
+                    relationships: &source_relationships,
+                    namespaces: source_styles
+                        .as_ref()
+                        .map_or(&[], |styles| styles.namespaces.as_slice()),
+                };
+                let destination_scope = ImportTableStyleScope {
+                    package: &self.package,
+                    part: &destination_owner,
+                    relationships: &destination_relationships,
+                    namespaces: &destination_styles.namespaces,
+                };
+                let mut reused = None;
+                for relationship in &destination_relationships.items {
+                    if import_table_resource_equal(
+                        &source_scope,
+                        &id,
+                        &destination_scope,
+                        &relationship.id,
+                    )? {
+                        reused = Some(relationship.id.clone());
+                        break;
+                    }
+                }
+                if let Some(reused) = reused {
+                    resources.insert(id, reused);
+                    continue;
+                }
+                let relationship = source_relationships.get_by_id(&id).ok_or_else(|| {
+                    Error::MissingRelationship {
+                        source_part: source_part.clone().unwrap_or_default(),
+                        relationship_id: id.clone(),
+                    }
+                })?;
+                let target = if relationship_is_external(relationship) {
+                    relationship.target.clone()
+                } else {
+                    if relationship.rel_type != rel_types::IMAGE {
+                        return Err(invalid_presentation_mutation(
+                            "import table styles",
+                            format!(
+                                "{} has unsupported table-style resource {}",
+                                source_part.as_deref().unwrap_or(""),
+                                relationship.rel_type
+                            ),
+                        ));
+                    }
+                    let source_target = OpcPackage::resolve_rel_target(
+                        source_part.as_deref().unwrap(),
+                        &relationship.target,
+                    );
+                    preflight_internal_transfer_image(
+                        source_package,
+                        &source_target,
+                        "import table styles",
+                    )?;
+                    let copied = if let Some(copied) = copies.get(&source_target) {
+                        copied.clone()
+                    } else {
+                        if source_package
+                            .get_part_rels(&source_target)
+                            .is_some_and(|rels| {
+                                rels.items
+                                    .iter()
+                                    .any(|relationship| !relationship_is_external(relationship))
+                            })
+                        {
+                            return Err(invalid_presentation_mutation(
+                                "import table styles",
+                                format!(
+                                    "{source_target} has unsupported internal image relationships"
+                                ),
+                            ));
+                        }
+                        let copied = fresh_related_part_name(&self.package, &source_target);
+                        self.package.set_part(
+                            &copied,
+                            required_part(source_package, &source_target)?.to_vec(),
+                        );
+                        if let Some(content_type) = source_package
+                            .content_types
+                            .content_type_for(&source_target)
+                        {
+                            self.package
+                                .content_types
+                                .add_override(&copied, content_type);
+                        }
+                        if let Some(relationships) = source_package.get_part_rels(&source_target) {
+                            self.package.set_part_rels(&copied, relationships.clone());
+                        }
+                        copies.insert(source_target, copied.clone());
+                        copied
+                    };
+                    relative_part_target(&destination_owner, &copied)
+                };
+                let new_id = if relationship_is_external(relationship) {
+                    destination_relationships.add_external(&relationship.rel_type, &target)
+                } else {
+                    destination_relationships.add(&relationship.rel_type, &target)
+                };
+                resources.insert(id, new_id);
+            }
+            fragment = rewrite_exact_rel_ids(&fragment, &resources).map_err(|error| {
+                invalid_presentation_mutation("import table styles", error.to_string())
+            })?;
+            let same = destination_styles.styles.iter().find(|(_, old)| {
+                set_import_style_id(old, &preferred).is_ok_and(|old| old == fragment)
+            });
+            let id = if let Some((id, _)) = same {
+                id.clone()
+            } else {
+                let id = if used.insert(preferred.to_ascii_uppercase()) {
+                    preferred
+                } else {
+                    let id = (1_u64..)
+                        .map(|index| format!("{{00000000-0000-4000-8001-{index:012X}}}"))
+                        .find(|id| !used.contains(id))
+                        .expect("finite style identities leave an unused identifier");
+                    used.insert(id.clone());
+                    id
+                };
+                fragment = set_import_style_id(&fragment, &id).map_err(|error| {
+                    invalid_presentation_mutation("import table styles", error.to_string())
+                })?;
+                appended.extend_from_slice(&fragment);
+                id
+            };
+            adopted_styles.insert(key, id.clone());
+            mapping.insert(selection, id);
+        }
+        let changed_metadata = original_table_xml != destination_xml;
+        if !appended.is_empty() || changed_metadata {
+            if destination_styles.empty {
+                let mut xml = destination_xml[..destination_styles.head_end - 2].to_vec();
+                xml.push(b'>');
+                xml.extend_from_slice(&appended);
+                xml.extend_from_slice(format!("</{}>", destination_styles.name).as_bytes());
+                xml.extend_from_slice(&destination_xml[destination_styles.head_end..]);
+                destination_xml = xml;
+            } else {
+                destination_xml.splice(
+                    destination_styles.insert..destination_styles.insert,
+                    appended,
+                );
+            }
+            self.package.set_part(&destination_owner, destination_xml);
+            self.package.content_types.add_override(
+                &destination_owner,
+                "application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml",
+            );
+            if destination_part.is_none() {
+                self.package
+                    .part_rels
+                    .entry(self.presentation_part.clone())
+                    .or_default()
+                    .add(
+                        rel_types::TABLE_STYLES,
+                        &relative_part_target(&self.presentation_part, &destination_owner),
+                    );
+            }
+        }
+        if !resources.is_empty() {
+            let imported_items = source_relationships
+                .items
+                .iter()
+                .filter_map(|relationship| {
+                    resources
+                        .get(&relationship.id)
+                        .filter(|id| !original_resource_ids.contains(*id))
+                        .map(|new_id| {
+                            let mut copied = relationship.clone();
+                            copied.id.clone_from(new_id);
+                            copied.target = destination_relationships
+                                .get_by_id(new_id)
+                                .unwrap()
+                                .target
+                                .clone();
+                            copied
+                        })
+                })
+                .collect();
+            let imported = source_relationships.rebind_for_import(imported_items, &resources)?;
+            let existing = self
+                .package
+                .get_part_rels(&destination_owner)
+                .cloned()
+                .unwrap_or_default();
+            let (merged, ids) = existing.merge_for_import(&imported)?;
+            if ids.iter().any(|(old, new)| old != new) {
+                return Err(invalid_presentation_mutation(
+                    "import table styles",
+                    "preallocated table resource relationship collision".into(),
+                ));
+            }
+            self.package.set_part_rels(&destination_owner, merged);
+        }
+        for part in parts {
+            let bytes =
+                import_table_part(source_package, part, &mut HashSet::new(), Some(&mapping))?;
+            source_package.set_part(part, bytes);
+        }
+        Ok(mapping)
+    }
+
+    /// Publishes selected presentation-owned edge metadata in one original source scope.
+    fn reconcile_imported_main_relationships(
+        &mut self,
+        source: &Presentation,
+        package: &OpcPackage,
+        targets: &HashMap<String, String>,
+        original_ids: &HashSet<String>,
+    ) -> Result<()> {
+        let original = package
+            .get_part_rels(&source.presentation_part)
+            .cloned()
+            .unwrap_or_default();
+        // Stage newly authored records against their retained physical scope
+        // before selected IDs are rebound. This keeps opaque original metadata.
+        let original = original.rebind_for_import(original.items.clone(), &HashMap::new())?;
+        let destination = self
+            .package
+            .get_part_rels(&self.presentation_part)
+            .cloned()
+            .unwrap_or_default();
+        let mut ids = original
+            .items
+            .iter()
+            .map(|item| (item.id.clone(), String::new()))
+            .collect::<HashMap<_, _>>();
+        let mut selected = Vec::new();
+        let mut replacing = HashSet::new();
+        let mut attributed = HashSet::new();
+        for relationship in &original.items {
+            if !matches!(
+                relationship.rel_type.as_str(),
+                rel_types::SLIDE
+                    | rel_types::SLIDE_MASTER
+                    | rel_types::FONT
+                    | rel_types::TABLE_STYLES
+                    | rel_types::POWERPOINT_AUTHORS
+                    | CLASSIC_COMMENT_AUTHORS_RELATIONSHIP
+            ) {
+                continue;
+            }
+            reject_external(&source.presentation_part, relationship)?;
+            let source_target =
+                OpcPackage::resolve_rel_target(&source.presentation_part, &relationship.target);
+            let Some(target) = targets.get(&source_target) else {
+                continue;
+            };
+            let matching = destination
+                .items
+                .iter()
+                .filter(|item| {
+                    item.rel_type == relationship.rel_type
+                        && !relationship_is_external(item)
+                        && OpcPackage::resolve_rel_target(&self.presentation_part, &item.target)
+                            == *target
+                })
+                .collect::<Vec<_>>();
+            let item = matching
+                .iter()
+                .find(|item| !attributed.contains(&item.id))
+                .copied()
+                .or_else(|| matching.first().copied())
+                .ok_or_else(|| {
+                    footer_malformed(
+                        &self.presentation_part,
+                        "imported global dependency has no destination relationship",
+                    )
+                })?;
+            if original_ids.contains(&item.id) || attributed.contains(&item.id) {
+                if !original.record_metadata_equal_for_import(
+                    &relationship.id,
+                    &destination,
+                    &item.id,
+                )? {
+                    return Err(footer_malformed(
+                        &self.presentation_part,
+                        "conflicting source global relationship metadata",
+                    ));
+                }
+                continue;
+            }
+            attributed.insert(item.id.clone());
+            replacing.insert(item.id.clone());
+            ids.insert(relationship.id.clone(), item.id.clone());
+            let mut copy = relationship.clone();
+            copy.id.clone_from(&item.id);
+            copy.target.clone_from(&item.target);
+            selected.push(copy);
+        }
+        let imported = original.rebind_for_import(selected, &ids)?;
+        let kept = destination
+            .items
+            .iter()
+            .filter(|item| !replacing.contains(&item.id))
+            .cloned()
+            .collect();
+        let destination = destination.rebind_for_import(kept, &HashMap::new())?;
+        let (merged, mappings) = destination.merge_for_import(&imported)?;
+        if mappings.iter().any(|(old, new)| old != new) {
+            return Err(footer_malformed(
+                &self.presentation_part,
+                "preallocated global dependency relationship collision",
+            ));
+        }
+        self.package.set_part_rels(&self.presentation_part, merged);
+        Ok(())
+    }
+
+    /// Copies active stored programs required by selected text and theme graphs.
+    /// Face collisions are checked before publishing the staged presentation.
+    fn import_embedded_font_dependencies(
+        &mut self,
+        source: &Presentation,
+        source_package: &OpcPackage,
+        names: &HashSet<String>,
+        copies: &mut HashMap<String, String>,
+    ) -> Result<()> {
+        let source_active = source
+            .presentation
+            .embed_true_type_fonts()
+            .map_err(font_model_error)?
+            == Some(true);
+        let destination_active = self
+            .presentation
+            .embed_true_type_fonts()
+            .map_err(font_model_error)?
+            == Some(true);
+        if !source_active {
+            if destination_active
+                && self
+                    .presentation
+                    .embedded_fonts()
+                    .any(|entry| names.contains(&entry.typeface().to_lowercase()))
+            {
+                return Err(Error::InvalidFontEmbedding("inactive source font appearance conflicts with destination active stored program".into()));
+            }
+            return Ok(());
+        }
+        if !destination_active && self.presentation.embedded_fonts().next().is_some() {
+            return Err(Error::InvalidFontEmbedding(
+                "activating imported fonts would activate unrelated inactive destination programs"
+                    .into(),
+            ));
+        }
+        let source_entries = source
+            .presentation
+            .embedded_fonts()
+            .filter(|entry| names.contains(&entry.typeface().to_lowercase()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let source_relationships = source_package
+            .get_part_rels(&source.presentation_part)
+            .cloned()
+            .unwrap_or_default();
+        let destination_relationships = self
+            .package
+            .get_part_rels(&self.presentation_part)
+            .cloned()
+            .unwrap_or_default();
+        let mut reserved = destination_relationships.clone();
+        let mut new_relationships = Vec::new();
+        let mut source_ids: HashMap<String, String> = HashMap::new();
+        let mut transferred = false;
+        let mut source_model = source.presentation.clone();
+        for entry in source_entries {
+            source_model
+                .embedded_font_mut(entry.typeface())
+                .map_err(font_model_error)?;
+            let matching = self
+                .presentation
+                .embedded_fonts()
+                .filter(|old| old.typeface().to_lowercase() == entry.typeface().to_lowercase())
+                .cloned()
+                .collect::<Vec<_>>();
+            if matching.len() > 1 {
+                return Err(Error::InvalidFontEmbedding(format!(
+                    "ambiguous destination imported font {}",
+                    entry.typeface()
+                )));
+            }
+            let existing = matching.first().cloned();
+            let mut copy = existing.clone().unwrap_or_else(|| entry.clone());
+            for (kind, id) in entry.faces() {
+                let source_part = source.checked_font_target(id)?;
+                let bytes = required_part(source_package, &source_part)?;
+                if let Some(owned) = source_package
+                    .get_part_rels(&source_part)
+                    .and_then(|rels| rels.items.iter().find(|rel| !relationship_is_external(rel)))
+                {
+                    return Err(Error::InvalidFontEmbedding(format!(
+                        "{source_part} has unsupported font-data relationship {}",
+                        owned.rel_type
+                    )));
+                }
+                if let Some(existing_id) = existing.as_ref().and_then(|entry| entry.face(kind)) {
+                    let destination_part = self.checked_font_target(existing_id)?;
+                    if !source_relationships.record_metadata_equal_for_import(
+                        id,
+                        &destination_relationships,
+                        existing_id,
+                    )? || self.package.get_part(&destination_part) != Some(bytes)
+                        || self
+                            .package
+                            .get_part_rels(&destination_part)
+                            .map(Relationships::to_xml)
+                            .transpose()?
+                            != source_package
+                                .get_part_rels(&source_part)
+                                .map(Relationships::to_xml)
+                                .transpose()?
+                    {
+                        return Err(Error::InvalidFontEmbedding(format!(
+                            "imported font {} face {kind:?} conflicts with destination stored program",
+                            entry.typeface()
+                        )));
+                    }
+                    copies.insert(source_part.clone(), destination_part);
+                    copy.import_face(&entry, kind, existing_id)
+                        .map_err(font_model_error)?;
+                    transferred = true;
+                    continue;
+                }
+                let destination_id = if let Some(id) = source_ids.get(id) {
+                    id.clone()
+                } else {
+                    let copied = if let Some(part) = copies.get(&source_part) {
+                        part.clone()
+                    } else {
+                        let part = fresh_related_part_name(&self.package, &source_part);
+                        self.package.set_part(&part, bytes.to_vec());
+                        self.package
+                            .content_types
+                            .add_override(&part, EMBEDDED_FONT_CONTENT_TYPE);
+                        if let Some(relationships) = source_package.get_part_rels(&source_part) {
+                            self.package.set_part_rels(&part, relationships.clone());
+                        }
+                        copies.insert(source_part.clone(), part.clone());
+                        part
+                    };
+                    let destination_id = reserved.add(
+                        rel_types::FONT,
+                        &relative_part_target(&self.presentation_part, &copied),
+                    );
+                    let mut relationship = source_relationships
+                        .get_by_id(id)
+                        .expect("checked source font relationship")
+                        .clone();
+                    relationship.id.clone_from(&destination_id);
+                    relationship.target = relative_part_target(&self.presentation_part, &copied);
+                    new_relationships.push(relationship);
+                    source_ids.insert(id.to_owned(), destination_id.clone());
+                    destination_id
+                };
+                if existing.is_some() {
+                    copy.import_face(&entry, kind, &destination_id)
+                        .map_err(font_model_error)?;
+                } else {
+                    copy.set_face(kind, &destination_id)
+                        .map_err(font_model_error)?;
+                }
+                transferred = true;
+            }
+            if copy != existing.clone().unwrap_or_else(|| entry.clone()) || existing.is_none() {
+                if let Some(old) = existing {
+                    *self
+                        .presentation
+                        .embedded_font_mut(old.typeface())
+                        .map_err(font_model_error)?
+                        .expect("matched font entry") = copy;
+                } else {
+                    self.presentation
+                        .push_embedded_font(copy)
+                        .map_err(font_model_error)?;
+                }
+            }
+        }
+        if !new_relationships.is_empty() {
+            let relationships =
+                destination_relationships.rebind_for_import(reserved.items, &HashMap::new())?;
+            self.package
+                .set_part_rels(&self.presentation_part, relationships);
+        }
+        if transferred {
+            if self
+                .presentation
+                .embed_true_type_fonts()
+                .map_err(font_model_error)?
+                == Some(false)
+            {
+                return Err(Error::InvalidFontEmbedding(
+                    "destination disables retaining imported embedded fonts".into(),
+                ));
+            }
+            self.presentation.set_embed_true_type_fonts(Some(true));
+        }
+        Ok(())
+    }
+
+    fn import_classic_comment_graphs(
+        &mut self,
+        source: &Presentation,
+        source_package: &OpcPackage,
+        indexes: &[usize],
+        copies: &mut HashMap<String, String>,
+    ) -> Result<()> {
+        let mut source_parts = Vec::new();
+        let mut seen = HashSet::new();
+        for &index in indexes {
+            let part = &source.slides[index].part_name;
+            let Some(relationships) = source_package.get_part_rels(part) else {
+                continue;
+            };
+            let comments = relationships.get_all_by_type(rel_types::COMMENTS);
+            if comments.len() > 1 {
+                return Err(Error::DuplicateRelationships {
+                    source_part: part.clone(),
+                    relationship_type: rel_types::COMMENTS,
+                    count: comments.len(),
+                });
+            }
+            for relationship in comments {
+                reject_external(part, relationship)?;
+                let comment_part = OpcPackage::resolve_rel_target(part, &relationship.target);
+                if seen.insert(comment_part.clone()) {
+                    source_parts.push((
+                        comment_part.clone(),
+                        required_part(source_package, &comment_part)?.to_vec(),
+                    ));
+                }
+            }
+        }
+        if source_parts.is_empty() {
+            return Ok(());
+        }
+        let mut all_parts = Vec::new();
+        let mut seen = HashSet::new();
+        for record in &source.slides {
+            if let Some(relationships) = source_package.get_part_rels(&record.part_name) {
+                for relationship in relationships.get_all_by_type(rel_types::COMMENTS) {
+                    reject_external(&record.part_name, relationship)?;
+                    let part =
+                        OpcPackage::resolve_rel_target(&record.part_name, &relationship.target);
+                    if seen.insert(part.clone()) {
+                        all_parts
+                            .push((part.clone(), required_part(source_package, &part)?.to_vec()));
+                    }
+                }
+            }
+        }
+        let dependencies =
+            classic_comment_dependencies(&source_parts, &all_parts).map_err(|error| {
+                invalid_presentation_mutation("import classic comments", error.to_string())
+            })?;
+        let mut imported_relationships = HashMap::new();
+        for (part, xml) in &mut source_parts {
+            let mut relationships = source_package
+                .get_part_rels(part)
+                .cloned()
+                .unwrap_or_default();
+            let mut scopes: HashMap<String, HashMap<String, String>> = HashMap::new();
+            for dependency in dependencies.get(part).into_iter().flatten() {
+                let ids = if let Some(ids) = scopes.get(&dependency.source_part) {
+                    ids.clone()
+                } else {
+                    let origin = source_package
+                        .get_part_rels(&dependency.source_part)
+                        .cloned()
+                        .unwrap_or_default();
+                    if origin
+                        .items
+                        .iter()
+                        .any(|relationship| !relationship_is_external(relationship))
+                    {
+                        return Err(invalid_presentation_mutation(
+                            "import classic comments",
+                            format!(
+                                "{} parent scope has unsupported internal relationships",
+                                dependency.source_part
+                            ),
+                        ));
+                    }
+                    let (merged, ids) = relationships.merge_for_import(&origin)?;
+                    relationships = merged;
+                    scopes.insert(dependency.source_part.clone(), ids.clone());
+                    ids
+                };
+                let parent = rewrite_exact_rel_ids(&dependency.xml, &ids).map_err(|error| {
+                    invalid_presentation_mutation("import classic comments", error.to_string())
+                })?;
+                *xml = append_classic_comment_dependency(xml, &parent).map_err(|error| {
+                    invalid_presentation_mutation("import classic comments", error.to_string())
+                })?;
+            }
+            imported_relationships.insert(part.clone(), relationships);
+        }
+        for (package, owner) in [
+            (source_package, &source.presentation_part),
+            (&self.package, &self.presentation_part),
+        ] {
+            let count = package.get_part_rels(owner).map_or(0, |relationships| {
+                relationships
+                    .get_all_by_type(CLASSIC_COMMENT_AUTHORS_RELATIONSHIP)
+                    .len()
+            });
+            if count > 1 {
+                return Err(Error::DuplicateRelationships {
+                    source_part: owner.clone(),
+                    relationship_type: CLASSIC_COMMENT_AUTHORS_RELATIONSHIP,
+                    count,
+                });
+            }
+        }
+        let source_authors = related_internal_part(
+            source_package,
+            &source.presentation_part,
+            CLASSIC_COMMENT_AUTHORS_RELATIONSHIP,
+        )?
+        .ok_or_else(|| Error::MalformedPart {
+            part_name: source.presentation_part.clone(),
+            message: "classic comments have no commentAuthors relationship".into(),
+        })?;
+        let destination_authors = related_internal_part(
+            &self.package,
+            &self.presentation_part,
+            CLASSIC_COMMENT_AUTHORS_RELATIONSHIP,
+        )?;
+        let mut destination_parts = Vec::new();
+        let mut seen = HashSet::new();
+        for record in &self.slides {
+            if let Some(relationships) = self.package.get_part_rels(&record.part_name) {
+                for relationship in relationships.get_all_by_type(rel_types::COMMENTS) {
+                    reject_external(&record.part_name, relationship)?;
+                    let part =
+                        OpcPackage::resolve_rel_target(&record.part_name, &relationship.target);
+                    if seen.insert(part.clone()) {
+                        destination_parts.push(required_part(&self.package, &part)?.to_vec());
+                    }
+                }
+            }
+        }
+        let imported = import_classic_comments(
+            required_part(source_package, &source_authors)?,
+            destination_authors
+                .as_deref()
+                .map(|part| required_part(&self.package, part))
+                .transpose()?,
+            &source_parts,
+            &destination_parts,
+        )
+        .map_err(|error| Error::MalformedPart {
+            part_name: source_authors.clone(),
+            message: error.to_string(),
+        })?;
+        let author_part = destination_authors
+            .unwrap_or_else(|| fresh_related_part_name(&self.package, &source_authors));
+        copies.insert(source_authors.clone(), author_part.clone());
+        self.package.set_part(&author_part, imported.authors_xml);
+        let author_type = source_package
+            .content_types
+            .content_type_for(&source_authors)
+            .ok_or_else(|| Error::MalformedPart {
+                part_name: source_authors.clone(),
+                message: "classic authors have no content type".into(),
+            })?;
+        self.package
+            .content_types
+            .add_override(&author_part, author_type);
+        let relationships = self
+            .package
+            .get_or_create_part_rels(&self.presentation_part);
+        if relationships
+            .get_by_type(CLASSIC_COMMENT_AUTHORS_RELATIONSHIP)
+            .is_none()
+        {
+            relationships.add(
+                CLASSIC_COMMENT_AUTHORS_RELATIONSHIP,
+                &relative_part_target(&self.presentation_part, &author_part),
+            );
+        }
+        for (source_part, _) in source_parts {
+            let part = fresh_related_part_name(&self.package, &source_part);
+            let content_type = source_package
+                .content_types
+                .content_type_for(&source_part)
+                .ok_or_else(|| Error::MalformedPart {
+                    part_name: source_part.clone(),
+                    message: "classic comments have no content type".into(),
+                })?;
+            self.package
+                .set_part(&part, imported.comment_parts[&source_part].clone());
+            self.package.content_types.add_override(&part, content_type);
+            if source_package.get_part_rels(&source_part).is_some()
+                || dependencies.contains_key(&source_part)
+            {
+                self.package.set_part_rels(
+                    &part,
+                    imported_relationships
+                        .remove(&source_part)
+                        .expect("selected classic scope prepared"),
+                );
+            }
+            copies.insert(source_part, part);
+        }
+        Ok(())
+    }
+
+    /// Merges modern authors and returns comment/reply and author ID maps.
+    fn merge_imported_comment_identities(
+        &mut self,
+        source: &Presentation,
+        comments: &CommentList,
+    ) -> Result<(HashMap<String, String>, HashMap<String, String>)> {
+        let mut used = self
+            .comment_authors
+            .authors
+            .iter()
+            .map(|author| author.id.to_ascii_uppercase())
+            .collect::<HashSet<_>>();
+        for record in &self.slides {
+            for comment in record
+                .comments
+                .iter()
+                .flat_map(|comments| &comments.comments.comments)
+            {
+                used.insert(comment.id.to_ascii_uppercase());
+                used.extend(
+                    comment
+                        .replies()
+                        .iter()
+                        .map(|reply| reply.id.to_ascii_uppercase()),
+                );
+            }
+        }
+        let fresh_id = |used: &mut HashSet<String>| {
+            let id = (1_u64..)
+                .map(|index| format!("{{00000000-0000-4000-8000-{index:012X}}}"))
+                .find(|id| !used.contains(id))
+                .expect("a finite set of used ids leaves a sequential id free");
+            used.insert(id.clone());
+            id
+        };
+
+        let mut author_ids = HashMap::new();
+        let referenced = comments
+            .referenced_author_ids()
+            .map_err(|error| invalid_presentation_mutation("import slide", error.to_string()))?;
+        for author_id in referenced {
+            if author_ids.contains_key(&author_id) {
+                continue;
+            }
+            let Some(author) = source
+                .comment_authors
+                .authors
+                .iter()
+                .find(|author| author.id == author_id)
+            else {
+                return Err(invalid_presentation_mutation(
+                    "import slide",
+                    format!("modern comment author {author_id} is absent"),
+                ));
+            };
+            if let Some(existing) = self.comment_authors.authors.iter().find(|existing| {
+                let mut identity = (**existing).clone();
+                identity.id.clone_from(&author.id);
+                &identity == author
+            }) {
+                author_ids.insert(author_id.clone(), existing.id.clone());
+                continue;
+            }
+            let mut copy = author.clone();
+            if used.contains(&author.id.to_ascii_uppercase()) {
+                copy.id = fresh_id(&mut used);
+            } else {
+                used.insert(author.id.to_ascii_uppercase());
+            }
+            author_ids.insert(author_id.clone(), copy.id.clone());
+            self.ensure_comment_authors_part()?;
+            self.comment_authors.authors.push(copy);
+            self.comment_authors_dirty = true;
+        }
+
+        let mut ids = HashMap::new();
+        for comment in &comments.comments {
+            for id in
+                std::iter::once(&comment.id).chain(comment.replies().iter().map(|reply| &reply.id))
+            {
+                if used.contains(&id.to_ascii_uppercase()) {
+                    ids.insert(id.clone(), fresh_id(&mut used));
+                } else {
+                    used.insert(id.to_ascii_uppercase());
+                }
+            }
+        }
+        Ok((ids, author_ids))
     }
 
     /// Inserts a new slide at a final zero-based position, including append.
@@ -12455,11 +14305,2029 @@ fn add_media_relationships(
     }
 }
 
+struct ImportGraphCopies<'a> {
+    diagrams: &'a mut HashMap<String, String>,
+    parts: &'a mut HashMap<String, String>,
+}
+
 struct RelationshipScopeTargets<'a> {
     slide: Option<&'a str>,
+    /// Source slide parts and the destination slides their jumps land on,
+    /// consulted before `slide`.
+    slide_map: Option<&'a HashMap<String, String>>,
     notes: Option<&'a str>,
+    comments: Option<&'a str>,
     layout: Option<&'a str>,
     notes_master: Option<&'a str>,
+    /// Copies chart, embedded-object and legacy-drawing graphs instead of
+    /// sharing their parts.
+    copy_part_graphs: bool,
+    graph_copies: Option<ImportGraphCopies<'a>>,
+}
+
+/// The layout one imported slide relates to.
+enum ImportLayout {
+    /// A layout of the destination, by index.
+    Destination(usize),
+    /// The source slide's own layout part, adopted with its master and theme.
+    Source(String),
+}
+
+/// Returns whether a source layout or master equals a destination one, so
+/// that a keep-source-formatting import may reuse it.
+///
+/// Two parts are equal when their bytes are equal and they own the same
+/// relationship ids, with the same types and external targets, and internal
+/// targets equal by this same rule. A master is compared without its
+/// `p:sldLayoutIdLst` and its layout relationships, since a copied master
+/// only lists the layouts imported so far. The rule is deliberately strict.
+/// An equal-looking part saved by another producer, or with other
+/// relationship ids, is not equal and gets copied.
+fn formatting_parts_equal(
+    source_package: &OpcPackage,
+    source_part: &str,
+    destination_package: &OpcPackage,
+    destination_part: &str,
+) -> Result<bool> {
+    fn equal(
+        source: &OpcPackage,
+        left: &str,
+        destination: &OpcPackage,
+        right: &str,
+        visited: &mut HashSet<(String, String)>,
+    ) -> Result<bool> {
+        if !visited.insert((left.to_owned(), right.to_owned())) {
+            return Ok(true);
+        }
+        if source.content_types.content_type_for(left)
+            != destination.content_types.content_type_for(right)
+        {
+            return Ok(false);
+        }
+        let master =
+            source.content_types.content_type_for(left) == Some(content_types::SLIDE_MASTER);
+        let (Some(a), Some(b)) = (source.get_part(left), destination.get_part(right)) else {
+            return Ok(false);
+        };
+        let a = if master {
+            replace_master_layout_ids(a, &[])
+                .map_err(|error| footer_malformed(left, error.to_string()))?
+        } else {
+            a.to_vec()
+        };
+        let b = if master {
+            replace_master_layout_ids(b, &[])
+                .map_err(|error| footer_malformed(right, error.to_string()))?
+        } else {
+            b.to_vec()
+        };
+        let edges = |package: &OpcPackage, part: &str| {
+            package
+                .get_part_rels(part)
+                .map(|r| {
+                    r.items
+                        .iter()
+                        .filter(|r| !(master && r.rel_type == rel_types::SLIDE_LAYOUT))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let a_edges = edges(source, left);
+        let b_edges = edges(destination, right);
+        if a_edges.len() != b_edges.len() {
+            return Ok(false);
+        }
+        let source_scope = source.get_part_rels(left).cloned().unwrap_or_default();
+        let destination_scope = destination
+            .get_part_rels(right)
+            .cloned()
+            .unwrap_or_default();
+        if a_edges.is_empty() {
+            return Ok(a == b
+                && source_scope
+                    .rebind_for_import(a_edges, &HashMap::new())?
+                    .to_xml()?
+                    == destination_scope
+                        .rebind_for_import(b_edges, &HashMap::new())?
+                        .to_xml()?);
+        }
+        let a_ids =
+            relationship_ids(&a).map_err(|error| footer_malformed(left, error.to_string()))?;
+        let b_ids =
+            relationship_ids(&b).map_err(|error| footer_malformed(right, error.to_string()))?;
+        if a_ids.len() != b_ids.len() {
+            return Ok(false);
+        }
+        let mut aliases = HashMap::new();
+        let mut inverse = HashMap::new();
+        for (a, b) in a_ids.iter().zip(&b_ids) {
+            if aliases.get(a).is_some_and(|old| old != b)
+                || inverse.get(b).is_some_and(|old| old != a)
+            {
+                return Ok(false);
+            }
+            aliases.insert(a.clone(), b.clone());
+            inverse.insert(b.clone(), a.clone());
+        }
+        if rewrite_exact_rel_ids(&a, &aliases)
+            .map_err(|error| footer_malformed(left, error.to_string()))?
+            != b
+        {
+            return Ok(false);
+        }
+        let mut used = HashSet::new();
+        let mut normalized_edges = Vec::with_capacity(a_edges.len());
+        let mut normalized_ids = HashMap::new();
+        for edge in a_edges {
+            let mut matched = false;
+            for candidate in &b_edges {
+                if used.contains(&candidate.id)
+                    || aliases.get(&edge.id).is_some_and(|id| id != &candidate.id)
+                    || inverse.get(&candidate.id).is_some_and(|id| id != &edge.id)
+                    || edge.rel_type != candidate.rel_type
+                    || edge.target_mode != candidate.target_mode
+                {
+                    continue;
+                }
+                let mut trial = visited.clone();
+                let same = if relationship_is_external(&edge) {
+                    edge.target == candidate.target
+                } else {
+                    equal(
+                        source,
+                        &OpcPackage::resolve_rel_target(left, &edge.target),
+                        destination,
+                        &OpcPackage::resolve_rel_target(right, &candidate.target),
+                        &mut trial,
+                    )?
+                };
+                if same {
+                    *visited = trial;
+                    used.insert(candidate.id.clone());
+                    normalized_ids.insert(edge.id.clone(), candidate.id.clone());
+                    let mut normalized = edge.clone();
+                    normalized.id = candidate.id.clone();
+                    normalized.target = candidate.target.clone();
+                    normalized_edges.push(normalized);
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                return Ok(false);
+            }
+        }
+        Ok(source_scope
+            .rebind_for_import(normalized_edges, &normalized_ids)?
+            .to_xml()?
+            == destination_scope
+                .rebind_for_import(b_edges, &HashMap::new())?
+                .to_xml()?)
+    }
+    equal(
+        source_package,
+        source_part,
+        destination_package,
+        destination_part,
+        &mut HashSet::new(),
+    )
+}
+
+/// The `p:sldLayoutIdLst` of one slide master.
+struct MasterLayoutIds {
+    /// The byte range of the list, or the empty range after `p:clrMap` where
+    /// a list belongs when the master has none.
+    range: std::ops::Range<usize>,
+    /// The `(id, relationship id)` of each `p:sldLayoutId`.
+    entries: Vec<(u32, String)>,
+}
+
+fn master_layout_ids(xml: &[u8]) -> std::result::Result<MasterLayoutIds, OxmlError> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut list_start = None;
+    let mut list = None;
+    let mut after_color_map = None;
+    let mut entries = Vec::new();
+    loop {
+        let start_offset = reader.buffer_position() as usize;
+        let (is_p, event) = {
+            let (namespace, event) = reader.read_resolved_event_into(&mut buffer)?;
+            (xml_is(&namespace, P_NS), event.into_owned())
+        };
+        let end_offset = reader.buffer_position() as usize;
+        match event {
+            XmlEvent::Start(start) => {
+                depth += 1;
+                if depth == 2 && is_p && start.local_name().as_ref() == b"sldLayoutIdLst" {
+                    list_start = Some(start_offset);
+                }
+            }
+            XmlEvent::Empty(start) => {
+                let local = start.local_name();
+                if depth == 1 && is_p && local.as_ref() == b"sldLayoutIdLst" {
+                    list = Some(start_offset..end_offset);
+                } else if depth == 1 && is_p && local.as_ref() == b"clrMap" {
+                    after_color_map = Some(end_offset);
+                } else if depth == 2
+                    && list_start.is_some()
+                    && is_p
+                    && local.as_ref() == b"sldLayoutId"
+                {
+                    let mut id = None;
+                    let mut relationship_id = None;
+                    for attribute in start.attributes().with_checks(false) {
+                        let attribute = attribute?;
+                        let (namespace, name) = reader.resolver().resolve_attribute(attribute.key);
+                        let value = attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?
+                            .into_owned();
+                        if name.as_ref() != b"id" {
+                            continue;
+                        }
+                        if xml_is(&namespace, R_NS) {
+                            relationship_id = Some(value);
+                        } else if matches!(namespace, XmlResolveResult::Unbound) {
+                            id = value.parse::<u32>().ok();
+                        }
+                    }
+                    if let (Some(id), Some(relationship_id)) = (id, relationship_id) {
+                        entries.push((id, relationship_id));
+                    }
+                }
+            }
+            XmlEvent::End(end) => {
+                if depth == 2 && is_p && end.local_name().as_ref() == b"sldLayoutIdLst" {
+                    list = list_start.take().map(|start| start..end_offset);
+                } else if depth == 2 && is_p && end.local_name().as_ref() == b"clrMap" {
+                    after_color_map = Some(end_offset);
+                }
+                depth = depth.saturating_sub(1);
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let range = match (list, after_color_map) {
+        (Some(range), _) => range,
+        (None, Some(offset)) => offset..offset,
+        (None, None) => return Err(OxmlError::MissingElement("p:clrMap".to_owned())),
+    };
+    Ok(MasterLayoutIds { range, entries })
+}
+
+/// Replaces the layout list of a slide master with `entries`, or removes it
+/// when `entries` is empty.
+fn replace_master_layout_ids(
+    xml: &[u8],
+    entries: &[(u32, String)],
+) -> std::result::Result<Vec<u8>, OxmlError> {
+    let MasterLayoutIds { range, .. } = master_layout_ids(xml)?;
+    let mut replaced = xml[..range.start].to_vec();
+    if !entries.is_empty() {
+        // The root of a master written by PowerPoint binds both prefixes,
+        // and any other root gets them declared on the list itself.
+        let root_start = xml
+            .windows(2)
+            .position(|pair| pair[0] == b'<' && pair[1].is_ascii_alphabetic())
+            .unwrap_or_default();
+        let root_end = xml[root_start..]
+            .iter()
+            .position(|byte| *byte == b'>')
+            .map_or(xml.len(), |end| root_start + end + 1);
+        let root = &xml[root_start..root_end];
+        let mut declarations = String::new();
+        for (prefix, namespace) in [("p", P_NS), ("r", R_NS)] {
+            let declaration = format!(" xmlns:{prefix}=\"{namespace}\"");
+            if !root
+                .windows(declaration.len())
+                .any(|window| window == declaration.as_bytes())
+            {
+                declarations.push_str(&declaration);
+            }
+        }
+        replaced.extend_from_slice(format!("<p:sldLayoutIdLst{declarations}>").as_bytes());
+        for (id, relationship_id) in entries {
+            replaced.extend_from_slice(
+                format!(r#"<p:sldLayoutId id="{id}" r:id="{relationship_id}"/>"#).as_bytes(),
+            );
+        }
+        replaced.extend_from_slice(b"</p:sldLayoutIdLst>");
+    }
+    replaced.extend_from_slice(&xml[range.end..]);
+    Ok(replaced)
+}
+
+/// Moves selected presentation-owned default resources into a source master scope.
+fn stage_source_master_defaults(
+    source: &Presentation,
+    package: &mut OpcPackage,
+    master_part: &str,
+) -> Result<()> {
+    let Some(defaults) = source.presentation.default_text_style.as_ref() else {
+        return Ok(());
+    };
+    let xml = defaults
+        .to_xml()
+        .map_err(|error| footer_malformed(master_part, error.to_string()))?;
+    let xml = transfer_imported_property_resources(
+        package,
+        &source.presentation_part,
+        master_part,
+        &xml,
+    )?;
+    let mapped_defaults = CT_TextListStyle::from_xml(&xml)
+        .map_err(|error| footer_malformed(master_part, error.to_string()))?;
+    let mut master = CT_SlideMaster::from_xml(required_part(package, master_part)?)
+        .map_err(|error| footer_malformed(master_part, error.to_string()))?;
+    master
+        .inherit_presentation_text_defaults(&mapped_defaults)
+        .map_err(|error| footer_malformed(master_part, error.to_string()))?;
+    package.set_part(
+        master_part,
+        master
+            .to_xml()
+            .map_err(|error| footer_malformed(master_part, error.to_string()))?,
+    );
+    Ok(())
+}
+
+fn transfer_imported_property_resources(
+    package: &mut OpcPackage,
+    source_part: &str,
+    destination_part: &str,
+    xml: &[u8],
+) -> Result<Vec<u8>> {
+    let ids: HashSet<_> = relationship_ids(xml)
+        .map_err(|error| footer_malformed(source_part, error.to_string()))?
+        .into_iter()
+        .collect();
+    if ids.is_empty() {
+        return Ok(xml.to_vec());
+    }
+    let original = package
+        .get_part_rels(source_part)
+        .cloned()
+        .unwrap_or_default();
+    let mut selected = Vec::with_capacity(ids.len());
+
+    for id in ids {
+        let relationship = original
+            .get_by_id(&id)
+            .ok_or_else(|| Error::MissingRelationship {
+                source_part: source_part.to_owned(),
+                relationship_id: id.clone(),
+            })?;
+        let mut transferred = relationship.clone();
+        if !relationship_is_external(relationship) {
+            transferred.target = relative_part_target(
+                destination_part,
+                &OpcPackage::resolve_rel_target(source_part, &relationship.target),
+            );
+        }
+        selected.push(transferred);
+    }
+    let scope = original.rebind_for_import(selected, &HashMap::new())?;
+    let existing = package
+        .get_part_rels(destination_part)
+        .cloned()
+        .unwrap_or_default();
+    let (merged, mapping) = existing.merge_for_import(&scope)?;
+    let rewritten = rewrite_exact_rel_ids(xml, &mapping)
+        .map_err(|error| footer_malformed(source_part, error.to_string()))?;
+    package.set_part_rels(destination_part, merged);
+    Ok(rewritten)
+}
+
+// Compare retained common extensions under the same global-master owner kind.
+// Resource-dependent or changed opaque metadata has no proven local equivalent.
+fn notes_common_extension_metadata(xml: &[u8], part: &str) -> Result<Vec<Vec<u8>>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut roles: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut scopes = vec![std::collections::BTreeMap::<String, String>::new()];
+    let mut metadata = Vec::new();
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let decoder = reader.decoder();
+        let (namespace, event) = reader
+            .read_resolved_event()
+            .map_err(|error| footer_malformed(part, error.to_string()))?;
+        let uri = import_namespace_uri(namespace, decoder)
+            .map_err(|error| footer_malformed(part, error.to_string()))?;
+        match event {
+            event @ (XmlEvent::Start(_) | XmlEvent::Empty(_)) => {
+                let empty = matches!(&event, XmlEvent::Empty(_));
+                let start = match &event {
+                    XmlEvent::Start(start) | XmlEvent::Empty(start) => start,
+                    _ => unreachable!(),
+                };
+                let local = start.local_name().as_ref().to_vec();
+                let mut scope = scopes.last().unwrap().clone();
+                for attr in start.attributes() {
+                    let attr = attr.map_err(|error| footer_malformed(part, error.to_string()))?;
+                    let name = attr.key.as_ref();
+                    let prefix = if name == b"xmlns" {
+                        Some("")
+                    } else {
+                        name.strip_prefix(b"xmlns:")
+                            .map(std::str::from_utf8)
+                            .transpose()
+                            .map_err(|error| footer_malformed(part, error.to_string()))?
+                    };
+                    if let Some(prefix) = prefix {
+                        scope.insert(
+                            prefix.into(),
+                            attr.decoded_and_normalized_value(
+                                XmlVersion::Implicit1_0,
+                                start.decoder(),
+                            )
+                            .map_err(|error| footer_malformed(part, error.to_string()))?
+                            .into_owned(),
+                        );
+                    }
+                }
+                if roles.len() == 2
+                    && roles
+                        .last()
+                        .is_some_and(|(uri, local)| uri == P_NS && local == b"cSld")
+                    && uri == P_NS
+                    && local == b"extLst"
+                {
+                    if !empty {
+                        reader
+                            .read_to_end(start.name())
+                            .map_err(|error| footer_malformed(part, error.to_string()))?;
+                    }
+                    let raw = &xml[begin..reader.buffer_position() as usize];
+                    let context = scope.into_iter().collect::<Vec<_>>();
+                    let raw = close_import_table_style(raw, &context)
+                        .map_err(|error| footer_malformed(part, error.to_string()))?;
+                    if !relationship_ids(&raw)
+                        .map_err(|error| footer_malformed(part, error.to_string()))?
+                        .is_empty()
+                    {
+                        return Err(footer_malformed(
+                            part,
+                            "unrepresentable resource-dependent notes-master common metadata",
+                        ));
+                    }
+                    metadata.push(raw);
+                    continue;
+                }
+                if !empty {
+                    roles.push((uri, local));
+                    scopes.push(scope);
+                }
+            }
+            XmlEvent::End(_) => {
+                roles.pop();
+                scopes.pop();
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(metadata)
+}
+
+// Notes-master owner metadata cannot be moved blindly to a notes-slide owner.
+// Admit only the explicitly materialized surface and schema scalars. Unknown
+// authority outside that surface is refused before any staged graph publication.
+fn admit_source_notes_master_metadata(
+    xml: &[u8],
+    destination_xml: &[u8],
+    part: &str,
+) -> Result<()> {
+    let source_metadata = notes_common_extension_metadata(xml, part)?;
+    let destination_metadata = notes_common_extension_metadata(destination_xml, part)?;
+    if source_metadata
+        .iter()
+        .any(|raw| !destination_metadata.contains(raw))
+    {
+        return Err(footer_malformed(
+            part,
+            "unrepresentable source notes-master common extension authority",
+        ));
+    }
+    let mut reader = NsReader::from_reader(xml);
+    let mut roles: Vec<(String, Vec<u8>)> = Vec::new();
+    loop {
+        let decoder = reader.decoder();
+        let (namespace, event) = reader
+            .read_resolved_event()
+            .map_err(|error| footer_malformed(part, error.to_string()))?;
+        let uri = import_namespace_uri(namespace, decoder)
+            .map_err(|error| footer_malformed(part, error.to_string()))?;
+        match event {
+            event @ (XmlEvent::Start(_) | XmlEvent::Empty(_)) => {
+                let empty = matches!(&event, XmlEvent::Empty(_));
+                let start = match &event {
+                    XmlEvent::Start(start) | XmlEvent::Empty(start) => start,
+                    _ => unreachable!(),
+                };
+                let local = start.local_name().as_ref().to_vec();
+                let depth = roles.len();
+                let owner = roles
+                    .last()
+                    .map(|(uri, local)| (uri.as_str(), local.as_slice()));
+                if depth == 1
+                    && !(uri == P_NS
+                        && matches!(
+                            local.as_slice(),
+                            b"cSld" | b"clrMap" | b"hf" | b"notesStyle"
+                        ))
+                    || depth == 2
+                        && owner == Some((P_NS, b"cSld"))
+                        && !(uri == P_NS
+                            && matches!(local.as_slice(), b"bg" | b"spTree" | b"extLst"))
+                    || depth == 2 && matches!(owner, Some((P_NS, b"hf" | b"clrMap")))
+                    || depth == 2
+                        && owner == Some((P_NS, b"notesStyle"))
+                        && !(uri == A_NS
+                            && (local == b"defPPr"
+                                || matches!(
+                                    local.as_slice(),
+                                    b"lvl1pPr"
+                                        | b"lvl2pPr"
+                                        | b"lvl3pPr"
+                                        | b"lvl4pPr"
+                                        | b"lvl5pPr"
+                                        | b"lvl6pPr"
+                                        | b"lvl7pPr"
+                                        | b"lvl8pPr"
+                                        | b"lvl9pPr"
+                                )))
+                {
+                    return Err(footer_malformed(
+                        part,
+                        "unrepresentable source notes-master owner metadata",
+                    ));
+                }
+                if depth <= 1 {
+                    for attr in start.attributes() {
+                        let attr =
+                            attr.map_err(|error| footer_malformed(part, error.to_string()))?;
+                        let key = attr.key.as_ref();
+                        if key == b"xmlns" || key.starts_with(b"xmlns:") {
+                            continue;
+                        }
+                        let supported = uri == P_NS
+                            && match local.as_slice() {
+                                b"cSld" => key == b"name",
+                                b"hf" => matches!(key, b"hdr" | b"ftr" | b"dt" | b"sldNum"),
+                                b"clrMap" => matches!(
+                                    key,
+                                    b"accent1"
+                                        | b"accent2"
+                                        | b"accent3"
+                                        | b"accent4"
+                                        | b"accent5"
+                                        | b"accent6"
+                                        | b"bg1"
+                                        | b"bg2"
+                                        | b"tx1"
+                                        | b"tx2"
+                                        | b"hlink"
+                                        | b"folHlink"
+                                ),
+                                _ => false,
+                            };
+                        if !supported {
+                            return Err(footer_malformed(
+                                part,
+                                "unrepresentable source notes-master owner attribute",
+                            ));
+                        }
+                    }
+                }
+                if !empty {
+                    roles.push((uri, local));
+                }
+            }
+            XmlEvent::End(_) => {
+                roles.pop();
+            }
+            XmlEvent::Comment(_) | XmlEvent::PI(_) | XmlEvent::CData(_) if roles.len() <= 2 => {
+                return Err(footer_malformed(
+                    part,
+                    "unrepresentable source notes-master owner event metadata",
+                ));
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Prepares local source notes appearance under the destination's one global master.
+fn stage_source_notes_appearance(
+    source: &Presentation,
+    package: &mut OpcPackage,
+    notes_part: &str,
+    destination: &Presentation,
+) -> Result<()> {
+    let presentation_defaults = if let Some(defaults) = &source.presentation.default_text_style {
+        let xml = defaults
+            .to_xml()
+            .map_err(|error| footer_malformed(notes_part, error.to_string()))?;
+        let rewritten = transfer_imported_property_resources(
+            package,
+            &source.presentation_part,
+            notes_part,
+            &xml,
+        )?;
+        Some(
+            CT_TextListStyle::from_xml(&rewritten)
+                .map_err(|error| footer_malformed(notes_part, error.to_string()))?,
+        )
+    } else {
+        None
+    };
+    let note_relationships = package
+        .get_part_rels(notes_part)
+        .cloned()
+        .unwrap_or_default();
+    let masters = note_relationships.get_all_by_type(rel_types::NOTES_MASTER);
+    if masters.len() != 1 || relationship_is_external(masters[0]) {
+        return Err(footer_malformed(
+            notes_part,
+            "source notes require one internal notes-master relationship",
+        ));
+    }
+    let master_relationship = masters[0];
+    let master_part = OpcPackage::resolve_rel_target(notes_part, &master_relationship.target);
+    let master_xml = required_part(package, &master_part)?.to_vec();
+    let destination_master_part = destination
+        .notes_master_part
+        .as_deref()
+        .ok_or_else(|| footer_malformed(notes_part, "destination notes master is absent"))?;
+    admit_source_notes_master_metadata(
+        &master_xml,
+        required_part(&destination.package, destination_master_part)?,
+        &master_part,
+    )?;
+    let master_relationships = package
+        .get_part_rels(&master_part)
+        .cloned()
+        .unwrap_or_default();
+    let ids: HashSet<_> = relationship_ids(&master_xml)
+        .map_err(|error| footer_malformed(&master_part, error.to_string()))?
+        .into_iter()
+        .collect();
+    let mut resources = Vec::new();
+
+    for id in ids {
+        let relationship =
+            master_relationships
+                .get_by_id(&id)
+                .ok_or_else(|| Error::MissingRelationship {
+                    source_part: master_part.clone(),
+                    relationship_id: id.clone(),
+                })?;
+        let mut transferred = relationship.clone();
+        if !relationship_is_external(relationship) {
+            transferred.target = relative_part_target(
+                notes_part,
+                &OpcPackage::resolve_rel_target(&master_part, &relationship.target),
+            );
+        }
+        resources.push(transferred);
+    }
+    let scope = master_relationships.rebind_for_import(resources, &HashMap::new())?;
+    let (relationships, mapping) = note_relationships.merge_for_import(&scope)?;
+    let rewritten = rewrite_exact_rel_ids(&master_xml, &mapping)
+        .map_err(|error| footer_malformed(&master_part, error.to_string()))?;
+    let mut master = CT_NotesMaster::from_xml(&rewritten)
+        .map_err(|error| footer_malformed(&master_part, error.to_string()))?;
+    let mut note = CT_NotesSlide::from_xml(required_part(package, notes_part)?)
+        .map_err(|error| footer_malformed(notes_part, error.to_string()))?;
+    let source_flags = master.header_footer.as_ref();
+    let destination_flags = destination
+        .notes_master
+        .as_ref()
+        .and_then(|master| master.header_footer.as_ref());
+    for enabled in [
+        CT_HeaderFooter::header_enabled,
+        CT_HeaderFooter::footer_enabled,
+        CT_HeaderFooter::date_time_enabled,
+        CT_HeaderFooter::slide_number_enabled,
+    ] {
+        if source_flags.is_none_or(enabled) != destination_flags.is_none_or(enabled) {
+            return Err(footer_malformed(
+                notes_part,
+                "unrepresentable source notes header/footer authority under destination global master",
+            ));
+        }
+    }
+    if note.common_slide_data.name.is_none() {
+        note.common_slide_data.name = master.common_slide_data.name.clone();
+    }
+    let theme_relationships = master_relationships.get_all_by_type(rel_types::THEME);
+    if theme_relationships.len() != 1 || relationship_is_external(theme_relationships[0]) {
+        return Err(footer_malformed(
+            &master_part,
+            "source notes master must own one internal theme",
+        ));
+    }
+    let theme_part = OpcPackage::resolve_rel_target(&master_part, &theme_relationships[0].target);
+    let original_theme = required_part(package, &theme_part)?.to_vec();
+    package.set_part_rels(notes_part, relationships);
+    let theme_xml =
+        transfer_imported_property_resources(package, &theme_part, notes_part, &original_theme)?;
+    let theme = CT_OfficeStyleSheet::from_xml(&theme_xml)
+        .map_err(|error| footer_malformed(&theme_part, error.to_string()))?;
+    let defaults = match (&master.notes_style, &presentation_defaults) {
+        (Some(local), Some(inherited)) => Some(
+            local
+                .with_inherited_defaults(inherited)
+                .map_err(|error| footer_malformed(notes_part, error.to_string()))?,
+        ),
+        (Some(local), None) => Some(local.clone()),
+        (None, Some(inherited)) => Some(inherited.clone()),
+        (None, None) => None,
+    };
+    if let Some(defaults) = &defaults {
+        materialize_imported_notes_text(
+            &mut master.common_slide_data.shape_tree.children,
+            defaults,
+            notes_part,
+        )?;
+        materialize_imported_notes_text(
+            &mut note.common_slide_data.shape_tree.children,
+            defaults,
+            notes_part,
+        )?;
+    }
+    materialize_source_notes_styles(
+        &mut master.common_slide_data.shape_tree.children,
+        &theme_xml,
+        &theme,
+        notes_part,
+    )?;
+    materialize_source_notes_styles(
+        &mut note.common_slide_data.shape_tree.children,
+        &theme_xml,
+        &theme,
+        notes_part,
+    )?;
+    note.common_slide_data
+        .shape_tree
+        .materialize_notes_master_surface(&master.common_slide_data.shape_tree)
+        .map_err(|error| footer_malformed(notes_part, error.to_string()))?;
+    if note.common_slide_data.background.is_none() {
+        note.common_slide_data.background = master.common_slide_data.background.clone();
+    }
+    if let Some(background) = note.common_slide_data.background.as_mut() {
+        if let rpptx_oxml::slide_parts::BackgroundRendering::Reference { index, color } =
+            background.rendering().clone()
+        {
+            let fill = if index == 0 {
+                Fill::from_xml(b"<a:noFill/>")
+                    .map_err(|error| footer_malformed(notes_part, error.to_string()))?
+            } else {
+                let (list, index) = if index >= 1000 {
+                    ("bgFillStyleLst", index - 1000)
+                } else {
+                    ("fillStyleLst", index)
+                };
+                source_notes_matrix_property(&theme_xml, list, index, color.as_ref(), notes_part)?
+                    .fill
+                    .ok_or_else(|| {
+                        footer_malformed(
+                            notes_part,
+                            "source background style has no representable fill",
+                        )
+                    })?
+            };
+            background
+                .replace_fill(fill)
+                .map_err(|error| footer_malformed(notes_part, error.to_string()))?;
+        }
+    } else {
+        note.common_slide_data.background = Some(
+            rpptx_oxml::slide_parts::CT_Background::from_fill(
+                Fill::from_xml(b"<a:noFill/>")
+                    .map_err(|error| footer_malformed(notes_part, error.to_string()))?,
+            )
+            .map_err(|error| footer_malformed(notes_part, error.to_string()))?,
+        );
+    }
+    note.set_show_master_shapes(Some(false));
+    let xml = note
+        .to_xml()
+        .map_err(|error| footer_malformed(notes_part, error.to_string()))?;
+    let color_map = match note
+        .color_map_override
+        .as_ref()
+        .map(|override_map| &override_map.kind)
+    {
+        Some(ColorMapOverrideKind::Override(map)) => map,
+        _ => &master.color_map,
+    };
+    let destination_master = destination
+        .notes_master_part
+        .as_deref()
+        .ok_or_else(|| footer_malformed(notes_part, "destination notes master is absent"))?;
+    let destination_theme_part =
+        related_internal_part(&destination.package, destination_master, rel_types::THEME)?
+            .ok_or_else(|| {
+                footer_malformed(destination_master, "destination notes theme is absent")
+            })?;
+    let destination_theme = CT_OfficeStyleSheet::from_xml(required_part(
+        &destination.package,
+        &destination_theme_part,
+    )?)
+    .map_err(|error| footer_malformed(&destination_theme_part, error.to_string()))?;
+    let xml = freeze_source_notes_theme(&xml, &theme, &destination_theme, color_map, notes_part)?;
+    CT_NotesSlide::from_xml(&xml)
+        .map_err(|error| footer_malformed(notes_part, error.to_string()))?;
+    package.set_part(notes_part, xml);
+    Ok(())
+}
+
+// Reads one actual selected source format-scheme property in its physical scope.
+fn source_notes_matrix_property(
+    theme_xml: &[u8],
+    list: &str,
+    index: u32,
+    reference: Option<&ColorChoice>,
+    part: &str,
+) -> Result<oxml_drawing::shape_props::CT_ShapeProperties> {
+    let mut reader = quick_xml::Reader::from_reader(theme_xml);
+    let mut scopes = vec![Vec::<(String, String)>::new()];
+    let mut roles = Vec::<String>::new();
+    let mut selected = 0u32;
+    loop {
+        match reader
+            .read_event()
+            .map_err(|error| footer_malformed(part, error.to_string()))?
+        {
+            event @ (XmlEvent::Start(_) | XmlEvent::Empty(_)) => {
+                let empty = matches!(&event, XmlEvent::Empty(_));
+                let start = match &event {
+                    XmlEvent::Start(start) | XmlEvent::Empty(start) => start,
+                    _ => unreachable!(),
+                };
+                let mut scope = scopes.last().unwrap().clone();
+                for attribute in start.attributes() {
+                    let attribute =
+                        attribute.map_err(|error| footer_malformed(part, error.to_string()))?;
+                    let key = attribute.key.as_ref();
+                    let prefix = if key == b"xmlns" {
+                        Some("")
+                    } else {
+                        key.strip_prefix(b"xmlns:")
+                            .map(std::str::from_utf8)
+                            .transpose()
+                            .map_err(|error| footer_malformed(part, error.to_string()))?
+                    };
+                    if let Some(prefix) = prefix {
+                        let value = attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+                            .map_err(|error| footer_malformed(part, error.to_string()))?
+                            .into_owned();
+                        if let Some((_, old)) = scope.iter_mut().find(|(key, _)| key == prefix) {
+                            *old = value;
+                        } else {
+                            scope.push((prefix.to_owned(), value));
+                        }
+                    }
+                }
+                let name = start.name();
+                let name = std::str::from_utf8(name.as_ref())
+                    .map_err(|error| footer_malformed(part, error.to_string()))?;
+                let (prefix, local) = name.split_once(':').unwrap_or(("", name));
+                let owned = scope.iter().any(|(key, uri)| key == prefix && uri == A_NS);
+                if owned && roles == ["theme", "themeElements", "fmtScheme", list] {
+                    selected += 1;
+                    if selected == index {
+                        let raw = if empty {
+                            oxml_core::raw_xml::capture_empty_element(start)
+                        } else {
+                            oxml_core::raw_xml::capture_element(&mut reader, start)
+                        }
+                        .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        let raw = close_import_table_style(&raw, &scope)
+                            .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        let children = if list == "effectStyleLst" {
+                            let mut elements = quick_xml::Reader::from_reader(raw.as_slice());
+                            let first = elements
+                                .read_event()
+                                .map_err(|error| footer_malformed(part, error.to_string()))?;
+                            let root = match first {
+                                XmlEvent::Start(root) => root,
+                                XmlEvent::Empty(_) => {
+                                    return Err(footer_malformed(
+                                        part,
+                                        "source effect style is empty",
+                                    ));
+                                }
+                                _ => unreachable!(),
+                            };
+                            for attr in root.attributes() {
+                                let attr = attr
+                                    .map_err(|error| footer_malformed(part, error.to_string()))?;
+                                if attr.key.as_ref() != b"xmlns"
+                                    && !attr.key.as_ref().starts_with(b"xmlns:")
+                                {
+                                    return Err(footer_malformed(
+                                        part,
+                                        "unrepresentable source effect-style owner attribute",
+                                    ));
+                                }
+                            }
+                            let mut children = Vec::new();
+                            loop {
+                                match elements
+                                    .read_event()
+                                    .map_err(|error| footer_malformed(part, error.to_string()))?
+                                {
+                                    XmlEvent::Start(child) => children.extend_from_slice(
+                                        &oxml_core::raw_xml::capture_element(&mut elements, &child)
+                                            .map_err(|error| {
+                                                footer_malformed(part, error.to_string())
+                                            })?,
+                                    ),
+                                    XmlEvent::Empty(child) => children.extend_from_slice(
+                                        &oxml_core::raw_xml::capture_empty_element(&child)
+                                            .map_err(|error| {
+                                                footer_malformed(part, error.to_string())
+                                            })?,
+                                    ),
+                                    XmlEvent::End(_) | XmlEvent::Eof => break,
+                                    XmlEvent::Text(text)
+                                        if text.iter().all(u8::is_ascii_whitespace) => {}
+                                    _ => {
+                                        return Err(footer_malformed(
+                                            part,
+                                            "unrepresentable source effect-style owner payload",
+                                        ));
+                                    }
+                                }
+                            }
+                            children
+                        } else {
+                            raw
+                        };
+                        let wrapper = [b"<spPr>".as_slice(), &children, b"</spPr>"].concat();
+                        let defaults = oxml_drawing::shape_props::CT_ShapeProperties::from_xml_with_inherited_namespaces(&wrapper, &scope)
+                            .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        let closed = oxml_drawing::shape_props::CT_ShapeProperties::default()
+                            .with_inherited_defaults(&defaults)
+                            .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        let projected = closed
+                            .to_xml()
+                            .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        let projected =
+                            close_import_table_style(&projected, &[("a".into(), A_NS.into())])
+                                .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        let xml = substitute_notes_placeholder_color(&projected, reference, part)?;
+                        return oxml_drawing::shape_props::CT_ShapeProperties::from_xml(&xml)
+                            .map_err(|error| footer_malformed(part, error.to_string()));
+                    }
+                }
+                if !empty {
+                    scopes.push(scope);
+                    roles.push(if owned {
+                        local.to_owned()
+                    } else {
+                        String::new()
+                    });
+                }
+            }
+            XmlEvent::End(_) => {
+                scopes.pop();
+                roles.pop();
+            }
+            XmlEvent::Eof => {
+                return Err(footer_malformed(
+                    part,
+                    format!("source {list} style index {index} is out of range"),
+                ));
+            }
+            _ => {}
+        }
+    }
+}
+
+fn substitute_notes_placeholder_color(
+    xml: &[u8],
+    reference: Option<&ColorChoice>,
+    part: &str,
+) -> Result<Vec<u8>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut edits = Vec::new();
+    let mut scopes = Vec::<bool>::new();
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let decoder = reader.decoder();
+        let (namespace, event) = reader
+            .read_resolved_event()
+            .map_err(|error| footer_malformed(part, error.to_string()))?;
+        let uri = import_namespace_uri(namespace, decoder)
+            .map_err(|error| footer_malformed(part, error.to_string()))?;
+        match event {
+            XmlEvent::Start(start) | XmlEvent::Empty(start) => {
+                let empty = xml[begin..reader.buffer_position() as usize].ends_with(b"/>");
+                let modeled = scopes.last().copied().unwrap_or(true)
+                    && notes_theme_modeled_element(&uri, start.local_name().as_ref());
+                if !empty {
+                    scopes.push(modeled);
+                }
+                if !modeled || uri != A_NS || start.local_name().as_ref() != b"schemeClr" {
+                    continue;
+                }
+                let attributes = start
+                    .attributes()
+                    .map(|attribute| attribute.map_err(OxmlError::from))
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(|error| footer_malformed(part, error.to_string()))?;
+                let placeholder = attributes.iter().any(|attribute| {
+                    attribute.key.as_ref() == b"val" && attribute.value.as_ref() == b"phClr"
+                });
+                if !placeholder {
+                    continue;
+                }
+                let empty = xml[begin..reader.buffer_position() as usize].ends_with(b"/>");
+                let mut reference = reference.cloned().ok_or_else(|| {
+                    footer_malformed(
+                        part,
+                        "source style placeholder color has no actual reference",
+                    )
+                })?;
+                if matches!(&reference, ColorChoice::Scheme { value, .. } if value == "phClr") {
+                    return Err(footer_malformed(
+                        part,
+                        "source style reference has unresolved placeholder color",
+                    ));
+                }
+                for attribute in attributes {
+                    let key = attribute.key.as_ref();
+                    if key != b"val" && key != b"xmlns" && !key.starts_with(b"xmlns:") {
+                        return Err(footer_malformed(
+                            part,
+                            "unrepresentable source placeholder-color attribute",
+                        ));
+                    }
+                }
+                let raw = if empty {
+                    oxml_core::raw_xml::capture_empty_element(&start)
+                } else {
+                    // NsReader exposes the same slice reader to the owning colour parser.
+                    let rest = &xml[begin..];
+                    let mut raw_reader = quick_xml::Reader::from_reader(rest);
+                    let XmlEvent::Start(root) = raw_reader
+                        .read_event()
+                        .map_err(|error| footer_malformed(part, error.to_string()))?
+                    else {
+                        unreachable!()
+                    };
+                    oxml_core::raw_xml::capture_element(&mut raw_reader, &root)
+                }
+                .map_err(|error| footer_malformed(part, error.to_string()))?;
+                let mut color_reader = quick_xml::Reader::from_reader(raw.as_slice());
+                let source = match color_reader
+                    .read_event()
+                    .map_err(|error| footer_malformed(part, error.to_string()))?
+                {
+                    XmlEvent::Start(start) => ColorChoice::from_xml(&mut color_reader, &start),
+                    XmlEvent::Empty(start) => ColorChoice::from_empty_xml(&start),
+                    _ => unreachable!(),
+                }
+                .map_err(|error| footer_malformed(part, error.to_string()))?;
+                if (0..=source.transforms().len())
+                    .any(|slot| source.raw_children().at(slot).next().is_some())
+                {
+                    return Err(footer_malformed(
+                        part,
+                        "unrepresentable opaque source placeholder-color payload",
+                    ));
+                }
+                let transforms = match &mut reference {
+                    ColorChoice::Srgb { transforms, .. }
+                    | ColorChoice::Scheme { transforms, .. }
+                    | ColorChoice::System { transforms, .. }
+                    | ColorChoice::Preset { transforms, .. } => transforms,
+                };
+                transforms.extend_from_slice(source.transforms());
+                let mut writer = XmlWriter::new(Vec::new());
+                reference
+                    .to_xml(&mut writer)
+                    .map_err(|error| footer_malformed(part, error.to_string()))?;
+                edits.push((begin..begin + raw.len(), writer.into_inner()));
+            }
+            XmlEvent::End(_) => {
+                scopes.pop();
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+    }
+    let mut result = xml.to_vec();
+    let mut limit = xml.len();
+    for (range, replacement) in edits.into_iter().rev() {
+        if range.end > limit {
+            return Err(footer_malformed(
+                part,
+                "overlapping source placeholder-color surface",
+            ));
+        }
+        limit = range.start;
+        result.splice(range, replacement);
+    }
+    Ok(result)
+}
+
+fn materialize_source_notes_styles(
+    children: &mut [ShapeTreeChild],
+    theme_xml: &[u8],
+    theme: &CT_OfficeStyleSheet,
+    part: &str,
+) -> Result<()> {
+    for child in children {
+        match child {
+            ShapeTreeChild::Shape(shape) => {
+                *shape.shape_properties = shape
+                    .shape_properties
+                    .with_inherited_defaults(
+                        &oxml_drawing::shape_props::CT_ShapeProperties::default(),
+                    )
+                    .map_err(|error| footer_malformed(part, error.to_string()))?;
+                let Some(style) = shape
+                    .style_for_materialization()
+                    .map_err(|error| footer_malformed(part, error.to_string()))?
+                else {
+                    continue;
+                };
+                for (list, index, color) in [
+                    (
+                        "fillStyleLst",
+                        style.fill_reference.index,
+                        style.fill_reference.color.as_ref(),
+                    ),
+                    (
+                        "lnStyleLst",
+                        style.line_reference.index,
+                        style.line_reference.color.as_ref(),
+                    ),
+                    (
+                        "effectStyleLst",
+                        style.effect_reference.index,
+                        style.effect_reference.color.as_ref(),
+                    ),
+                ] {
+                    if index == 0 {
+                        continue;
+                    }
+                    let (list, index) = if list == "fillStyleLst" && index >= 1000 {
+                        ("bgFillStyleLst", index - 1000)
+                    } else {
+                        (list, index)
+                    };
+                    let defaults =
+                        source_notes_matrix_property(theme_xml, list, index, color, part)?;
+                    if list == "lnStyleLst"
+                        && let (Some(local), Some(parent)) =
+                            (shape.shape_properties.line.as_mut(), defaults.line.as_ref())
+                    {
+                        if (0..=8).any(|slot| parent.raw_children().at(slot).next().is_some()) {
+                            return Err(footer_malformed(
+                                part,
+                                "unrepresentable opaque source line-style overlay",
+                            ));
+                        }
+                        let raw = parent
+                            .to_xml()
+                            .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        let mut owned = quick_xml::Reader::from_reader(raw.as_slice());
+                        let root = match owned
+                            .read_event()
+                            .map_err(|error| footer_malformed(part, error.to_string()))?
+                        {
+                            XmlEvent::Start(root) | XmlEvent::Empty(root) => root,
+                            _ => unreachable!(),
+                        };
+                        for attr in root.attributes() {
+                            let attr =
+                                attr.map_err(|error| footer_malformed(part, error.to_string()))?;
+                            let key = attr.key.as_ref();
+                            if !matches!(key, b"w" | b"cap" | b"cmpd" | b"algn" | b"xmlns")
+                                && !key.starts_with(b"xmlns:")
+                            {
+                                return Err(footer_malformed(
+                                    part,
+                                    "unrepresentable opaque source line-style owner attribute",
+                                ));
+                            }
+                        }
+                        if local.width.is_none() {
+                            local.width = parent.width;
+                        }
+                        if local.cap.is_none() {
+                            local.cap = parent.cap;
+                        }
+                        if local.fill.is_none() {
+                            local.fill = parent.fill.clone();
+                        }
+                        if local.dash.is_none() {
+                            local.dash = parent.dash.clone();
+                        }
+                        if local.join.is_none() {
+                            local.join = parent.join.clone();
+                        }
+                        if local.head_end.is_none() {
+                            local.head_end = parent.head_end.clone();
+                        }
+                        if local.tail_end.is_none() {
+                            local.tail_end = parent.tail_end.clone();
+                        }
+                        let local_xml = local
+                            .to_xml()
+                            .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        let mut local_reader = quick_xml::Reader::from_reader(local_xml.as_slice());
+                        let (mut local_start, empty) = match local_reader
+                            .read_event()
+                            .map_err(|error| footer_malformed(part, error.to_string()))?
+                        {
+                            XmlEvent::Start(start) => (start.into_owned(), false),
+                            XmlEvent::Empty(start) => (start.into_owned(), true),
+                            _ => unreachable!(),
+                        };
+                        let own = local_start
+                            .attributes()
+                            .map(|attr| attr.map(|attr| attr.key.as_ref().to_vec()))
+                            .collect::<std::result::Result<HashSet<_>, _>>()
+                            .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        for attr in root.attributes() {
+                            let attr =
+                                attr.map_err(|error| footer_malformed(part, error.to_string()))?;
+                            let key = attr.key.as_ref();
+                            if matches!(key, b"cmpd" | b"algn") && !own.contains(key) {
+                                let value = attr
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        root.decoder(),
+                                    )
+                                    .map_err(|error| footer_malformed(part, error.to_string()))?;
+                                let value = quick_xml::escape::escape(value.as_ref());
+                                local_start.push_attribute((key, value.as_bytes()));
+                            }
+                        }
+                        let mut writer = XmlWriter::new(Vec::new());
+                        writer
+                            .write_event(if empty {
+                                XmlEvent::Empty(local_start)
+                            } else {
+                                XmlEvent::Start(local_start)
+                            })
+                            .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        writer.get_mut().extend_from_slice(
+                            &local_xml[local_reader.buffer_position() as usize..],
+                        );
+                        *local =
+                            oxml_drawing::line::CT_LineProperties::from_xml(&writer.into_inner())
+                                .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        // Both admitted line scopes are now physically closed in
+                        // the staged local owner. Capture that completed edit,
+                        // rather than comparing it against the earlier snapshot.
+                        *shape.shape_properties =
+                            oxml_drawing::shape_props::CT_ShapeProperties::from_xml(
+                                &shape
+                                    .shape_properties
+                                    .to_xml()
+                                    .map_err(|error| footer_malformed(part, error.to_string()))?,
+                            )
+                            .map_err(|error| footer_malformed(part, error.to_string()))?;
+                    }
+                    *shape.shape_properties = shape
+                        .shape_properties
+                        .with_inherited_defaults(&defaults)
+                        .map_err(|error| footer_malformed(part, error.to_string()))?;
+                }
+                if let Some(body) = shape.text_body.as_mut() {
+                    let own_list = body.list_style().cloned().unwrap_or_default();
+                    let collection = match style.font_reference.index {
+                        oxml_drawing::style_ref::FontCollectionIndex::Major => {
+                            Some(&theme.theme_elements.font_scheme.major_font)
+                        }
+                        oxml_drawing::style_ref::FontCollectionIndex::Minor => {
+                            Some(&theme.theme_elements.font_scheme.minor_font)
+                        }
+                        oxml_drawing::style_ref::FontCollectionIndex::None => None,
+                    };
+                    let mut inherited = CT_TextCharacterProperties::default();
+                    if let Some(collection) = collection {
+                        inherited.latin = Some(
+                            TextFont::new(collection.latin.typeface.clone())
+                                .map_err(|error| footer_malformed(part, error.to_string()))?,
+                        );
+                        if !collection.east_asian.typeface.is_empty() {
+                            inherited.east_asian = Some(
+                                TextFont::new(collection.east_asian.typeface.clone())
+                                    .map_err(|error| footer_malformed(part, error.to_string()))?,
+                            );
+                        }
+                        if !collection.complex_script.typeface.is_empty() {
+                            inherited.complex_script = Some(
+                                TextFont::new(collection.complex_script.typeface.clone())
+                                    .map_err(|error| footer_malformed(part, error.to_string()))?,
+                            );
+                        }
+                    }
+                    if let Some(color) = style.font_reference.color.clone() {
+                        let mut writer = XmlWriter::new(Vec::new());
+                        color
+                            .to_xml(&mut writer)
+                            .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        let raw = [
+                            b"<a:solidFill>".as_slice(),
+                            writer.get_ref(),
+                            b"</a:solidFill>",
+                        ]
+                        .concat();
+                        inherited.fill = Some(
+                            Fill::from_xml(&raw)
+                                .map_err(|error| footer_malformed(part, error.to_string()))?,
+                        );
+                    }
+                    for index in 0..body.paragraph_count() {
+                        let paragraph = body.paragraph_mut(index).unwrap();
+                        let mut inherited = inherited.clone();
+                        if let Some(local) = own_list
+                            .default_paragraph_properties
+                            .as_ref()
+                            .and_then(|properties| properties.default_run_properties.as_ref())
+                        {
+                            inherited = local
+                                .with_inherited_defaults(&inherited)
+                                .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        }
+                        let level = paragraph
+                            .properties
+                            .as_ref()
+                            .and_then(|properties| properties.level)
+                            .unwrap_or(0)
+                            + 1;
+                        if let Some(local) = own_list
+                            .level(usize::from(level))
+                            .and_then(|properties| properties.default_run_properties.as_ref())
+                        {
+                            inherited = local
+                                .with_inherited_defaults(&inherited)
+                                .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        }
+                        let properties = paragraph.properties.get_or_insert_with(Default::default);
+                        let local = properties
+                            .default_run_properties
+                            .clone()
+                            .unwrap_or_default();
+                        properties.default_run_properties = Some(
+                            local
+                                .with_inherited_defaults(&inherited)
+                                .map_err(|error| footer_malformed(part, error.to_string()))?,
+                        );
+                        for run in &mut paragraph.runs {
+                            let properties = match run {
+                                TextRun::Run(run) => &mut run.properties,
+                                TextRun::Break(line_break) => &mut line_break.properties,
+                                TextRun::Field(field) => &mut field.run_properties,
+                            };
+                            *properties = Some(
+                                properties
+                                    .clone()
+                                    .unwrap_or_default()
+                                    .with_inherited_defaults(&inherited)
+                                    .map_err(|error| footer_malformed(part, error.to_string()))?,
+                            );
+                        }
+                        paragraph.end_properties = Some(
+                            paragraph
+                                .end_properties
+                                .clone()
+                                .unwrap_or_default()
+                                .with_inherited_defaults(&inherited)
+                                .map_err(|error| footer_malformed(part, error.to_string()))?,
+                        );
+                    }
+                }
+                shape
+                    .materialize_style_references()
+                    .map_err(|error| footer_malformed(part, error.to_string()))?;
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                materialize_source_notes_styles(&mut group.children, theme_xml, theme, part)?
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn notes_theme_modeled_element(uri: &str, local: &[u8]) -> bool {
+    match uri {
+        P_NS => matches!(
+            local,
+            b"notes"
+                | b"cSld"
+                | b"spTree"
+                | b"nvGrpSpPr"
+                | b"cNvPr"
+                | b"cNvGrpSpPr"
+                | b"nvPr"
+                | b"ph"
+                | b"grpSpPr"
+                | b"sp"
+                | b"nvSpPr"
+                | b"cNvSpPr"
+                | b"spPr"
+                | b"txBody"
+                | b"style"
+                | b"pic"
+                | b"nvPicPr"
+                | b"cNvPicPr"
+                | b"blipFill"
+                | b"grpSp"
+                | b"cxnSp"
+                | b"nvCxnSpPr"
+                | b"cNvCxnSpPr"
+                | b"graphicFrame"
+                | b"nvGraphicFramePr"
+                | b"cNvGraphicFramePr"
+                | b"xfrm"
+                | b"bg"
+                | b"bgPr"
+                | b"bgRef"
+                | b"clrMapOvr"
+                | b"masterClrMapping"
+                | b"overrideClrMapping"
+        ),
+        A_NS => matches!(
+            local,
+            b"spPr"
+                | b"xfrm"
+                | b"off"
+                | b"ext"
+                | b"chOff"
+                | b"chExt"
+                | b"prstGeom"
+                | b"custGeom"
+                | b"avLst"
+                | b"gdLst"
+                | b"gd"
+                | b"ahLst"
+                | b"cxnLst"
+                | b"rect"
+                | b"pathLst"
+                | b"path"
+                | b"moveTo"
+                | b"lnTo"
+                | b"pt"
+                | b"arcTo"
+                | b"quadBezTo"
+                | b"cubicBezTo"
+                | b"close"
+                | b"noFill"
+                | b"solidFill"
+                | b"gradFill"
+                | b"pattFill"
+                | b"blipFill"
+                | b"blip"
+                | b"srcRect"
+                | b"stretch"
+                | b"tile"
+                | b"fillRect"
+                | b"gsLst"
+                | b"gs"
+                | b"lin"
+                | b"fillToRect"
+                | b"tileRect"
+                | b"fgClr"
+                | b"bgClr"
+                | b"ln"
+                | b"prstDash"
+                | b"custDash"
+                | b"ds"
+                | b"round"
+                | b"bevel"
+                | b"miter"
+                | b"headEnd"
+                | b"tailEnd"
+                | b"effectLst"
+                | b"blur"
+                | b"glow"
+                | b"innerShdw"
+                | b"outerShdw"
+                | b"prstShdw"
+                | b"reflection"
+                | b"softEdge"
+                | b"fillOverlay"
+                | b"lnRef"
+                | b"fillRef"
+                | b"effectRef"
+                | b"fontRef"
+                | b"srgbClr"
+                | b"schemeClr"
+                | b"sysClr"
+                | b"prstClr"
+                | b"tint"
+                | b"shade"
+                | b"comp"
+                | b"inv"
+                | b"gray"
+                | b"alpha"
+                | b"alphaOff"
+                | b"alphaMod"
+                | b"hue"
+                | b"hueOff"
+                | b"hueMod"
+                | b"sat"
+                | b"satOff"
+                | b"satMod"
+                | b"lum"
+                | b"lumOff"
+                | b"lumMod"
+                | b"red"
+                | b"redOff"
+                | b"redMod"
+                | b"green"
+                | b"greenOff"
+                | b"greenMod"
+                | b"blue"
+                | b"blueOff"
+                | b"blueMod"
+                | b"gamma"
+                | b"invGamma"
+                | b"bodyPr"
+                | b"lstStyle"
+                | b"defPPr"
+                | b"lvl1pPr"
+                | b"lvl2pPr"
+                | b"lvl3pPr"
+                | b"lvl4pPr"
+                | b"lvl5pPr"
+                | b"lvl6pPr"
+                | b"lvl7pPr"
+                | b"lvl8pPr"
+                | b"lvl9pPr"
+                | b"p"
+                | b"pPr"
+                | b"defRPr"
+                | b"r"
+                | b"rPr"
+                | b"br"
+                | b"fld"
+                | b"t"
+                | b"endParaRPr"
+                | b"latin"
+                | b"ea"
+                | b"cs"
+                | b"sym"
+                | b"buFont"
+                | b"buClr"
+                | b"buSzPct"
+                | b"buSzPts"
+                | b"buChar"
+                | b"buBlip"
+                | b"buAutoNum"
+                | b"buNone"
+                | b"highlight"
+                | b"tabLst"
+                | b"tab"
+                | b"graphic"
+                | b"graphicData"
+                | b"tbl"
+                | b"tblPr"
+                | b"tblGrid"
+                | b"gridCol"
+                | b"tr"
+                | b"tc"
+                | b"tcPr"
+                | b"txBody"
+                | b"lnL"
+                | b"lnR"
+                | b"lnT"
+                | b"lnB"
+                | b"lnTlToBr"
+                | b"lnBlToTr"
+        ),
+        _ => false,
+    }
+}
+
+/// Freezes only modeled notes colour and typeface references, retaining all other bytes.
+fn freeze_source_notes_theme(
+    xml: &[u8],
+    theme: &CT_OfficeStyleSheet,
+    destination_theme: &CT_OfficeStyleSheet,
+    color_map: &ColorMap,
+    part: &str,
+) -> Result<Vec<u8>> {
+    let scheme = &theme.theme_elements.color_scheme;
+    let mut colors = Vec::new();
+    for (slot, color) in scheme.iter() {
+        let value = oxml_drawing::color::resolve_color(color, &ColorMap::default(), &[])
+            .map_err(|error| footer_malformed(part, error.to_string()))?;
+        if value.alpha != 255 {
+            return Err(footer_malformed(
+                part,
+                "source notes theme has a non-opaque scheme base",
+            ));
+        }
+        colors.push((
+            slot.as_str(),
+            oxml_drawing::color::RgbColor::new(value.red, value.green, value.blue),
+        ));
+    }
+    let mut reader = NsReader::from_reader(xml);
+    let mut stack: Vec<(bool, Option<Vec<u8>>)> = Vec::new();
+    let mut edits = Vec::new();
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let decoder = reader.decoder();
+        let (namespace, event) = reader
+            .read_resolved_event()
+            .map_err(|error| footer_malformed(part, error.to_string()))?;
+        let uri = import_namespace_uri(namespace, decoder)
+            .map_err(|error| footer_malformed(part, error.to_string()))?;
+        let end = reader.buffer_position() as usize;
+        match event {
+            XmlEvent::Start(element) | XmlEvent::Empty(element) => {
+                let empty = xml[begin..end].ends_with(b"/>");
+                let modeled = stack.last().is_none_or(|(modeled, _)| *modeled)
+                    && notes_theme_modeled_element(&uri, element.local_name().as_ref());
+                let local = element.local_name();
+                let mut replacement_name = None;
+                if modeled
+                    && uri == A_NS
+                    && (local.as_ref() == b"schemeClr"
+                        || matches!(local.as_ref(), b"latin" | b"ea" | b"cs" | b"buFont"))
+                {
+                    for attribute in element.attributes() {
+                        let attribute =
+                            attribute.map_err(|error| footer_malformed(part, error.to_string()))?;
+                        let key = attribute.key.as_ref();
+                        let value = attribute
+                            .decoded_and_normalized_value(
+                                XmlVersion::Implicit1_0,
+                                element.decoder(),
+                            )
+                            .map_err(|error| footer_malformed(part, error.to_string()))?;
+                        let replacement = if key == b"val" && local.as_ref() == b"schemeClr" {
+                            let choice = ColorChoice::Scheme {
+                                value: value.into_owned(),
+                                transforms: Vec::new(),
+                                raw_children: Default::default(),
+                            };
+                            let color =
+                                oxml_drawing::color::resolve_color(&choice, color_map, &colors)
+                                    .map_err(|error| footer_malformed(part, error.to_string()))?;
+                            let (red, green, blue) = (color.red, color.green, color.blue);
+                            let name = element.name().as_ref().to_vec();
+                            let prefix = name
+                                .iter()
+                                .rposition(|byte| *byte == b':')
+                                .map_or(&b""[..], |offset| &name[..=offset]);
+                            let mut renamed = prefix.to_vec();
+                            renamed.extend_from_slice(b"srgbClr");
+                            edits.push((begin + 1..begin + 1 + name.len(), renamed.clone()));
+                            replacement_name = Some(renamed);
+                            Some(format!("{red:02X}{green:02X}{blue:02X}"))
+                        } else if key == b"typeface" {
+                            let fonts = &theme.theme_elements.font_scheme;
+                            let face = match value.as_ref() {
+                                "+mj-lt" => Some(&fonts.major_font.latin.typeface),
+                                "+mn-lt" => Some(&fonts.minor_font.latin.typeface),
+                                "+mj-ea" => Some(&fonts.major_font.east_asian.typeface),
+                                "+mn-ea" => Some(&fonts.minor_font.east_asian.typeface),
+                                "+mj-cs" => Some(&fonts.major_font.complex_script.typeface),
+                                "+mn-cs" => Some(&fonts.minor_font.complex_script.typeface),
+                                _ => None,
+                            };
+                            if face.is_some_and(|face| face.is_empty()) {
+                                let destination_fonts =
+                                    &destination_theme.theme_elements.font_scheme;
+                                let (source, destination) = if value.starts_with("+mj-") {
+                                    (&fonts.major_font, &destination_fonts.major_font)
+                                } else {
+                                    (&fonts.minor_font, &destination_fonts.minor_font)
+                                };
+                                if source != destination {
+                                    return Err(footer_malformed(
+                                        part,
+                                        "unrepresentable automatic source notes script-font inheritance",
+                                    ));
+                                }
+                                // An empty theme face denotes automatic script selection.
+                                // Keep its valid token only when the complete collection,
+                                // including supplemental script faces, has identical authority.
+                                None
+                            } else {
+                                face.cloned()
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(replacement) = replacement {
+                            let raw_start: &[u8] = element.as_ref();
+                            let offset = attribute.value.as_ref().as_ptr() as usize
+                                - raw_start.as_ptr() as usize
+                                + begin
+                                + 1;
+                            edits.push((
+                                offset..offset + attribute.value.len(),
+                                quick_xml::escape::escape(&replacement).as_bytes().to_vec(),
+                            ));
+                        }
+                    }
+                }
+                if !empty {
+                    stack.push((modeled, replacement_name));
+                }
+            }
+            XmlEvent::End(end_element) => {
+                if let Some((_, Some(name))) = stack.pop() {
+                    edits.push((
+                        begin + 2..begin + 2 + end_element.name().as_ref().len(),
+                        name,
+                    ));
+                }
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+    }
+    edits.sort_by_key(|(range, _)| range.start);
+    let mut result = xml.to_vec();
+    let mut next = xml.len();
+    for (range, replacement) in edits.into_iter().rev() {
+        if range.end > next {
+            return Err(footer_malformed(
+                part,
+                "overlapping source notes theme edits",
+            ));
+        }
+        next = range.start;
+        result.splice(range, replacement);
+    }
+    Ok(result)
+}
+
+fn materialize_imported_notes_text(
+    children: &mut [ShapeTreeChild],
+    defaults: &CT_TextListStyle,
+    part: &str,
+) -> Result<()> {
+    for child in children {
+        match child {
+            ShapeTreeChild::Shape(shape) => {
+                let Some(body) = &mut shape.text_body else {
+                    continue;
+                };
+                let local = body.list_style().cloned().unwrap_or_default();
+                let effective = local
+                    .with_inherited_defaults(defaults)
+                    .map_err(|error| footer_malformed(part, error.to_string()))?;
+                for index in 0..body.paragraphs().len() {
+                    let paragraph = body.paragraph_mut(index).expect("existing notes paragraph");
+                    let level = usize::from(
+                        paragraph
+                            .properties
+                            .as_ref()
+                            .and_then(|properties| properties.level)
+                            .unwrap_or(0),
+                    ) + 1;
+                    if let Some(inherited) = effective
+                        .level(level)
+                        .or(effective.default_paragraph_properties.as_ref())
+                    {
+                        let local = paragraph.properties.clone().unwrap_or_default();
+                        paragraph.properties = Some(
+                            local
+                                .with_inherited_defaults(inherited)
+                                .map_err(|error| footer_malformed(part, error.to_string()))?,
+                        );
+                    }
+                    if let Some(inherited) = paragraph
+                        .properties
+                        .as_ref()
+                        .and_then(|properties| properties.default_run_properties.as_ref())
+                    {
+                        for run in &mut paragraph.runs {
+                            let properties = match run {
+                                TextRun::Run(run) => &mut run.properties,
+                                TextRun::Break(line_break) => &mut line_break.properties,
+                                TextRun::Field(field) => &mut field.run_properties,
+                            };
+                            let local = properties.clone().unwrap_or_default();
+                            *properties = Some(
+                                local
+                                    .with_inherited_defaults(inherited)
+                                    .map_err(|error| footer_malformed(part, error.to_string()))?,
+                            );
+                        }
+                        let local = paragraph.end_properties.clone().unwrap_or_default();
+                        paragraph.end_properties = Some(
+                            local
+                                .with_inherited_defaults(inherited)
+                                .map_err(|error| footer_malformed(part, error.to_string()))?,
+                        );
+                    }
+                }
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                materialize_imported_notes_text(&mut group.children, defaults, part)?
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Neutralizes an imported jump target without releasing its click payload.
+fn release_imported_jump_actions(
+    xml: &[u8],
+    ids: &HashSet<String>,
+) -> std::result::Result<Vec<u8>, OxmlError> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut edits = Vec::new();
+    let bom = usize::from(xml.starts_with(&[0xef, 0xbb, 0xbf])) * 3;
+    loop {
+        let event = reader.read_event_into(&mut buffer)?;
+        let event_end = reader.buffer_position() as usize + bom;
+        match &event {
+            XmlEvent::Start(start) | XmlEvent::Empty(start) => {
+                let content: &[u8] = start.as_ref();
+                let (namespace, local) = reader.resolver().resolve_element(start.name());
+                if import_namespace_uri(namespace, reader.decoder())?
+                    == oxml_drawing::namespace::A_NS
+                    && matches!(
+                        local.as_ref(),
+                        b"hlinkClick" | b"hlinkHover" | b"hlinkMouseOver"
+                    )
+                {
+                    let attributes = start
+                        .attributes()
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    let mut target = None;
+                    for attribute in &attributes {
+                        let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                        if local.as_ref() == b"id"
+                            && import_namespace_uri(namespace, reader.decoder())?
+                                == rpptx_oxml::namespace::R_NS
+                        {
+                            if target.is_some() {
+                                return Err(OxmlError::InvalidValue(
+                                    "ambiguous imported hyperlink target".into(),
+                                ));
+                            }
+                            target = Some(
+                                attribute
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        reader.decoder(),
+                                    )?
+                                    .into_owned(),
+                            );
+                        }
+                    }
+                    if target.as_ref().is_some_and(|id| ids.contains(id)) {
+                        let closing = if matches!(event, XmlEvent::Empty(_)) {
+                            2
+                        } else {
+                            1
+                        };
+                        let content_start = event_end
+                            .checked_sub(closing + content.len())
+                            .ok_or_else(|| {
+                                OxmlError::InvalidValue("invalid hyperlink source span".into())
+                            })?;
+                        let mut has_action = false;
+                        for attribute in &attributes {
+                            let (namespace, local) =
+                                reader.resolver().resolve_attribute(attribute.key);
+                            let owned_id = local.as_ref() == b"id"
+                                && import_namespace_uri(namespace, reader.decoder())?
+                                    == rpptx_oxml::namespace::R_NS;
+                            let action = attribute.key.as_ref() == b"action";
+                            has_action |= action;
+                            if !owned_id && !action {
+                                continue;
+                            }
+                            let offset = (attribute.value.as_ref().as_ptr() as usize)
+                                .checked_sub(content.as_ptr() as usize)
+                                .ok_or_else(|| {
+                                    OxmlError::InvalidValue(
+                                        "invalid hyperlink attribute span".into(),
+                                    )
+                                })?;
+                            let from = content_start + offset;
+                            let to = from + attribute.value.as_ref().len();
+                            if xml.get(from..to) != Some(attribute.value.as_ref()) {
+                                return Err(OxmlError::InvalidValue(
+                                    "hyperlink attribute source mismatch".into(),
+                                ));
+                            }
+                            edits.push((
+                                from..to,
+                                if action {
+                                    b"ppaction://noaction".to_vec()
+                                } else {
+                                    Vec::new()
+                                },
+                            ));
+                        }
+                        if !has_action {
+                            let at = content_start + content.len();
+                            edits.push((at..at, b" action=\"ppaction://noaction\"".to_vec()));
+                        }
+                    }
+                }
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    edits.sort_by_key(|(range, _)| range.start);
+    let mut result = xml.to_vec();
+    for (range, bytes) in edits.into_iter().rev() {
+        result.splice(range, bytes);
+    }
+    Ok(result)
+}
+
+/// What a slide import adds to one slide copy.
+struct SlideImportContext<'a> {
+    source: &'a Presentation,
+    source_index: usize,
+    slide_part: &'a str,
+    jump_targets: &'a HashMap<String, String>,
+    diagnostics: &'a mut Vec<String>,
+    part_copies: &'a mut HashMap<String, String>,
+    diagram_copies: &'a mut HashMap<String, String>,
+}
+
+impl SlideImportContext<'_> {
+    /// Turns every jump of `part` to a slide outside `jump_targets` into a
+    /// hyperlink that does nothing, and drops the relationships only those
+    /// hyperlinks named. A jump to `back_target`, the slide of a notes part,
+    /// is kept.
+    fn release_unmapped_jumps(
+        &mut self,
+        part: &str,
+        back_target: Option<&str>,
+        xml: Vec<u8>,
+        mut relationships: Relationships,
+    ) -> Result<(Vec<u8>, Relationships)> {
+        let mut released = HashSet::new();
+        for relationship in &relationships.items {
+            if relationship.rel_type != rel_types::SLIDE || relationship_is_external(relationship) {
+                continue;
+            }
+            let target = OpcPackage::resolve_rel_target(part, &relationship.target);
+            if Some(target.as_str()) == back_target || self.jump_targets.contains_key(&target) {
+                continue;
+            }
+            released.insert(relationship.id.clone());
+            self.diagnostics.push(format!("source slide {} owner {part} relationship {} target {target}: dropped unmapped slide jump", self.source_index, relationship.id));
+        }
+        if released.is_empty() {
+            return Ok((xml, relationships));
+        }
+        let malformed = |error: OxmlError| Error::MalformedPart {
+            part_name: part.to_owned(),
+            message: error.to_string(),
+        };
+        let released_xml = release_imported_jump_actions(&xml, &released).map_err(malformed)?;
+        let before: HashSet<String> = relationship_ids(&xml)
+            .map_err(malformed)?
+            .into_iter()
+            .collect();
+        let after: HashSet<String> = relationship_ids(&released_xml)
+            .map_err(malformed)?
+            .into_iter()
+            .collect();
+        if let Some(id) = released.iter().find(|id| after.contains(*id)) {
+            return Err(invalid_presentation_mutation(
+                "import slide",
+                format!(
+                    "{part} names the slide relationship {id} outside a hyperlink, which is not carried"
+                ),
+            ));
+        }
+        relationships.items.retain(|relationship| {
+            !((released.contains(&relationship.id) || before.contains(&relationship.id))
+                && !after.contains(&relationship.id))
+        });
+        let relationships =
+            relationships.rebind_for_import(relationships.items.clone(), &HashMap::new())?;
+        Ok((released_xml, relationships))
+    }
 }
 
 fn preflight_cross_presentation_transfer(
@@ -12570,20 +16438,761 @@ fn preflight_cross_presentation_transfer(
                 &resolved,
                 &mut visited_diagram_parts,
                 "transfer SmartArt slide",
+                true,
             )?;
         }
     }
     Ok(())
 }
 
-fn preflight_slide_import(source_package: &OpcPackage, source: &SlideRecord) -> Result<()> {
-    const OPERATION: &str = "import slide";
-    if source.comments.is_some() {
+/// Raw direct style definitions retain producer spelling and opaque descendants.
+struct ImportTableStyleAttribute {
+    uri: String,
+    local: String,
+    value: String,
+    raw: Vec<u8>,
+}
+
+struct ImportTableStyles {
+    metadata: Vec<ImportTableStyleAttribute>,
+    opaque: Vec<Vec<u8>>,
+    default: Option<String>,
+    styles: Vec<(String, Vec<u8>)>,
+    namespaces: Vec<(String, String)>,
+    close: usize,
+    insert: usize,
+    head_end: usize,
+    name: String,
+    empty: bool,
+}
+
+fn import_namespace_uri(
+    namespace: XmlResolveResult<'_>,
+    decoder: quick_xml::encoding::Decoder,
+) -> std::result::Result<String, OxmlError> {
+    match namespace {
+        XmlResolveResult::Bound(uri) => {
+            let attribute = quick_xml::events::attributes::Attribute {
+                key: quick_xml::name::QName(b"xmlns"),
+                value: std::borrow::Cow::Borrowed(uri.as_ref()),
+            };
+            Ok(attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)?
+                .into_owned())
+        }
+        _ => Ok(String::new()),
+    }
+}
+
+fn import_table_styles(xml: &[u8]) -> std::result::Result<ImportTableStyles, OxmlError> {
+    let origin = usize::from(xml.starts_with(b"\xef\xbb\xbf")) * 3;
+    let mut reader = NsReader::from_reader(&xml[origin..]);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut pending = None;
+    let mut extension_start = None;
+    let mut result = None;
+    let mut ids = HashSet::new();
+    loop {
+        let begin = origin + reader.buffer_position() as usize;
+        let decoder = reader.decoder();
+        let (namespace, event) = reader.read_resolved_event_into(&mut buffer)?;
+        let uri = import_namespace_uri(namespace, decoder)?;
+        let end = origin + reader.buffer_position() as usize;
+        let empty = matches!(event, XmlEvent::Empty(_));
+        match event {
+            XmlEvent::Start(start) | XmlEvent::Empty(start) => {
+                if depth == 0 {
+                    if result.is_some()
+                        || uri != A_NS
+                        || start.local_name().as_ref() != b"tblStyleLst"
+                    {
+                        return Err(OxmlError::MissingElement("a:tblStyleLst".into()));
+                    }
+                    let mut default = None;
+                    let mut namespaces = Vec::new();
+                    let mut metadata = Vec::new();
+                    let content: &[u8] = start.as_ref();
+                    for attribute in start.attributes() {
+                        let attribute = attribute?;
+                        let key = std::str::from_utf8(attribute.key.as_ref())
+                            .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+                        let value = attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)?
+                            .into_owned();
+                        if key == "def" {
+                            default = Some(value);
+                        } else if key == "xmlns" {
+                            namespaces.push((String::new(), value));
+                        } else if let Some(prefix) = key.strip_prefix("xmlns:") {
+                            namespaces.push((prefix.to_owned(), value));
+                        } else {
+                            let (namespace, local) =
+                                reader.resolver().resolve_attribute(attribute.key);
+                            let uri = import_namespace_uri(namespace, decoder)?;
+                            let from = attribute.key.as_ref().as_ptr() as usize
+                                - content.as_ptr() as usize;
+                            let to = attribute.value.as_ref().as_ptr() as usize
+                                - content.as_ptr() as usize
+                                + attribute.value.len()
+                                + 1;
+                            metadata.push(ImportTableStyleAttribute {
+                                uri,
+                                local: String::from_utf8_lossy(local.as_ref()).into_owned(),
+                                value,
+                                raw: content[from..to].to_vec(),
+                            });
+                        }
+                    }
+                    result = Some(ImportTableStyles {
+                        metadata,
+                        opaque: Vec::new(),
+                        default,
+                        styles: Vec::new(),
+                        namespaces,
+                        close: end,
+                        insert: end,
+                        head_end: end,
+                        name: String::from_utf8_lossy(start.name().as_ref()).into_owned(),
+                        empty,
+                    });
+                } else if depth == 1 && uri == A_NS && start.local_name().as_ref() == b"tblStyle" {
+                    let mut id = None;
+                    for attribute in start.attributes() {
+                        let attribute = attribute?;
+                        if attribute.key.as_ref() == b"styleId" {
+                            id = Some(
+                                attribute
+                                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)?
+                                    .into_owned(),
+                            );
+                        }
+                    }
+                    let id =
+                        id.ok_or_else(|| OxmlError::MissingElement("a:tblStyle/@styleId".into()))?;
+                    if !ids.insert(id.to_ascii_uppercase()) {
+                        return Err(OxmlError::InvalidValue("duplicate table style id".into()));
+                    }
+                    if empty {
+                        result
+                            .as_mut()
+                            .unwrap()
+                            .styles
+                            .push((id, xml[begin..end].to_vec()));
+                    } else {
+                        pending = Some((Some(id), begin));
+                    }
+                } else if depth == 1 {
+                    if uri == A_NS && start.local_name().as_ref() == b"extLst" {
+                        extension_start.get_or_insert(begin);
+                    }
+                    if empty {
+                        result
+                            .as_mut()
+                            .unwrap()
+                            .opaque
+                            .push(xml[begin..end].to_vec());
+                    } else {
+                        pending = Some((None, begin));
+                    }
+                }
+                if !empty {
+                    depth += 1;
+                }
+            }
+            XmlEvent::End(_) => {
+                if depth == 2
+                    && let Some((id, begin)) = pending.take()
+                {
+                    if let Some(id) = id {
+                        result
+                            .as_mut()
+                            .unwrap()
+                            .styles
+                            .push((id, xml[begin..end].to_vec()));
+                    } else {
+                        result
+                            .as_mut()
+                            .unwrap()
+                            .opaque
+                            .push(xml[begin..end].to_vec());
+                    }
+                }
+                if depth == 1 {
+                    result.as_mut().unwrap().close = begin;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut result = result.ok_or_else(|| OxmlError::MissingElement("a:tblStyleLst".into()))?;
+    result.insert = extension_start.unwrap_or(result.close);
+    Ok(result)
+}
+
+fn close_import_table_style(
+    xml: &[u8],
+    namespaces: &[(String, String)],
+) -> std::result::Result<Vec<u8>, OxmlError> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let event = reader.read_event()?;
+    let empty = matches!(event, XmlEvent::Empty(_));
+    let mut start = match event {
+        XmlEvent::Start(start) | XmlEvent::Empty(start) => start.into_owned(),
+        _ => return Err(OxmlError::MissingElement("a:tblStyle".into())),
+    };
+    let local = start
+        .attributes()
+        .map(|attribute| attribute.map(|attribute| attribute.key.as_ref().to_vec()))
+        .collect::<std::result::Result<HashSet<_>, _>>()?;
+    for (prefix, value) in namespaces {
+        let key = if prefix.is_empty() {
+            "xmlns".to_owned()
+        } else {
+            format!("xmlns:{prefix}")
+        };
+        if !local.contains(key.as_bytes()) {
+            let escaped = quick_xml::escape::escape(value);
+            start.push_attribute((key.as_str(), escaped.as_ref()));
+        }
+    }
+    // An absent source default namespace is itself an ownership fact.
+    if !namespaces.iter().any(|(prefix, _)| prefix.is_empty())
+        && !local.contains(b"xmlns".as_slice())
+    {
+        start.push_attribute(("xmlns", ""));
+    }
+    let mut writer = XmlWriter::new(Vec::new());
+    writer.write_event(if empty {
+        XmlEvent::Empty(start)
+    } else {
+        XmlEvent::Start(start)
+    })?;
+    let mut closed = writer.into_inner();
+    closed.extend_from_slice(&xml[reader.buffer_position() as usize..]);
+    Ok(closed)
+}
+
+fn set_import_style_id(xml: &[u8], id: &str) -> std::result::Result<Vec<u8>, OxmlError> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let event = reader.read_event()?;
+    let start = match event {
+        XmlEvent::Start(start) | XmlEvent::Empty(start) => start,
+        _ => return Err(OxmlError::MissingElement("a:tblStyle".into())),
+    };
+    let content: &[u8] = start.as_ref();
+    for attribute in start.attributes() {
+        let attribute = attribute?;
+        if attribute.key.as_ref() == b"styleId" {
+            let offset = attribute.value.as_ref().as_ptr() as usize - content.as_ptr() as usize + 1;
+            let mut changed = xml[..offset].to_vec();
+            changed.extend_from_slice(id.as_bytes());
+            changed.extend_from_slice(&xml[offset + attribute.value.len()..]);
+            return Ok(changed);
+        }
+    }
+    Err(OxmlError::MissingElement("a:tblStyle/@styleId".into()))
+}
+
+fn merge_import_table_root_metadata(
+    destination: &[u8],
+    source: &ImportTableStyles,
+) -> std::result::Result<Vec<u8>, OxmlError> {
+    let original = import_table_styles(destination)?;
+    let mut attributes = Vec::new();
+    let mut namespace_attributes = Vec::new();
+    for attribute in &source.metadata {
+        if let Some(old) = original
+            .metadata
+            .iter()
+            .find(|old| old.uri == attribute.uri && old.local == attribute.local)
+        {
+            if old.value != attribute.value {
+                return Err(OxmlError::InvalidValue(
+                    "conflicting table style root metadata".into(),
+                ));
+            }
+            continue;
+        }
+        // Root metadata can contain producer-defined namespace-valued strings.
+        // A new root binding cannot override another destination authority.
+        for (prefix, uri) in &source.namespaces {
+            if let Some((_, old)) = original.namespaces.iter().find(|(old, _)| old == prefix) {
+                if old != uri {
+                    return Err(OxmlError::InvalidValue(
+                        "conflicting table style root namespace context".into(),
+                    ));
+                }
+            } else {
+                let key = if prefix.is_empty() {
+                    "xmlns".to_owned()
+                } else {
+                    format!("xmlns:{prefix}")
+                };
+                if !namespace_attributes.iter().any(|(old, _)| old == &key) {
+                    namespace_attributes.push((key, uri.clone()));
+                }
+            }
+        }
+        attributes.push(attribute.raw.clone());
+    }
+    let origin = usize::from(destination.starts_with(b"\xef\xbb\xbf")) * 3;
+    let mut reader = quick_xml::Reader::from_reader(&destination[origin..]);
+    let (start, begin, end, empty) = loop {
+        let begin = origin + reader.buffer_position() as usize;
+        let event = reader.read_event()?;
+        let empty = matches!(event, XmlEvent::Empty(_));
+        if let XmlEvent::Start(start) | XmlEvent::Empty(start) = event {
+            break (
+                start.into_owned(),
+                begin,
+                origin + reader.buffer_position() as usize,
+                empty,
+            );
+        }
+    };
+    let mut start = start;
+    for (key, value) in namespace_attributes {
+        let value = quick_xml::escape::escape(&value);
+        start.push_attribute((key.as_str(), value.as_ref()));
+    }
+    let mut writer = XmlWriter::new(Vec::new());
+    writer.write_event(if empty {
+        XmlEvent::Empty(start)
+    } else {
+        XmlEvent::Start(start)
+    })?;
+    let head = writer.into_inner();
+    let mut changed = destination[..begin].to_vec();
+    changed.extend_from_slice(&head[..head.len() - if empty { 2 } else { 1 }]);
+    for raw in attributes {
+        changed.push(b' ');
+        changed.extend_from_slice(&raw);
+    }
+    changed.extend_from_slice(if empty { b"/>" } else { b">" });
+    changed.extend_from_slice(&destination[end..]);
+    let scope = import_table_styles(&changed)?;
+    let mut opaque = Vec::new();
+    for raw in &source.opaque {
+        let closed = close_import_table_style(raw, &source.namespaces)?;
+        if !scope.opaque.contains(&closed) {
+            opaque.extend(closed);
+        }
+    }
+    if !opaque.is_empty() {
+        if scope.empty {
+            let mut result = changed[..scope.head_end - 2].to_vec();
+            result.push(b'>');
+            result.extend(opaque);
+            result.extend(format!("</{}>", scope.name).as_bytes());
+            result.extend_from_slice(&changed[scope.head_end..]);
+            changed = result;
+        } else {
+            changed.splice(scope.close..scope.close, opaque);
+        }
+    }
+    Ok(changed)
+}
+
+fn imported_table_style_ids(children: &[ShapeTreeChild], ids: &mut HashSet<Option<String>>) {
+    let mut pending = children.iter().collect::<Vec<_>>();
+    while let Some(child) = pending.pop() {
+        match child {
+            ShapeTreeChild::GraphicFrame(frame) => {
+                if let GraphicDataPayload::Table(table) = frame.graphic_data.payload() {
+                    ids.insert(
+                        table
+                            .properties
+                            .as_ref()
+                            .and_then(|properties| properties.style_id.clone()),
+                    );
+                }
+            }
+            ShapeTreeChild::GroupShape(group) => pending.extend(group.children.iter()),
+            _ => {}
+        }
+    }
+}
+
+fn remap_imported_table_styles(
+    children: &mut [ShapeTreeChild],
+    ids: &HashMap<Option<String>, String>,
+) {
+    let mut pending = children.iter_mut().collect::<Vec<_>>();
+    while let Some(child) = pending.pop() {
+        match child {
+            ShapeTreeChild::GraphicFrame(frame) => {
+                if let Some(table) = frame.graphic_data.table_mut() {
+                    let old = table
+                        .properties
+                        .as_ref()
+                        .and_then(|properties| properties.style_id.clone());
+                    if let Some(id) = ids.get(&old) {
+                        table_properties_mut(table).style_id = Some(id.clone());
+                    }
+                }
+            }
+            ShapeTreeChild::GroupShape(group) => pending.extend(group.children.iter_mut()),
+            _ => {}
+        }
+    }
+}
+
+fn import_table_part(
+    package: &OpcPackage,
+    part: &str,
+    selected: &mut HashSet<Option<String>>,
+    mapping: Option<&HashMap<Option<String>, String>>,
+) -> Result<Vec<u8>> {
+    let xml = required_part(package, part)?;
+    let mut local = HashSet::new();
+    let result = match package.content_types.content_type_for(part) {
+        Some(content_types::SLIDE) => {
+            let mut model = CT_Slide::from_xml(xml)
+                .map_err(|error| footer_malformed(part, error.to_string()))?;
+            imported_table_style_ids(&model.common_slide_data.shape_tree.children, &mut local);
+            if let Some(mapping) = mapping {
+                remap_imported_table_styles(
+                    &mut model.common_slide_data.shape_tree.children,
+                    mapping,
+                );
+            }
+            model.to_xml()
+        }
+        Some(content_types::SLIDE_LAYOUT) => {
+            let mut model = CT_SlideLayout::from_xml(xml)
+                .map_err(|error| footer_malformed(part, error.to_string()))?;
+            imported_table_style_ids(&model.common_slide_data.shape_tree.children, &mut local);
+            if let Some(mapping) = mapping {
+                remap_imported_table_styles(
+                    &mut model.common_slide_data.shape_tree.children,
+                    mapping,
+                );
+            }
+            model.to_xml()
+        }
+        Some(content_types::SLIDE_MASTER) => {
+            let mut model = CT_SlideMaster::from_xml(xml)
+                .map_err(|error| footer_malformed(part, error.to_string()))?;
+            imported_table_style_ids(&model.common_slide_data.shape_tree.children, &mut local);
+            if let Some(mapping) = mapping {
+                remap_imported_table_styles(
+                    &mut model.common_slide_data.shape_tree.children,
+                    mapping,
+                );
+            }
+            model.to_xml()
+        }
+        Some(content_types::NOTES_SLIDE) => {
+            let mut model = CT_NotesSlide::from_xml(xml)
+                .map_err(|error| footer_malformed(part, error.to_string()))?;
+            imported_table_style_ids(&model.common_slide_data.shape_tree.children, &mut local);
+            if let Some(mapping) = mapping {
+                remap_imported_table_styles(
+                    &mut model.common_slide_data.shape_tree.children,
+                    mapping,
+                );
+            }
+            model.to_xml()
+        }
+        _ => return Ok(xml.to_vec()),
+    };
+    selected.extend(local.iter().cloned());
+    if mapping.is_none_or(|mapping| {
+        local
+            .iter()
+            .all(|id| mapping.get(id).is_none_or(|new| id.as_ref() == Some(new)))
+    }) {
+        return Ok(xml.to_vec());
+    }
+    result.map_err(|error| footer_malformed(part, error.to_string()))
+}
+
+struct ImportTableStyleScope<'a> {
+    package: &'a OpcPackage,
+    part: &'a str,
+    relationships: &'a Relationships,
+    namespaces: &'a [(String, String)],
+}
+
+fn import_table_resource_equal(
+    source: &ImportTableStyleScope<'_>,
+    source_id: &str,
+    destination: &ImportTableStyleScope<'_>,
+    destination_id: &str,
+) -> Result<bool> {
+    let Some(left) = source.relationships.get_by_id(source_id) else {
+        return Ok(false);
+    };
+    let Some(right) = destination.relationships.get_by_id(destination_id) else {
+        return Ok(false);
+    };
+    if left.rel_type != right.rel_type
+        || relationship_is_external(left) != relationship_is_external(right)
+        || !source.relationships.record_metadata_equal_for_import(
+            source_id,
+            destination.relationships,
+            destination_id,
+        )?
+    {
+        return Ok(false);
+    }
+    if relationship_is_external(left) {
+        return Ok(left.target == right.target);
+    }
+    if left.rel_type != rel_types::IMAGE {
+        return Ok(false);
+    }
+    let a = OpcPackage::resolve_rel_target(source.part, &left.target);
+    let b = OpcPackage::resolve_rel_target(destination.part, &right.target);
+    preflight_internal_transfer_image(source.package, &a, "import table styles")?;
+    if source.package.get_part_rels(&a).is_some_and(|rels| {
+        rels.items
+            .iter()
+            .any(|relationship| !relationship_is_external(relationship))
+    }) {
         return Err(invalid_presentation_mutation(
-            OPERATION,
-            "the slide has comments, which are not carried".to_owned(),
+            "import table styles",
+            format!("{a} has unsupported internal image relationships"),
         ));
     }
+    Ok(
+        source.package.get_part(&a) == destination.package.get_part(&b)
+            && source.package.content_types.content_type_for(&a)
+                == destination.package.content_types.content_type_for(&b)
+            && source
+                .package
+                .get_part_rels(&a)
+                .map(Relationships::to_xml)
+                .transpose()?
+                == destination
+                    .package
+                    .get_part_rels(&b)
+                    .map(Relationships::to_xml)
+                    .transpose()?,
+    )
+}
+
+fn import_table_style_equal(
+    source: &ImportTableStyleScope<'_>,
+    left: &[u8],
+    destination: &ImportTableStyleScope<'_>,
+    right: &[u8],
+) -> Result<bool> {
+    let malformed =
+        |error: OxmlError| invalid_presentation_mutation("import table styles", error.to_string());
+    let left = close_import_table_style(left, source.namespaces).map_err(malformed)?;
+    let right = close_import_table_style(right, destination.namespaces).map_err(malformed)?;
+    let left_ids = relationship_ids(&left).map_err(malformed)?;
+    let right_ids = relationship_ids(&right).map_err(malformed)?;
+    if left_ids.len() != right_ids.len() {
+        return Ok(false);
+    }
+    let mut aliases = HashMap::new();
+    let mut inverse = HashMap::new();
+    for (left, right) in left_ids.iter().zip(&right_ids) {
+        if aliases.get(left).is_some_and(|old| old != right)
+            || inverse.get(right).is_some_and(|old| old != left)
+            || !import_table_resource_equal(source, left, destination, right)?
+        {
+            return Ok(false);
+        }
+        aliases.insert(left.clone(), right.clone());
+        inverse.insert(right.clone(), left.clone());
+    }
+    let left = rewrite_exact_rel_ids(&left, &aliases).map_err(malformed)?;
+    let neutral = "{00000000-0000-4000-8000-000000000000}";
+    Ok(set_import_style_id(&left, neutral).map_err(malformed)?
+        == set_import_style_id(&right, neutral).map_err(malformed)?)
+}
+
+fn import_table_style_part(package: &OpcPackage, owner: &str) -> Result<Option<String>> {
+    let count = package.get_part_rels(owner).map_or(0, |rels| {
+        rels.get_all_by_type(rel_types::TABLE_STYLES).len()
+    });
+    if count > 1 {
+        return Err(Error::DuplicateRelationships {
+            source_part: owner.to_owned(),
+            relationship_type: rel_types::TABLE_STYLES,
+            count,
+        });
+    }
+    related_internal_part(package, owner, rel_types::TABLE_STYLES)
+}
+
+/// Finds qualified rendered character and theme font descriptions in selected XML.
+fn imported_typefaces(package: &OpcPackage, parts: &HashSet<String>) -> Result<HashSet<String>> {
+    let mut names = HashSet::new();
+    for part in parts {
+        let Some(xml) = package.get_part(part) else {
+            continue;
+        };
+        if !package
+            .content_types
+            .content_type_for(part)
+            .is_some_and(|content_type| {
+                content_type.ends_with("+xml") || content_type == "application/xml"
+            })
+        {
+            continue;
+        }
+        let mut reader = NsReader::from_reader(xml);
+        let mut buffer = Vec::new();
+        let mut path: Vec<(String, Vec<u8>, bool)> = Vec::new();
+        loop {
+            let decoder = reader.decoder();
+            let (namespace, event) = reader
+                .read_resolved_event_into(&mut buffer)
+                .map_err(|error| footer_malformed(part, error.to_string()))?;
+            let uri = match namespace {
+                XmlResolveResult::Bound(uri) => {
+                    let attribute = quick_xml::events::attributes::Attribute {
+                        key: quick_xml::name::QName(b"xmlns"),
+                        value: std::borrow::Cow::Borrowed(uri.as_ref()),
+                    };
+                    attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
+                        .map_err(|error| footer_malformed(part, error.to_string()))?
+                        .into_owned()
+                }
+                _ => String::new(),
+            };
+            let empty = matches!(event, XmlEvent::Empty(_));
+            match event {
+                XmlEvent::Start(start) | XmlEvent::Empty(start) => {
+                    let active = path.last().is_none_or(|(_, _, active)| *active)
+                        && matches!(
+                            uri.as_str(),
+                            P_NS | A_NS
+                                | "http://schemas.openxmlformats.org/drawingml/2006/chart"
+                                | "http://schemas.openxmlformats.org/drawingml/2006/chartDrawing"
+                                | "http://schemas.microsoft.com/office/drawing/2014/chartex"
+                                | "http://schemas.microsoft.com/office/powerpoint/2018/8/main"
+                                | "http://schemas.openxmlformats.org/markup-compatibility/2006"
+                        )
+                        && start.local_name().as_ref() != b"extLst";
+                    let parent_font = path.last().is_some_and(|(uri, name, _)| {
+                        uri == A_NS
+                            && matches!(
+                                name.as_slice(),
+                                b"rPr" | b"defRPr" | b"endParaRPr" | b"majorFont" | b"minorFont"
+                            )
+                    });
+                    if active
+                        && parent_font
+                        && uri == A_NS
+                        && matches!(
+                            start.local_name().as_ref(),
+                            b"latin" | b"ea" | b"cs" | b"font"
+                        )
+                    {
+                        for attribute in start.attributes() {
+                            let attribute = attribute
+                                .map_err(|error| footer_malformed(part, error.to_string()))?;
+                            if attribute.key.as_ref() == b"typeface" {
+                                let name = attribute
+                                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
+                                    .map_err(|error| footer_malformed(part, error.to_string()))?;
+                                if !name.is_empty() {
+                                    names.insert(name.to_lowercase());
+                                }
+                            }
+                        }
+                    }
+                    if !empty {
+                        path.push((uri, start.local_name().as_ref().to_vec(), active));
+                    }
+                }
+                XmlEvent::End(_) => {
+                    path.pop();
+                }
+                XmlEvent::Eof => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+    Ok(names)
+}
+
+/// Validates the finite formatting topology before semantic comparison.
+/// Layouts reach a master, masters reach a theme, and copied theme/tag/VML
+/// parts may reach only leaf images. No recursive comparison follows arbitrary edges.
+fn preflight_source_formatting(
+    package: &OpcPackage,
+    part: &str,
+    layout: bool,
+    visited: &mut HashSet<String>,
+) -> Result<()> {
+    let mut pending = vec![(part.to_owned(), layout)];
+    while let Some((part, layout)) = pending.pop() {
+        let expected = if layout {
+            content_types::SLIDE_LAYOUT
+        } else {
+            content_types::SLIDE_MASTER
+        };
+        if package.content_types.content_type_for(&part) != Some(expected) {
+            return Err(Error::MalformedPart {
+                part_name: part,
+                message: format!("formatting owner must have content type {expected}"),
+            });
+        }
+        required_part(package, &part)?;
+        if !visited.insert(part.clone()) {
+            continue;
+        }
+        let Some(relationships) = package.get_part_rels(&part) else {
+            continue;
+        };
+        for relationship in &relationships.items {
+            if relationship_is_external(relationship) {
+                continue;
+            }
+            let target = OpcPackage::resolve_rel_target(&part, &relationship.target);
+            match relationship.rel_type.as_str() {
+                rel_types::SLIDE_MASTER if layout => pending.push((target, false)),
+                rel_types::SLIDE_LAYOUT if !layout => {
+                    required_part(package, &target)?;
+                }
+                rel_types::IMAGE => {
+                    preflight_internal_transfer_image(package, &target, "import slide")?
+                }
+                kind @ (TAGS_RELATIONSHIP | VML_DRAWING_RELATIONSHIP) => {
+                    preflight_carried_part_graph(package, &target, kind, visited)?
+                }
+                rel_types::THEME if !layout => {
+                    if package.content_types.content_type_for(&target) != Some(content_types::THEME)
+                    {
+                        return Err(Error::MalformedPart {
+                            part_name: target,
+                            message: "master theme has an incompatible content type".into(),
+                        });
+                    }
+                    preflight_carried_part_graph(package, &target, rel_types::THEME, visited)?;
+                }
+                kind => {
+                    return Err(invalid_presentation_mutation(
+                        "import slide",
+                        format!(
+                            "{part} has an internal relationship of type {kind}, which is not carried"
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn preflight_slide_import(
+    source_package: &OpcPackage,
+    source: &SlideRecord,
+    visited_diagram_parts: &mut HashSet<String>,
+    visited_parts: &mut HashSet<String>,
+) -> Result<()> {
     let mut smartart_frames = Vec::new();
     collect_smartart_frames(
         &source.slide.common_slide_data.shape_tree.children,
@@ -12598,9 +17207,27 @@ fn preflight_slide_import(source_package: &OpcPackage, source: &SlideRecord) -> 
             )?;
         }
     }
-    preflight_import_scope(source_package, &source.part_name, None)?;
+    let comments_part = source
+        .comments
+        .as_ref()
+        .map(|comments| comments.part_name.as_str());
+    preflight_import_scope(
+        source_package,
+        &source.part_name,
+        None,
+        comments_part,
+        visited_diagram_parts,
+        visited_parts,
+    )?;
     if let Some(notes) = &source.notes {
-        preflight_import_scope(source_package, &notes.part_name, Some(&source.part_name))?;
+        preflight_import_scope(
+            source_package,
+            &notes.part_name,
+            Some(&source.part_name),
+            None,
+            visited_diagram_parts,
+            visited_parts,
+        )?;
     }
     Ok(())
 }
@@ -12608,15 +17235,19 @@ fn preflight_slide_import(source_package: &OpcPackage, source: &SlideRecord) -> 
 /// Accepts the internal relationships a slide import rebinds or copies.
 ///
 /// A slide scope, whose `notes_of` is `None`, may relate to its layout, its
-/// notes, images, audio, video and SmartArt graphs. A notes scope may relate to
-/// its notes master, the slide named by `notes_of`, images, audio and video. The
-/// copy rebinds every notes slide relationship to the imported slide, so one
-/// that targets another slide is a jump and is refused. External relationships
-/// are always carried.
+/// notes, its modern comments part `comments_part`, images, audio, video,
+/// SmartArt graphs, charts, embedded objects and legacy drawings. A notes
+/// scope may relate to its notes master, images, audio and video. Both may
+/// relate to slides, the notes back to the slide named by `notes_of`, and
+/// every other slide relationship is a jump that the copy maps or releases.
+/// External relationships are always carried.
 fn preflight_import_scope(
     source_package: &OpcPackage,
     part: &str,
     notes_of: Option<&str>,
+    comments_part: Option<&str>,
+    visited_diagram_parts: &mut HashSet<String>,
+    visited_parts: &mut HashSet<String>,
 ) -> Result<()> {
     let slide = notes_of.is_none();
     const OPERATION: &str = "import slide";
@@ -12624,7 +17255,6 @@ fn preflight_import_scope(
         .get_part_rels(part)
         .cloned()
         .unwrap_or_default();
-    let mut visited_diagram_parts = HashSet::new();
     for relationship in &relationships.items {
         if relationship_is_external(relationship) {
             continue;
@@ -12634,7 +17264,42 @@ fn preflight_import_scope(
         match rel_type {
             rel_types::SLIDE_LAYOUT | rel_types::NOTES_SLIDE if slide => {}
             rel_types::NOTES_MASTER if !slide => {}
-            rel_types::SLIDE if notes_of == Some(resolved.as_str()) => {}
+            rel_types::SLIDE => {}
+            rel_types::COMMENTS if slide => {
+                required_part(source_package, &resolved)?;
+                if let Some(owned) = source_package.get_part_rels(&resolved).and_then(|owned| {
+                    owned
+                        .items
+                        .iter()
+                        .find(|owned| !relationship_is_external(owned))
+                }) {
+                    return Err(invalid_presentation_mutation(
+                        OPERATION,
+                        format!(
+                            "{resolved} has an internal relationship of type {}, which is not carried",
+                            owned.rel_type
+                        ),
+                    ));
+                }
+            }
+            rel_types::POWERPOINT_COMMENTS if slide && comments_part == Some(&resolved) => {
+                // The copy is written from the comment model, so the part
+                // may own external relationships only.
+                if let Some(owned) = source_package.get_part_rels(&resolved).and_then(|owned| {
+                    owned
+                        .items
+                        .iter()
+                        .find(|owned| !relationship_is_external(owned))
+                }) {
+                    return Err(invalid_presentation_mutation(
+                        OPERATION,
+                        format!(
+                            "{resolved} has an internal relationship of type {}, which is not carried",
+                            owned.rel_type
+                        ),
+                    ));
+                }
+            }
             rel_types::IMAGE => {
                 preflight_internal_transfer_image(source_package, &resolved, OPERATION)?;
             }
@@ -12645,26 +17310,90 @@ fn preflight_import_scope(
                 preflight_diagram_part_graph(
                     source_package,
                     &resolved,
-                    &mut visited_diagram_parts,
+                    visited_diagram_parts,
                     OPERATION,
+                    false,
                 )?;
             }
+            _ if slide && is_carried_part_graph_relationship(rel_type) => {
+                preflight_carried_part_graph(source_package, &resolved, rel_type, visited_parts)?;
+            }
             _ => {
-                let what = match rel_type {
-                    rel_types::CHART => "a chart".to_owned(),
-                    rel_types::OLE_OBJECT | rel_types::STRICT_OLE_OBJECT | rel_types::PACKAGE => {
-                        "an embedded object".to_owned()
-                    }
-                    rel_types::COMMENTS | rel_types::POWERPOINT_COMMENTS => "comments".to_owned(),
-                    rel_types::SLIDE => {
-                        "a hyperlink that jumps to another slide of the source presentation"
-                            .to_owned()
-                    }
-                    _ => format!("an internal relationship of type {rel_type}"),
-                };
                 return Err(invalid_presentation_mutation(
                     OPERATION,
-                    format!("{part} has {what}, which is not carried"),
+                    format!(
+                        "{part} has an internal relationship of type {rel_type}, which is not carried"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Returns whether a slide import copies the part graph behind a slide
+/// relationship of this type, rather than rebinding or sharing it.
+fn is_carried_part_graph_relationship(relationship_type: &str) -> bool {
+    matches!(
+        relationship_type,
+        rel_types::CHART
+            | rel_types::COMMENTS
+            | CHART_EX_RELATIONSHIP
+            | rel_types::OLE_OBJECT
+            | rel_types::STRICT_OLE_OBJECT
+            | rel_types::PACKAGE
+            | VML_DRAWING_RELATIONSHIP
+    )
+}
+
+/// Accepts one part of a chart, embedded-object, legacy-drawing or comments
+/// graph and, through it, the parts it relates to.
+///
+/// A chart may relate to its embedded workbook or object, its style, colour,
+/// user-shape and theme-override parts. Every part may relate to images that
+/// own no relationships, and to external targets. Anything else is refused.
+fn preflight_carried_part_graph(
+    source_package: &OpcPackage,
+    part: &str,
+    relationship_type: &str,
+    visited: &mut HashSet<String>,
+) -> Result<()> {
+    const OPERATION: &str = "import slide";
+    if !visited.insert(part.to_owned()) {
+        return Ok(());
+    }
+    required_part(source_package, part)?;
+    let chart = matches!(relationship_type, rel_types::CHART | CHART_EX_RELATIONSHIP);
+    let relationships = source_package
+        .get_part_rels(part)
+        .cloned()
+        .unwrap_or_default();
+    for relationship in &relationships.items {
+        if relationship_is_external(relationship) {
+            continue;
+        }
+        let resolved = OpcPackage::resolve_rel_target(part, &relationship.target);
+        match relationship.rel_type.as_str() {
+            rel_types::IMAGE => {
+                preflight_internal_transfer_image(source_package, &resolved, OPERATION)?;
+            }
+            rel_type @ (rel_types::PACKAGE
+            | rel_types::OLE_OBJECT
+            | rel_types::STRICT_OLE_OBJECT
+            | CHART_STYLE_RELATIONSHIP
+            | CHART_COLOR_STYLE_RELATIONSHIP
+            | CHART_USER_SHAPES_RELATIONSHIP
+            | THEME_OVERRIDE_RELATIONSHIP)
+                if chart =>
+            {
+                preflight_carried_part_graph(source_package, &resolved, rel_type, visited)?;
+            }
+            rel_type => {
+                return Err(invalid_presentation_mutation(
+                    OPERATION,
+                    format!(
+                        "{part} has an internal relationship of type {rel_type}, which is not carried"
+                    ),
                 ));
             }
         }
@@ -12697,42 +17426,45 @@ fn preflight_diagram_part_graph(
     source_part: &str,
     visited: &mut HashSet<String>,
     operation: &'static str,
+    bounded: bool,
 ) -> Result<()> {
-    if visited.contains(source_part) {
-        return Ok(());
-    }
-    if visited.len() >= MAX_SMARTART_TRANSFER_DIAGRAM_PARTS {
-        return Err(invalid_presentation_mutation(
-            operation,
-            format!(
-                "diagram graph exceeds the {MAX_SMARTART_TRANSFER_DIAGRAM_PARTS}-part transfer bound"
-            ),
-        ));
-    }
-    visited.insert(source_part.to_owned());
-    required_part(source_package, source_part)?;
-    let relationships = source_package
-        .get_part_rels(source_part)
-        .cloned()
-        .unwrap_or_default();
-    for relationship in &relationships.items {
-        if relationship_is_external(relationship) {
+    let mut pending = vec![source_part.to_owned()];
+    while let Some(part) = pending.pop() {
+        if visited.contains(&part) {
             continue;
         }
-        let resolved = OpcPackage::resolve_rel_target(source_part, &relationship.target);
-        required_part(source_package, &resolved)?;
-        if relationship.rel_type == rel_types::IMAGE {
-            preflight_internal_transfer_image(source_package, &resolved, operation)?;
-        } else if is_diagram_relationship(&relationship.rel_type) {
-            preflight_diagram_part_graph(source_package, &resolved, visited, operation)?;
-        } else {
+        if bounded && visited.len() >= MAX_SMARTART_TRANSFER_DIAGRAM_PARTS {
             return Err(invalid_presentation_mutation(
                 operation,
                 format!(
-                    "diagram part {source_part} owns internal relationship type {} outside the bounded cross-presentation transfer",
-                    relationship.rel_type
+                    "diagram graph exceeds the {MAX_SMARTART_TRANSFER_DIAGRAM_PARTS}-part transfer bound"
                 ),
             ));
+        }
+        visited.insert(part.clone());
+        required_part(source_package, &part)?;
+        let Some(relationships) = source_package.get_part_rels(&part) else {
+            continue;
+        };
+        for relationship in &relationships.items {
+            if relationship_is_external(relationship) {
+                continue;
+            }
+            let resolved = OpcPackage::resolve_rel_target(&part, &relationship.target);
+            required_part(source_package, &resolved)?;
+            if relationship.rel_type == rel_types::IMAGE {
+                preflight_internal_transfer_image(source_package, &resolved, operation)?;
+            } else if is_diagram_relationship(&relationship.rel_type) {
+                pending.push(resolved);
+            } else {
+                return Err(invalid_presentation_mutation(
+                    operation,
+                    format!(
+                        "diagram part {part} owns internal relationship type {} outside the bounded cross-presentation transfer",
+                        relationship.rel_type
+                    ),
+                ));
+            }
         }
     }
     Ok(())
@@ -12749,18 +17481,35 @@ fn duplicate_relationship_scope(
 ) -> Result<(Relationships, HashMap<String, String>)> {
     let mut destination = Relationships::new();
     let mut relationship_map = HashMap::new();
-    let mut diagram_copies = HashMap::new();
+    let mut owned_diagrams = HashMap::new();
+    let mut owned_parts = HashMap::new();
+    let bounded_diagrams = targets.graph_copies.is_none();
+    let (diagram_copies, part_copies) = match targets.graph_copies {
+        Some(copies) => (copies.diagrams, copies.parts),
+        None => (&mut owned_diagrams, &mut owned_parts),
+    };
     for relationship in &source_relationships.items {
         let target = if relationship_is_external(relationship) {
             relationship.target.clone()
         } else {
             let resolved = match relationship.rel_type.as_str() {
-                rel_types::SLIDE => targets.slide.map(str::to_owned).unwrap_or_else(|| {
-                    OpcPackage::resolve_rel_target(source_part, &relationship.target)
-                }),
+                rel_types::SLIDE => {
+                    let resolved =
+                        OpcPackage::resolve_rel_target(source_part, &relationship.target);
+                    targets
+                        .slide_map
+                        .and_then(|slide_map| slide_map.get(&resolved).cloned())
+                        .or_else(|| targets.slide.map(str::to_owned))
+                        .unwrap_or(resolved)
+                }
                 rel_types::NOTES_SLIDE => targets.notes.map(str::to_owned).unwrap_or_else(|| {
                     OpcPackage::resolve_rel_target(source_part, &relationship.target)
                 }),
+                rel_types::POWERPOINT_COMMENTS => {
+                    targets.comments.map(str::to_owned).unwrap_or_else(|| {
+                        OpcPackage::resolve_rel_target(source_part, &relationship.target)
+                    })
+                }
                 rel_types::SLIDE_LAYOUT => targets.layout.map(str::to_owned).unwrap_or_else(|| {
                     OpcPackage::resolve_rel_target(source_part, &relationship.target)
                 }),
@@ -12797,17 +17546,29 @@ fn duplicate_relationship_scope(
                     destination_package,
                     media_store,
                     &resolved,
-                    &mut diagram_copies,
+                    diagram_copies,
+                    bounded_diagrams,
+                )?
+            } else if targets.copy_part_graphs
+                && is_carried_part_graph_relationship(&relationship.rel_type)
+            {
+                duplicate_part_graph(
+                    source_package,
+                    destination_package,
+                    media_store,
+                    &resolved,
+                    part_copies,
                 )?
             } else {
                 resolved
             };
             relative_part_target(destination_part, &resolved)
         };
-        let new_id = if relationship
-            .id
-            .strip_prefix("rId")
-            .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+        let new_id = if bounded_diagrams
+            && relationship
+                .id
+                .strip_prefix("rId")
+                .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
         {
             destination.add(&relationship.rel_type, &target)
         } else {
@@ -12844,6 +17605,8 @@ fn duplicate_relationship_scope(
             })?,
         );
     }
+    let destination =
+        source_relationships.rebind_for_import(destination.items, &relationship_map)?;
     Ok((destination, relationship_map))
 }
 
@@ -12853,11 +17616,12 @@ fn duplicate_diagram_part_graph(
     media_store: &mut MediaStore,
     source_part: &str,
     copies: &mut HashMap<String, String>,
+    bounded: bool,
 ) -> Result<String> {
     if let Some(existing) = copies.get(source_part) {
         return Ok(existing.clone());
     }
-    if copies.len() >= MAX_SMARTART_TRANSFER_DIAGRAM_PARTS {
+    if bounded && copies.len() >= MAX_SMARTART_TRANSFER_DIAGRAM_PARTS {
         return Err(invalid_presentation_mutation(
             "copy SmartArt diagram graph",
             format!(
@@ -12865,26 +17629,117 @@ fn duplicate_diagram_part_graph(
             ),
         ));
     }
-    let source_xml = required_part(source_package, source_part)?.to_vec();
+    let root = fresh_related_part_name(destination_package, source_part);
+    copies.insert(source_part.to_owned(), root.clone());
+    destination_package.set_part(&root, required_part(source_package, source_part)?.to_vec());
+    let mut pending = vec![source_part.to_owned()];
+    while let Some(part) = pending.pop() {
+        let destination_part = copies[&part].clone();
+        let source_xml = required_part(source_package, &part)?;
+        if let Some(content_type) = source_package.content_types.content_type_for(&part) {
+            destination_package
+                .content_types
+                .add_override(&destination_part, content_type);
+        }
+        let source_relationships = source_package
+            .get_part_rels(&part)
+            .cloned()
+            .unwrap_or_default();
+        let mut destination_relationships = Relationships::new();
+        let mut relationship_map = HashMap::new();
+        for relationship in &source_relationships.items {
+            let target = if relationship_is_external(relationship) {
+                relationship.target.clone()
+            } else {
+                let resolved = OpcPackage::resolve_rel_target(&part, &relationship.target);
+                let copied = if relationship.rel_type == rel_types::IMAGE {
+                    let bytes = required_part(source_package, &resolved)?.to_vec();
+                    media_store.insert(destination_package, &bytes, &resolved)
+                } else if is_diagram_relationship(&relationship.rel_type) {
+                    if let Some(existing) = copies.get(&resolved) {
+                        existing.clone()
+                    } else {
+                        if bounded && copies.len() >= MAX_SMARTART_TRANSFER_DIAGRAM_PARTS {
+                            return Err(invalid_presentation_mutation(
+                                "copy SmartArt diagram graph",
+                                format!(
+                                    "diagram graph exceeds the {MAX_SMARTART_TRANSFER_DIAGRAM_PARTS}-part copy bound"
+                                ),
+                            ));
+                        }
+                        let copied = fresh_related_part_name(destination_package, &resolved);
+                        copies.insert(resolved.clone(), copied.clone());
+                        destination_package
+                            .set_part(&copied, required_part(source_package, &resolved)?.to_vec());
+                        pending.push(resolved);
+                        copied
+                    }
+                } else {
+                    resolved
+                };
+                relative_part_target(&destination_part, &copied)
+            };
+            destination_relationships.add_with_id(
+                &relationship.id,
+                &relationship.rel_type,
+                &target,
+            );
+            let id = relationship.id.clone();
+            if let Some(inserted) = destination_relationships.items.last_mut() {
+                inserted.target_mode = relationship.target_mode.clone();
+            }
+            relationship_map.insert(relationship.id.clone(), id);
+        }
+        let rewritten = rewrite_exact_rel_ids(source_xml, &relationship_map).map_err(|error| {
+            Error::MalformedPart {
+                part_name: part.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        destination_package.set_part(&destination_part, rewritten);
+        let destination_relationships = source_relationships
+            .rebind_for_import(destination_relationships.items, &HashMap::new())?;
+        if source_package.get_part_rels(&part).is_some() {
+            destination_package.set_part_rels(&destination_part, destination_relationships);
+        }
+    }
+    Ok(root)
+}
+
+/// Copies one part and the parts it relates to, under fresh names.
+///
+/// Relationship ids are kept, so the copied bytes need no rewrite. Images go
+/// through the media store and reuse equal media. A part reached twice is
+/// copied once. The graph was bounded by `preflight_carried_part_graph`.
+fn duplicate_part_graph(
+    source_package: &OpcPackage,
+    destination_package: &mut OpcPackage,
+    media_store: &mut MediaStore,
+    source_part: &str,
+    copies: &mut HashMap<String, String>,
+) -> Result<String> {
+    if let Some(existing) = copies.get(source_part) {
+        return Ok(existing.clone());
+    }
+    let bytes = required_part(source_package, source_part)?.to_vec();
     let destination_part = fresh_related_part_name(destination_package, source_part);
     copies.insert(source_part.to_owned(), destination_part.clone());
-    destination_package.set_part(&destination_part, source_xml.clone());
-    if let Some(content_type) = source_package
-        .content_types
-        .content_type_for(source_part)
-        .map(str::to_owned)
+    destination_package.set_part(&destination_part, bytes);
+    if let Some(content_type) = source_package.content_types.content_type_for(source_part)
+        && destination_package
+            .content_types
+            .content_type_for(&destination_part)
+            != Some(content_type)
     {
         destination_package
             .content_types
-            .add_override(&destination_part, &content_type);
+            .add_override(&destination_part, content_type);
     }
-
     let source_relationships = source_package
         .get_part_rels(source_part)
         .cloned()
         .unwrap_or_default();
     let mut destination_relationships = Relationships::new();
-    let mut relationship_map = HashMap::new();
     for relationship in &source_relationships.items {
         let target = if relationship_is_external(relationship) {
             relationship.target.clone()
@@ -12893,33 +17748,25 @@ fn duplicate_diagram_part_graph(
             let copied = if relationship.rel_type == rel_types::IMAGE {
                 let bytes = required_part(source_package, &resolved)?.to_vec();
                 media_store.insert(destination_package, &bytes, &resolved)
-            } else if is_diagram_relationship(&relationship.rel_type) {
-                duplicate_diagram_part_graph(
+            } else {
+                duplicate_part_graph(
                     source_package,
                     destination_package,
                     media_store,
                     &resolved,
                     copies,
                 )?
-            } else {
-                resolved
             };
             relative_part_target(&destination_part, &copied)
         };
-        let id = destination_relationships.add(&relationship.rel_type, &target);
+        destination_relationships.add_with_id(&relationship.id, &relationship.rel_type, &target);
         if let Some(inserted) = destination_relationships.items.last_mut() {
             inserted.target_mode = relationship.target_mode.clone();
         }
-        relationship_map.insert(relationship.id.clone(), id);
     }
-    let rewritten = rewrite_exact_rel_ids(&source_xml, &relationship_map).map_err(|error| {
-        Error::MalformedPart {
-            part_name: source_part.to_owned(),
-            message: error.to_string(),
-        }
-    })?;
-    destination_package.set_part(&destination_part, rewritten);
-    if !destination_relationships.items.is_empty() {
+    let destination_relationships =
+        source_relationships.rebind_for_import(destination_relationships.items, &HashMap::new())?;
+    if source_package.get_part_rels(source_part).is_some() {
         destination_package
             .part_rels
             .insert(destination_part.clone(), destination_relationships);
@@ -19437,6 +24284,16 @@ fn compose_notes_common(
 ) -> Result<CT_CommonSlideData> {
     let mut common = master.common_slide_data.clone();
     if let Some(notes) = notes {
+        if let Some(background) = &notes.common_slide_data.background {
+            common.background = Some(background.clone());
+        }
+        if notes
+            .show_master_shapes()
+            .map_err(|error| render_failure(error.to_string()))?
+            == Some(false)
+        {
+            retain_notes_master_placeholders(&mut common.shape_tree.children);
+        }
         let mut overlays = Vec::new();
         collect_export_placeholder_shapes(
             &notes.common_slide_data.shape_tree.children,
@@ -19478,6 +24335,21 @@ fn compose_notes_common(
         )));
     }
     Ok(common)
+}
+
+#[cfg(feature = "render")]
+fn retain_notes_master_placeholders(children: &mut Vec<ShapeTreeChild>) {
+    for child in children.iter_mut() {
+        if let ShapeTreeChild::GroupShape(group) = child {
+            retain_notes_master_placeholders(&mut group.children);
+        }
+    }
+    children.retain(|child| match child {
+        ShapeTreeChild::Shape(shape) => shape.placeholder.is_some(),
+        ShapeTreeChild::Picture(picture) => picture.placeholder.is_some(),
+        ShapeTreeChild::GroupShape(group) => !group.children.is_empty(),
+        _ => false,
+    });
 }
 
 #[cfg(feature = "render")]
@@ -19524,45 +24396,56 @@ fn collect_export_placeholder_shapes(
 
 #[cfg(feature = "render")]
 fn apply_export_placeholder_overlays(
-    children: &mut [ShapeTreeChild],
+    children: &mut Vec<ShapeTreeChild>,
     overlays: &[(PlaceholderKey, CT_Shape)],
     consumed: &mut HashSet<usize>,
 ) -> Result<()> {
-    for child in children {
-        match child {
+    let mut index = 0;
+    while index < children.len() {
+        let mut absent = false;
+        match &mut children[index] {
             ShapeTreeChild::Shape(shape) => {
-                let Some(placeholder) = shape.placeholder.as_ref() else {
-                    continue;
-                };
-                let key = placeholder.key();
-                let mut matches = overlays
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (overlay_key, _))| key.matches(overlay_key));
-                let Some((overlay_index, (_, overlay))) = matches.next() else {
-                    continue;
-                };
-                if matches.next().is_some() {
-                    return Err(render_failure(format!(
-                        "notes master placeholder {key:?} matches multiple notes-slide placeholders"
-                    )));
-                }
-                if !consumed.insert(overlay_index) {
-                    return Err(render_failure(format!(
-                        "notes master has duplicate placeholder {key:?}"
-                    )));
-                }
-                if let Some(transform) = overlay.shape_properties.transform.clone() {
-                    shape.shape_properties.transform = Some(transform);
-                }
-                if let Some(text) = overlay.text_body.clone() {
-                    shape.text_body = Some(text);
+                if let Some(placeholder) = shape.placeholder.as_ref() {
+                    let key = placeholder.key();
+                    let mut matches = overlays
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (overlay_key, _))| key.matches(overlay_key));
+                    if let Some((overlay_index, (_, overlay))) = matches.next() {
+                        if matches.next().is_some() {
+                            return Err(render_failure(format!(
+                                "notes master placeholder {key:?} matches multiple notes-slide placeholders"
+                            )));
+                        }
+                        if !consumed.insert(overlay_index) {
+                            return Err(render_failure(format!(
+                                "notes master has duplicate placeholder {key:?}"
+                            )));
+                        }
+                        let properties = overlay
+                            .shape_properties
+                            .with_inherited_defaults(&shape.shape_properties)
+                            .map_err(|error| render_failure(error.to_string()))?;
+                        if overlay.style().is_some() {
+                            *shape = overlay.clone();
+                        } else {
+                            shape.text_body = overlay.text_body.clone();
+                        }
+                        *shape.shape_properties = properties;
+                    } else {
+                        absent = true;
+                    }
                 }
             }
             ShapeTreeChild::GroupShape(group) => {
                 apply_export_placeholder_overlays(&mut group.children, overlays, consumed)?;
             }
             _ => {}
+        }
+        if absent {
+            children.remove(index);
+        } else {
+            index += 1;
         }
     }
     Ok(())
@@ -19614,7 +24497,28 @@ fn filter_export_master_shapes(
                 placeholder.ph_type = Some(PhType::Other("exportPageNumber".to_owned()));
             }
             if let Some(body) = shape.text_body.as_mut() {
-                body.set_text(&page_number.to_string());
+                if keep_body {
+                    // Resolve actual local number fields on the render clone.
+                    // Empty placeholders and ordinary local text stay unchanged.
+                    for index in 0..body.paragraphs().len() {
+                        let paragraph =
+                            body.paragraph_mut(index).expect("existing notes paragraph");
+                        for run in &mut paragraph.runs {
+                            if let oxml_drawing::text::TextRun::Field(field) = run
+                                && field
+                                    .field_type
+                                    .as_deref()
+                                    .is_some_and(|kind| kind.eq_ignore_ascii_case("slidenum"))
+                            {
+                                field.field_type = Some("exportPageNumber".into());
+                                field.text.get_or_insert_with(Default::default).value =
+                                    page_number.to_string();
+                            }
+                        }
+                    }
+                } else {
+                    body.set_text(&page_number.to_string());
+                }
             }
         }
         if enabled
@@ -28175,6 +33079,108 @@ mod write_tests {
     }
 
     #[cfg(feature = "render")]
+    #[test]
+    fn fx216_formatting_reuse_compares_complete_relationship_scope() {
+        let presentation = Presentation::new().unwrap();
+        let original = presentation.package.clone();
+        let part = "/ppt/slideLayouts/slideLayout7.xml";
+        let relationships = original.get_part_rels(part).unwrap();
+        let xml = String::from_utf8(relationships.to_xml().unwrap()).unwrap();
+        assert!(formatting_parts_equal(&original, part, &original, part).unwrap());
+        let declared = xml.replacen(
+            "<Relationships",
+            "<Relationships xmlns:z=\"urn:metadata\"",
+            1,
+        );
+        let variants = [
+            declared.replacen("<Relationships", "<Relationships z:owner=\"source\"", 1),
+            declared.replacen("<Relationship ", "<Relationship z:record=\"source\" ", 1),
+            declared.replace("</Relationships>", "<z:tail keep='&#65;'/></Relationships>"),
+            declared.replace("</Relationships>", "<z:first/><z:second/></Relationships>"),
+        ];
+        for (index, changed) in variants.iter().enumerate() {
+            let mut source = original.clone();
+            let rels = Relationships::from_xml(changed.as_bytes()).unwrap();
+            assert_eq!(rels.items, relationships.items);
+            source.set_part_rels(part, rels);
+            assert!(
+                !formatting_parts_equal(&source, part, &original, part).unwrap(),
+                "opaque variant {index} reused destination"
+            );
+            assert!(formatting_parts_equal(&source, part, &source, part).unwrap());
+        }
+        let a = declared.replace("</Relationships>", "<z:first/><z:second/></Relationships>");
+        for b in [
+            a.replace("urn:metadata", "urn:other"),
+            a.replace("<z:first/><z:second/>", "<z:second/><z:first/>"),
+        ] {
+            let mut source = original.clone();
+            let mut destination = original.clone();
+            source.set_part_rels(part, Relationships::from_xml(a.as_bytes()).unwrap());
+            destination.set_part_rels(part, Relationships::from_xml(b.as_bytes()).unwrap());
+            assert!(!formatting_parts_equal(&source, part, &destination, part).unwrap());
+        }
+    }
+
+    #[test]
+    fn fx216_property_resources_retarget_actual_owner_and_keep_record_metadata() {
+        for source_part in ["/ppt/presentation.xml", "/custom/deep/nested/master.xml"] {
+            let mut package = Presentation::new().unwrap().package;
+            let destination_part = "/ppt/notesSlides/notesSlide1.xml";
+            let target = "/media/actual-image.png";
+            package.set_part(target, b"original stored resource".to_vec());
+            let relative = relative_part_target(source_part, target);
+            let source_rels = format!(
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" xmlns:z="urn:metadata"><Relationship Id="picture" Type="{}" Target="{relative}" z:keep='&#65;'/></Relationships>"#,
+                rel_types::IMAGE
+            );
+            package.set_part_rels(
+                source_part,
+                Relationships::from_xml(source_rels.as_bytes()).unwrap(),
+            );
+            let mut existing = Relationships::new();
+            existing.add_with_id("picture", rel_types::IMAGE, "../media/existing.png");
+            package.set_part_rels(destination_part, existing);
+            let xml=br#"<a:buBlip xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><a:blip r:embed="picture"/></a:buBlip>"#;
+            let rewritten = transfer_imported_property_resources(
+                &mut package,
+                source_part,
+                destination_part,
+                xml,
+            )
+            .unwrap();
+            let ids = relationship_ids(&rewritten).unwrap();
+            assert_eq!(ids.len(), 1);
+            let scope = package.get_part_rels(destination_part).unwrap();
+            let relationship = scope.get_by_id(&ids[0]).unwrap();
+            assert_eq!(
+                OpcPackage::resolve_rel_target(destination_part, &relationship.target),
+                target
+            );
+            assert_eq!(
+                package.get_part(target),
+                Some(b"original stored resource".as_slice())
+            );
+            assert!(
+                String::from_utf8(scope.to_xml().unwrap())
+                    .unwrap()
+                    .contains("z:keep='&#65;'")
+            );
+            assert_eq!(
+                scope.get_by_id("picture").unwrap().target,
+                "../media/existing.png"
+            );
+            assert_eq!(
+                package
+                    .get_part_rels(source_part)
+                    .unwrap()
+                    .to_xml()
+                    .unwrap(),
+                source_rels.as_bytes()
+            );
+        }
+    }
+
     fn render_bound_png_header(width: u32, height: u32) -> Vec<u8> {
         let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
         bytes.extend_from_slice(&width.to_be_bytes());
@@ -28225,7 +33231,7 @@ mod write_tests {
         };
 
         let master = build_master(true);
-        let unmatched = notes(&[(4, "sldNum", 12), (5, "ftr", 13)]);
+        let unmatched = notes(&[(6, "sldImg", 2), (4, "sldNum", 12), (5, "ftr", 13)]);
         let mut diagnostics = Vec::new();
         compose_notes_common(&master, Some(&unmatched), 1, &mut diagnostics).unwrap();
         assert_eq!(
@@ -28239,7 +33245,7 @@ mod write_tests {
             ]
         );
 
-        let ambiguous = notes(&[(4, "sldNum", 12), (5, "sldNum", 12)]);
+        let ambiguous = notes(&[(6, "sldImg", 2), (4, "sldNum", 12), (5, "sldNum", 12)]);
         assert!(
             compose_notes_common(&master, Some(&ambiguous), 1, &mut Vec::new())
                 .unwrap_err()
@@ -33218,4 +38224,269 @@ fn geometry_target_signature(children: &[ShapeTreeChild], id: u32) -> Vec<Target
     let mut out = Vec::new();
     visit(children, id, &mut Vec::new(), &mut out);
     out
+}
+
+#[cfg(test)]
+#[test]
+fn fx216_import_jump_neutralization_preserves_lexical_payload_and_foreign_nodes() {
+    let xml = br#"<root xmlns:q="http://schemas.openxmlformats.org/drawingml/20&#48;6/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/20&#48;6/relationships" xmlns:f="urn:foreign"><q:hlinkClick r:id='rId&#50;' action='owned-click' tooltip='A &amp; B' f:id='rId2'><q:snd r:embed='sound'/><q:extLst><q:ext uri='opaque'><f:payload keep='&#65;'/></q:ext></q:extLst></q:hlinkClick><f:hlinkClick r:id='rId2' action='foreign'/><q:hlinkClick f:id='rId2' action='foreign-attribute'/><q:hlinkClick r:id='keep' action='keep'/><q:hlinkHover r:id='rId2' tooltip='hover'/><q:hlinkMouseOver r:id='rId2' action='owned-over'/></root>"#;
+    let expected = std::str::from_utf8(xml)
+        .unwrap()
+        .replace("r:id='rId&#50;'", "r:id=''")
+        .replace("action='owned-click'", "action='ppaction://noaction'")
+        .replace(
+            "<q:hlinkHover r:id='rId2' tooltip='hover'/>",
+            "<q:hlinkHover r:id='' tooltip='hover' action=\"ppaction://noaction\"/>",
+        )
+        .replace(
+            "<q:hlinkMouseOver r:id='rId2' action='owned-over'/>",
+            "<q:hlinkMouseOver r:id='' action='ppaction://noaction'/>",
+        );
+    let ids = HashSet::from(["rId2".to_owned()]);
+    for bom in [false, true] {
+        let mut source = if bom { vec![0xef, 0xbb, 0xbf] } else { vec![] };
+        source.extend_from_slice(xml);
+        let mut wanted = if bom { vec![0xef, 0xbb, 0xbf] } else { vec![] };
+        wanted.extend_from_slice(expected.as_bytes());
+        let actual = release_imported_jump_actions(&source, &ids).unwrap();
+        assert_eq!(actual, wanted);
+        assert_eq!(
+            release_imported_jump_actions(&actual, &ids).unwrap(),
+            actual
+        );
+        assert_eq!(
+            release_imported_jump_actions(&source, &HashSet::new()).unwrap(),
+            source
+        );
+    }
+}
+
+#[cfg(all(test, feature = "render"))]
+fn fx216_positioned_semantics(
+    elements: &[oxml_layout::PositionedElement],
+    fonts: &[oxml_layout::FontData],
+) -> Vec<String> {
+    use oxml_layout::PositionedElement;
+    use sha2::{Digest, Sha256};
+    let mut facts = Vec::new();
+    for element in elements {
+        match element {
+            PositionedElement::Text(run) => {
+                let font = fonts.iter().find(|font| font.id == run.font_id).unwrap();
+                facts.push(format!(
+                    "font={} family={} face={} bold={} italic={} axes={:?} synthetic={}/{}",
+                    Sha256::digest(font.data.as_ref())
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>(),
+                    font.family,
+                    font.face_index,
+                    font.bold,
+                    font.italic,
+                    font.variations,
+                    font.synthetic_bold,
+                    font.synthetic_italic
+                ));
+                let mut run = run.clone();
+                run.font_id = oxml_layout::FontId(0);
+                run.source = None;
+                run.field_source = None;
+                run.note_reference_source = None;
+
+                facts.push(format!("glyph={run:?}"));
+            }
+            PositionedElement::MultilingualText(run) => {
+                let font = fonts.iter().find(|font| font.id == run.font_id).unwrap();
+                facts.push(format!(
+                    "font={} family={} face={} bold={} italic={} axes={:?} synthetic={}/{}",
+                    Sha256::digest(font.data.as_ref())
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>(),
+                    font.family,
+                    font.face_index,
+                    font.bold,
+                    font.italic,
+                    font.variations,
+                    font.synthetic_bold,
+                    font.synthetic_italic
+                ));
+                let mut run = run.clone();
+                run.font_id = oxml_layout::FontId(0);
+                run.source = None;
+                run.field_source = None;
+                run.note_reference_source = None;
+                // Language identity is recorded separately. Appearance compares
+                // actual shaped glyphs, used font bytes, script, bidi and paint.
+                run.language = None;
+                facts.push(format!("multilingual={run:?}"));
+            }
+            PositionedElement::Image {
+                rect,
+                data,
+                content_type,
+                ..
+            } => facts.push(format!(
+                "image rect={rect:?} mime={content_type} sha={}",
+                Sha256::digest(data)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            )),
+            PositionedElement::Group(group) => {
+                facts.push(format!(
+                    "group transform={:?} clip={:?} opacity={:.17} effects={:?}",
+                    group.transform, group.clip, group.opacity, group.effects
+                ));
+                facts.extend(fx216_positioned_semantics(&group.children, fonts));
+                facts.push("end-group".into());
+            }
+            PositionedElement::MarkedContent { children, .. } => {
+                facts.push("marked-content".into());
+                facts.extend(fx216_positioned_semantics(children, fonts));
+                facts.push("end-marked-content".into());
+            }
+            other => facts.push(format!("paint={other:?}")),
+        }
+    }
+    facts
+}
+
+#[cfg(all(test, feature = "render"))]
+#[test]
+#[ignore = "requires admitted F-X216 source-built appearance artifacts"]
+fn fx216_full_effective_notes_properties_match_source_after_import() {
+    use sha2::{Digest, Sha256};
+    let dir = std::path::PathBuf::from(
+        std::env::var("FX216_CURRENT_NOTES_DIR").expect("current source-built notes artifacts"),
+    );
+    let mut layouts = Vec::new();
+    for (name, expected) in [
+        (
+            "source-notes.pptx",
+            "71b9df47d7d6aec67f70fbb988c956ca802b5fc04f70f10af427132bc1321987",
+        ),
+        (
+            "imported-notes.pptx",
+            "52b4b76a51e17343517ce5156fcd1267e2ae9e4bf95c64950579ee35f1b012b0",
+        ),
+    ] {
+        let bytes = std::fs::read(dir.join(name)).unwrap();
+        assert_eq!(
+            Sha256::digest(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+            expected
+        );
+        let presentation = Presentation::from_bytes(&bytes).unwrap();
+        layouts
+            .push(render_notes_pages(&presentation.staged_package(false).unwrap(), &[]).unwrap());
+    }
+    let source = &layouts[0];
+    let imported = &layouts[1];
+    assert_eq!(source.pages.len(), 1);
+    assert_eq!(imported.pages.len(), 2);
+    assert_eq!(source.pages[0].width, imported.pages[1].width);
+    assert_eq!(source.pages[0].height, imported.pages[1].height);
+    assert_eq!(source.pages[0].background, imported.pages[1].background);
+    let languages = |page: &oxml_layout::PageFrame| {
+        let mut values = Vec::new();
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::MultilingualText(run) = element {
+                values.push((run.logical_text.clone(), run.language.clone()));
+            }
+        });
+        values
+    };
+    let source_languages = languages(&source.pages[0]);
+    let imported_languages = languages(&imported.pages[1]);
+    assert_eq!(source_languages.len(), 5);
+    assert!(source_languages.iter().all(|(_, lang)| lang.is_none()));
+    assert_eq!(
+        source_languages
+            .iter()
+            .map(|(text, _)| text)
+            .collect::<Vec<_>>(),
+        imported_languages
+            .iter()
+            .map(|(text, _)| text)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        imported_languages
+            .iter()
+            .all(|(_, lang)| lang.as_deref() == Some("en-US"))
+    );
+    let expected = fx216_positioned_semantics(&source.pages[0].elements, &source.fonts);
+    let actual = fx216_positioned_semantics(&imported.pages[1].elements, &imported.fonts);
+    assert_eq!(
+        expected, actual,
+        "actual notes painter geometry/colors/glyphs/used-face bytes"
+    );
+    assert_eq!(
+        source_languages
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect::<String>(),
+        "Source notes appearance"
+    );
+    assert!(!expected.iter().any(|fact| fact.contains("10/17/16")));
+    // Explicit local language remains source-owned even though language tags
+    // are outside the geometry, font and color appearance comparison.
+    let bytes = std::fs::read(dir.join("source-notes.pptx")).unwrap();
+    let source_presentation = Presentation::from_bytes(&bytes).unwrap();
+    let mut package = source_presentation.staged_package(false).unwrap();
+    let note_part = source_presentation.slides[0]
+        .notes
+        .as_ref()
+        .unwrap()
+        .part_name
+        .clone();
+    let xml = String::from_utf8(package.get_part(&note_part).unwrap().to_vec()).unwrap();
+    assert!(xml.contains("<a:r><a:t>Source notes appearance</a:t>"));
+    package.set_part(
+        &note_part,
+        xml.replacen("<a:r><a:t>", "<a:r><a:rPr lang=\"fr-FR\"/><a:t>", 1)
+            .into_bytes(),
+    );
+    let explicit_source = Presentation::from_package(package).unwrap();
+    let original = explicit_source.to_bytes().unwrap();
+    let mut destination = Presentation::new().unwrap();
+    destination
+        .import_slides(
+            &explicit_source,
+            &[0],
+            &ImportSlideOptions {
+                keep_source_formatting: true,
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap();
+    assert_eq!(explicit_source.to_bytes().unwrap(), original);
+    let explicit_source_layout =
+        render_notes_pages(&explicit_source.staged_package(false).unwrap(), &[]).unwrap();
+    let explicit_imported_layout =
+        render_notes_pages(&destination.staged_package(false).unwrap(), &[]).unwrap();
+    let local_languages = languages(&explicit_source_layout.pages[0]);
+    assert!(
+        local_languages
+            .iter()
+            .all(|(_, lang)| lang.as_deref() == Some("fr-FR"))
+    );
+    assert_eq!(
+        local_languages,
+        languages(&explicit_imported_layout.pages[0]),
+        "explicit local language must remain exact"
+    );
+    if let Ok(dir) = std::env::var("FX216_EFFECTIVE_ARTIFACT_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(std::path::Path::new(&dir).join("notes-language-observations.tsv"), format!("source={source_languages:?}\nimported={imported_languages:?}\nexplicit={local_languages:?}\n")).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join("full-effective-notes.tsv"),
+            expected.join("\n"),
+        )
+        .unwrap();
+    }
 }

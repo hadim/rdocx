@@ -262,6 +262,23 @@ enum Command {
 
 #[derive(Subcommand)]
 enum SlideCommand {
+    /// Import selected slides from another deck into a new output file
+    Import {
+        destination: PathBuf,
+        source: PathBuf,
+        /// One-based source selection in caller order, such as 1,3-5
+        #[arg(long)]
+        slides: Option<String>,
+        /// One-based insertion position, append when absent
+        #[arg(long)]
+        at: Option<usize>,
+        #[arg(long)]
+        keep_source_formatting: bool,
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Add a slide from a layout, at the end or at a one-based position
     Add {
         file: PathBuf,
@@ -750,6 +767,23 @@ fn run_cli() {
             } => commands::comment_remove(&file, &id, &output, json),
         },
         Command::Slide { command } => match command {
+            SlideCommand::Import {
+                destination,
+                source,
+                slides,
+                at,
+                keep_source_formatting,
+                output,
+                json,
+            } => commands::slide_import(
+                &destination,
+                &source,
+                slides.as_deref(),
+                at,
+                keep_source_formatting,
+                &output,
+                json,
+            ),
             SlideCommand::Add {
                 file,
                 layout,

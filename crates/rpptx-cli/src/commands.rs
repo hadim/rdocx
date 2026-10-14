@@ -1522,6 +1522,66 @@ fn resolve_layout(presentation: &Presentation, layout: &str) -> Result<usize> {
     }
 }
 
+/// Imports a selected source batch and publishes one complete new file.
+pub fn slide_import(
+    destination: &Path,
+    source: &Path,
+    slides: Option<&str>,
+    at: Option<usize>,
+    keep_source_formatting: bool,
+    output: &Path,
+    as_json: bool,
+) -> Result<()> {
+    let outputs = [output.to_path_buf()];
+    ensure_output_paths_allowed(&outputs, destination, false)?;
+    ensure_output_paths_allowed(&outputs, source, false)?;
+    ensure_output_paths_available(&outputs)?;
+    let mut presentation = Presentation::open(destination)?;
+    let source_presentation = Presentation::open(source)?;
+    let indexes = match slides {
+        None => (0..source_presentation.len()).collect(),
+        Some(selection) => {
+            let mut indexes = Vec::new();
+            let mut selected = HashSet::new();
+            for component in selection.split(',') {
+                for one_based in parse_range(component)? {
+                    if one_based > source_presentation.len() {
+                        return Err(format!(
+                            "source slide {one_based} is out of range for {} slides",
+                            source_presentation.len()
+                        )
+                        .into());
+                    }
+                    if !selected.insert(one_based) {
+                        return Err(format!("duplicate source slide {one_based}").into());
+                    }
+                    indexes.push(one_based - 1);
+                }
+            }
+            indexes
+        }
+    };
+    let insert_index = at
+        .map(|at| at.checked_sub(1).ok_or("insertion position is one-based"))
+        .transpose()?;
+    let options = rpptx::ImportSlideOptions {
+        insert_index,
+        keep_source_formatting,
+        ..Default::default()
+    };
+    let (inserted, diagnostics) =
+        presentation.import_slides(&source_presentation, &indexes, &options, &[])?;
+    let bytes = presentation.to_bytes_for_path(output)?;
+    let record = json!({ "source": source, "destination": destination, "selected_slides": indexes.iter().map(|index| index + 1).collect::<Vec<_>>(), "inserted_slides": inserted.iter().map(|index| index + 1).collect::<Vec<_>>(), "diagnostics": diagnostics });
+    stage_and_publish(&[(output.to_path_buf(), bytes)], false)?;
+    if !as_json {
+        for diagnostic in &diagnostics {
+            writeln!(io::stderr().lock(), "{diagnostic}")?;
+        }
+    }
+    mutation_record(as_json, "import", record, output)
+}
+
 /// Adds one slide from a layout, then moves it to `at` when given.
 pub fn slide_add(
     file: &Path,

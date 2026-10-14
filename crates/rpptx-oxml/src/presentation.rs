@@ -133,6 +133,37 @@ impl Section {
             raw_children: OrderedRawChildren::default(),
         })
     }
+
+    /// Maps copied slide identities while retaining each source slide's XML sidecar.
+    /// Unselected source slots remain absent from reconciliation of the copied list.
+    pub fn remap_slide_ids(&mut self, ids: &std::collections::HashMap<u32, u32>) -> Result<()> {
+        let mapped = self
+            .slide_ids
+            .iter()
+            .filter_map(|id| ids.get(id).copied())
+            .collect::<Vec<_>>();
+        let mut used = std::collections::HashSet::new();
+        for &id in &mapped {
+            validate_slide_id(id)?;
+            if !used.insert(id) {
+                return Err(invalid_value("duplicate copied section slide id".into()));
+            }
+        }
+        for id in &mut self.original_slide_ids {
+            // Zero is outside the valid slide-id range and cannot match a copied slot.
+            *id = ids.get(id).copied().unwrap_or(0);
+        }
+        self.slide_id_sidecars.retain_mut(|sidecar| {
+            if let Some(&id) = ids.get(&sidecar.id) {
+                sidecar.id = id;
+                true
+            } else {
+                false
+            }
+        });
+        self.slide_ids = mapped;
+        Ok(())
+    }
 }
 
 impl CT_SlideMasterId {
@@ -330,6 +361,186 @@ impl CT_EmbeddedFontListEntry {
         Err(invalid_value(
             "embedded font face projection is inconsistent".into(),
         ))
+    }
+
+    /// Carries one missing imported face, retaining its source payload and namespaces.
+    /// The caller has already admitted equal typeface descriptions and font bytes.
+    pub fn import_face(
+        &mut self,
+        source: &Self,
+        kind: EmbeddedFontKind,
+        relationship_id: &str,
+    ) -> Result<()> {
+        if source.face(kind).is_none()
+            || self.typeface != source.typeface
+            || !self.import_description_matches(source)?
+        {
+            return Err(invalid_value(
+                "embedded font description conflicts with destination".into(),
+            ));
+        }
+        let previous = self.face(kind).map(str::to_owned);
+        if previous.as_deref().is_some_and(|id| id != relationship_id) {
+            return Err(invalid_value(
+                "embedded font face import would overwrite destination".into(),
+            ));
+        }
+        let destination = NamespaceBindings::from_entries(&self.namespaces);
+        let mut source = source.clone().into_namespace_context(&destination)?;
+        source.set_face(kind, relationship_id)?;
+        let source_scope = NamespaceBindings::from_entries(&source.namespaces);
+        let source_parts = font_element_parts(&source.raw)?;
+        let mut child = source_parts
+            .children
+            .into_iter()
+            .find_map(|child| match font_child_start(&child, &source_scope) {
+                Ok(Some((name, _))) if name == kind.element_name().as_bytes() => Some(Ok(child)),
+                Err(error) => Some(Err(error)),
+                _ => None,
+            })
+            .transpose()?
+            .ok_or_else(|| invalid_value("source embedded font face is absent".into()))?;
+        let original_names = font_expanded_names(&child, &source_scope)?;
+        let mut reader = Reader::from_reader(child.as_slice());
+        let start = match reader.read_event()? {
+            Event::Start(start) | Event::Empty(start) => start,
+            _ => unreachable!(),
+        };
+        let local = all_attributes(&start)?;
+        let mut bindings = source.namespaces.clone();
+        if !bindings.iter().any(|(prefix, _)| prefix.is_empty()) {
+            bindings.push((String::new(), String::new()));
+        }
+        for (prefix, uri) in bindings {
+            let key = if prefix.is_empty() {
+                "xmlns".to_owned()
+            } else {
+                format!("xmlns:{prefix}")
+            };
+            if !local.iter().any(|(name, _)| name == &key)
+                && !destination
+                    .entries()
+                    .iter()
+                    .any(|(name, value)| name == &prefix && value == &uri)
+            {
+                crate::namespace::set_non_visual_drawing_text(&mut child, &key, Some(&uri))?;
+            }
+        }
+        if font_expanded_names(&child, &destination)? != original_names {
+            return Err(invalid_value(
+                "imported embedded face would change namespace ownership".into(),
+            ));
+        }
+        if previous.is_some() {
+            let mut left_plain = self.clone();
+            let mut right_plain = source.clone();
+            if left_plain.remove_face(kind).is_ok() && right_plain.remove_face(kind).is_ok() {
+                return Ok(());
+            }
+            let parts = font_element_parts(&self.raw)?;
+            let existing = parts
+                .children
+                .into_iter()
+                .find_map(|child| match font_child_start(&child, &destination) {
+                    Ok(Some((name, _))) if name == kind.element_name().as_bytes() => {
+                        Some(Ok(child))
+                    }
+                    Err(error) => Some(Err(error)),
+                    _ => None,
+                })
+                .transpose()?
+                .ok_or_else(|| invalid_value("destination embedded face is absent".into()))?;
+            let strip_declarations = |mut xml: Vec<u8>| -> Result<Vec<u8>> {
+                let mut reader = Reader::from_reader(xml.as_slice());
+                let start = match reader.read_event()? {
+                    Event::Start(start) | Event::Empty(start) => start,
+                    _ => unreachable!(),
+                };
+                let attributes = all_attributes(&start)?;
+                for (key, _) in attributes
+                    .into_iter()
+                    .filter(|(key, _)| key == "xmlns" || key.starts_with("xmlns:"))
+                {
+                    crate::namespace::set_non_visual_drawing_text(&mut xml, &key, None)?;
+                }
+                Ok(xml)
+            };
+            if font_expanded_names(&existing, &destination)? != original_names
+                || font_opaque_namespace_context(&existing, &destination)?
+                    != font_opaque_namespace_context(&child, &destination)?
+                || strip_declarations(existing)? != strip_declarations(child)?
+            {
+                return Err(invalid_value(
+                    "embedded font face opaque payload conflicts with destination".into(),
+                ));
+            }
+            return Ok(());
+        }
+        let mut parts = font_element_parts(&self.raw)?;
+        let mut insertion = parts.children.len();
+        for (index, old) in parts.children.iter().enumerate() {
+            if let Some((name, _)) = font_child_start(old, &destination)?
+                && let Some(current) = EmbeddedFontKind::from_name(&name)
+                && (current as usize) > kind as usize
+            {
+                insertion = insertion.min(index);
+            }
+        }
+        parts.children.insert(insertion, child);
+        *self = parse_font_entry(&parts.join(), &destination)?;
+        Ok(())
+    }
+
+    /// Checks complete description and non-face metadata before merging face graphs.
+    fn import_description_matches(&self, source: &Self) -> Result<bool> {
+        let description = |entry: &Self| -> Result<Vec<u8>> {
+            let scope = NamespaceBindings::from_entries(&entry.namespaces);
+            let mut parts = font_element_parts(&entry.raw)?;
+            let mut retained = Vec::new();
+            for child in parts.children {
+                if font_child_start(&child, &scope)?
+                    .is_some_and(|(name, _)| EmbeddedFontKind::from_name(&name).is_some())
+                {
+                    continue;
+                }
+                retained.push(child);
+            }
+            parts.children = retained;
+            Ok(parts.join())
+        };
+        let left = description(self)?;
+        let right = description(source)?;
+        let left_scope = NamespaceBindings::from_entries(&self.namespaces);
+        let right_scope = NamespaceBindings::from_entries(&source.namespaces);
+        let left_model = parse_font_entry(&left, &left_scope)?;
+        let right_model = parse_font_entry(&right, &right_scope)?;
+        if !left_model.has_opaque_source()? && !right_model.has_opaque_source()? {
+            return Ok(self.typeface == source.typeface
+                && self.panose == source.panose
+                && self.pitch_family == source.pitch_family
+                && self.charset == source.charset);
+        }
+        if font_expanded_names(&left, &left_scope)? != font_expanded_names(&right, &right_scope)?
+            || font_opaque_namespace_context(&left, &left_scope)?
+                != font_opaque_namespace_context(&right, &right_scope)?
+        {
+            return Ok(false);
+        }
+        let strip = |mut xml: Vec<u8>| -> Result<Vec<u8>> {
+            let mut reader = Reader::from_reader(xml.as_slice());
+            let start = match reader.read_event()? {
+                Event::Start(start) | Event::Empty(start) => start,
+                _ => unreachable!(),
+            };
+            for (key, _) in all_attributes(&start)?
+                .into_iter()
+                .filter(|(key, _)| key == "xmlns" || key.starts_with("xmlns:"))
+            {
+                crate::namespace::set_non_visual_drawing_text(&mut xml, &key, None)?;
+            }
+            Ok(xml)
+        };
+        Ok(strip(left)? == strip(right)?)
     }
 
     fn into_namespace_context(mut self, destination: &NamespaceBindings) -> Result<Self> {
@@ -579,6 +790,43 @@ fn font_exact_attributes(start: &BytesStart<'_>) -> Result<RawAttributes> {
         ));
     }
     Ok(attributes)
+}
+
+/// Opaque values may refer to any inherited prefix. Preserve the complete
+/// decoded context instead of guessing which producer strings are QNames.
+fn font_opaque_namespace_context(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<Vec<Vec<(String, String)>>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut scopes = vec![inherited.clone()];
+    let mut contexts = Vec::new();
+    loop {
+        let event = reader.read_event()?;
+        let empty = matches!(event, Event::Empty(_));
+        match event {
+            Event::Start(start) | Event::Empty(start) => {
+                let scope = scopes
+                    .last()
+                    .ok_or_else(|| invalid_value("missing embedded font namespace scope".into()))?
+                    .with_start(&start)?;
+                let mut entries = scope.entries();
+                if !entries.iter().any(|(prefix, _)| prefix.is_empty()) {
+                    entries.push((String::new(), String::new()));
+                }
+                entries.sort();
+                contexts.push(entries);
+                if !empty {
+                    scopes.push(scope);
+                }
+            }
+            Event::End(_) => {
+                scopes.pop();
+            }
+            Event::Eof => return Ok(contexts),
+            _ => {}
+        }
+    }
 }
 
 fn font_expanded_names(
@@ -1131,6 +1379,87 @@ impl CT_Presentation {
     /// Counts qualified relationships throughout presentation XML, including preserved source.
     pub fn embedded_font_reference_count(&self, relationship_id: &str) -> Result<usize> {
         font_relationship_reference_count(&self.to_xml()?, relationship_id)
+    }
+
+    /// Registers the single global notes master in its schema-ordered list.
+    /// Existing owned lists must agree, and all foreign children remain verbatim.
+    pub fn ensure_notes_master_relationship(&mut self, relationship_id: &str) -> Result<()> {
+        if relationship_id.is_empty() {
+            return Err(invalid_value("empty notes master relationship".into()));
+        }
+        let xml = self.to_xml()?;
+        let mut reader = Reader::from_reader(xml.as_slice());
+        let mut scopes = vec![NamespaceBindings::default()];
+        let mut owned_list = None;
+        let mut lists = 0;
+        let mut references = Vec::new();
+        loop {
+            let event = reader.read_event()?;
+            let empty = matches!(&event, Event::Empty(_));
+            match event {
+                Event::Start(start) | Event::Empty(start) => {
+                    let scope = scopes
+                        .last()
+                        .expect("root namespace scope")
+                        .with_start(&start)?;
+                    let name = start.name();
+                    if scopes.len() == 2
+                        && scope.element_uri(name.as_ref()) == Some(P_NS)
+                        && name.local_name().as_ref() == b"notesMasterIdLst"
+                    {
+                        lists += 1;
+                        if !empty {
+                            owned_list = Some(scopes.len());
+                        }
+                    } else if owned_list == Some(scopes.len() - 1)
+                        && scope.element_uri(name.as_ref()) == Some(P_NS)
+                        && name.local_name().as_ref() == b"notesMasterId"
+                    {
+                        let mut ids =
+                            font_exact_attributes(&start)?
+                                .into_iter()
+                                .filter(|(key, _)| {
+                                    key.as_bytes().rsplit(|byte| *byte == b':').next()
+                                        == Some(b"id")
+                                        && scope.attribute_uri(key.as_bytes()) == Some(R_NS)
+                                });
+                        let (_, id) = ids
+                            .next()
+                            .ok_or_else(|| invalid_value("notes master id lacks r:id".into()))?;
+                        if ids.next().is_some() {
+                            return Err(invalid_value("ambiguous notes master r:id".into()));
+                        }
+                        references.push(id);
+                    }
+                    if !empty {
+                        scopes.push(scope);
+                    }
+                }
+                Event::End(_) => {
+                    scopes.pop();
+                    if owned_list == Some(scopes.len()) {
+                        owned_list = None;
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        if lists > 0 {
+            if lists != 1 || references != [relationship_id] {
+                return Err(invalid_value(
+                    "notes master list disagrees with its global relationship".into(),
+                ));
+            }
+            return Ok(());
+        }
+        let id = quick_xml::escape::escape(relationship_id);
+        self.raw_children.push(
+            2,
+            format!("<p:notesMasterIdLst><p:notesMasterId r:id=\"{id}\"/></p:notesMasterIdLst>")
+                .into_bytes(),
+        );
+        Ok(())
     }
 
     pub fn embed_true_type_fonts(&self) -> Result<Option<bool>> {

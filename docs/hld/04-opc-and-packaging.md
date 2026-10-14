@@ -1149,11 +1149,39 @@ numbered part after the greatest occupied suffix. The sniffed canonical
 extension and content type are registered with the package. Each source slide
 creates or reuses its own internal image relationship to that shared part, with
 a relative target resolved from the slide part name.
-Cross-presentation slide import uses the same byte equality check for images,
-audio, and video, including media stored outside `/ppt/media/`. The import
-stages the destination package and remaps each copied part's relationship ids
-once. An unsupported internal relationship graph fails before the destination
-changes, while external targets retain their target mode and address.
+Cross-presentation slide import uses complete byte equality for images,
+audio and video, including parts outside `/ppt/media/`. One staged destination
+candidate preflights the selected graph and allocates copied parts, slide IDs,
+relationship scopes and slide-jump maps before publication. Shared parts use
+one source-to-destination part map. Charts include their workbook, style and
+colour dependencies. Embedded objects retain bytes and previews. Notes,
+comments and actual author or person references retain their qualified owners.
+External relationships preserve their address and mode. Unsupported internal
+types report the actual type and owner path before any destination change.
+
+Classic and modern comment identities have separate collision checks. Required
+parent records, replies and assigned persons join the selected closure. Authors
+merge by complete supported identity, not display name. Qualified numeric and
+relationship references remap together, while foreign lookalikes and opaque
+root or record payload remain preserved. Unmapped slide jumps release only the
+actual owned action and unused relationship, preserving shared references and
+click sounds, and produce an owner-specific diagnostic.
+
+Source-formatting import carries required presentation-global table styles and
+embedded font graphs without overwriting destination definitions. Equal graphs
+may be reused only with complete source, namespace and relationship proof.
+Relationship roots, ordered records, opaque payload and effective namespace
+contexts participate in equality. Only graph-proven assigned IDs and resolved
+target identities normalize for comparison. Copied relationship targets are
+resolved from the original owner and written relative to the actual new owner
+without changing retained record metadata.
+Style collisions remap selected imported references to noncolliding identities.
+Source-default style inheritance is preserved explicitly when destination
+defaults differ. Stored font programs retain their original bytes and qualified
+face descriptions. A conflicting same-typeface face or ambiguous opaque
+metadata refuses atomically when both owners cannot be preserved. Only source-enabled programs participate, preserving the source activation
+state. No copied font is re-encoded or assigned fabricated license
+authorization.
 
 The presentation HTML importer accepts image bytes only through
 `HtmlImageResource`. The HTML source string is an exact lookup key. Missing

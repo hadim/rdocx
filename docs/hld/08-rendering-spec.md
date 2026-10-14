@@ -116,7 +116,11 @@ Notes-slide placeholder overlays that have no complete-key match on the notes
 master are skipped rather than aborting the page. The renderer reports each
 skipped key in source order. It still fails closed for ambiguous or duplicate
 matching, invalid relationship ownership, and a missing required slide-image
-placeholder.
+placeholder. With an actual notes owner, absent master placeholders are
+omitted. Matched local absent or empty text bodies stay empty, and actual
+local slide-number fields resolve on the render clone without changing the
+saved owner. Ordinary local text is preserved. Notes without a notes owner
+and handouts keep their separate master composition behavior.
 
 Raster notes and handout output accepts finite positive DPI up to 600 and
 rejects a decoded output estimate above 256 MiB before allocation. Deterministic
@@ -2580,6 +2584,17 @@ Explicit imported layout mapping can change inherited geometry or appearance,
 but does not rewrite direct slide coordinates or content. Imported resources
 remain bounded to the preflighted selected closure. Deterministic physical font
 registration and the pinned Word tint convention remain unchanged.
+
+Destination-formatting slide import uses destination inheritance by default.
+Opt-in source formatting resolves the copied actual layout, master and theme,
+including inherited fonts, colours, placeholder geometry and notes resources.
+Presentation-global source table styles and embedded font programs preserve
+the selected source appearance without changing unrelated destination owners.
+Caller-font precedence, checked embedded decoding and deterministic fallback
+rules remain shared with ordinary rendering. Source and imported render
+comparisons use the same actual geometry and font inputs with comparison
+criteria fixed before measuring output. A graph copy or nonblank image alone
+is not native appearance or pixel parity evidence.
 
 Qualified picture drawing properties with hidden=true or hidden=1 do not paint. Missing and false hidden flags retain ordinary picture rendering. The reader uses the actual qualified cNvPr owner and retains its raw bytes, including foreign attributes and children. LibreOffice may materialize master visibility as hidden layout pictures during save and reopen.
 

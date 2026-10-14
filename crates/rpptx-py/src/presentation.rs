@@ -2399,6 +2399,7 @@ impl PyPptElement {
 #[derive(Clone, Copy)]
 pub(crate) enum SlideOwnerEdit {
     Insert(usize),
+    InsertMany { at: usize, count: usize },
     Remove(usize),
     Move { from: usize, to: usize },
 }
@@ -3616,6 +3617,13 @@ impl PyPresentation {
                 SlideOwnerEdit::Insert(at) => {
                     if *index >= at {
                         *index += 1;
+                    }
+                }
+                SlideOwnerEdit::InsertMany { at, count } => {
+                    if *index >= at {
+                        *index = index
+                            .checked_add(count)
+                            .expect("native slide count was checked");
                     }
                 }
                 SlideOwnerEdit::Remove(at) => {

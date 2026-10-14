@@ -211,6 +211,32 @@ correctly inside a non-rectangular shape and would otherwise have to be invented
 
 The generated table and its provenance are covered in `08-rendering-spec.md`.
 
+The concrete shape-property inheritance operation stages missing geometry,
+fill, line and effect groups into a clone. A local transform retains its
+rotation and flip values, including explicit zero and false, while absent
+optional offset, extent and child coordinates inherit individually. An absent
+local transform inherits the complete lower transform. Copied opaque children
+retain their source namespace authority and schema position. Conflicting
+opaque owner metadata refuses atomically rather than rebinding local payload.
+The operation retains original source XML and its typed projection for
+admission. Unrepresentable opaque metadata on modeled descendants refuses
+from either the local or inherited owner, even without a namespace conflict.
+Those retained source facts do not participate in ordinary shape-property
+equality or serialization.
+
+`CT_Shape::style_for_materialization` prepares the actual source-scoped
+shape style without mutating the owner or clearing its current reference
+selections. Source-format notes stage direct fill, line, effect and font
+appearance before calling `materialize_style_references`. That operation
+validates the qualified owned style references, sets the fill, line and effect
+matrix indexes to zero and selects the schema None font collection. It stages
+the complete edit before publishing it. Original namespace authority, ordered
+opaque payload and foreign lookalikes remain preserved or receive a named
+atomic refusal when they cannot be represented. Legitimate modeled reference
+edits participate in preparation rather than being replaced by stale source
+snapshots. These materialization-specific source facts do not change ordinary
+style equality or writing.
+
 ## Text body
 
 ```
@@ -313,6 +339,17 @@ their stored logical text.
 properties. The reader accepts any prefix, and the writer emits `a:defPPr`
 before the ascending level properties with fixed `a:` prefixes. Unmodelled
 siblings remain in their original positions around those typed children.
+
+Character properties, paragraph properties and list styles each expose a
+concrete `with_inherited_defaults` operation. Local schema choices win,
+including explicit false, zero and no-bullet values. Missing paragraph and
+character defaults inherit without replacing unrelated local choices, and
+list default properties remain distinct from the nine level properties.
+Inheritance stages a clone and preserves qualified opaque attributes and
+ordered children. Copied lower children close their required namespaces,
+while inherited unqualified scalar attributes add no unrelated namespace
+bindings to the local owner. Ambiguous opaque metadata conflicts refuse
+without changing either input.
 
 ### Character-owner source and caps
 
