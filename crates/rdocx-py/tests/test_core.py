@@ -3446,9 +3446,9 @@ def test_paragraph_text_setter_replaces_runs_and_keeps_format_and_comments():
 
     paragraph.text = "Omega\tone\ntwo"
 
-    for stale in (lambda: paragraph.text, lambda: run.text):
-        with pytest.raises(rdocx.StaleElementError):
-            stale()
+    assert paragraph.text == "Omega\tone\ntwo"
+    with pytest.raises(rdocx.StaleElementError):
+        _ = run.text
     paragraph = document.paragraphs[0]
     assert paragraph.text == "Omega\tone\ntwo"
     assert paragraph.style == "Heading1"
@@ -3724,10 +3724,12 @@ def test_issue_168_complete_edit_save_reopen_layout_and_render(tmp_path):
     document.insert_section(1)
     document.add_paragraph("Second section {{state}}")
     footer = document.create_section_story(1, "footer", "default")
+    footer_part = footer.part_name
     document.add_paragraph("Confidential").runs[0].add_tab()
     document.paragraphs[-1].add_run("Page ").add_field("PAGE", "1")
     document.paragraphs[-1].add_run(" of ").add_field("NUMPAGES", "1")
     fragment = document.pop_content(document.find_content_index("Confidential"))
+    footer = next(story for story in document.stories if story.part_name == footer_part)
     document.insert_content(footer, fragment)
 
     target_index = document.find_content_index("Target phrase")
@@ -3864,18 +3866,24 @@ def test_comment_removal_paths_preserve_atomicity_and_revisions():
 
     document = commented("cell")
     held = document.paragraphs[0]
+    removed_cell = document.tables[0].cell(0, 0)
+    removed_run = removed_cell.paragraphs[0].runs[0]
     document.tables[0].remove_row(0)
     assert document.comments == ()
-    with pytest.raises(rdocx.StaleElementError):
-        held.text
+    assert held.text == "body anchor"
+    for retired in (lambda: removed_cell.text, lambda: removed_run.text):
+        with pytest.raises(rdocx.StaleElementError):
+            retired()
     assert rdocx.Document.from_bytes(document.to_bytes()).comments == ()
 
     document = commented("cell")
     held = document.tables[0].cell(0, 0)
+    replaced_run = held.paragraphs[0].runs[0]
     held.text = "replacement"
     assert len(document.comments) == 3
+    assert held.text == "replacement"
     with pytest.raises(rdocx.StaleElementError):
-        held.text
+        _ = replaced_run.text
     assert document.tables[0].cell(0, 0).text == "replacement"
     assert len(rdocx.Document.from_bytes(document.to_bytes()).comments) == 3
 
@@ -4005,9 +4013,13 @@ def test_comment_anchor_block_control_paragraph_endpoints_are_real_typed_ranges(
         assert position.item.text == ("A" if multi else "AB")
         assert position.item.xml
         assert current.to_bytes() == original
+        retired_run = held.runs[0]
         current.add_paragraph("Revision changes")
+        survivor = rdocx.StoryRunPosition(paragraph=held, run_index=0)
+        assert survivor.item.text == ("A" if multi else "AB")
+        assert survivor.item.xml == position.item.xml
         with pytest.raises(rdocx.StaleElementError, match="document revision"):
-            rdocx.StoryRunPosition(paragraph=held, run_index=0)
+            _ = retired_run.text
 
 
 def test_comment_anchor_header_block_control_preserves_nonbody_identity():
@@ -4271,14 +4283,38 @@ def test_scoped_alternate_text_box_refusal_is_rdocxerror_without_mutation():
     with pytest.raises(rdocx.ReplacementCountError) as raised:
         document.replace_text_at(item, "NEEDLE", "PIN", expect=2)
     assert (raised.value.expected, raised.value.found) == (2, 1)
-    with pytest.raises(rdocx.RdocxError, match="alternate text-box"):
-        document.replace_text_at(item, "NEEDLE", "PIN", expect=1)
     assert document.to_bytes() == before
     assert held.text == "held outside"
-    assert document.replace_text_at(item, "absent", "PIN", expect=0) == 0
-    assert document.to_bytes() == before
-    reopened = rdocx.Document.from_bytes(before)
-    assert _story_paragraph_texts(reopened, "text_box") == ["box NEEDLE"]
+    assert document.replace_text_at(item, "NEEDLE", "PIN", expect=1) == 1
+    with pytest.raises(rdocx.StaleElementError):
+        _ = held.text
+    assert document.paragraphs[0].text == "held outside"
+    saved = document.to_bytes()
+    xml = _document_xml(document)
+    assert xml.count(b"box PIN") == 2 and b"NEEDLE" not in xml
+    assert b"<!--preserve alternate producer-->" in xml
+    reopened = rdocx.Document.from_bytes(saved)
+    assert _story_paragraph_texts(reopened, "text_box") == ["box PIN"]
+    assert _document_xml(reopened) == xml
+    fresh = next(entry for entry in reopened.story_items
+                 if entry.story.kind == "text_box" and entry.kind == "paragraph")
+    assert reopened.replace_text_at(fresh, "absent", "PIN", expect=0) == 0
+    assert reopened.to_bytes() == saved
+
+    # The corresponding source slot is not proved when the fallback text differs.
+    asymmetric = body.replace(
+        f"<v:textbox>{content}</v:textbox>",
+        f"<v:textbox>{content.replace('box NEEDLE', 'different text')}</v:textbox>",
+    )
+    assert asymmetric != body
+    refused = _replace_document_body(rdocx.Document(), asymmetric)
+    selected = next(entry for entry in refused.story_items
+                    if entry.story.kind == "text_box" and entry.kind == "paragraph")
+    original = refused.to_bytes()
+    outside = refused.paragraphs[0]
+    with pytest.raises(rdocx.RdocxError, match="asymmetric"):
+        refused.replace_text_at(selected, "NEEDLE", "PIN", expect=1)
+    assert refused.to_bytes() == original and outside.text == "held outside"
 
 
 def test_rebuild_toc_single_entry_preserves_opaque_properties_and_reopens():
@@ -4452,10 +4488,12 @@ def test_fx201_note_reference_creation_uses_checked_paragraph():
 
     document = rdocx.Document()
     reference = document.add_paragraph("reference")
+    retired_run = reference.runs[0]
     note = document.add_footnote(reference, "note content")
     assert note.paragraphs[0].text == "note content"
+    assert reference.text == "reference"
     with pytest.raises(rdocx.StaleElementError):
-        _ = reference.text
+        _ = retired_run.text
     saved = document.to_bytes()
     with zipfile.ZipFile(io.BytesIO(saved)) as archive:
         assert b"note content" in archive.read("word/footnotes.xml")
@@ -6558,3 +6596,41 @@ def test_fx211d_merge_opaque_refusal_preserves_package_and_owners(kind):
     assert opaque in second.element.xml
     reopened = Document.from_bytes(before)
     assert opaque in reopened.tables[0].cell(0, 1).element.xml
+
+
+@pytest.mark.parametrize("properties", [
+    '<w:tag w:val="goog_rdk_1"/><w:id w:val="1209466531"/>',
+    '<w:id w:val="-1482736121"/><w:docPartObj>'
+    '<w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj>',
+])
+def test_preserved_control_paragraphs_keep_ordinary_reads_without_xml_authority(properties):
+    import rdocx
+
+    body = (
+        '<w:p><w:r><w:t>outside</w:t></w:r></w:p>'
+        f'<w:sdt><w:sdtPr>{properties}</w:sdtPr><w:sdtContent>'
+        '<w:p><w:r><w:t>preserved</w:t></w:r></w:p>'
+        '</w:sdtContent></w:sdt>'
+    )
+    document = _replace_document_body(rdocx.Document(), body)
+    before = document.to_bytes()
+    before_xml = _document_xml(document)
+    assert [paragraph.text for paragraph in document.paragraphs] == ["outside", "preserved"]
+    held = document.paragraphs[1]
+    outside = document.paragraphs[0]
+    assert held.text == "preserved"
+    for operation in (
+        lambda: held.element.xml,
+        lambda: held.element.replace_xml('<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'),
+    ):
+        with pytest.raises(ValueError, match="paragraph XML owner route is unsupported"):
+            operation()
+        assert document.to_bytes() == before
+    reopened = rdocx.Document.from_bytes(before)
+    assert reopened.paragraphs[1].text == "preserved"
+    assert _document_xml(reopened) == before_xml
+    document.add_paragraph("later")
+    assert outside.text == "outside"
+    with pytest.raises(rdocx.StaleElementError):
+        _ = held.text
+    assert document.paragraphs[1].text == "preserved"

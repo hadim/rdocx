@@ -24784,13 +24784,21 @@ impl Document {
         let (source, owner) = self.story_source_and_owner(&story)?;
         // The body section properties come last, so the n-th direct item is
         // the direct body child at slot n.
-        let item_index = scan_story_items(source.xml.as_ref(), &owner)?
+        let items = scan_story_items(source.xml.as_ref(), &owner)?;
+        let (item_index, item) = items
             .iter()
             .enumerate()
             .filter(|(_, item)| item.direct_owner_child)
             .nth(slot)
-            .map(|(index, _)| index)
             .ok_or_else(|| Error::Other("body paragraph has no story item".to_owned()))?;
+        let expected_kind = if ordinal.is_some() {
+            StoryItemKind::ContentControl
+        } else {
+            StoryItemKind::Paragraph
+        };
+        if item.kind != expected_kind {
+            return Ok(None);
+        }
         Ok(Some(ContentLocation::new(
             story,
             StoryItemKind::Paragraph,
