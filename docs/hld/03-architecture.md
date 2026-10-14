@@ -1061,7 +1061,9 @@ formatting, the prior holds no `w:rPr` and reads like Word's form, so rejecting
 it keeps the edited mark formatting. Contextual markers act on their owning
 run, paragraph mark, numbering property, or row. A removed paragraph mark
 merges with the next paragraph across a table that immediately follows it when
-every row of that table is removed by the same resolution. A removed paragraph
+every row of that table is removed by the same resolution. Before a table
+that stays, it has no merge partner, so the paragraph goes when nothing of it
+but proofing marks remains, and is refused otherwise. A removed paragraph
 mark inside removed content, such as a cell paragraph of a removed row, needs
 no merge partner. The merged paragraph keeps the resolved properties of the
 last paragraph, whose mark remains. A hyperlink whose every child is a revision
@@ -1153,6 +1155,10 @@ paragraph mark as the story or control terminator. A self-closing original
 final paragraph expands around its marker without creating a raw sibling. This
 ownership lets acceptance retain every appended paragraph and rejection
 reconstruct the original without an empty terminal residue.
+Any other inserted or deleted paragraph carries the change on its own mark,
+also when a table follows it, as Word writes it. Resolving that change merges
+the paragraph into the next one across the tables it removes, or removes the
+paragraph before a table that stays.
 When an inserted or deleted table stands between that boundary and a final
 inserted or deleted paragraph, the paragraph mark before the table carries the
 boundary, because resolving that change removes every row of the table.

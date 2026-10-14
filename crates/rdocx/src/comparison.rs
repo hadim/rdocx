@@ -3261,11 +3261,19 @@ fn compare_body(
     let mut output: Vec<(EmittedOwner, String)> = Vec::new();
     let mut trailing_merged = None;
     for (position, (original_index, edited_index)) in aligned.iter().copied().enumerate() {
-        let next_is_paragraph = aligned.get(position + 1).is_some_and(|(left, right)| {
+        let item = |(left, right): (Option<usize>, Option<usize>)| {
             right
                 .and_then(|index| edited.body.content.get(index))
                 .or_else(|| left.and_then(|index| original.body.content.get(index)))
-                .is_some_and(|content| matches!(content, BodyContent::Paragraph(_)))
+        };
+        let next_takes_mark = next_kept_owner(&aligned, position, |pair| {
+            matches!(item(pair), Some(BodyContent::Table(_)))
+        })
+        .is_some_and(|pair| {
+            matches!(
+                item(pair),
+                Some(BodyContent::Paragraph(_) | BodyContent::Table(_))
+            )
         });
         match (original_index, edited_index) {
             (Some(left), Some(right)) => {
@@ -3305,7 +3313,7 @@ fn compare_body(
                 let content = &original.body.content[left];
                 if let Some(id) = moves.original[left] {
                     if let BodyContent::Paragraph(paragraph) = content
-                        && !next_is_paragraph
+                        && !next_takes_mark
                     {
                         let merged =
                             mark_previous_paragraph_with_id(&mut output, "moveFrom", id, metadata)?;
@@ -3328,7 +3336,7 @@ fn compare_body(
                     if trailing_paragraph_delete_start == Some(position) {
                         trailing_merged = mark_previous_paragraph(&mut output, "del", metadata)?;
                     }
-                    if next_is_paragraph {
+                    if next_takes_mark {
                         output.push((
                             EmittedOwner::of(content, content, Some("del")),
                             deleted_body_content(content, metadata)?,
@@ -3343,7 +3351,7 @@ fn compare_body(
                         )?);
                     }
                 } else if let BodyContent::Paragraph(paragraph) = content
-                    && !next_is_paragraph
+                    && !next_takes_mark
                 {
                     let merged = mark_previous_paragraph(&mut output, "del", metadata)?;
                     output.push(final_paragraph(paragraph, "del", None, merged, metadata)?);
@@ -3358,7 +3366,7 @@ fn compare_body(
                 let content = &edited.body.content[right];
                 if let Some(id) = moves.edited[right] {
                     if let BodyContent::Paragraph(paragraph) = content
-                        && !next_is_paragraph
+                        && !next_takes_mark
                     {
                         let merged =
                             mark_previous_paragraph_with_id(&mut output, "moveTo", id, metadata)?;
@@ -3381,7 +3389,7 @@ fn compare_body(
                     if trailing_paragraph_insert_start == Some(position) {
                         trailing_merged = mark_previous_paragraph(&mut output, "ins", metadata)?;
                     }
-                    if next_is_paragraph {
+                    if next_takes_mark {
                         output.push((
                             EmittedOwner::of(content, content, None),
                             inserted_body_content(content, metadata)?,
@@ -3396,7 +3404,7 @@ fn compare_body(
                         )?);
                     }
                 } else if let BodyContent::Paragraph(paragraph) = content
-                    && !next_is_paragraph
+                    && !next_takes_mark
                 {
                     let merged = mark_previous_paragraph(&mut output, "ins", metadata)?;
                     output.push(final_paragraph(paragraph, "ins", None, merged, metadata)?);
@@ -3658,6 +3666,30 @@ impl<'a> EmittedOwner<'a> {
             rejected: original.properties.as_ref(),
         }
     }
+}
+
+/// The aligned owner after an inserted, deleted or moved one at `position`
+/// that the resolution removing its paragraph mark keeps. A table on the same
+/// side is crossed, because that resolution removes every row of it.
+///
+/// When that owner is a paragraph or a table, the paragraph at `position`
+/// carries its own change: removing its mark merges it into that paragraph,
+/// or, before a table, removes the paragraph, which has no content left.
+/// Otherwise its mark ends the story, and [`final_paragraph`] applies.
+fn next_kept_owner(
+    aligned: &[(Option<usize>, Option<usize>)],
+    position: usize,
+    is_table: impl Fn((Option<usize>, Option<usize>)) -> bool,
+) -> Option<(Option<usize>, Option<usize>)> {
+    let (left, right) = aligned[position];
+    aligned[position + 1..]
+        .iter()
+        .copied()
+        .find(|&(next_left, next_right)| {
+            next_left.is_some() != left.is_some()
+                || next_right.is_some() != right.is_some()
+                || !is_table((next_left, next_right))
+        })
 }
 
 /// Mark the paragraph before a final inserted or deleted paragraph, and
@@ -6443,11 +6475,19 @@ fn compare_control_from_xml(
             content.push((EmittedOwner::Whitespace, whitespace_slots[index].clone()));
             whitespace_emitted[index] = true;
         }
-        let next_is_paragraph = aligned.get(position + 1).is_some_and(|(left, right)| {
+        let item = |(left, right): (Option<usize>, Option<usize>)| {
             right
                 .and_then(|index| edited_content.get(index).copied())
                 .or_else(|| left.and_then(|index| original_content.get(index).copied()))
-                .is_some_and(|content| matches!(content, SdtContent::Paragraph(_)))
+        };
+        let next_takes_mark = next_kept_owner(&aligned, position, |pair| {
+            matches!(item(pair), Some(SdtContent::Table(_)))
+        })
+        .is_some_and(|pair| {
+            matches!(
+                item(pair),
+                Some(SdtContent::Paragraph(_) | SdtContent::Table(_))
+            )
         });
         let child_location = format!("{location}/content[{position}]");
         match (left, right) {
@@ -6469,7 +6509,7 @@ fn compare_control_from_xml(
                     if trailing_paragraph_delete_start == Some(position) {
                         trailing_merged = mark_previous_paragraph(&mut content, "del", metadata)?;
                     }
-                    if next_is_paragraph {
+                    if next_takes_mark {
                         content.push((
                             EmittedOwner::paragraph(paragraph, paragraph),
                             marked_control_content(original_content[i], "del", metadata)?,
@@ -6484,7 +6524,7 @@ fn compare_control_from_xml(
                         )?);
                     }
                 } else if let SdtContent::Paragraph(paragraph) = original_content[i]
-                    && !next_is_paragraph
+                    && !next_takes_mark
                 {
                     let merged = mark_previous_paragraph(&mut content, "del", metadata)?;
                     content.push(final_paragraph(paragraph, "del", None, merged, metadata)?);
@@ -6506,7 +6546,7 @@ fn compare_control_from_xml(
                     if trailing_paragraph_insert_start == Some(position) {
                         trailing_merged = mark_previous_paragraph(&mut content, "ins", metadata)?;
                     }
-                    if next_is_paragraph {
+                    if next_takes_mark {
                         content.push((
                             EmittedOwner::paragraph(paragraph, paragraph),
                             marked_control_content(edited_content[j], "ins", metadata)?,
@@ -6521,7 +6561,7 @@ fn compare_control_from_xml(
                         )?);
                     }
                 } else if let SdtContent::Paragraph(paragraph) = edited_content[j]
-                    && !next_is_paragraph
+                    && !next_takes_mark
                 {
                     let merged = mark_previous_paragraph(&mut content, "ins", metadata)?;
                     content.push(final_paragraph(paragraph, "ins", None, merged, metadata)?);

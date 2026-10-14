@@ -753,23 +753,30 @@ impl<'a> XmlTree<'a> {
                 // its row markers and yields no bytes.
                 let mut siblings = vec![child];
                 let mut next_index = child_index + 1;
+                // A table that stays leaves the paragraphs nothing to merge
+                // into, so they go, which needs them to keep no content.
+                let mut before_table = false;
                 loop {
                     let next = element.children.get(next_index).copied().ok_or_else(|| {
                         Error::Other("cannot remove the final paragraph mark".to_owned())
                     })?;
-                    siblings.push(next);
-                    next_index += 1;
-                    if self.elements[next].word
-                        && self.elements[next].local == "tbl"
-                        && self.owned_rows_all_remove(next, state)
-                    {
+                    let next_element = &self.elements[next];
+                    if next_element.word && next_element.local == "tbl" {
+                        if !self.owned_rows_all_remove(next, state) {
+                            before_table = true;
+                            break;
+                        }
+                        siblings.push(next);
+                        next_index += 1;
                         continue;
                     }
-                    if !self.elements[next].word || self.elements[next].local != "p" {
+                    if !next_element.word || next_element.local != "p" {
                         return Err(Error::Other(
                             "paragraph mark removal requires an adjacent paragraph".to_owned(),
                         ));
                     }
+                    siblings.push(next);
+                    next_index += 1;
                     paragraphs.push(next);
                     if !self.paragraph_mark_removes(next, state) {
                         break;
@@ -783,8 +790,12 @@ impl<'a> XmlTree<'a> {
                         self.render(pair[1], state, false)?;
                     }
                 }
-                output.extend_from_slice(&self.render_merged_paragraphs(&paragraphs, state)?);
-                cursor = self.elements[*paragraphs.last().expect("paragraph chain exists")].end;
+                if before_table {
+                    self.validate_removed_paragraphs(&paragraphs, state)?;
+                } else {
+                    output.extend_from_slice(&self.render_merged_paragraphs(&paragraphs, state)?);
+                }
+                cursor = self.elements[*siblings.last().expect("paragraph chain exists")].end;
                 child_index = next_index;
                 continue;
             }
@@ -1254,6 +1265,32 @@ impl<'a> XmlTree<'a> {
                 .then_some(*child)
             })
             .collect()
+    }
+
+    /// Resolve paragraphs whose marks are removed before a table that stays,
+    /// and which go. Nothing of them but proofing marks may remain.
+    fn validate_removed_paragraphs(
+        &self,
+        paragraphs: &[usize],
+        state: &mut RenderState<'_>,
+    ) -> Result<()> {
+        for paragraph in paragraphs {
+            for child in &self.elements[*paragraph].children {
+                let child_element = &self.elements[*child];
+                if child_element.word && child_element.local == "pPr" {
+                    self.validate_selected_descendants(*child, state)?;
+                } else if !self.render(*child, state, false)?.is_empty()
+                    && !(child_element.word && child_element.local == "proofErr")
+                {
+                    return Err(Error::Other(
+                        "paragraph mark removal before a table requires a paragraph with no \
+                         content left"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn render_merged_paragraphs(

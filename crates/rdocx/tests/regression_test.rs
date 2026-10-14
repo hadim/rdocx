@@ -45538,6 +45538,271 @@ fn issue_255_word_compare_output_for_a_final_table_resolves() {
     }
 }
 
+/// A body where "T:text" is a one-cell table holding that text.
+fn paragraph_next_to_table_document(spec: &[&str]) -> Document {
+    let mut document = Document::new();
+    for item in spec {
+        if let Some(text) = item.strip_prefix("T:") {
+            document
+                .add_table(1, 1)
+                .cell(0, 0)
+                .expect("one-cell table")
+                .set_text(text);
+        } else {
+            document.add_paragraph(item);
+        }
+    }
+    document
+}
+
+fn paragraph_next_to_table_body(document: &Document) -> Vec<String> {
+    document
+        .body_items()
+        .map(|item| match item {
+            BodyItemRef::Paragraph(paragraph) => paragraph.text(),
+            BodyItemRef::Table(table) => {
+                format!("T:{}", table.cell(0, 0).expect("one-cell table").text())
+            }
+            _ => panic!("unexpected body item"),
+        })
+        .collect()
+}
+
+#[test]
+fn paragraph_inserted_or_deleted_before_a_table_compares() {
+    let pairs: [(&[&str], &[&str]); 12] = [
+        // The paragraph before the table is the first of the body.
+        (&["Old.", "T:Same cell.", "End."], &["T:Same cell.", "End."]),
+        (&["T:Same cell.", "End."], &["New.", "T:Same cell.", "End."]),
+        // The table changes too.
+        (
+            &["Intro.", "Old.", "T:Old cell.", "End."],
+            &["Intro.", "T:New cell.", "End."],
+        ),
+        (
+            &["Intro.", "T:Old cell.", "End."],
+            &["Intro.", "New.", "T:New cell.", "End."],
+        ),
+        // Controls that compared before.
+        (
+            &["Intro.", "Old.", "T:Same cell.", "End."],
+            &["Intro.", "T:Same cell.", "End."],
+        ),
+        (
+            &["Intro.", "Old.", "T:Cell text.", "End."],
+            &["Intro.", "T:Cell text.", "End."],
+        ),
+        (
+            &["Intro.", "Old.", "", "T:Old cell.", "End."],
+            &["Intro.", "", "T:New cell.", "End."],
+        ),
+        // Two paragraphs, and a table that is the last body item.
+        (
+            &["Old.", "Older.", "T:Same cell.", "End."],
+            &["T:Same cell.", "End."],
+        ),
+        (&["Old.", "T:Same cell."], &["T:Same cell."]),
+        (&["T:Same cell."], &["New.", "T:Same cell."]),
+        // The table goes with the paragraph, or comes with it.
+        (&["Old.", "T:Cell.", "End."], &["End."]),
+        (&["Intro.", "T:Cell.", "End."], &["Intro.", "New.", "End."]),
+    ];
+    for granularity in [
+        rdocx::ComparisonGranularity::Word,
+        rdocx::ComparisonGranularity::Run,
+    ] {
+        for ignore in [false, true] {
+            for (original, edited) in pairs {
+                let label = format!("{granularity:?} ignore={ignore} {original:?} -> {edited:?}");
+                let mut compared = paragraph_next_to_table_document(original);
+                compared
+                    .compare_with_options(
+                        &paragraph_next_to_table_document(edited),
+                        "Reviewer",
+                        "2026-01-01T00:00:00Z",
+                        &rdocx::ComparisonOptions {
+                            granularity,
+                            ignore_fields: ignore,
+                            ignore_formatting: ignore,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_else(|error| panic!("{label}: {error}"));
+                let redline = compared.to_bytes().expect("save redline");
+                for (accept, expected) in [(true, edited), (false, original)] {
+                    let mut resolved = Document::from_bytes(&redline).expect("reopen redline");
+                    if accept {
+                        resolved.accept_all()
+                    } else {
+                        resolved.reject_all()
+                    }
+                    .unwrap_or_else(|error| panic!("{label} accept={accept}: {error}"));
+                    let resolved = Document::from_bytes(&resolved.to_bytes().unwrap())
+                        .expect("reopen resolved redline");
+                    assert_eq!(
+                        paragraph_next_to_table_body(&resolved),
+                        expected
+                            .iter()
+                            .map(|item| item.to_string())
+                            .collect::<Vec<_>>(),
+                        "{label} accept={accept}"
+                    );
+                    assert!(resolved.revisions().is_empty(), "{label} accept={accept}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn paragraph_inserted_or_deleted_before_a_table_in_a_control_compares() {
+    let document = |spec: &[&str], indent: &str| {
+        let content = spec
+            .iter()
+            .map(|item| match item.strip_prefix("T:") {
+                Some(text) => format!(
+                    r#"{indent}<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#
+                ),
+                None => format!("{indent}<w:p><w:r><w:t>{item}</w:t></w:r></w:p>"),
+            })
+            .collect::<String>();
+        document_with_content_controls(&wrap_word_body(&format!(
+            r#"<w:sdt><w:sdtPr><w:id w:val="7"/></w:sdtPr><w:sdtContent>{content}{indent}</w:sdtContent></w:sdt><w:p/>"#
+        )))
+    };
+    // Inserted content carries no indentation, so whitespace is not compared.
+    let resolved_body = |document: &mut Document| {
+        let mut body = body_from_document(document);
+        for content in &mut body.content {
+            if let BodyContent::ContentControl(control) = content {
+                control.content.retain(|child| {
+                    !matches!(child, SdtContent::RawXml(raw) if raw.iter().all(u8::is_ascii_whitespace))
+                });
+            }
+        }
+        body
+    };
+    let pairs: [(&[&str], &[&str]); 4] = [
+        (&["Old.", "T:Same cell.", "End."], &["T:Same cell.", "End."]),
+        (&["T:Same cell.", "End."], &["New.", "T:Same cell.", "End."]),
+        (
+            &["Intro.", "Old.", "T:Old cell.", "End."],
+            &["Intro.", "T:New cell.", "End."],
+        ),
+        (&["Old.", "T:Cell.", "End."], &["End."]),
+    ];
+    for indent in ["", "\n        "] {
+        for (original, edited) in pairs {
+            let label = format!("{indent:?} {original:?} -> {edited:?}");
+            let mut compared = document(original, indent);
+            compared
+                .compare(
+                    &document(edited, indent),
+                    "Reviewer",
+                    "2026-01-01T00:00:00Z",
+                )
+                .unwrap_or_else(|error| panic!("{label}: {error}"));
+            let redline = compared.to_bytes().expect("save redline");
+            for (accept, expected) in [(true, edited), (false, original)] {
+                let mut resolved = Document::from_bytes(&redline).expect("reopen redline");
+                if accept {
+                    resolved.accept_all()
+                } else {
+                    resolved.reject_all()
+                }
+                .unwrap_or_else(|error| panic!("{label} accept={accept}: {error}"));
+                assert!(resolved.revisions().is_empty(), "{label} accept={accept}");
+                assert_eq!(
+                    resolved_body(&mut resolved),
+                    resolved_body(&mut document(expected, indent)),
+                    "{label} accept={accept}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn paragraph_mark_removed_before_a_table_removes_an_emptied_paragraph() {
+    // The paragraph carries its own mark revision, as Word writes a paragraph
+    // deleted or inserted before a table.
+    let table = r#"<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+    let marked = |kind: &str, text: &str| {
+        format!(
+            r#"<w:p><w:pPr><w:rPr><w:{kind} w:id="1" w:author="Reviewer" w:date="2026-01-01T00:00:00Z"/></w:rPr></w:pPr><w:proofErr w:type="spellStart"/><w:{kind} w:id="2" w:author="Reviewer" w:date="2026-01-01T00:00:00Z"><w:r>{text}</w:r></w:{kind}><w:proofErr w:type="spellEnd"/></w:p>"#
+        )
+    };
+    let end = "<w:p><w:r><w:t>End.</w:t></w:r></w:p>";
+    let body = |document: &Document| {
+        document
+            .body_items()
+            .map(|item| match item {
+                BodyItemRef::Paragraph(paragraph) => paragraph.text(),
+                BodyItemRef::Table(_) => "T".to_owned(),
+                _ => panic!("unexpected body item"),
+            })
+            .collect::<Vec<_>>()
+    };
+    for (kind, text, removes_on_accept) in [
+        ("del", "<w:delText>Old.</w:delText>", true),
+        ("ins", "<w:t>New.</w:t>", false),
+    ] {
+        let xml = format!("{}{table}{end}", marked(kind, text));
+        for accept in [true, false] {
+            let mut resolved = document_with_content_controls(&wrap_word_body(&xml));
+            if accept {
+                resolved.accept_all()
+            } else {
+                resolved.reject_all()
+            }
+            .unwrap_or_else(|error| panic!("{kind} accept={accept}: {error}"));
+            let resolved = Document::from_bytes(&resolved.to_bytes().unwrap()).unwrap();
+            let kept = if kind == "del" { "Old." } else { "New." };
+            let expected = if accept == removes_on_accept {
+                vec!["T", "End."]
+            } else {
+                vec![kept, "T", "End."]
+            };
+            assert_eq!(body(&resolved), expected, "{kind} accept={accept}");
+            assert!(resolved.revisions().is_empty(), "{kind} accept={accept}");
+        }
+    }
+    // A paragraph that keeps content has nothing to merge into.
+    let kept = format!(
+        r#"<w:p><w:pPr><w:rPr><w:del w:id="1" w:author="Reviewer" w:date="2026-01-01T00:00:00Z"/></w:rPr></w:pPr><w:r><w:t>Kept.</w:t></w:r></w:p>{table}{end}"#
+    );
+    let mut document = document_with_content_controls(&wrap_word_body(&kept));
+    let error = document.accept_all().expect_err("content before a table");
+    assert!(error.to_string().contains("no content left"), "{error}");
+}
+
+#[test]
+fn paragraph_deleted_before_a_table_carries_its_own_mark() {
+    let mut compared = paragraph_next_to_table_document(&["Intro.", "Old.", "T:Cell.", "End."]);
+    compared
+        .compare(
+            &paragraph_next_to_table_document(&["Intro.", "T:Cell.", "End."]),
+            "Reviewer",
+            "2026-01-01T00:00:00Z",
+        )
+        .expect("compare");
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(compared.to_bytes().unwrap()))
+            .unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let paragraph = |text: &str| {
+        let at = xml.find(text).expect("paragraph text");
+        &xml[xml[..at].rfind("<w:p>").expect("paragraph start")..at]
+    };
+    assert!(!paragraph("<w:t>Intro.</w:t>").contains("<w:del "), "{xml}");
+    assert!(
+        paragraph("<w:delText>Old.</w:delText>").starts_with("<w:p><w:pPr><w:rPr><w:del "),
+        "{xml}"
+    );
+    let table = &xml[xml.find("<w:tbl>").unwrap()..xml.find("</w:tbl>").unwrap()];
+    assert!(!table.contains("<w:del "), "{xml}");
+}
+
 /// The properties of each body paragraph, with an empty `w:pPr` or mark
 /// `w:rPr` read as none.
 fn resolved_paragraph_properties(
