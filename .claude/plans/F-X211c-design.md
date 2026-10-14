@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S91
 **Size**: L
-**Depends on**: F-X211a, F-X211b, F-X200 through F-X210, F-X215, F-X217, F-X218 and F-X220 for final integrated capability acceptance. Compose their reviewed current source without reimplementing them.
+**Depends on**: F-X211a, F-X211b, F-X211d, F-X200 through F-X210, F-X215, F-X217, F-X218 and F-X220 for final integrated capability acceptance. Compose their reviewed current source without reimplementing them.
 **Test gate**: regression
 
 ## Problem
@@ -32,7 +32,7 @@ Own final paired source-built installed bindings, immutable100 execution and CI/
 
 Shared oxml-py-support/src/lib.rs and residual cross-family aliases/errors are c-owned, but no production edit overlaps active a/b carriers. c implementation starts after a/b integrate. Any truly necessary shared primitive earlier is root-serial and reconciled into both family branches. Existing provider source is pinned/composed once. Root authors HLD/archive tuples, integrated delivery totals and final sprint gate. No bibliography work.
 
-The approved F-X211 parent remains binding. This split transfers its acceptance once without adding or weakening app/manual obligations. Existing material approvals persist. Each child follows design/start/implement/microscope/scoped-verify/complete. Parent closes only after all three children close. No new product file, module, crate, dependency, feature flag, generic XML framework or revision registry is authorized. Normal child design records are workflow artifacts. Root alone updates shared ledgers, HLD/archive composition and the hash baseline. Workers retain original failed/unqualified evidence and use existing test entrypoints. Shared primitive changes are explicit root-serial prerequisites, never concurrent edits.
+The approved F-X211 parent remains binding. This split transfers its acceptance once without adding or weakening app/manual obligations. Existing material approvals persist. Each child follows design/start/implement/microscope/scoped-verify/complete. Parent closes only after all four children close. No new product file, module, crate, dependency, feature flag, generic XML framework or revision registry is authorized. Normal child design records are workflow artifacts. Root alone updates shared ledgers, HLD/archive composition and the hash baseline. Workers retain original failed/unqualified evidence and use existing test entrypoints. Shared primitive changes are explicit root-serial prerequisites, never concurrent edits.
 
 ## Test plan
 
@@ -134,3 +134,23 @@ independent qualification, including stable first-use request deduplication
 and explicit actual-face approximation. The corrected source still requires
 one complete unchanged100 attempt, the original at-least90-percent complete
 correct-file gate and every independent XML, lifetime, native and render gate.
+
+
+## Reviewed frozen alt-text owner assertion
+
+Independent F-X211c-frozen-alt-owner-pass-1, SHA256
+`bb4a8ef797ae64b3f7dd0e3d61473c0dad82803bde555fc9f0eabed88b87524d`,
+authenticates a later invalid owner selector in unchanged P-AREA-14. The first
+actual100 attempt failed at the missing Shape.alt_text facade. That original
+provider defect and failed candidate remain unchanged and receive no credit.
+
+After the real facade repair, the exact current candidate retained the
+authored shape2 descr, title and decorative state through saved source and
+reopen. The frozen assertion instead selects the first descendant cNvPr,
+which is the slide-tree owner1. Do not put shape metadata on that owner to
+satisfy the assertion, and do not rewrite the frozen selector. If the new
+source reaches this incompatible assertion, classify this exact evidenced
+conflict as deliberate non-success. Preserve the100 denominator and no
+successful-file credit. Subsequent unreached frozen assertions remain
+unqualified. Independent actual shape-specific saved/reopened alt metadata
+controls remain required, as do every original hard owner and native gate.
