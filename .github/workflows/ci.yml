@@ -82,7 +82,8 @@ jobs:
               - 'Cargo.lock'
               - 'Cargo.toml'
               - 'rust-toolchain.toml'
-              - 'crates/**'
+              - 'crates/oxml-*/**'
+              - 'crates/rpptx*/**'
               - 'scripts/fetch_pptx_corpus.py'
               - 'scripts/install_pinned_libreoffice.py'
               - 'scripts/install_pinned_poppler.py'
@@ -134,6 +135,10 @@ jobs:
     if: needs.changes.outputs.test == 'true'
     name: Test
     runs-on: ubuntu-24.04
+    env:
+      # Debug assertions and overflow checks stay on. Opt-level 1 runs the suite
+      # about nine times faster for about twice the compile time.
+      CARGO_PROFILE_DEV_OPT_LEVEL: "1"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -630,6 +635,10 @@ jobs:
     if: needs.changes.outputs.msrv == 'true'
     name: MSRV (1.93)
     runs-on: ubuntu-24.04
+    env:
+      # Debug assertions and overflow checks stay on. Opt-level 1 runs the suite
+      # about nine times faster for about twice the compile time.
+      CARGO_PROFILE_DEV_OPT_LEVEL: "1"
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master

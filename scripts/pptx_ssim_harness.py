@@ -137,6 +137,7 @@ def run_rust_renderer(corpus: Path, output: Path, manifest: Path) -> None:
         [
             "cargo",
             "run",
+            "--release",
             "--quiet",
             "-p",
             "rpptx",
