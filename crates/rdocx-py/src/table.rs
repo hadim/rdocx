@@ -1289,7 +1289,11 @@ impl PyTable {
             py,
             &candidate,
             "Table.remove_row",
-            crate::document::WordPublication::Conservative,
+            crate::document::WordPublication::TableGrid(
+                TableLocation::new(table_index, &current_related)
+                    .native(&document.inner)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?,
+            ),
         )?;
         document.commit_word_revision(prepared)?;
         document.inner = candidate;
