@@ -3175,3 +3175,15 @@ The parent retains every original acceptance condition and now has four
 delivery children. Twenty-nine top-level stories and the frozen40 issues/30
 PRs are unchanged. Preserve all failed candidates and never stitch a best-of
 retry rate or rewrite the corpus. Publication and close remain gated.
+
+
+## S91 Word compatibility repair checkpoint, 2026-10-14
+
+F-X211d is complete and integrated through its scoped dependency-prefix gate.
+Children a, b and d are complete. Child c owns the final fresh paired bindings,
+complete unchanged100 measurement and qualified native/rendered acceptance.
+Twenty-seven of29 top-level stories remain complete, with parent F-X211 and
+release preparation F-X221 unfinished. Bibliography, navigation and standalone
+authoring remain in S92. Intake stays frozen40 issues/30 PRs, with discussions
+264 and281 excluded and open. Final full verification, focused appearance
+riders, sprint review and authorized publication/closure remain due.

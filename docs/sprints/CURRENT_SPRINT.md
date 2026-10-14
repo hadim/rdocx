@@ -46,7 +46,7 @@ for parallel Word and PowerPoint work followed by integrated compatibility. The 
 | F-X211a | Word checked XML owners and resource admission | L | done | - |
 | F-X211b | PowerPoint checked XML owners | L | done | - |
 | F-X211c | Integrated Python compatibility and causal errors | L | in-progress | codex |
-| F-X211d | Repair Word compatibility owners and aliases | L | in-progress | codex |
+| F-X211d | Repair Word compatibility owners and aliases | L | done | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | done | - |
 | F-X214 | Bound recursive PowerPoint parsing and traversal | L | done | - |
@@ -1226,3 +1226,15 @@ Twenty-six of29 top-level stories are complete. Parent F-X211 remains running. F
 Complete slide import, source formatting and deck merge are integrated locally at501144b4. Issues347,348,349 and PR357 are locally addressed by the completed story. The validated handoff is consumed, current defining regression and scoped acceptance pass, and independent integration review reports zero defects and zero smells. Admitted native PowerPoint source comparisons, graph survival and two save/reopen cycles retain their exact documented boundaries.
 
 Twenty-seven of29 top-level stories are complete. Parent F-X211 and its compatibility child c remain running. F-X221 remains approved pending all repair prerequisites. Final full integrated verification, both explicitly ignored focused appearance riders and sprint review remain due. Four missing historical oracle assets remain uncredited in S92. Intake stays frozen40 issues/30 PRs, with264/281 excluded and open. No remote closure, main merge, tag, publication or push is claimed.
+
+
+## Word compatibility repair dependency completed, 2026-10-14
+
+F-X211d is complete at its scoped dependency-prefix checkpoint. The reviewed
+Word owner, alias, merge and style repairs are integrated. Children a, b and d
+are complete, while c retains the final fresh paired bindings and unchanged100
+compatibility measurement. Twenty-seven of29 top-level stories remain complete.
+Parent F-X211 and release preparation F-X221 remain unfinished. Full integrated
+verification, focused appearance riders and sprint review remain due. Intake
+stays frozen40 issues/30 PRs, with264/281 excluded and open. No remote closure,
+main merge, tag, publication or push is claimed.

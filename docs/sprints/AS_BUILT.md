@@ -19445,3 +19445,21 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** Exactly HLD02,04,05,06,08,10,12 and14. Canonical Word0.16.1 and PowerPoint0.14.1 release targets are preserved.
 
 **Notes for future sessions.** Required worker scratch evidence is preserved under /private/tmp/S91-F-X216-preserved-worker-evidence-1, with1662 file, symlink and mode entries authenticated by manifest188034b0b47fff99b8ff2ce8e205c0eefd11bd41a2f408095254b65bbf1f29cc. Keep the worker branch through final verification and close. Parent F-X211 and child c remain running, release F-X221 remains pending. Frozen40 issues/30 PRs, excluded/open264/281 and S92 deferrals remain unchanged. No remote closure, push, main merge, tag or publication is claimed.
+
+
+### F-X211d, Repair Word compatibility owners and aliases
+
+**Completed.** 2026-10-14, S91 scoped dependency-prefix checkpoint
+**Size.** L, actual not recorded
+
+**What was built.** Checked table, cell and section XML retains captured opaque children and qualified root metadata. Canonical margin aliases, surviving Section and Paragraph owners through supported appends, prepared same-table Cell.merge with atomic opaque-metadata refusal, and lazy requested table style admission resolve the exposed Word compatibility residuals. The four inherited Word carriers and shared stale wording are adopted once under explicit custody.
+
+**Tests.** Current installed32 controls and strict typing/fullstubs pass. Twelve ordinary2MiB resource/lifecycle controls and four pinned LibreOffice integration successors pass with ignored cases uncredited. Native, strict Clippy, MSRV, both WASM, doctest and Rustdoc authorities retain their exact original source scopes and explicit unchanged-runtime bridges. All22 actual verified archives are below10MiB, with current affected measurements and authenticated unchanged ordinary members for the retained19. Full policy141 has139 passes and two platform skips. The full README inventory/examples, prose and26 generated adapters pass. Genuine predecessor failures remain retained.
+
+**Integrated evidence.** Feature171f398f3f1b85b4147cd274858d637a29ee0793 and tip4853938fe0bde2f462e242c85893f14d2cb7f0b5 integrate at38ce356b. Handoff56b2f6592ac6dbc60bf0cfc44b68e7dcb3f095c62e6428966dd81e3c3b18cdd6 validates and is consumed. Final completion reviewc3f55777 and incremental integration review777c7667 have zero defects and smells. Installed receiptc7912cc0, ordinary rider8e6a8846, final affected archiveefa8af3d, retained19 bridge8300165b, materialization180a1a2e and full policy/README68dc94dd retain independent exact-source authority. Coordinated four-file HLD70470e4a is preserved.
+
+**Hash harness.**49 unchanged deterministic outputs on authenticated identical product source. Final full integrated verification and review remain due.
+
+**Spec sections touched.** Exactly HLD04,10,12 and14, including the canonical style ID and decoded-root-attribute versus exact opaque-child distinction.
+
+**Notes for future sessions.** Required worker evidence is preserved at /private/tmp/S91-F-X211d-preserved-worker-evidence-1 with90 entries and manifest844cf0c2ed7561de775273bf31ed3b0bd0a62a747b0e01a1db7a074832918774. Keep the worker branch through sprint close. Parent F-X211 and child c retain the complete unchanged100 and native/rendered acceptance. Release F-X221 remains pending. Intake stays frozen40 issues/30 PRs, excluded/open264/281 and S92 deferrals remain unchanged. No remote closure, main merge, tag, publication or push is claimed.

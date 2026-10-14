@@ -985,3 +985,6 @@ Issues264 and281 remain excluded and open.
 | F-X218 | S91 | L | not recorded | not recorded | 2026-10-13 | Scoped dependency-prefix completion. PowerPoint semantic HTML/Markdown export preserves supported source order, list/style/link/table/image/notes/hidden-slide semantics with immutable detached diagnostics/assets. Native atomic publication and one bounded image validator back Python and CLI. Two native source cycles qualify source semantics separately from HTML pixel parity. Parent/c and final full sprint gates remain due |
 
 | F-X216 | S91 | L | not recorded | not recorded | 2026-10-14 | Scoped dependency-prefix completion. Complete slide graphs, source formatting and deck merge with admitted native source comparisons, graph survival and save/reopen acceptance. Independent integration review clean. Four historical oracle assets uncredited in S92. Final union gates remain due |
+
+
+| F-X211d | S91 | L | not recorded | not recorded | 2026-10-14 | Scoped Word compatibility dependency completion. Installed32 and typing, ordinary2MiB12, pinned native complements, verified22 archives, full141 policy and README qualified. Independent completion and integration reviews clean. Parent unchanged100 and final sprint gates remain due |
