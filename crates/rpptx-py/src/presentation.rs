@@ -688,8 +688,8 @@ impl PyCoreProperties {
 #[pymethods]
 impl PyCoreProperties {
     #[getter]
-    fn author(&self, py: Python<'_>) -> String {
-        self.text(py, |properties| &mut properties.creator)
+    fn author(&self, py: Python<'_>) -> Option<String> {
+        self.read(py, |properties| &mut properties.creator)
     }
     #[setter]
     fn set_author(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
@@ -3803,8 +3803,8 @@ impl PyPresentation {
         Ok(proofs)
     }
 
-    /// Ordinary text setters retain the existing lifetime contract. The
-    /// body survives, while a paragraph setter retires its earlier views.
+    /// Text replacement retains its physical paragraph and body ancestors,
+    /// while the replaced runs and whole-body paragraph descendants retire.
     pub(crate) fn text_changed_owners(
         &self,
         path: &oxml_py_support::ContentPath,
@@ -3851,10 +3851,8 @@ impl PyPresentation {
                 .find(|owner| owner.owner.generation() == proof.generation)
                 .expect("unchanged owner proof");
             let removed = if paragraph {
-                matches!(
-                    old.address.physical,
-                    PhysicalOwner::Paragraph { .. } | PhysicalOwner::Run { .. }
-                ) && old.address.path.starts_with(&current.segs)
+                matches!(old.address.physical, PhysicalOwner::Run { .. })
+                    && old.address.path.starts_with(&current.segs)
             } else {
                 matches!(
                     old.address.physical,

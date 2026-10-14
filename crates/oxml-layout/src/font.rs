@@ -1723,10 +1723,7 @@ impl FontManager {
         ppt_bullet_compatibility: bool,
     ) -> Result<(String, FontId)> {
         let primary = self.resolve_font(family, bold, italic)?;
-        if let Some(index) = self.index_of(primary)
-            && family.is_some_and(|family| self.physical_requested_family_matches(index, family))
-            && self.uncovered(index, original).is_empty()
-        {
+        if self.has_original_symbol_coverage(primary, family, original) {
             return Ok((original.to_owned(), primary));
         }
         let displayed: String = original
@@ -1764,6 +1761,64 @@ impl FontManager {
             .collect();
         let selected = self.resolve_font_for_text(family, bold, italic, &displayed)?;
         Ok((displayed, selected))
+    }
+
+    /// Whether the selected physical requested face covers the original symbol codes.
+    /// Caller labels alone cannot establish this coverage or symbol meaning.
+    pub fn has_original_symbol_coverage(
+        &self,
+        selected: FontId,
+        family: Option<&str>,
+        original: &str,
+    ) -> bool {
+        self.index_of(selected).is_some_and(|index| {
+            family.is_some_and(|name| self.physical_requested_family_matches(index, name))
+                && self.uncovered(index, original).is_empty()
+        })
+    }
+
+    /// Owned unknown semantic mappings for accepted original symbol text.
+    /// This query neither records font history nor claims glyphs are missing.
+    pub fn unknown_symbol_diagnostics(
+        &self,
+        selected: FontId,
+        requested: Option<&str>,
+        original: &str,
+        displayed: &str,
+    ) -> Vec<String> {
+        if self.index_of(selected).is_none() {
+            return Vec::new();
+        }
+        let family = match requested {
+            Some(name) if name.eq_ignore_ascii_case("Wingdings") => "Wingdings",
+            Some(name) if name.eq_ignore_ascii_case("Symbol") => "Symbol",
+            _ => return Vec::new(),
+        };
+        let mut result = Vec::new();
+        for (source, displayed) in original.chars().zip(displayed.chars()) {
+            let code = source as u32;
+            if source != displayed
+                || source.is_whitespace()
+                || source.is_control()
+                || !(code <= 0xff || (0xf000..=0xf0ff).contains(&code))
+            {
+                continue;
+            }
+            let mut utf8 = [0; 4];
+            if self.has_original_symbol_coverage(
+                selected,
+                Some(family),
+                source.encode_utf8(&mut utf8),
+            ) {
+                continue;
+            }
+            let message = format!("Unknown {family} symbol U+{code:04X}: original code retained");
+            if !result.contains(&message) {
+                result.push(message);
+            }
+        }
+        // One canonical family and at most 512 original low-byte/PUA scalars.
+        result
     }
 
     /// The characters in `text` that the font at `idx` cannot draw.
@@ -4238,40 +4293,70 @@ for feature in ['smcp=0','smcp=1']:
     }
 
     fn font_with_family(source: &[u8], family: &str) -> Vec<u8> {
-        assert_eq!(family.len(), 7);
+        assert!(family.is_ascii() && !family.is_empty());
         let mut font = source.to_vec();
         let table_count = u16::from_be_bytes([font[4], font[5]]) as usize;
-        let name_offset = (0..table_count)
-            .find_map(|table| {
-                let record = 12 + table * 16;
-                (&font[record..record + 4] == b"name").then(|| {
-                    u32::from_be_bytes(font[record + 8..record + 12].try_into().unwrap()) as usize
-                })
-            })
+        let record = (0..table_count)
+            .map(|table| 12 + table * 16)
+            .find(|record| &font[*record..*record + 4] == b"name")
             .expect("font has name table");
-        let count = u16::from_be_bytes([font[name_offset + 2], font[name_offset + 3]]) as usize;
-        let strings = name_offset
-            + u16::from_be_bytes([font[name_offset + 4], font[name_offset + 5]]) as usize;
+        let offset = u32::from_be_bytes(font[record + 8..record + 12].try_into().unwrap()) as usize;
+        let length =
+            u32::from_be_bytes(font[record + 12..record + 16].try_into().unwrap()) as usize;
+        let mut names = font[offset..offset + length].to_vec();
+        let count = u16::from_be_bytes([names[2], names[3]]) as usize;
+        let strings = u16::from_be_bytes([names[4], names[5]]) as usize;
         for index in 0..count {
-            let record = name_offset + 6 + index * 12;
-            let platform = u16::from_be_bytes([font[record], font[record + 1]]);
-            let name_id = u16::from_be_bytes([font[record + 6], font[record + 7]]);
-            let length = u16::from_be_bytes([font[record + 8], font[record + 9]]) as usize;
-            let offset = u16::from_be_bytes([font[record + 10], font[record + 11]]) as usize;
+            let entry = 6 + index * 12;
+            let platform = u16::from_be_bytes([names[entry], names[entry + 1]]);
+            let name_id = u16::from_be_bytes([names[entry + 6], names[entry + 7]]);
             if !matches!(name_id, 1 | 16) {
                 continue;
             }
-            let destination = &mut font[strings + offset..strings + offset + length];
-            match (platform, length) {
-                (0 | 3, 14) => {
-                    for (bytes, ch) in destination.chunks_exact_mut(2).zip(family.bytes()) {
-                        bytes.copy_from_slice(&(ch as u16).to_be_bytes());
-                    }
-                }
-                (1, 7) => destination.copy_from_slice(family.as_bytes()),
-                _ => {}
-            }
+            let encoded = match platform {
+                0 | 3 => family
+                    .encode_utf16()
+                    .flat_map(u16::to_be_bytes)
+                    .collect::<Vec<_>>(),
+                1 => family.as_bytes().to_vec(),
+                _ => continue,
+            };
+            let string_offset = u16::try_from(names.len() - strings).unwrap();
+            let length = u16::try_from(encoded.len()).unwrap();
+            names[entry + 8..entry + 10].copy_from_slice(&length.to_be_bytes());
+            names[entry + 10..entry + 12].copy_from_slice(&string_offset.to_be_bytes());
+            names.extend_from_slice(&encoded);
         }
+        let checksum = |data: &[u8]| {
+            data.chunks(4).fold(0u32, |sum, chunk| {
+                let mut word = [0; 4];
+                word[..chunk.len()].copy_from_slice(chunk);
+                sum.wrapping_add(u32::from_be_bytes(word))
+            })
+        };
+        while !font.len().is_multiple_of(4) {
+            font.push(0);
+        }
+        let new_offset = u32::try_from(font.len()).unwrap();
+        font[record + 4..record + 8].copy_from_slice(&checksum(&names).to_be_bytes());
+        font[record + 8..record + 12].copy_from_slice(&new_offset.to_be_bytes());
+        font[record + 12..record + 16]
+            .copy_from_slice(&u32::try_from(names.len()).unwrap().to_be_bytes());
+        font.extend_from_slice(&names);
+        let head = (0..table_count)
+            .map(|table| 12 + table * 16)
+            .find(|record| &font[*record..*record + 4] == b"head")
+            .unwrap();
+        let head_offset =
+            u32::from_be_bytes(font[head + 8..head + 12].try_into().unwrap()) as usize;
+        let head_length =
+            u32::from_be_bytes(font[head + 12..head + 16].try_into().unwrap()) as usize;
+        font[head_offset + 8..head_offset + 12].fill(0);
+        let head_checksum = checksum(&font[head_offset..head_offset + head_length]);
+        font[head + 4..head + 8].copy_from_slice(&head_checksum.to_be_bytes());
+        let adjustment = 0xb1b0afba_u32.wrapping_sub(checksum(&font));
+        font[head_offset + 8..head_offset + 12].copy_from_slice(&adjustment.to_be_bytes());
+        assert_eq!(checksum(&font), 0xb1b0afba);
         font
     }
 
@@ -5316,6 +5401,68 @@ for feature in ['smcp=0','smcp=1']:
                 .is_err()
         );
         assert_eq!(fonts.current_font_diagnostics(), before);
+    }
+
+    #[test]
+    fn fx211c_original_symbol_coverage_authenticates_physical_family_and_glyphs() {
+        let source = include_bytes!("../fonts/Carlito-Regular.ttf");
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        fonts.load_additional_fonts(&[FontFile {
+            family: "Wingdings".to_owned(),
+            data: source.to_vec(),
+        }]);
+        let alias = fonts.resolve_font(Some("Wingdings"), false, false).unwrap();
+        assert!(!fonts.has_original_symbol_coverage(alias, Some("Wingdings"), "ÿ"));
+        fonts.load_additional_fonts(&[FontFile {
+            family: "Wingdings".to_owned(),
+            data: font_with_family(source, "Wingdings"),
+        }]);
+        let actual = fonts.resolve_font(Some("Wingdings"), false, false).unwrap();
+        assert!(fonts.has_original_symbol_coverage(actual, Some("Wingdings"), "ÿ"));
+        assert!(
+            fonts
+                .unknown_symbol_diagnostics(actual, Some("Wingdings"), "ÿ", "ÿ")
+                .is_empty()
+        );
+        assert!(
+            fonts
+                .unknown_symbol_diagnostics(
+                    FontId(u32::MAX),
+                    Some("Wingdings"),
+                    "\u{f0ff}",
+                    "\u{f0ff}"
+                )
+                .is_empty()
+        );
+        let genuine = fonts.font_data(actual).unwrap();
+        let original = ttf_parser::Face::parse(source, 0).unwrap();
+        let renamed = ttf_parser::Face::parse(genuine.data.as_ref(), 0).unwrap();
+        assert_eq!(renamed.glyph_index('ÿ'), original.glyph_index('ÿ'));
+        let count = u16::from_be_bytes([source[4], source[5]]) as usize;
+        for table in 0..count {
+            let tag = ttf_parser::Tag::from_bytes(
+                source[12 + table * 16..16 + table * 16].try_into().unwrap(),
+            );
+            if tag != ttf_parser::Tag::from_bytes(b"name")
+                && tag != ttf_parser::Tag::from_bytes(b"head")
+            {
+                assert_eq!(
+                    renamed.raw_face().table(tag),
+                    original.raw_face().table(tag)
+                );
+            }
+        }
+
+        assert!(!fonts.has_original_symbol_coverage(actual, Some("Wingdings"), "\u{f0ff}"));
+        assert!(!fonts.has_original_symbol_coverage(actual, Some("Symbol"), "ÿ"));
+        let resolved = fonts
+            .resolve_symbol_text(Some("Wingdings"), false, false, "ÿ", true)
+            .unwrap();
+        assert_eq!(
+            resolved,
+            ("ÿ".to_owned(), actual),
+            "genuine original glyph beats semantic fallback"
+        );
     }
 
     #[test]

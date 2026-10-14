@@ -2991,9 +2991,11 @@ impl Presentation {
         if changed {
             self.publish_authoring_package(package)?;
         }
+        let mut seen_font_facts = HashSet::new();
         let diagnostics = owners
             .iter()
             .flat_map(|owner| owner.update.diagnostics.iter().cloned())
+            .filter(|diagnostic| keep_authoring_font_fact(diagnostic, &mut seen_font_facts))
             .collect();
         Ok(AutofitRefreshResult {
             updates: owners.into_iter().map(|owner| owner.update).collect(),
@@ -3010,6 +3012,7 @@ impl Presentation {
         let mut fonts = authoring_fonts(self, font_files)?;
         let mut frames = Vec::new();
         let mut diagnostics = Vec::new();
+        let mut seen_font_facts = HashSet::new();
         for mut owner in owners {
             let pair = if owner.empty || owner.unsupported.is_some() {
                 None
@@ -3018,7 +3021,16 @@ impl Presentation {
             };
             if !owner.empty && owner.unsupported.is_none() {
                 owner.update.diagnostics = authoring_font_diagnostics(&owner, &mut fonts, None)?;
-                diagnostics.extend(owner.update.diagnostics.iter().cloned());
+                diagnostics.extend(
+                    owner
+                        .update
+                        .diagnostics
+                        .iter()
+                        .filter(|diagnostic| {
+                            keep_authoring_font_fact(diagnostic, &mut seen_font_facts)
+                        })
+                        .cloned(),
+                );
             }
             for context in &owner.contexts {
                 if owner.empty {
@@ -6199,6 +6211,40 @@ impl Presentation {
             });
         }
         Ok(imported)
+    }
+
+    /// Changes the owning theme's name without rewriting unrelated source XML.
+    pub fn set_theme_name(&mut self, master_index: usize, name: &str) -> Result<()> {
+        let part = self.theme_part_for_edit(master_index)?;
+        let source = required_part(&self.package, &part)?;
+        let owner = theme_source_owner(source, &["theme"])?
+            .ok_or_else(|| invalid_shape_mutation("edit theme name", "theme root is absent"))?;
+        let bytes = if owner.attributes.iter().any(|(key, _, _)| key == "name") {
+            patch_theme_attribute(source, &owner, "name", name)?
+        } else {
+            let mut reader = NsReader::from_reader(&source[owner.start..]);
+            let mut buffer = Vec::new();
+            reader
+                .read_event_into(&mut buffer)
+                .map_err(|error| footer_malformed(&part, error))?;
+            let insertion =
+                owner.start + reader.buffer_position() as usize - if owner.empty { 2 } else { 1 };
+            let mut bytes = source[..insertion].to_vec();
+            bytes.extend_from_slice(
+                format!(" name=\"{}\"", quick_xml::escape::escape(name)).as_bytes(),
+            );
+            bytes.extend_from_slice(&source[insertion..]);
+            bytes
+        };
+        if bytes == source {
+            return Ok(());
+        }
+        CT_OfficeStyleSheet::from_xml(&bytes).map_err(|error| footer_malformed(&part, error))?;
+        let mut candidate = self.clone();
+        candidate.package.set_part(&part, bytes);
+        candidate.commit_owned_parts(None)?;
+        *self = candidate;
+        Ok(())
     }
 
     /// Replaces one qualified scheme color without rewriting unrelated source XML.
@@ -24931,6 +24977,19 @@ fn authoring_fonts(presentation: &Presentation, files: &[(&str, &[u8])]) -> Resu
 }
 
 #[cfg(feature = "render")]
+fn keep_authoring_font_fact(
+    diagnostic: &oxml_layout::Diagnostic,
+    seen: &mut HashSet<&'static str>,
+) -> bool {
+    let request = ["Aptos", "Aptos Display"].into_iter().find(|request| {
+        diagnostic
+            .message
+            .starts_with(&format!("Font '{request}' is approximate: "))
+    });
+    request.is_none_or(|request| seen.insert(request))
+}
+
+#[cfg(feature = "render")]
 fn authoring_font_diagnostics(
     owner: &AutofitOwner,
     fonts: &mut FontManager,
@@ -24953,6 +25012,10 @@ fn authoring_font_diagnostics(
             Some(AuthoringChange::Shape(_)) => text.autofit = ResolvedAutofit::None,
             None => {}
         }
+        // Sizing trials use the same loaded faces, but their first-use facts
+        // must not suppress this owner's successful final contributions.
+        fonts.begin_layout();
+        let diagnostic_start = fonts.current_font_diagnostics().len();
         let scope = fonts.begin_font_contribution_scope().ok_or_else(|| {
             autofit_failure(
                 &owner.update.location,
@@ -24976,6 +25039,32 @@ fn authoring_font_diagnostics(
                 )
             })?;
         trial.map_err(|e| autofit_failure(&owner.update.location, e))?;
+        // Nested shaping-cache scopes discard their approximation messages.
+        // Regenerate only the captured successful physical contributions in
+        // another bounded scope, retaining its facts before it rolls back.
+        let fact_scope = fonts.begin_font_contribution_scope().ok_or_else(|| {
+            autofit_failure(
+                &owner.update.location,
+                "font diagnostic capture unavailable",
+            )
+        })?;
+        let replay = fonts.replay_font_trace_events(&events);
+        let approximation_facts = fonts.current_font_diagnostics()[diagnostic_start..].to_vec();
+        let finished = fonts.finish_font_contribution_scope(fact_scope);
+        replay.map_err(|e| autofit_failure(&owner.update.location, e))?;
+        finished
+            .map_err(|e| autofit_failure(&owner.update.location, e))?
+            .ok_or_else(|| {
+                autofit_failure(
+                    &owner.update.location,
+                    "font diagnostic capture exceeded its bound",
+                )
+            })?;
+        for fact in &approximation_facts {
+            if !diagnostics.contains(fact) {
+                diagnostics.push(fact.clone());
+            }
+        }
         for event in events {
             let oxml_layout::FontTraceEvent::Contribution(contribution) = event else {
                 continue;
@@ -24987,6 +25076,19 @@ fn authoring_font_diagnostics(
                 .font_data(contribution.font_id)
                 .map_err(|e| autofit_failure(&owner.update.location, e))?
                 .family;
+            let approximation_request = if requested.eq_ignore_ascii_case("Aptos") {
+                "Aptos"
+            } else if requested.eq_ignore_ascii_case("Aptos Display") {
+                "Aptos Display"
+            } else {
+                &requested
+            };
+            if approximation_facts.iter().any(|fact| {
+                fact.message
+                    .starts_with(&format!("Font '{approximation_request}' is approximate: "))
+            }) {
+                continue;
+            }
             if !requested.eq_ignore_ascii_case(&actual)
                 && seen.insert((requested.clone(), actual.clone()))
             {
@@ -30324,6 +30426,68 @@ mod write_tests {
     }
 
     #[cfg(feature = "default-template")]
+    #[test]
+    fn fx211c_theme_name_edits_only_the_qualified_root_and_accepts_an_absent_name() {
+        for present in [true, false] {
+            let mut deck = Presentation::new().unwrap();
+            let part = deck.theme_part_for_edit(0).unwrap();
+            let original = required_part(&deck.package, &part).unwrap();
+            let owner = theme_source_owner(original, &["theme"]).unwrap().unwrap();
+            let mut reader = NsReader::from_reader(&original[owner.start..]);
+            let mut buffer = Vec::new();
+            reader.read_event_into(&mut buffer).unwrap();
+            let head_end = owner.start + reader.buffer_position() as usize;
+            let opening = format!(
+                "<a:theme xmlns:a=\"{A_NS}\" xmlns:x='urn:foreign' x:keep='a > b' x:name='shadow'{}>",
+                if present { " name='Before'" } else { "" },
+            );
+            let mut source = original[..owner.start].to_vec();
+            source.extend_from_slice(opening.as_bytes());
+            source.extend_from_slice(&original[head_end..]);
+            deck.package.set_part(&part, source.clone());
+            let before = deck.staged_package(true).unwrap();
+            let name = "A \"quoted\" & <name>";
+            deck.set_theme_name(0, name).unwrap();
+            let current = required_part(&deck.package, &part).unwrap();
+            let expected = if present {
+                String::from_utf8(source.clone())
+                    .unwrap()
+                    .replacen(
+                        "name='Before'",
+                        &format!("name='{}'", quick_xml::escape::escape(name)),
+                        1,
+                    )
+                    .into_bytes()
+            } else {
+                let insertion = owner.start + opening.len() - 1;
+                let mut bytes = source[..insertion].to_vec();
+                bytes.extend_from_slice(
+                    format!(" name=\"{}\"", quick_xml::escape::escape(name)).as_bytes(),
+                );
+                bytes.extend_from_slice(&source[insertion..]);
+                bytes
+            };
+            assert_eq!(current, expected);
+            assert_eq!(deck.theme(0).unwrap().unwrap().name.as_deref(), Some(name));
+            let saved = deck.to_bytes().unwrap();
+            let reopened = Presentation::from_bytes(&saved).unwrap();
+            assert_eq!(
+                reopened.theme(0).unwrap().unwrap().name.as_deref(),
+                Some(name)
+            );
+            let after = deck.staged_package(true).unwrap();
+            for (name, bytes) in &before.parts {
+                if name != &part {
+                    assert_eq!(Some(bytes.as_slice()), after.get_part(name));
+                }
+            }
+            deck.set_theme_name(0, name).unwrap();
+            assert_eq!(deck.to_bytes().unwrap(), saved);
+            assert!(deck.set_theme_name(usize::MAX, "invalid owner").is_err());
+            assert_eq!(deck.to_bytes().unwrap(), saved);
+        }
+    }
+
     #[test]
     fn fx209_theme_slots_preserve_other_parts_and_refuse_atomically() {
         let mut source_deck = Presentation::new().unwrap();
@@ -35758,6 +35922,55 @@ mod write_tests {
         assert_eq!(bounds[2][0] - bounds[1][2], -70.0);
     }
     #[test]
+    fn fx211c_arrangement_refusals_report_actual_minima_atomically() {
+        for (align, count, minimum) in [(true, 1, 2), (false, 1, 3), (false, 2, 3)] {
+            let mut p = Presentation::new().unwrap();
+            p.add_slide(6).unwrap();
+            for x in [0, 100, 200] {
+                p.shapes_mut(0, &[])
+                    .unwrap()
+                    .add_shape("rect", Emu(x), Emu(0), Emu(80), Emu(40))
+                    .unwrap();
+            }
+            let indices = (0..count).collect::<Vec<_>>();
+            let before = p.to_bytes().unwrap();
+            let error = if align {
+                p.shapes_mut(0, &[]).unwrap().align(
+                    &indices,
+                    ShapeAlignment::Left,
+                    ArrangeReference::Selection,
+                )
+            } else {
+                p.shapes_mut(0, &[]).unwrap().distribute(
+                    &indices,
+                    DistributeDirection::Horizontal,
+                    ArrangeReference::Selection,
+                )
+            }
+            .unwrap_err();
+            assert!(matches!(error, Error::InvalidShapeMutation { .. }));
+            assert!(error.to_string().contains(&format!(
+                "too few selected shapes: selection reference requires at least {minimum}, got {count}"
+            )));
+            assert_eq!(p.to_bytes().unwrap(), before);
+            if align {
+                p.shapes_mut(0, &[]).unwrap().align(
+                    &[0],
+                    ShapeAlignment::Left,
+                    ArrangeReference::Slide,
+                )
+            } else {
+                p.shapes_mut(0, &[]).unwrap().distribute(
+                    &[0],
+                    DistributeDirection::Horizontal,
+                    ArrangeReference::Slide,
+                )
+            }
+            .unwrap();
+        }
+    }
+
+    #[test]
     fn fx206_group_refuses_noncontiguous_selection_atomically() {
         let mut p = Presentation::new().unwrap();
         p.add_slide(6).unwrap();
@@ -37388,7 +37601,17 @@ impl ShapesMut<'_> {
             _ => 1,
         };
         if sorted.len() < minimum {
-            return Err(invalid_shape_mutation(operation, "too few selected shapes"));
+            let reference_name = match reference {
+                ArrangeReference::Selection => "selection",
+                ArrangeReference::Slide => "slide",
+            };
+            return Err(invalid_shape_mutation(
+                operation,
+                format!(
+                    "too few selected shapes: {reference_name} reference requires at least {minimum}, got {}",
+                    sorted.len()
+                ),
+            ));
         }
         let parent = members_to_slide(
             &self

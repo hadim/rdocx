@@ -7543,6 +7543,11 @@ native providers, and causal errors retain their first public invalidator.
 Unknown explicit symbol diagnostics use the actual Word and PowerPoint
 accepted-layout consumers, preserving original codes and physical-face
 precedence without retaining probe history.
+Table rows and columns collections retain their physical ancestor authority
+through supported topology edits, while affected indexed members retire with
+the first public cause. Both-axis controls retain save/reopen, refusal and
+parent-removal obligations.
+
 Named reviewed non-successes remain in the denominator without correct-file
 credit. No corpus rewriting or provider duplication.
 

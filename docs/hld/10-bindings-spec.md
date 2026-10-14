@@ -1029,7 +1029,14 @@ handles valid.
 
 ### Checked presentation surfaces
 
-`Row.cells` returns a tuple of checked live cell views. `Theme.name` reads and
+`Row.cells` returns a tuple of checked live cell views.
+
+Held `Table.rows` and `Table.columns` collections survive supported row and
+column additions and removals under the same physical table. Earlier indexed
+rows, columns and cells retire with the first topology-edit cause. Newly
+returned indexed members bind the prepared successor. Invalid edits and
+no-ops leave both collection and member authority unchanged. Parent removal
+retires the table collections. `Theme.name` reads and
 updates the owned theme root. An absent `CoreProperties.author` reads as None,
 while an explicitly empty creator remains an empty string. `Paragraph.text`
 retains its paragraph and properties, replacing its run children and retiring

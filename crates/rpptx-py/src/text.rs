@@ -1179,6 +1179,17 @@ impl PyParagraph {
             properties.set_bullet(Some(bullet));
         })
     }
+    /// Compatibility spelling for the same checked bullet choice.
+    #[getter]
+    fn bullet_char(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.bullet(py)
+    }
+
+    #[setter]
+    fn set_bullet_char(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.set_bullet(py, value)
+    }
+
     /// The auto-numbering scheme of a numbered paragraph, such as
     /// `arabicPeriod` (1. 2. 3.), `alphaLcParenR` (a) b) c)), or
     /// `romanUcPeriod` (I. II. III.), or `None` when the paragraph is not
@@ -2206,6 +2217,37 @@ impl PyFont {
             .filter(|value| !value.is_none())
             .map(|value| {
                 let (red, green, blue) = oxml_py_support::rgb_channels(value, "Font.highlight")?;
+                Ok::<_, PyErr>(RgbColor::new(red, green, blue))
+            })
+            .transpose()?;
+        let current = font_highlight_at(py, &self.presentation, &self.path)?;
+        let color = color.map(|rgb| crate::dml::with_rgb(current, rgb));
+        write_font_highlight(py, &self.presentation, &self.path, color)
+    }
+
+    #[getter]
+    fn highlight_color(&self, py: Python<'_>) -> PyResult<Py<crate::dml::PyColorFormat>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            crate::dml::PyColorFormat::font_highlight(
+                self.presentation.clone_ref(py),
+                self.path.clone(),
+            ),
+        )
+    }
+
+    #[setter]
+    fn set_highlight_color(
+        &self,
+        py: Python<'_>,
+        value: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let color = value
+            .filter(|value| !value.is_none())
+            .map(|value| {
+                let (red, green, blue) =
+                    oxml_py_support::rgb_channels(value, "Font.highlight_color")?;
                 Ok::<_, PyErr>(RgbColor::new(red, green, blue))
             })
             .transpose()?;

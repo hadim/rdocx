@@ -706,6 +706,36 @@ impl PyShape {
     }
 
     #[getter]
+    fn alt_text(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.read(py, |shape| shape.alt_text())
+    }
+
+    #[setter]
+    fn set_alt_text(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        self.edit(py, "Shape.alt_text", |shape| shape.set_alt_text(value))
+    }
+
+    #[getter]
+    fn alt_title(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.read(py, |shape| shape.title())
+    }
+
+    #[setter]
+    fn set_alt_title(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        self.edit(py, "Shape.alt_title", |shape| shape.set_title(value))
+    }
+
+    #[getter]
+    fn decorative(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |shape| shape.decorative())
+    }
+
+    #[setter]
+    fn set_decorative(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.edit(py, "Shape.decorative", |shape| shape.set_decorative(value))
+    }
+
+    #[getter]
     fn top(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         self.validate(py)?;
         let presentation = self.presentation.borrow(py);
@@ -1492,7 +1522,9 @@ impl PyShapeCollection {
         for value in shapes.try_iter()? {
             let shape = value?.extract::<Py<PyShape>>()?;
             if !shape.borrow(py).presentation.is(&self.presentation) {
-                return Err(PyValueError::new_err("shape is not in this collection"));
+                return Err(PyValueError::new_err(
+                    "shape owner is not in this presentation collection",
+                ));
             }
             handles.try_reserve(1).map_err(|_| {
                 pyo3::exceptions::PyMemoryError::new_err("shape selection allocation failed")
@@ -1519,7 +1551,9 @@ impl PyShapeCollection {
                 return Err(PyValueError::new_err("shape has no physical member path"));
             };
             if prefix != parent.as_slice() {
-                return Err(PyValueError::new_err("shape is not in this collection"));
+                return Err(PyValueError::new_err(
+                    "shape owner is not in this presentation collection",
+                ));
             }
             indices.push(*index);
         }
@@ -1772,13 +1806,14 @@ impl PyShapeCollection {
         presentation.publish_owners(candidate, prepared)?;
         Ok(result)
     }
-    #[pyo3(signature=(shapes,alignment,reference="selection"))]
+    #[pyo3(signature=(shapes,alignment,reference=None,*,relative_to=None))]
     fn align(
         &self,
         py: Python<'_>,
         shapes: &Bound<'_, PyAny>,
         alignment: &str,
-        reference: &str,
+        reference: Option<&str>,
+        relative_to: Option<&str>,
     ) -> PyResult<()> {
         let alignment = match alignment {
             "left" => rpptx::ShapeAlignment::Left,
@@ -1789,7 +1824,10 @@ impl PyShapeCollection {
             "bottom" => rpptx::ShapeAlignment::Bottom,
             _ => return Err(PyValueError::new_err("unknown alignment")),
         };
-        let reference = match reference {
+        if reference.is_some() && relative_to.is_some() && reference != relative_to {
+            return Err(PyValueError::new_err("reference and relative_to disagree"));
+        }
+        let reference = match relative_to.or(reference).unwrap_or("selection") {
             "selection" => rpptx::ArrangeReference::Selection,
             "slide" => rpptx::ArrangeReference::Slide,
             _ => return Err(PyValueError::new_err("unknown reference")),
@@ -1826,20 +1864,24 @@ impl PyShapeCollection {
         )?;
         presentation.publish_owners(candidate, prepared)
     }
-    #[pyo3(signature=(shapes,direction,reference="selection"))]
+    #[pyo3(signature=(shapes,direction,reference=None,*,relative_to=None))]
     fn distribute(
         &self,
         py: Python<'_>,
         shapes: &Bound<'_, PyAny>,
         direction: &str,
-        reference: &str,
+        reference: Option<&str>,
+        relative_to: Option<&str>,
     ) -> PyResult<()> {
         let direction = match direction {
             "horizontal" => rpptx::DistributeDirection::Horizontal,
             "vertical" => rpptx::DistributeDirection::Vertical,
             _ => return Err(PyValueError::new_err("unknown direction")),
         };
-        let reference = match reference {
+        if reference.is_some() && relative_to.is_some() && reference != relative_to {
+            return Err(PyValueError::new_err("reference and relative_to disagree"));
+        }
+        let reference = match relative_to.or(reference).unwrap_or("selection") {
             "selection" => rpptx::ArrangeReference::Selection,
             "slide" => rpptx::ArrangeReference::Slide,
             _ => return Err(PyValueError::new_err("unknown reference")),
@@ -2077,7 +2119,9 @@ impl PyShapeCollection {
             .ok_or_else(|| PyIndexError::new_err("shape collection owner is absent"))?;
         let shape = shape.extract::<PyRef<'_, PyShape>>()?;
         if !shape.presentation.is(&self.presentation) {
-            return Err(PyValueError::new_err("shape is not in this collection"));
+            return Err(PyValueError::new_err(
+                "shape owner is not in this presentation collection",
+            ));
         }
         shape.validate(py)?;
         let current = self
@@ -2087,7 +2131,11 @@ impl PyShapeCollection {
             .ok_or_else(|| PyIndexError::new_err("shape owner is absent"))?;
         let shape_index = match current.segs.as_slice() {
             [_, PathSeg::Shape(index)] if shape_owner(&current)? == owner => *index,
-            _ => return Err(PyValueError::new_err("shape is not in this collection")),
+            _ => {
+                return Err(PyValueError::new_err(
+                    "shape owner is not in this presentation collection",
+                ));
+            }
         };
         let mut presentation = self.presentation.borrow_mut(py);
         let mut candidate = presentation.inner.clone();

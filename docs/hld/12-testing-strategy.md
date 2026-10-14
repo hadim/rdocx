@@ -4210,6 +4210,16 @@ without successful-file credit. Unexpected failures, missing or duplicate IDs,
 changed bodies and unsafe process cleanup reject the report and CI gate.
 Original failed candidates remain distinct from genuinely changed successors.
 
+The full report binds one complete first-attempt run to its exact source and
+paired installed artifacts. Results from different candidates cannot be
+stitched into a score. CI tests the retained report contract without claiming
+to execute the external corpus or native applications.
+
+Table collection controls exercise both first-axis orders across append and
+remove, surviving own and opposite-axis collections, retired indexed members,
+prepared returned members, first-cause errors, no-op and refusal atomicity,
+save/reopen and actual parent removal.
+
 Unknown-symbol controls retain the original source and compare same-pass
 diagnostics for Word explicit symbols and numbering, and PowerPoint character
 markers. Known mappings, genuine physical-face coverage and misleading caller

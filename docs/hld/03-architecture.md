@@ -14,6 +14,11 @@ scopes, then locate retained physical owners in their current source graph.
 Manual native snapshot constructors remain unbound and visible snapshot
 values retain their existing equality semantics.
 
+Table rows and columns collections bind their surviving physical table owner.
+Grid topology edits retire captured indexed rows, columns and cells while
+preserving those collections and the table and shape ancestors. Removing the
+parent owner retires its collections too.
+
 Bindings stage a native candidate and validate all conversions, source graph
 constraints and returned Python allocations before committing prepared scopes.
 The final native assignment cannot fail after publication. A rejected edit or

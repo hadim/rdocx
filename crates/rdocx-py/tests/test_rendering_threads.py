@@ -1973,3 +1973,59 @@ def test_fx210_word_companions_preserve_payload_and_owned_messages():
     assert document.to_bytes() == before_empty
     tiff, _ = document.render_pages_with_diagnostics(format="tiff", dpi=72.0, **kwargs)
     assert isinstance(tiff, bytes)
+
+
+
+@pytest.mark.parametrize("owner", ["symbol", "numbering"])
+def test_fx211c_word_unknown_symbol_source_and_same_pass_diagnostics(owner, tmp_path):
+    import xml.etree.ElementTree as ET
+    from rdocx import Document, ListLevel
+    document = Document()
+    document.add_paragraph("Visible symbol owner")
+    if owner == "numbering":
+        definition = document.add_numbering_definition([ListLevel(format="bullet", text="\uf0ff")])
+        instance = document.add_numbering_instance(definition)
+        document.paragraphs[0].numbering = (instance, 0)
+    source = zipfile.ZipFile(io.BytesIO(document.to_bytes()))
+    parts = {name: source.read(name) for name in source.namelist()}
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    if owner == "symbol":
+        tree = ET.fromstring(parts["word/document.xml"])
+        run = next(tree.iter(ns + "r"))
+        ET.SubElement(run, ns + "sym", {ns + "font": "Wingdings", ns + "char": "F0FF"})
+        parts["word/document.xml"] = ET.tostring(tree, encoding="utf-8")
+    else:
+        tree = ET.fromstring(parts["word/numbering.xml"])
+        level = next(node for node in tree.iter(ns + "lvl") if node.find(ns + "lvlText").get(ns + "val") == "\uf0ff")
+        properties = level.find(ns + "rPr")
+        if properties is None:
+            properties = ET.SubElement(level, ns + "rPr")
+        fonts = properties.find(ns + "rFonts")
+        if fonts is None:
+            fonts = ET.SubElement(properties, ns + "rFonts")
+        fonts.set(ns + "ascii", "Wingdings")
+        fonts.set(ns + "hAnsi", "Wingdings")
+        parts["word/numbering.xml"] = ET.tostring(tree, encoding="utf-8")
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w") as package:
+        for name, body in parts.items():
+            package.writestr(name, body)
+    document = Document.from_bytes(data.getvalue())
+    before = document.to_bytes()
+    font = (Path(__file__).resolve().parents[2] / "oxml-layout/fonts/Carlito-Regular.ttf").read_bytes()
+    kwargs = {"fonts": [("Wingdings", font), ("Calibri", font)]}
+    pdf, facts = document.to_pdf_with_diagnostics(**kwargs)
+    (tmp_path / (owner + "-facts.txt")).write_text(repr(facts))
+    assert pdf.startswith(b"%PDF-") and document.to_bytes() == before
+    expected = "Unknown Wingdings symbol U+F0FF: original code retained"
+    assert facts.count(expected) == 1, facts
+    assert document.to_pdf_with_diagnostics(**kwargs)[1] == facts
+    reopened = Document.from_bytes(before)
+    saved = zipfile.ZipFile(io.BytesIO(reopened.to_bytes()))
+    if owner == "symbol":
+        symbol = ET.fromstring(saved.read("word/document.xml")).find(".//" + ns + "sym")
+        assert symbol.get(ns + "font") == "Wingdings" and symbol.get(ns + "char") == "F0FF"
+    else:
+        levels = ET.fromstring(saved.read("word/numbering.xml")).iter(ns + "lvl")
+        assert any(level.find(ns + "lvlText").get(ns + "val") == "\uf0ff" for level in levels)
+    assert reopened.to_pdf_with_diagnostics(**kwargs)[1] == facts

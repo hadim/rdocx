@@ -8855,6 +8855,14 @@ fn layout_paragraph_with_source_and_table(
                 && let Ok(shaped) = fm.shape_text(font_id, &display_text, marker_font_size)
             {
                 let metrics = fm.metrics(font_id, marker_font_size)?;
+                for message in fm.unknown_symbol_diagnostics(
+                    font_id,
+                    marker_font_family,
+                    &marker.marker_text,
+                    &display_text,
+                ) {
+                    push_unique_diagnostic(diagnostics, message);
+                }
                 let color = marker_rpr
                     .color
                     .as_ref()
@@ -9741,6 +9749,14 @@ fn layout_paragraph_with_source_and_table(
                     )?;
                     let symbol_metrics = fm.metrics(symbol_font_id, font_size)?;
                     let shaped = fm.shape_text(symbol_font_id, &text, font_size)?;
+                    for message in fm.unknown_symbol_diagnostics(
+                        symbol_font_id,
+                        Some(font),
+                        &symbol.to_string(),
+                        &text,
+                    ) {
+                        push_unique_diagnostic(diagnostics, message);
+                    }
                     multilingual_styles.insert(
                         inline_items.len(),
                         WordMultilingualStyle {
@@ -16024,7 +16040,7 @@ mod tests {
     fn image_watermark_header(text: &str, width_pt: f64) -> rdocx_oxml::header_footer::CT_HdrFtr {
         rdocx_oxml::header_footer::CT_HdrFtr::from_xml(
             format!(
-                r#"<w:hdr xmlns:w="{}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:p><w:r><w:pict><v:shape style="width:{width_pt}pt;height:36pt"><v:fill opacity=".5"/><v:imagedata r:id="rIdWatermark"/></v:shape></w:pict><w:t>{text}</w:t></w:r></w:p></w:hdr>"#,
+                r#"<w:hdr xmlns:w="{0}"><w:p><w:r><w:pict xmlns:w="{0}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><v:shape style="width:{width_pt}pt;height:36pt"><v:fill opacity=".5"/><v:imagedata r:id="rIdWatermark"/></v:shape></w:pict><w:t>{text}</w:t></w:r></w:p></w:hdr>"#,
                 rdocx_oxml::namespace::W_NS
             )
             .as_bytes(),
@@ -22044,6 +22060,73 @@ mod tests {
             baseline.saturating_add(font_contribution_trace_bytes(&events))
         );
         drop(events);
+    }
+
+    #[test]
+    fn fx211c_word_explicit_unknown_symbols_are_same_pass_and_source_preserved() {
+        let mut input = make_input_with_text("");
+        input.document = CT_Document::from_xml(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:sym w:font="Wingdings" w:char="F0FF"/></w:r></w:p><w:p><w:r><w:sym w:font="Wingdings" w:char="F0FF"/></w:r></w:p><w:p><w:r><w:sym w:font="Wingdings" w:char="F0A7"/></w:r><w:r><w:sym w:font="Symbol" w:char="F0B7"/></w:r></w:p><w:p><w:r><w:rPr><w:rFonts w:ascii="Arial"/></w:rPr><w:t>&#xF0FF;</w:t></w:r></w:p><w:p><w:r><w:rPr><w:vanish/></w:rPr><w:sym w:font="Symbol" w:char="F0FF"/></w:r></w:p></w:body></w:document>"#).unwrap();
+        let source = input.document.to_xml().unwrap();
+        let mut engine = Engine::new_deterministic().unwrap();
+        let cold = engine.layout(&input).unwrap();
+        let unknown = cold
+            .diagnostics
+            .iter()
+            .filter(|fact| fact.message.starts_with("Unknown "))
+            .map(|fact| fact.message.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            unknown,
+            ["Unknown Wingdings symbol U+F0FF: original code retained"]
+        );
+        assert!(output_text(&cold).iter().any(|text| text == "\u{f0ff}"));
+        assert!(output_text(&cold).iter().any(|text| text == "▪"));
+        assert!(output_text(&cold).iter().any(|text| text == "•"));
+        let warm = engine.layout(&input).unwrap();
+        assert_eq!(warm.diagnostics, cold.diagnostics);
+        assert_eq!(input.document.to_xml().unwrap(), source);
+        let (_, measured) = engine
+            .measure_content(&input, &input.document.body.content[0], 468.0, None)
+            .unwrap();
+        assert!(
+            measured
+                .iter()
+                .any(|fact| fact.message.starts_with("Unknown Wingdings"))
+        );
+        let empty = engine.layout(&make_input_with_text("")).unwrap();
+        assert!(
+            !empty
+                .diagnostics
+                .iter()
+                .any(|fact| fact.message.starts_with("Unknown ")),
+            "measurement and prior layouts do not publish historical symbol warnings"
+        );
+    }
+
+    #[test]
+    fn fx211c_word_pua_numbering_retains_unknown_code_without_mutation() {
+        let mut input = make_input_with_text("");
+        input.document = CT_Document::from_xml(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Actual listed text</w:t></w:r></w:p></w:body></w:document>"#).unwrap();
+        input.numbering = Some(rdocx_oxml::numbering::CT_Numbering::from_xml(br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="&#xF0FF;"/><w:rPr><w:rFonts w:ascii="Wingdings" w:hAnsi="Wingdings"/></w:rPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num></w:numbering>"#).unwrap());
+        let source = input.document.to_xml().unwrap();
+        let numbering = input.numbering.as_ref().unwrap().to_xml().unwrap();
+        let mut engine = Engine::new_deterministic().unwrap();
+        let cold = engine.layout(&input).unwrap();
+        assert_eq!(
+            cold.diagnostics
+                .iter()
+                .filter(|fact| fact.message.starts_with("Unknown "))
+                .map(|fact| fact.message.as_str())
+                .collect::<Vec<_>>(),
+            ["Unknown Wingdings symbol U+F0FF: original code retained"]
+        );
+        assert!(output_text(&cold).iter().any(|text| text == "\u{f0ff}"));
+        assert_eq!(engine.layout(&input).unwrap().diagnostics, cold.diagnostics);
+        assert_eq!(input.document.to_xml().unwrap(), source);
+        assert_eq!(
+            input.numbering.as_ref().unwrap().to_xml().unwrap(),
+            numbering
+        );
     }
 
     #[test]

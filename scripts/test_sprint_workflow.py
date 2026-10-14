@@ -961,8 +961,14 @@ class SprintWorkflowTests(unittest.TestCase):
             "Create isolated binding environment",
             "Build Python extension",
             "Run full Python binding suite",
+            "Validate retained compatibility report contracts",
         )
         self.assertEqual(identities, required_order)
+        report = self.yaml_step(job, "Validate retained compatibility report contracts")
+        self.assertEqual(self.yaml_direct_lines(report, 8), (
+            "if: matrix.package.distribution == 'rdocx'",
+            "run: python3 -m unittest -v scripts.test_sprint_workflow.CompatibilityReportTests",
+        ))
         viewer = self.yaml_step(job, "Install pinned LibreOffice 26.2.5.2")
         self.assertEqual(
             self.yaml_direct_lines(viewer, 8),
@@ -2083,7 +2089,12 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assertIn(old, python_job)
             return ci.replace(python_job, python_job.replace(old, new, 1), 1)
 
+        report = self.yaml_step(python_job, "Validate retained compatibility report contracts")
         mutations = {
+            "missing-compatibility-contract-step": ci.replace(report, "", 1),
+            "wrong-compatibility-matrix-cell": ci.replace(report, report.replace("== 'rdocx'", "== 'rpptx'"), 1),
+            "narrowed-compatibility-contracts": ci.replace(report, report.replace("CompatibilityReportTests", "CompatibilityReportTests.test_assertion_exits_do_not_manufacture_correct_file_credit"), 1),
+            "swallowed-compatibility-contract-failure": ci.replace(report, report.replace("        if:", "        continue-on-error: true\n        if:"), 1),
             "missing-pull-request-trigger": ci.replace(
                 "  pull_request:\n", "", 1
             ),
@@ -8221,6 +8232,336 @@ class DocxAuthoringConformanceTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
+
+
+class CompatibilityReportTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.records = []
+        for family, allocation in (("W", {"BASE": 17, "XML": 5, "LIFE": 7, "AREA": 20}),
+                                   ("P", {"BASE": 7, "XML": 9, "LIFE": 9, "AREA": 26})):
+            for area, count in allocation.items():
+                self.records.extend({"id": f"{family}-{area}-{i:02}", "family": family,
+                                     "area": area, "script_sha256": "1" * 64}
+                                    for i in range(1, count + 1))
+        manifest = self.artifact("manifest.json", {"records": self.records})
+        bodies = self.artifact("bodies.json", {"unit_test_only": True})
+        self.enterContext(patch.object(workflow, "COMPATIBILITY_MANIFEST_SHA", manifest["sha256"]))
+        self.enterContext(patch.object(workflow, "COMPATIBILITY_BODY_SHA", bodies["sha256"]))
+        self.evidence = self.artifact("evidence.json", {"unit_test_only": True})
+        self.attempts = [dict(row, attempt_number=1, exit_code=0, timed_out=False, evidence=[self.evidence])
+                         for row in self.records]
+        self.source = self.artifact("source.json", {"tracked-file": {"mode": "100644", "sha256": "2" * 64}})
+        provenance = self.artifact("provenance.json", {
+            "source_kind": "working-copy", "dirty": True, "base": "3" * 40,
+            "head": "4" * 40, "index_sha256": "5" * 64,
+            "source_manifest": self.source, "evidence": [self.evidence]})
+        dependencies = {"F-X211a", "F-X211b", "F-X211d", "F-X215", "F-X217", "F-X218", "F-X220"}
+        dependencies.update(f"F-X{number}" for number in range(200, 211))
+        self.packet = {"manifest": manifest, "body_manifest": bodies,
+                       "attempts": self.artifact("attempts.json", self.attempts),
+                       "provenance": provenance,
+                       "dependencies": {name: self.evidence for name in dependencies}}
+
+    def artifact(self, name: str, value: object) -> dict:
+        path = self.root / name
+        raw = json.dumps(value, sort_keys=True).encode()
+        path.write_bytes(raw)
+        return {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
+
+    def qualify(self) -> None:
+        observations = [{"observation": "Unit fixture only, never native acceptance", "kind": "source-model",
+                         "expected": "unit", "actual": "unit", "evidence": [self.evidence]}]
+        facts = {"source_manifest_sha256": self.source["sha256"],
+                 "attempts_sha256": self.packet["attempts"]["sha256"],
+                 "cases": [dict(id=row["id"], status="unqualified" if row["id"] in workflow.COMPATIBILITY_DIVERGENCES else "qualified",
+                                evidence=[self.evidence], source_model=observations, save_reopen=[dict(observations[0], kind="save-reopen")])
+                           for row in self.records],
+                 "hard_gates": {row["id"]: {"status": "qualified", "evidence": [self.evidence], "observations": observations}
+                                for row in self.records if row["area"] in ("XML", "LIFE") or row["id"] == "P-AREA-10"}}
+        facts["native_obligations"] = {}
+        for row in self.records:
+            texts = row.get("additional_native_obligations", [])
+            if isinstance(texts, str):
+                texts = [texts]
+            if texts:
+                clauses = [clause.strip() for text in texts for clause in text.split(";") if clause.strip()]
+                facts["native_obligations"][row["id"]] = [
+                    {"obligation": text, "obligation_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                     "status": "qualified", "observations": [dict(observations[0], kind="native")]}
+                    for text in clauses]
+        self.facts = facts
+        self.rebind_qualification()
+
+    def rebind_qualification(self) -> None:
+        qualification = self.artifact("facts.json", self.facts)
+        self.packet["qualification"] = qualification
+        self.packet["qualification_admission"] = self.artifact("admission.json", {
+            "qualification_sha256": qualification["sha256"], "source_manifest_sha256": self.source["sha256"],
+            "attempts_sha256": self.packet["attempts"]["sha256"], "status": "admitted"})
+
+    def test_assertion_exits_do_not_manufacture_correct_file_credit(self) -> None:
+        result = workflow.compatibility_report(self.packet)
+        self.assertIsNone(result["full_acceptance_percent"])
+        self.assertFalse(result["threshold_met"])
+        self.assertEqual(result["total"]["correct_file"], 0)
+        self.assertEqual(result["total"]["assertions_exit_zero"], 100)
+        self.assertEqual(result["documentation_subset"]["attempted"], 24)
+        self.assertEqual(result["total"]["deliberate_divergence"], 2)
+        self.assertEqual({area: row["attempted"] for area, row in result["by_area"].items()}, workflow.COMPATIBILITY_COUNTS)
+
+    def test_duplicate_attempt_and_changed_script_are_refused(self) -> None:
+        for change in ("duplicate", "script"):
+            with self.subTest(change=change):
+                rows = [dict(row) for row in self.attempts]
+                if change == "duplicate":
+                    rows[-1] = rows[0]
+                else:
+                    rows[0]["script_sha256"] = "f" * 64
+                self.packet["attempts"] = self.artifact("attempts.json", rows)
+                with self.assertRaises(ValueError):
+                    workflow.compatibility_report(self.packet)
+
+    def test_retry_and_unqualified_ci_check_are_refused(self) -> None:
+        self.packet["attempts"] = self.artifact("attempts.json", [dict(row, attempt_number=2) for row in self.attempts])
+        with self.assertRaisesRegex(ValueError, "immutable first attempt"):
+            workflow.compatibility_report(self.packet)
+        self.packet["attempts"] = self.artifact("attempts.json", self.attempts)
+        packet = self.artifact("packet.json", self.packet)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(workflow.cmd_compatibility_report(argparse.Namespace(packet=packet["path"], check=True)), 1)
+            self.assertEqual(workflow.cmd_compatibility_report(argparse.Namespace(packet=packet["path"], check=False)), 0)
+
+    def test_changed_evidence_and_missing_provider_are_refused(self) -> None:
+        Path(self.evidence["path"]).write_text("changed")
+        with self.assertRaisesRegex(ValueError, "evidence changed"):
+            workflow.compatibility_report(self.packet)
+        self.evidence = self.artifact("evidence.json", {"unit_test_only": True})
+        del self.packet["dependencies"]["F-X211a"]
+        with self.assertRaisesRegex(ValueError, "dependency identities"):
+            workflow.compatibility_report(self.packet)
+
+    def test_qualified_facts_require_bound_admission_and_all_owner_safety_gates(self) -> None:
+        self.qualify()
+        result = workflow.compatibility_report(self.packet)
+        self.assertEqual(result["full_acceptance_percent"], 98)
+        del self.facts["hard_gates"]["W-LIFE-07"]
+        self.rebind_qualification()
+        with self.assertRaisesRegex(ValueError, "hard gates"):
+            workflow.compatibility_report(self.packet)
+
+    def test_pending_native_fact_keeps_full_metric_unset(self) -> None:
+        self.qualify()
+        self.facts["hard_gates"]["P-AREA-10"]["status"] = "pending"
+        self.rebind_qualification()
+        result = workflow.compatibility_report(self.packet)
+        self.assertIsNone(result["full_acceptance_percent"])
+        self.assertFalse(result["threshold_met"])
+
+    def test_nested_boolean_observations_are_not_qualification(self) -> None:
+        for field in ("source_model", "save_reopen", "hard_gate"):
+            with self.subTest(field=field):
+                self.qualify()
+                if field == "hard_gate":
+                    self.facts["hard_gates"]["W-LIFE-07"]["observations"] = [{"observation": True}]
+                else:
+                    self.facts["cases"][0][field] = [{"observation": True}]
+                self.rebind_qualification()
+                with self.assertRaises(ValueError):
+                    workflow.compatibility_report(self.packet)
+
+    def test_each_declared_native_obligation_needs_its_own_bound_proof(self) -> None:
+        for selected in ("W-LIFE-07", "P-AREA-10"):
+            with self.subTest(selected=selected):
+                for row in self.records:
+                    if row["id"] == selected:
+                        row["additional_native_obligations"] = (
+                            ["Native common-serial overflow preflight requires source-level fault injection, unavailable through public constructor",
+                             "Weak Arc-state reclamation requires existing native test instrumentation, not invented Python access"]
+                            if selected == "W-LIFE-07" else
+                            ["Media removal/poster pruning/shared reference refusal native riders; frozen MP4 fixture must have independently authenticated actual playable sample before render acceptance"])
+                manifest = self.artifact("manifest.json", {"records": self.records})
+                self.packet["manifest"] = manifest
+                self.enterContext(patch.object(workflow, "COMPATIBILITY_MANIFEST_SHA", manifest["sha256"]))
+                self.qualify()
+                # Retain the first real obligation and omit just the second.
+                # The generic case-level native gate is still qualified.
+                self.assertEqual(len(self.facts["native_obligations"][selected]), 2)
+                self.facts["native_obligations"][selected].pop(1)
+                self.rebind_qualification()
+                with self.assertRaisesRegex(ValueError, "obligation proofs are missing"):
+                    workflow.compatibility_report(self.packet)
+
+    def test_boolean_prose_or_failed_script_is_not_correct_file_evidence(self) -> None:
+        self.qualify()
+        self.facts["cases"][0]["source_model"] = True
+        self.rebind_qualification()
+        with self.assertRaisesRegex(ValueError, "concrete typed observations"):
+            workflow.compatibility_report(self.packet)
+        self.qualify()
+        self.attempts[0]["exit_code"] = 1
+        self.packet["attempts"] = self.artifact("attempts.json", self.attempts)
+        self.facts["attempts_sha256"] = self.packet["attempts"]["sha256"]
+        self.rebind_qualification()
+        with self.assertRaisesRegex(ValueError, "failed or divergent"):
+            workflow.compatibility_report(self.packet)
+
+    def declare_named_non_successes(self) -> None:
+        assertions = {
+            "W-AREA-19": (18, "assert any('Gelasio' in x for x in names)"),
+            "P-AREA-02": (40, "assert len(updates)==1"),
+            "P-AREA-14": (17, "assert nv.get('descr')=='Description' and nv.get('title')=='Title'"),
+        }
+        observations = [{"observation": "Unit fixture only, never native acceptance", "kind": "source-model",
+                         "expected": "unit", "actual": "unit", "evidence": [self.evidence]}]
+        cases = []
+        for case_id, (line, assertion) in assertions.items():
+            path = self.root / f"{case_id}-stderr.log"
+            path.write_text(f'Traceback (most recent call last):\n  File "/frozen/scripts/{case_id}.py", line {line}, in <module>\n    {assertion}\nAssertionError\n')
+            evidence = {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            attempt = next(row for row in self.attempts if row["id"] == case_id)
+            attempt.update(exit_code=1, evidence=[evidence], cleanup={"groupGone": True,
+                           "leaderReaped": True, "leaseReleaseSafe": True, "signals": []})
+            cases.append({"id": case_id, "failure_evidence": evidence,
+                          "source_model": observations, "save_reopen": [dict(observations[0], kind="save-reopen")]})
+        self.packet["attempts"] = self.artifact("attempts.json", self.attempts)
+        self.named = {"source_manifest_sha256": self.source["sha256"],
+                      "attempts_sha256": self.packet["attempts"]["sha256"], "cases": cases}
+        self.rebind_named_non_successes()
+
+    def rebind_named_non_successes(self) -> None:
+        facts = self.artifact("named-non-successes.json", self.named)
+        self.packet["named_non_successes"] = facts
+        self.packet["non_success_admission"] = self.artifact("non-success-admission.json", {
+            "disposition_sha256": facts["sha256"], "source_manifest_sha256": self.source["sha256"],
+            "attempts_sha256": self.packet["attempts"]["sha256"], "status": "admitted"})
+
+    def test_named_non_successes_preserve_denominator_without_success_credit(self) -> None:
+        self.declare_named_non_successes()
+        result = workflow.compatibility_report(self.packet)
+        self.assertEqual(result["total"]["unexpected_failure_ids"], [])
+        self.assertEqual(result["total"]["deliberate_divergence"], 5)
+        self.assertEqual(result["denominator"], 100)
+        self.assertEqual(result["total"]["correct_file"], 0)
+        self.assertIsNone(result["full_acceptance_percent"])
+        self.qualify()
+        for row in self.facts["cases"]:
+            if row["id"] in {"W-AREA-19", "P-AREA-02", "P-AREA-14"}:
+                row["status"] = "unqualified"
+        self.rebind_qualification()
+        result = workflow.compatibility_report(self.packet)
+        self.assertEqual(result["full_acceptance_percent"], 95)
+        self.assertTrue(result["threshold_met"])
+        for row in self.facts["cases"]:
+            if row["id"] in {f"W-BASE-{i:02}" for i in range(1, 6)}:
+                row["status"] = "unqualified"
+        self.rebind_qualification()
+        self.assertTrue(workflow.compatibility_report(self.packet)["threshold_met"])
+        self.assertEqual(workflow.compatibility_report(self.packet)["full_acceptance_percent"], 90)
+        next(row for row in self.facts["cases"] if row["id"] == "W-BASE-06")["status"] = "unqualified"
+        self.rebind_qualification()
+        self.assertFalse(workflow.compatibility_report(self.packet)["threshold_met"])
+        del self.facts["hard_gates"]["W-LIFE-07"]
+        self.rebind_qualification()
+        with self.assertRaisesRegex(ValueError, "hard gates"):
+            workflow.compatibility_report(self.packet)
+
+    def test_named_non_successes_require_candidate_admission_and_concrete_companions(self) -> None:
+        for change in ("source", "attempts", "arbitrary", "duplicate", "source-model", "save-reopen", "boolean", "scope", "unadmitted", "missing-admission", "wrong-log"):
+            with self.subTest(change=change):
+                self.declare_named_non_successes()
+                if change in ("source", "attempts"):
+                    self.named[f"{change if change == 'attempts' else 'source_manifest'}_sha256"] = "f" * 64
+                elif change == "arbitrary":
+                    self.named["cases"][0]["id"] = "W-BASE-01"
+                elif change == "duplicate":
+                    self.named["cases"].append(self.named["cases"][0])
+                elif change in ("source-model", "save-reopen"):
+                    del self.named["cases"][0][change.replace("-", "_")]
+                elif change == "boolean":
+                    self.named["cases"][0]["source_model"] = [{"observation": True}]
+                elif change == "scope":
+                    self.named["cases"][0]["source_model"] = self.named["cases"][0]["save_reopen"]
+                elif change == "wrong-log":
+                    self.named["cases"][0]["failure_evidence"] = self.evidence
+                self.rebind_named_non_successes()
+                if change == "unadmitted":
+                    value = json.loads(Path(self.packet["non_success_admission"]["path"]).read_text())
+                    value["status"] = "pending"
+                    self.packet["non_success_admission"] = self.artifact("non-success-admission.json", value)
+                elif change == "missing-admission":
+                    del self.packet["non_success_admission"]
+                with self.assertRaises((ValueError, KeyError)):
+                    workflow.compatibility_report(self.packet)
+
+    def test_named_non_successes_cannot_hide_earlier_provider_or_process_failures(self) -> None:
+        for change in ("early-provider", "wrong-line", "wrong-script", "wrong-assertion", "timeout", "signal", "cleanup", "success"):
+            with self.subTest(change=change):
+                self.declare_named_non_successes()
+                row = next(value for value in self.named["cases"] if value["id"] == "P-AREA-14")
+                attempt = next(value for value in self.attempts if value["id"] == row["id"])
+                reference = row["failure_evidence"]
+                path = Path(reference["path"])
+                text = path.read_text()
+                if change == "early-provider":
+                    text = 'Traceback (most recent call last):\n  File "/frozen/scripts/P-AREA-14.py", line 11, in <module>\n    shape.alt_text="Description"\nAttributeError: Shape has no alt_text\n'
+                elif change == "wrong-line":
+                    text = text.replace("line 17", "line 11")
+                elif change == "wrong-script":
+                    text = text.replace("P-AREA-14.py", "P-AREA-13.py")
+                elif change == "wrong-assertion":
+                    text = text.replace("assert nv.get('descr')", "assert another.get('descr')")
+                elif change == "timeout":
+                    attempt["timed_out"] = True
+                elif change == "signal":
+                    attempt["cleanup"]["signals"] = ["SIGTERM"]
+                elif change == "cleanup":
+                    attempt["cleanup"]["groupGone"] = False
+                elif change == "success":
+                    attempt["exit_code"] = 0
+                path.write_text(text)
+                reference["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+                self.packet["attempts"] = self.artifact("attempts.json", self.attempts)
+                self.named["attempts_sha256"] = self.packet["attempts"]["sha256"]
+                self.rebind_named_non_successes()
+                with self.assertRaisesRegex(ValueError, "named non-success"):
+                    workflow.compatibility_report(self.packet)
+
+    def test_named_non_successes_never_qualify_failed_cases_or_waive_native_gates(self) -> None:
+        self.declare_named_non_successes()
+        self.qualify()
+        with self.assertRaisesRegex(ValueError, "failed or divergent"):
+            workflow.compatibility_report(self.packet)
+        for row in self.facts["cases"]:
+            if row["id"] in {"W-AREA-19", "P-AREA-02", "P-AREA-14"}:
+                row["status"] = "unqualified"
+        self.facts["hard_gates"]["P-AREA-10"]["status"] = "pending"
+        self.rebind_qualification()
+        result = workflow.compatibility_report(self.packet)
+        self.assertIsNone(result["full_acceptance_percent"])
+        self.assertFalse(result["threshold_met"])
+
+    def test_corrective_word_child_is_a_mandatory_provider(self) -> None:
+        self.packet["dependencies"].pop("F-X211d", None)
+        with self.assertRaisesRegex(ValueError, "dependency identities"):
+            workflow.compatibility_report(self.packet)
+        self.packet["dependencies"]["F-X211d"] = self.evidence
+        self.assertEqual(workflow.compatibility_report(self.packet)["denominator"], 100)
+
+    def test_full_qualification_requires_explicit_admitted_status(self) -> None:
+        for status in ("pending", None):
+            with self.subTest(status=status):
+                self.qualify()
+                value = json.loads(Path(self.packet["qualification_admission"]["path"]).read_text())
+                if status is None:
+                    del value["status"]
+                else:
+                    value["status"] = status
+                self.packet["qualification_admission"] = self.artifact("admission.json", value)
+                with self.assertRaisesRegex(ValueError, "qualification is not admitted"):
+                    workflow.compatibility_report(self.packet)
 
 
 if __name__ == "__main__":

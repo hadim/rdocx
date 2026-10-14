@@ -1,6 +1,6 @@
 # F-X211c, Integrated Python compatibility and causal errors
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X211a, F-X211b, F-X211d, F-X200 through F-X210, F-X215, F-X217, F-X218 and F-X220 for final integrated capability acceptance. Compose their reviewed current source without reimplementing them.
@@ -71,13 +71,13 @@ No default output delta is expected from additive XML, aliases, metrics or error
 
 ## Implementation checklist
 
-- [ ] Authenticate parent immutable corpus/Base and all owning provider source.
-- [ ] Wait for a/b integration before overlapping shared/public implementation.
-- [ ] Implement only uncovered shared aliases/lifetimes/first-cause/errors/options/unit residuals.
-- [ ] Qualify installed paired sources, typing, provider composition and named risk gates.
-- [ ] Execute frozen100 unchanged, qualify correct files/required native/rendered facts and report honest per-area/full rates.
-- [ ] Obtain clean independent microscope and root HLD/archive composition.
-- [ ] Prepare valid handoff, then close parent only after all children actually close.
+- [x] Authenticate parent immutable corpus/Base and all owning provider source.
+- [x] Wait for a/b integration before overlapping shared/public implementation.
+- [x] Implement only uncovered shared aliases/lifetimes/first-cause/errors/options/unit residuals.
+- [x] Qualify installed paired sources, typing, provider composition and named risk gates.
+- [x] Execute frozen100 unchanged, qualify correct files/required native/rendered facts and report honest per-area/full rates.
+- [x] Obtain clean independent microscope and root HLD/archive composition.
+- [x] Prepare valid handoff, then close parent only after all children actually close.
 
 ## Open questions
 

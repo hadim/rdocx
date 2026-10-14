@@ -1871,6 +1871,35 @@ impl PyTheme {
         Ok(self.current(py)?.name)
     }
 
+    #[setter]
+    fn set_name(&self, py: Python<'_>, value: &str) -> PyResult<()> {
+        let master = PySlideMaster {
+            presentation: self.presentation.clone_ref(py),
+            part_name: self.part_name.clone(),
+            path: self.path.clone(),
+        };
+        let index = master.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut candidate = presentation.inner.clone();
+        candidate
+            .set_theme_name(index, value)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        if candidate
+            .to_bytes()
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?
+            == presentation
+                .inner
+                .to_bytes()
+                .map_err(|error| crate::rpptx_to_pyerr(py, error))?
+        {
+            return Ok(());
+        }
+        let proofs = presentation.unchanged_owners()?;
+        let prepared =
+            presentation.prepare_owners(&candidate, "Theme.name", &proofs, false, false, false)?;
+        presentation.publish_owners(candidate, prepared)
+    }
+
     #[getter]
     fn colors(&self, py: Python<'_>) -> PyResult<PyThemeColors> {
         self.current(py)?;

@@ -76,6 +76,8 @@ jobs:
               - 'rust-toolchain.toml'
               - 'crates/**'
               - 'scripts/install_pinned_poppler.py'
+              - 'scripts/sprint_workflow.py'
+              - 'scripts/test_sprint_workflow.py'
             presentation_fidelity:
               - '.github/workflows/ci.yml'
               - '.cargo/**'
@@ -278,6 +280,9 @@ jobs:
           binding_venv="${RUNNER_TEMP}/${{ matrix.package.distribution }}-venv"
           binding_python="$binding_venv/bin/python"
           "$binding_python" -m pytest "crates/${{ matrix.package.crate }}/tests"
+      - name: Validate retained compatibility report contracts
+        if: matrix.package.distribution == 'rdocx'
+        run: python3 -m unittest -v scripts.test_sprint_workflow.CompatibilityReportTests
 
   no-default-features:
     name: No default features

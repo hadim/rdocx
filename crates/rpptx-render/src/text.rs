@@ -883,11 +883,40 @@ fn shape_paragraphs(
                 };
                 let requested = explicit.or_else(|| typeface_for_text(first_run_style(paragraph), &marker.text));
                 font_manager.record_font_contribution(marker.font_id, requested, &marker.text)?;
+                if let Some(ResolvedBullet::Character { character, .. }) = &paragraph.bullet {
+                    append_symbol_marker_diagnostics(
+                        font_manager,
+                        requested,
+                        character,
+                        &marker,
+                        diagnostics,
+                    );
+                }
                 items.insert(0, InlineItem::Marker(marker));
             }
             Ok((items, base_direction))
         })
         .collect()
+}
+
+// Unknown semantic mappings are distinct from glyph coverage. A fallback face's
+// private-use glyph does not authenticate the requested symbol's meaning.
+fn append_symbol_marker_diagnostics(
+    fonts: &FontManager,
+    requested: Option<&str>,
+    original: &str,
+    marker: &TextSegment,
+    diagnostics: &mut Vec<String>,
+) {
+    for message in
+        fonts.unknown_symbol_diagnostics(marker.font_id, requested, original, &marker.text)
+    {
+        // At most 1024 canonical family/original-code pairs (512 per family).
+        // Only accepted visible markers enter this local layout vector.
+        if !diagnostics.contains(&message) {
+            diagnostics.push(message);
+        }
+    }
 }
 
 fn shape_multilingual_items_preserving_controls(
@@ -3624,6 +3653,138 @@ mod tests {
 
         assert_eq!(runs[0].text, "\u{2022}");
         assert!(runs[0].glyph_ids.iter().all(|glyph| *glyph != 0));
+    }
+
+    #[test]
+    fn fx211c_unknown_symbol_marker_facts_are_owned_ordered_and_not_missing_claims() {
+        let mut body = ResolvedTextBody {
+            paragraphs: [
+                ("Wingdings", "\u{f0ff}"),
+                ("Wingdings", "\u{f0ff}"),
+                ("Wingdings", "\u{f0a7}"),
+                ("Symbol", "\u{f0b7}"),
+                ("Arial", "\u{f0ff}"),
+            ]
+            .into_iter()
+            .map(|(family, character)| {
+                bullet_paragraph(
+                    0,
+                    Some(ResolvedBullet::Character {
+                        character: character.to_owned(),
+                        font: Some(family.to_owned()),
+                        color: None,
+                        size: None,
+                    }),
+                    "visible",
+                )
+            })
+            .collect(),
+            ..text_body(TextInsets::default())
+        };
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let cold = stack_text(&mut fonts, test_content_box(120.0), &body).unwrap();
+        assert_eq!(
+            cold.diagnostics,
+            ["Unknown Wingdings symbol U+F0FF: original code retained"]
+        );
+        let runs = glyph_runs(&cold.elements);
+        assert_eq!(runs[0].text, "\u{f0ff}");
+        assert!(
+            runs[0].glyph_ids.contains(&0),
+            "actual missing glyph is separately observable"
+        );
+        assert!(!cold.diagnostics[0].to_ascii_lowercase().contains("missing"));
+        let warm = stack_text(&mut fonts, test_content_box(120.0), &body).unwrap();
+        assert_eq!(warm.diagnostics, cold.diagnostics);
+        assert_eq!(glyph_runs(&warm.elements)[0].text, "\u{f0ff}");
+        for paragraph in &mut body.paragraphs {
+            paragraph.runs.clear();
+        }
+        let empty = stack_text(&mut fonts, test_content_box(120.0), &body).unwrap();
+        assert!(
+            empty.diagnostics.is_empty(),
+            "discarded and empty layouts cannot leak marker facts"
+        );
+        assert!(
+            !fonts
+                .current_font_diagnostics()
+                .iter()
+                .any(|fact| fact.message.contains("Unknown Wingdings"))
+        );
+    }
+
+    #[test]
+    fn fx211c_unknown_symbol_semantics_do_not_claim_an_existing_glyph_is_missing() {
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        fonts.load_additional_fonts(&[oxml_layout::FontFile {
+            family: "Wingdings".to_owned(),
+            data: include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf").to_vec(),
+        }]);
+        let style = ResolvedRunStyle {
+            latin_typeface: Some("Wingdings".to_owned()),
+            symbol_typeface: Some("Wingdings".to_owned()),
+            ..ResolvedRunStyle::default()
+        };
+        let (displayed, _) = fonts
+            .resolve_symbol_text(Some("Wingdings"), false, false, "ÿ", true)
+            .unwrap();
+        let marker = shape_run(&mut fonts, &displayed, &style).unwrap();
+        assert!(marker.glyph_ids.iter().all(|id| *id != 0));
+        let mut diagnostics = Vec::new();
+        append_symbol_marker_diagnostics(&fonts, Some("Wingdings"), "ÿ", &marker, &mut diagnostics);
+        assert_eq!(
+            diagnostics,
+            ["Unknown Wingdings symbol U+00FF: original code retained"]
+        );
+        assert!(!diagnostics[0].to_ascii_lowercase().contains("missing"));
+    }
+
+    #[test]
+    fn fx211c_symbol_marker_original_scalar_dedup_is_bounded() {
+        let original = (0..=0xff)
+            .chain(0xf000..=0xf0ff)
+            .map(|code| char::from_u32(code).unwrap())
+            .collect::<String>();
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let mut diagnostics = Vec::new();
+        for family in ["Symbol", "Wingdings"] {
+            let (displayed, _) = fonts
+                .resolve_symbol_text(Some(family), false, false, &original, true)
+                .unwrap();
+            let style = ResolvedRunStyle {
+                latin_typeface: Some(family.to_owned()),
+                symbol_typeface: Some(family.to_owned()),
+                ..ResolvedRunStyle::default()
+            };
+            let marker = shape_run(&mut fonts, &displayed, &style).unwrap();
+            append_symbol_marker_diagnostics(
+                &fonts,
+                Some(family),
+                &original,
+                &marker,
+                &mut diagnostics,
+            );
+            let before = diagnostics.clone();
+            append_symbol_marker_diagnostics(
+                &fonts,
+                Some(family),
+                &original,
+                &marker,
+                &mut diagnostics,
+            );
+            assert_eq!(diagnostics, before);
+        }
+        assert!(diagnostics.len() > 512 && diagnostics.len() <= 1024);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|fact| fact.contains("Wingdings symbol U+00FF"))
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|fact| fact.contains("Wingdings symbol U+F0FF"))
+        );
     }
 
     #[test]

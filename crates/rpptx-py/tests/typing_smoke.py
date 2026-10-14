@@ -778,3 +778,23 @@ def semantic_text_exports(prs: Presentation, path: Path) -> None:
     assert_type(prs.export_markdown(), PresentationTextExport)
     assert_type(prs.save_html(path), tuple[str, ...])
     assert_type(prs.save_markdown(path, inline_images=True), tuple[str, ...])
+
+
+def fx211c_compatibility_aliases(prs: Presentation, shape: Shape, row: Row, font: Font) -> None:
+    assert_type(row.cells, tuple[Cell, ...])
+    paragraph = shape.text_frame.paragraphs[0]
+    assert_type(paragraph.bullet_char, str | bool | None)
+    paragraph.bullet_char = "•"
+    paragraph.bullet_char = False
+    paragraph.bullet_char = None
+    assert_type(shape.alt_text, str | None)
+    shape.alt_text = "Description"
+    font.highlight_color = "FFFF00"
+    assert_type(font.highlight_color, ColorFormat)
+    theme = prs.slide_masters[0].theme
+    theme.name = "Typed theme"
+    assert_type(theme.name, str | None)
+    assert_type(prs.core_properties.author, str | None)
+    shapes = prs.slides[0].shapes
+    shapes.align([shape], "left", relative_to="selection")
+    shapes.distribute([shape], "horizontal", relative_to="selection")

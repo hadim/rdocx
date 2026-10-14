@@ -1,7 +1,7 @@
 use oxml_py_support::{ContentPath, PathSeg};
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyList, PySlice};
+use pyo3::types::{PyAny, PyList, PySlice, PyTuple};
 
 use crate::dml::{FillTarget, PyFillFormat, PyLineFormat};
 use crate::normalize_index;
@@ -341,7 +341,7 @@ impl PyTable {
                         .current_path(&self.path)
                         .ok_or_else(|| PyIndexError::new_err("table owner is absent"))?
                         .segs,
-                    Some(oxml_py_support::RevisionScope::Grid),
+                    None,
                 )?,
             },
         )
@@ -360,7 +360,7 @@ impl PyTable {
                         .current_path(&self.path)
                         .ok_or_else(|| PyIndexError::new_err("table owner is absent"))?
                         .segs,
-                    Some(oxml_py_support::RevisionScope::Grid),
+                    None,
                 )?,
             },
         )
@@ -418,7 +418,10 @@ impl PyColumnCollection {
             .ok_or_else(|| PyIndexError::new_err("owner is absent"))?
             .segs;
         segments.push(PathSeg::Cell(index));
-        let path = self.presentation.borrow(py).capture_path(segments, None)?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_path(segments, Some(oxml_py_support::RevisionScope::Grid))?;
         Py::new(
             py,
             PyColumn {
@@ -785,6 +788,36 @@ pub struct PyRow {
 
 #[pymethods]
 impl PyRow {
+    #[getter]
+    fn cells<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let presentation = self.presentation.borrow(py);
+        validate_path(py, &presentation, &self.path, "row", "")?;
+        let row =
+            row_index(&self.path).ok_or_else(|| PyIndexError::new_err("row index is missing"))?;
+        let columns = shape_ref_at(&presentation, &self.path)
+            .and_then(|shape| shape.table())
+            .filter(|table| row < table.row_count())
+            .map(|table| table.column_count())
+            .ok_or_else(|| PyIndexError::new_err("row index out of range"))?;
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("row owner is absent"))?;
+        let mut cells = Vec::with_capacity(columns);
+        for column in 0..columns {
+            let mut segments = current.segs.clone();
+            segments.push(PathSeg::Cell(column));
+            let path = presentation.capture_path(segments, None)?;
+            cells.push(Py::new(
+                py,
+                PyCell {
+                    presentation: self.presentation.clone_ref(py),
+                    path,
+                },
+            )?);
+        }
+        PyTuple::new(py, cells)
+    }
+
     /// The stored row height, a minimum that PowerPoint grows to fit text.
     #[getter]
     fn height(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
