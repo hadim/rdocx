@@ -3092,6 +3092,7 @@ impl PyPresentation {
                 segment,
                 PathSeg::Shape(_) | PathSeg::Cell(_) | PathSeg::Para(_) | PathSeg::Run(_)
             ) && !styled
+                && (!matches!(segment, PathSeg::Shape(_)) || prefix == physical)
                 && let Some(ancestor) = owner_at(&prefix, None, false)
                 && !scopes.iter().any(|state| state.same_state(&ancestor.owner))
             {
