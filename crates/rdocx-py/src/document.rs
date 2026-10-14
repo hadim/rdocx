@@ -4182,6 +4182,7 @@ impl PyDocument {
     }
 
     #[pyo3(signature = (page_index, dpi = 150.0, *, revision_view = "accepted", revision_style = "plain", fonts = None, font_dir = None))]
+    #[allow(clippy::too_many_arguments)]
     fn render_page_to_png<'py>(
         &self,
         py: Python<'py>,
