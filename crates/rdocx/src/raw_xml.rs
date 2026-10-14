@@ -10,7 +10,8 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
-use quick_xml::events::{BytesText, Event};
+use quick_xml::events::attributes::Attribute;
+use quick_xml::events::{BytesStart, BytesText, Event};
 use quick_xml::name::{QName, ResolveResult};
 use quick_xml::{NsReader, Reader, Writer};
 use rdocx_oxml::document::{BodyContent, CT_Body, CT_Document, CT_SectPr};
@@ -163,9 +164,12 @@ impl Document {
             return Err(invalid(format!("got {root}")));
         }
         let fragment = cdata_as_text(fragment)?;
+        let root_start = self.shell_root()?;
+        let fragment =
+            declare_inherited_prefixes(fragment.as_ref(), &root_start).map_err(invalid)?;
         let fragment = fragment.as_ref();
         let (before, after) = target.wrapper();
-        let mut wrapped = self.shell_root()?;
+        let mut wrapped = root_start;
         wrapped.extend_from_slice(b"<w:body>");
         wrapped.extend_from_slice(before.as_bytes());
         wrapped.extend_from_slice(fragment);
@@ -661,6 +665,157 @@ fn cdata_as_text(xml: &[u8]) -> Result<Cow<'_, [u8]>> {
         }
         buffer.clear();
     }
+}
+
+/// The namespace declarations of one start tag, by prefix (empty for the
+/// default namespace), with their values as written.
+fn namespace_declarations(element: &BytesStart<'_>) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    let mut declarations = Vec::new();
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| xml_error(error.into()))?;
+        let key = attribute.key.as_ref();
+        let prefix = if key == b"xmlns" {
+            b"".as_slice()
+        } else if let Some(prefix) = key.strip_prefix(b"xmlns:") {
+            prefix
+        } else {
+            continue;
+        };
+        declarations.push((prefix.to_vec(), attribute.value.into_owned()));
+    }
+    Ok(declarations)
+}
+
+/// `fragment` with every namespace prefix an element or its attributes use
+/// declared on that element when an ancestor inside the fragment declares
+/// it and `root`, the document's root start tag, does not bind it the same
+/// way.
+///
+/// The model writes the elements it parses with fixed prefixes and keeps the
+/// ones it does not know verbatim, without the declarations of their
+/// ancestors. A prefix declared on the `w:p`, as `xml.etree` writes it, would
+/// otherwise be unbound in the kept subtree. Declaring it where it is used
+/// keeps the same XML infoset. A prefix declared nowhere, which would leave
+/// the saved part unreadable, is refused.
+fn declare_inherited_prefixes<'a>(
+    fragment: &'a [u8],
+    root: &[u8],
+) -> std::result::Result<Cow<'a, [u8]>, String> {
+    let malformed = |error: Error| format!("the XML is malformed: {error}");
+    let mut reader = Reader::from_reader(root);
+    let root_scope = match reader
+        .read_event()
+        .map_err(|error| malformed(xml_error(error)))?
+    {
+        Event::Start(element) => namespace_declarations(&element).map_err(malformed)?,
+        _ => Vec::new(),
+    };
+    let mut reader = Reader::from_reader(fragment);
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Vec::new());
+    let mut scopes: Vec<Vec<(Vec<u8>, Vec<u8>)>> = Vec::new();
+    let mut changed = false;
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| malformed(xml_error(error)))?;
+        let (element, empty) = match event {
+            Event::Start(element) => (element, false),
+            Event::Empty(element) => (element, true),
+            Event::End(element) => {
+                scopes.pop();
+                writer
+                    .write_event(Event::End(element))
+                    .map_err(|error| malformed(xml_error(error.into())))?;
+                buffer.clear();
+                continue;
+            }
+            Event::Eof => break,
+            event => {
+                writer
+                    .write_event(event)
+                    .map_err(|error| malformed(xml_error(error.into())))?;
+                buffer.clear();
+                continue;
+            }
+        };
+        let own = namespace_declarations(&element).map_err(malformed)?;
+        let mut used = vec![
+            element
+                .name()
+                .prefix()
+                .map_or(Vec::new(), |prefix| prefix.as_ref().to_vec()),
+        ];
+        for attribute in element.attributes() {
+            let attribute = attribute.map_err(|error| malformed(xml_error(error.into())))?;
+            if let Some(prefix) = attribute.key.prefix()
+                && !matches!(prefix.as_ref(), b"xmlns" | b"xml")
+            {
+                used.push(prefix.as_ref().to_vec());
+            }
+        }
+        let mut element = element.into_owned();
+        let mut added: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for prefix in used {
+            if own
+                .iter()
+                .chain(&added)
+                .any(|(declared, _)| *declared == prefix)
+            {
+                continue;
+            }
+            let Some((_, value)) = scopes
+                .iter()
+                .rev()
+                .flatten()
+                .find(|(declared, _)| *declared == prefix)
+            else {
+                if !prefix.is_empty() && !root_scope.iter().any(|(declared, _)| *declared == prefix)
+                {
+                    return Err(format!(
+                        "the prefix {} is not declared, declare its namespace on the element or \
+                         an ancestor",
+                        String::from_utf8_lossy(&prefix)
+                    ));
+                }
+                continue;
+            };
+            let binding = (prefix, value.clone());
+            if root_scope.contains(&binding) {
+                continue;
+            }
+            added.push(binding);
+        }
+        for (prefix, value) in &added {
+            let key = if prefix.is_empty() {
+                b"xmlns".to_vec()
+            } else {
+                [b"xmlns:".as_slice(), prefix].concat()
+            };
+            element.push_attribute(Attribute {
+                key: QName(&key),
+                value: Cow::Borrowed(value),
+            });
+            changed = true;
+        }
+        if !empty {
+            scopes.push(own);
+        }
+        writer
+            .write_event(if empty {
+                Event::Empty(element)
+            } else {
+                Event::Start(element)
+            })
+            .map_err(|error| malformed(xml_error(error.into())))?;
+        buffer.clear();
+    }
+    Ok(if changed {
+        Cow::Owned(writer.into_inner())
+    } else {
+        Cow::Borrowed(fragment)
+    })
 }
 
 /// Range and revision markers that may sit between the children of a

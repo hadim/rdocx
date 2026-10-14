@@ -26389,3 +26389,93 @@ fn raw_xml_round_trips_each_body_element_and_refuses_what_it_cannot_keep() {
     }
     assert_eq!(doc.to_bytes().unwrap(), before);
 }
+
+#[test]
+fn raw_xml_accepts_a_namespace_declared_on_an_ancestor_inside_the_replacement() {
+    use quick_xml::NsReader;
+    use quick_xml::events::Event;
+    use quick_xml::name::ResolveResult;
+    use rdocx::{XmlParagraph, XmlTarget};
+
+    const ASVG: &str = "http://schemas.microsoft.com/office/drawing/2016/SVG/main";
+    let mut doc = Document::new();
+    for name in ["first.png", "second.png"] {
+        doc.add_picture(PNG_2_BY_3, name, Length::emu(12_700), Length::emu(19_050));
+    }
+    let picture = String::from_utf8(
+        doc.element_xml(&XmlTarget::Paragraph(XmlParagraph::Body(1)))
+            .unwrap(),
+    )
+    .unwrap();
+    let svg_id = picture.split("r:embed=\"").nth(1).unwrap();
+    let svg_id = &svg_id[..svg_id.find('"').unwrap()];
+    let original = String::from_utf8(
+        doc.element_xml(&XmlTarget::Paragraph(XmlParagraph::Body(0)))
+            .unwrap(),
+    )
+    .unwrap();
+    let blip_end = original.find("<a:blip ").unwrap();
+    let blip_end = blip_end + original[blip_end..].find("/>").unwrap();
+    let with_twin = |declared_on_paragraph: bool| {
+        let declaration = format!(" xmlns:asvg=\"{ASVG}\"");
+        let (on_paragraph, on_blip) = if declared_on_paragraph {
+            (declaration.as_str(), "")
+        } else {
+            ("", declaration.as_str())
+        };
+        format!(
+            "<w:p{on_paragraph}{}><a:extLst><a:ext uri=\"{{96DAC541-7B7A-43D3-8B79-37D633B846F1}}\">\
+             <asvg:svgBlip{on_blip} r:embed=\"{svg_id}\"/></a:ext></a:extLst></a:blip>{}",
+            &original["<w:p".len()..blip_end],
+            &original[blip_end + "/>".len()..]
+        )
+    };
+
+    // The same infoset with the declaration on svgBlip or on the w:p.
+    for declared_on_paragraph in [false, true] {
+        let target = XmlTarget::Paragraph(XmlParagraph::Body(0));
+        doc.replace_element_xml(&target, with_twin(declared_on_paragraph).as_bytes())
+            .unwrap();
+        let saved = document_xml(&mut doc);
+        let mut reader = NsReader::from_reader(saved.as_slice());
+        let mut buffer = Vec::new();
+        let mut twins = 0;
+        loop {
+            match reader.read_resolved_event_into(&mut buffer).unwrap() {
+                (ResolveResult::Bound(namespace), Event::Empty(element))
+                    if element.local_name().as_ref() == b"svgBlip" =>
+                {
+                    assert_eq!(namespace.as_ref(), ASVG.as_bytes());
+                    twins += 1;
+                }
+                (_, Event::Eof) => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+        assert_eq!(twins, 1, "declared on w:p: {declared_on_paragraph}");
+        let reopened = Document::from_bytes(&doc.to_bytes().unwrap()).unwrap();
+        assert!(
+            String::from_utf8(
+                reopened
+                    .element_xml(&XmlTarget::Paragraph(XmlParagraph::Body(0)))
+                    .unwrap()
+            )
+            .unwrap()
+            .contains("svgBlip")
+        );
+    }
+
+    // A prefix bound nowhere is still refused, and so is what rdocx drops.
+    let unbound = with_twin(false).replace(&format!(" xmlns:asvg=\"{ASVG}\""), "");
+    let dropped = "<w:p xmlns:x=\"urn:x\"><w:r><w:rPr><w:b/><w:b/></w:rPr></w:r></w:p>";
+    for (xml, message) in [
+        (unbound.as_str(), "prefix asvg is not declared"),
+        (dropped, "would not keep b"),
+    ] {
+        let error = doc
+            .replace_element_xml(&XmlTarget::Paragraph(XmlParagraph::Body(0)), xml.as_bytes())
+            .unwrap_err();
+        assert!(error.to_string().contains(message), "{error}");
+    }
+}
