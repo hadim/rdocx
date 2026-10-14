@@ -602,10 +602,10 @@ that inherit `[workspace.package].version`, including the unpublished
 `rdocx-wasm`, `rdocx-py`, and `oxml-py-support` packages, use cargo-release's
 effective `workspace` shared-version group and the `v{{version}}` tag template.
 That shared-version group, the `rdocx` Python project, and rdocx WASM
-contract literals are prepared at0.16.0, together with the exact seven-package
-stable family and its `v0.16.0` release notes. The prepared stable packages
-require shared OOXML0.14.0. The previous complete unified stable release is
-immutable `v0.15.0` at9d019472f7e6b95ac4ba0770c4dee35dcbc28f0e. The historical
+contract literals are prepared at0.16.1, together with the exact seven-package
+stable family and its `v0.16.1` release notes. The prepared stable packages
+require shared OOXML0.14.1. The previous complete unified stable release is
+immutable `v0.16.0` at733ce6f7b2b816c5760692abf5c99d68b29ae897. The historical
 S73 family retains its immutable annotated `v0.14.0` tag at reviewed SHA
 `58ca5a279277f7cd8de0b8f250fb4650de14371b`. Its published archives
 require shared 0.12.1. The unpublished 0.13.2 crates.io train is superseded
@@ -623,11 +623,11 @@ immutable registry releases, including the complete 0.12.0 family, remain
 available. No binding, WASM, Python, npm, or
 incubating package gained publication authority from the stable release.
 The 15 publishable `oxml-*` and `rpptx*` package manifests and the unpublished
-`rpptx-py` binding crate use explicit version0.14.0, the named `incubating`
+`rpptx-py` binding crate use explicit version0.14.1, the named `incubating`
 group, and the `rpptx-v{{version}}` template. The unpublished `rpptx-wasm`
 crate remains at 0.12.1 with its separate npm boundary. The crates.io
 allowlist remains exactly15 packages. The previous complete unified family is
-immutable `rpptx-v0.13.1` at9d019472f7e6b95ac4ba0770c4dee35dcbc28f0e. The
+immutable `rpptx-v0.14.0` at733ce6f7b2b816c5760692abf5c99d68b29ae897. The
 historical S73 family retains the immutable `rpptx-v0.12.1` release at reviewed SHA
 `58ca5a279277f7cd8de0b8f250fb4650de14371b`, and earlier registry releases
 remain available. The stable 0.10.1 registry consumer proof remains pinned to
@@ -645,7 +645,7 @@ and source distributions for both families run clean Python3.9/3.12 runtime and
 Python3.12 typing checks. Both WASM bindings and current npm carrier contracts
 retain their existing separate authority. Final integrated full verification,
 sprint review and SHA-bound hosted build-only rehearsal remain mandatory before
-close. The shared0.14.0 family publishes before Word0.16.0 where the verified
+close. The shared0.14.1 family publishes before Word0.16.1 where the verified
 internal pins require it, each with its own approval at reviewed main.
 External release actions remain owned by `/release`.
 

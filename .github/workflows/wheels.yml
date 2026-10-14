@@ -234,10 +234,11 @@ jobs:
           packages-dir: dist
 
   build-cli-assets:
-    name: CLI ${{ matrix.platform.label }}
+    name: CLI ${{ matrix.family }} ${{ matrix.platform.label }}
     strategy:
       fail-fast: false
       matrix:
+        family: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["rdocx","rpptx"]' || startsWith(github.ref, 'refs/tags/rpptx-v') && '["rpptx"]' || '["rdocx"]') }}
         platform:
           - { label: linux-x86_64, runner: ubuntu-24.04, target: x86_64-unknown-linux-gnu, archive: tar.gz }
           - { label: linux-aarch64, runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, archive: tar.gz }
@@ -245,7 +246,7 @@ jobs:
           - { label: macos-x86_64, runner: macos-15-intel, target: x86_64-apple-darwin, archive: tar.gz }
           - { label: macos-arm64, runner: macos-14, target: aarch64-apple-darwin, archive: tar.gz }
           - { label: windows-x86_64, runner: windows-2025, target: x86_64-pc-windows-msvc, archive: zip }
-    if: github.event_name == 'push'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     runs-on: ${{ matrix.platform.runner }}
     permissions:
       contents: read
@@ -253,18 +254,53 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          python-version: "3.12"
       - name: Select Rust release family
         id: selected
         shell: bash
         run: |
-          case "${GITHUB_REF_NAME}" in
-            v*) package=rdocx-cli; binary=rdocx; version=${GITHUB_REF_NAME#v} ;;
-            rpptx-v*) package=rpptx-cli; binary=rpptx; version=${GITHUB_REF_NAME#rpptx-v} ;;
-            *) exit 1 ;;
-          esac
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            binary="${{ matrix.family }}"
+            package="${binary}-cli"
+            version=$(python - "$package" <<'PY_VERSION'
+          from pathlib import Path
+          import re
+          import sys
+          import tomllib
+
+          manifest = tomllib.loads(Path(f"crates/{sys.argv[1]}/Cargo.toml").read_text())
+          version = manifest["package"]["version"]
+          if isinstance(version, dict):
+              assert version == {"workspace": True}, version
+              workspace = tomllib.loads(Path("Cargo.toml").read_text())
+              version = workspace["workspace"]["package"]["version"]
+          assert isinstance(version, str) and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
+          print(version)
+          PY_VERSION
+            )
+            if [[ "$binary" == "rdocx" ]]; then
+              selected_tag="v${version}"
+            else
+              selected_tag="rpptx-v${version}"
+            fi
+            python scripts/sprint_workflow.py unified-release-family "$selected_tag"
+            artifact="cli-asset-${binary}-${{ matrix.platform.label }}"
+          else
+            case "${GITHUB_REF_NAME}" in
+              v*) package=rdocx-cli; binary=rdocx; version=${GITHUB_REF_NAME#v} ;;
+              rpptx-v*) package=rpptx-cli; binary=rpptx; version=${GITHUB_REF_NAME#rpptx-v} ;;
+              *) exit 1 ;;
+            esac
+            [[ "$binary" == "${{ matrix.family }}" ]]
+            artifact="cli-asset-${{ matrix.platform.label }}"
+          fi
           echo "package=${package}" >> "${GITHUB_OUTPUT}"
           echo "binary=${binary}" >> "${GITHUB_OUTPUT}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "artifact=${artifact}" >> "${GITHUB_OUTPUT}"
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           toolchain: 1.97.1
@@ -330,13 +366,13 @@ jobs:
       - name: Upload selected CLI archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: cli-asset-${{ matrix.platform.label }}
+          name: ${{ steps.selected.outputs.artifact }}
           path: dist/${{ steps.selected.outputs.binary }}-${{ matrix.platform.target }}.${{ matrix.platform.archive }}
           if-no-files-found: error
 
   cli-assets:
     name: Verify CLI release assets
-    if: github.event_name == 'push'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     needs: build-cli-assets
     runs-on: ubuntu-24.04
     steps:
@@ -357,10 +393,12 @@ jobs:
           import zipfile
 
           tag = os.environ["GITHUB_REF_NAME"]
-          if tag.startswith("rpptx-v"):
-              binary = "rpptx"
+          if os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch":
+              binaries = ["rdocx", "rpptx"]
+          elif tag.startswith("rpptx-v"):
+              binaries = ["rpptx"]
           elif tag.startswith("v"):
-              binary = "rdocx"
+              binaries = ["rdocx"]
           else:
               raise AssertionError(f"unsupported Rust release tag {tag}")
 
@@ -375,28 +413,38 @@ jobs:
           dist = Path("dist")
           expected_names = {
               f"{binary}-{target}{suffix}"
+              for binary in binaries
               for target, suffix in expected_targets.items()
           }
           archives = sorted(path for path in dist.iterdir() if path.is_file())
           assert {path.name for path in archives} == expected_names, archives
 
-          expected_readme = Path(f"crates/{binary}-cli/README.md").read_bytes()
           expected_license = Path("LICENSE").read_bytes()
 
           def normalize_text(payload: bytes) -> bytes:
               return payload.replace(b"\r\n", b"\n")
 
           for archive in archives:
+              binary = next(name for name in binaries if archive.name.startswith(name + "-"))
+              expected_readme = Path(f"crates/{binary}-cli/README.md").read_bytes()
               executable = f"{binary}.exe" if archive.suffix == ".zip" else binary
               expected_members = {executable, "README.md", "LICENSE"}
               if archive.suffix == ".zip":
                   with zipfile.ZipFile(archive) as package:
-                      members = {info.filename: info for info in package.infolist()}
+                      ordered_members = package.infolist()
+                      ordered_names = [info.filename for info in ordered_members]
+                      assert len(ordered_members) == len(expected_members), ordered_names
+                      assert len(ordered_names) == len(set(ordered_names)), ordered_names
+                      members = {info.filename: info for info in ordered_members}
                       assert set(members) == expected_members, members
                       payloads = {name: package.read(name) for name in members}
               else:
                   with tarfile.open(archive, "r:gz") as package:
-                      members = {member.name: member for member in package.getmembers()}
+                      ordered_members = package.getmembers()
+                      ordered_names = [member.name for member in ordered_members]
+                      assert len(ordered_members) == len(expected_members), ordered_names
+                      assert len(ordered_names) == len(set(ordered_names)), ordered_names
+                      members = {member.name: member for member in ordered_members}
                       assert set(members) == expected_members, members
                       assert all(member.isfile() for member in members.values())
                       assert members[executable].mode & 0o111
@@ -412,7 +460,7 @@ jobs:
       - name: Upload reviewed CLI assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: cli-release-assets-${{ github.ref_name }}
+          name: ${{ github.event_name == 'workflow_dispatch' && format('cli-rehearsal-assets-{0}', github.sha) || format('cli-release-assets-{0}', github.ref_name) }}
           path: |
             dist/*.tar.gz
             dist/*.zip

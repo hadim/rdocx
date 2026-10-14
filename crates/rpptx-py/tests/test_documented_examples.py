@@ -250,7 +250,7 @@ def _assert_stale_after_exactly_one_bump(rpptx, operation):
 
 def _assert_exact_stale(rpptx, operation, kind, captured, current, recovery, cause):
     expected = (
-        f"{kind} handle was created at document revision {captured}, but the "
+        f"stale {kind} handle was created at document revision {captured}, but the "
         f"document is now at revision {current} (a structural change "
         f"invalidated it). First invalidated by {cause} at committed revision {current}. {recovery}"
     )

@@ -302,9 +302,11 @@ and samples explicit segments, prepares the package, resolver, font, chart,
 picture, and media state once, then evaluates and lowers one timeline sample at
 a time. The completed opaque raster immediately enters either the facade-owned
 GIF encoder or the Motion JPEG AVI writer before the next sample is resolved.
-`gif`, `jpeg-encoder`, and `tiny-skia` are optional dependencies of the existing
-`rpptx` render feature. No codec edge enters `rpptx-layout`, `rpptx-render`, or
-an `oxml-*` crate, and audio and video package payloads are still never decoded.
+`jpeg-encoder` is an optional dependency of the existing `rpptx` render
+feature. The facade also uses `gif` and `tiny-skia` unconditionally for bounded
+image validation when rendering is disabled. No codec edge enters
+`rpptx-layout`, `rpptx-render`, or an `oxml-*` crate, and audio and video package
+payloads are still never decoded.
 
 The same boundary owns multilingual text mechanics. Rich segments retain
 logical text and source ranges while carrying script, language, direction,

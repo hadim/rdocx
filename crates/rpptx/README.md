@@ -28,7 +28,7 @@ presentation, notes, handout, PDF, and animation outputs.
 
 | Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
 |---|---|---|---|---|---|---|---|---|
-| Crates.io archive: rpptx | 714,762 compressed bytes, 3,826,494 member bytes, 16 members | 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --allow-dirty --locked` | Tracked `rpptx` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-14 |
+| Crates.io archive: rpptx | 714,771 compressed bytes, 3,826,516 member bytes, 16 members | 0.14.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo publish --workspace --dry-run --allow-dirty --locked` | Tracked `rpptx` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-14 |
 
 ## Use it when
 
@@ -52,14 +52,14 @@ let bytes = deck.to_bytes()?;
 
 ```toml
 [dependencies]
-rpptx = "0.14.0"
+rpptx = "0.14.1"
 ```
 
 Enable native encryption and signing explicitly:
 
 ```toml
 [dependencies]
-rpptx = { version = "0.14.0", features = ["agile-encryption", "digital-signatures"] }
+rpptx = { version = "0.14.1", features = ["agile-encryption", "digital-signatures"] }
 ```
 
 ## Licensed font embedding

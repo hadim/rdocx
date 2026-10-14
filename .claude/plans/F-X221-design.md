@@ -1,11 +1,11 @@
 # F-X221, Prepare Word 0.16.1 and PowerPoint 0.14.1 patch releases
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X193, F-X194, F-X195, F-X196, F-X197, F-X198, F-X199, F-X200, F-X201, F-X202, F-X203, F-X204, F-X205, F-X206, F-X207, F-X208, F-X209, F-X210, F-X211, F-X212, F-X213, F-X214, F-X215, F-X216, F-X217, F-X218, F-X220, F-X222
 **Test gate**: release regression
-**Implementation**: not claimed, no version or publication changes
+**Implementation**: local release preparation completed and scoped verified. Hosted rehearsal, sprint closure and publication remain pending post-integration gates.
 
 ## Problem
 
@@ -73,6 +73,7 @@ No absent method/command compilation is Base failure. Preserve original failed c
 
 ## HLD impact
 
+- docs/hld/03-architecture.md, correct only the older optional-codec paragraph to match approved F218 unconditional bounded-media validation.
 - docs/hld/10-bindings-spec.md
 - docs/hld/14-development-backlog.md
 - docs/hld/15-build-and-toolchain.md
@@ -87,11 +88,11 @@ All49 deterministic outputs must remain unchanged by version preparation. Preser
 
 ## Implementation checklist
 
-- [ ] Complete all28 repair prerequisites and obtain exclusive preparation claim.
-- [ ] Recheck version/tag facts and genuine old-version Base failure.
-- [ ] Update exact family carriers and authenticated notes/inventories.
-- [ ] Pass actual package, policy, wheel/metadata/runtime/typing/WASM controls.
-- [ ] Obtain clean microscope, update listed HLD files and prepare handoff.
+- [x] Complete all28 repair prerequisites and obtain exclusive preparation claim.
+- [x] Recheck version/tag facts and genuine old-version Base failure.
+- [x] Update exact family carriers and authenticated notes/inventories.
+- [x] Pass actual package, policy, wheel/metadata/runtime/typing/WASM controls.
+- [x] Obtain clean microscope, update listed HLD files and prepare handoff.
 
 ## Post-integration gates
 
@@ -103,3 +104,18 @@ All49 deterministic outputs must remain unchanged by version preparation. Preser
 ## Open questions
 
 No blocking design question remains. The user requests patch crate and matching Python releases in the existing version lines. Fresh checked registry/tag facts support0.16.1 and0.14.1. The user explicitly authorizes publication and closure in these corrected lines after all gates. Exact main provenance, verified roles and publisher registrations, assets and final registry checks remain mandatory.
+
+
+## Scoped qualification oracle corrections
+
+The release checks retain their actual failed predecessors. The exact shared
+stale-error helper now includes the approved `stale ` prefix without changing
+exception, revisions, first cause, recovery or byte-atomicity assertions.
+Historical S90 notes remain fixed while present carriers follow current
+versions. CLI rehearsal job guards admit only the approved manual-or-push
+builds, with strict push-only publication guards and negative mutations.
+The WASM manifest control now checks the approved F218 unconditional facade
+image-validation codecs separately from optional rendering dependencies.
+This changes only the existing test oracle and the contradictory older HLD
+paragraph, preserving native defaults, WASM isolation and product dependency
+edges. Frozen compatibility bodies and retained release artifacts are unchanged.
