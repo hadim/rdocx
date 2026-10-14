@@ -4240,6 +4240,40 @@ def test_raw_xml_refuses_what_it_cannot_write_faithfully():
     assert document.to_bytes() == before
 
 
+def test_raw_xml_resolves_a_prefix_declared_on_an_ancestor_inside_the_replacement():
+    import xml.etree.ElementTree as ElementTree
+
+    import rdocx
+
+    asvg = "http://schemas.microsoft.com/office/drawing/2016/SVG/main"
+    for declared_on in ("svgBlip", "w:p"):
+        document = rdocx.Document()
+        for name in ("first.png", "second.png"):
+            document.add_picture(_one_pixel_png(), name, 12700, 12700)
+        twin_id = re.search(rb'r:embed="([^"]+)"', document.paragraphs[1].xml).group(1)
+        declaration = f'xmlns:asvg="{asvg}"'.encode()
+        extension = (
+            b'<a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip '
+            + (declaration if declared_on == "svgBlip" else b"")
+            + b' r:embed="' + twin_id + b'"/></a:ext></a:extLst></a:blip>'
+        )
+        xml = re.sub(
+            rb"(<a:blip\b[^>]*?)/>",
+            lambda match: match.group(1) + b">" + extension,
+            document.paragraphs[0].xml,
+            count=1,
+        )
+        if declared_on == "w:p":
+            xml = xml.replace(b"<w:p ", b"<w:p " + declaration + b" ", 1)
+        document.paragraphs[0].replace_xml(xml)
+        saved = ElementTree.fromstring(_document_xml(document))
+        assert len(saved.findall(f".//{{{asvg}}}svgBlip")) == 1, declared_on
+
+    unbound = xml.replace(declaration + b" ", b"")
+    with pytest.raises(ValueError, match="prefix asvg is not declared"):
+        document.paragraphs[0].replace_xml(unbound)
+
+
 def test_paragraph_and_run_handles_survive_edits_that_do_not_move_them():
     import rdocx
 
