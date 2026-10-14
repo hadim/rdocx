@@ -1247,3 +1247,7 @@ Child c is completed and integrated atf62976d3. The unchanged100 qualifies95 cor
 ## F-X211 aggregate checkpoint, 2026-10-14
 
 All four delivery children and the parent are complete. Independent aggregate review reports zero defects and smells. The admitted final unchanged100 report qualifies95 correct files, all42 hard gates,51 native clauses and24 documentation examples, with five reviewed non-successes and no unexpected failures. All28 repair prerequisites are complete. F-X221 release preparation is the only unfinished top-level story. Final integrated full verification, sprint review, close and publication remain due. Intake is closed40 issues/30 PRs,264/281 remain open, and S92 carryovers are untouched.
+
+## Parked carryover status reconciliation, 2026-10-14
+
+F-X192 remains deferred to S92 and is pending in the backlog, matching the approved scheduling contract and carried run state. Its dirty worker, source, tests, reviews and native evidence remain untouched. No bibliography execution or implementation resumes in S91. F-X221 is the only active implementation story.

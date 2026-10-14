@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 236 | 228 | 2 | 2 |
-| **Total** | **561** | **502** | **2** | **53** |
+| X, Cross-cutting | 236 | 228 | 1 | 3 |
+| **Total** | **561** | **502** | **1** | **54** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -748,7 +748,7 @@ HLD14 contract before adopting contributor changes.
 | F-X187 | Scoped paragraph and cell text replacement | S90 | M | done |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | S90 | L | done |
 | F-X190 | Preserve cached text in multi-run complex field story snapshots | S90 | M | done |
-| F-X192 | Complete the remaining Word bibliography catalogue | S92 | L | in-progress |
+| F-X192 | Complete the remaining Word bibliography catalogue | S92 | L | pending |
 | F-X191 | Ignore namespace declarations in numbering reader completeness | S90 | S | done |
 | F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | S90 | L | done |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S91 | S | done |
