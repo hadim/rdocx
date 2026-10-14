@@ -1054,6 +1054,109 @@ impl<'a> Table<'a> {
         Ok(())
     }
 
+    /// Merge a checked rectangle of whole physical cells, retaining their content.
+    pub fn merge_cells(
+        &mut self,
+        from: (usize, usize),
+        to: (usize, usize),
+    ) -> Result<(usize, usize)> {
+        let columns = check_column_edit_topology(self.inner)?;
+        let bounds = |(row, cell): (usize, usize)| -> Result<(usize, usize)> {
+            row_cell_ranges(
+                self.inner
+                    .rows
+                    .get(row)
+                    .ok_or_else(|| Error::Other("merge row is absent".into()))?,
+                columns,
+            )?
+            .get(cell)
+            .copied()
+            .ok_or_else(|| Error::Other("merge cell is absent".into()))
+        };
+        let a = bounds(from)?;
+        let b = bounds(to)?;
+        let top = from.0.min(to.0);
+        let bottom = from.0.max(to.0);
+        let left = a.0.min(b.0);
+        let right = a.1.max(b.1);
+        if from == to {
+            return Ok(from);
+        }
+        let mut selected = Vec::new();
+        for row in top..=bottom {
+            let ranges = row_cell_ranges(&self.inner.rows[row], columns)?;
+            let first = ranges
+                .iter()
+                .position(|range| range.0 == left)
+                .ok_or_else(|| Error::Other("merge cuts an existing cell boundary".into()))?;
+            let last = ranges
+                .iter()
+                .position(|range| range.1 == right)
+                .ok_or_else(|| Error::Other("merge cuts an existing cell boundary".into()))?;
+            if first > last {
+                return Err(Error::Other("merge rectangle has no cells".into()));
+            }
+            for (offset, cell) in self.inner.rows[row].cells[first..=last].iter().enumerate() {
+                if !cell.extra_xml.is_empty()
+                    || (offset > 0
+                        && cell.properties.as_ref().is_some_and(|p| {
+                            !p.extra_xml.is_empty()
+                                || p.borders.as_ref().is_some_and(|b| !b.extra_xml.is_empty())
+                        }))
+                    || cell
+                        .properties
+                        .as_ref()
+                        .is_some_and(|p| p.v_merge.is_some())
+                {
+                    return Err(Error::Other("merge cannot discard opaque cell metadata or existing vertical merge ownership".into()));
+                }
+            }
+            selected.push((first, last));
+        }
+        let mut candidate = self.inner.clone();
+        let mut content = Vec::new();
+        for (offset, (first, last)) in selected.iter().enumerate() {
+            for cell in &candidate.rows[top + offset].cells[*first..=*last] {
+                content.extend(cell.content.clone());
+            }
+        }
+        let width = candidate
+            .grid
+            .as_ref()
+            .ok_or_else(|| Error::Other("merge grid is absent".into()))?
+            .columns[left..right]
+            .iter()
+            .try_fold(0_i32, |sum, col| {
+                sum.checked_add(col.width.0)
+                    .ok_or_else(|| Error::Other("merged cell width overflow".into()))
+            })?;
+        let span =
+            u32::try_from(right - left).map_err(|_| Error::Other("merge span overflow".into()))?;
+        for (offset, (first, last)) in selected.iter().enumerate() {
+            let row = &mut candidate.rows[top + offset];
+            for index in (*first + 1..=*last).rev() {
+                remove_row_cell(row, index);
+            }
+            let cell = &mut row.cells[*first];
+            let properties = cell.properties.get_or_insert_with(CT_TcPr::default);
+            properties.grid_span = (span > 1).then_some(span);
+            properties.width = Some(CT_TblWidth::dxa(width));
+            properties.v_merge = (bottom > top).then_some(if offset == 0 {
+                VMerge::Restart
+            } else {
+                VMerge::Continue
+            });
+            cell.content = if offset == 0 {
+                content.clone()
+            } else {
+                vec![CellContent::Paragraph(CT_P::new())]
+            };
+        }
+        validate_table_topology(&candidate)?;
+        *self.inner = candidate;
+        Ok((top, selected[0].0))
+    }
+
     /// Split a merged cell into one cell per grid column and row it covers,
     /// undoing its `w:gridSpan` and `w:vMerge`.
     ///

@@ -28367,6 +28367,162 @@ impl Document {
         Ok(added)
     }
 
+    /// Materialize the requested supported built-in table style, without changing defaults.
+    pub fn ensure_builtin_table_style(&mut self, name: &str) -> Result<bool> {
+        if !matches!(name, "LightShading-Accent1" | "Light Shading Accent 1") {
+            return Ok(false);
+        }
+        if self.styles.styles.iter().any(|s| {
+            s.style_id == "LightShading-Accent1"
+                || s.name
+                    .as_deref()
+                    .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        }) {
+            return Ok(false);
+        }
+        // python-docx 1.2.0 default.docx, SHA-256 2094b5bddffe9cf973d61fe03388413804f034160718494a65db7e98da40d35d.
+        // The existing TableNormal base is retained. A copied absent base is nondefault.
+        let definitions = CT_Styles::from_xml(br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="table" w:styleId="TableNormal">
+    <w:name w:val="Normal Table"/>
+    <w:uiPriority w:val="99"/>
+    <w:semiHidden/>
+    <w:unhideWhenUsed/>
+    <w:tblPr>
+      <w:tblInd w:w="0" w:type="dxa"/>
+      <w:tblCellMar>
+        <w:top w:w="0" w:type="dxa"/>
+        <w:left w:w="108" w:type="dxa"/>
+        <w:bottom w:w="0" w:type="dxa"/>
+        <w:right w:w="108" w:type="dxa"/>
+      </w:tblCellMar>
+    </w:tblPr>
+  </w:style><w:style w:type="table" w:styleId="LightShading-Accent1">
+    <w:name w:val="Light Shading Accent 1"/>
+    <w:basedOn w:val="TableNormal"/>
+    <w:uiPriority w:val="60"/>
+    <w:rsid w:val="00FC693F"/>
+    <w:pPr>
+      <w:spacing w:after="0" w:line="240" w:lineRule="auto"/>
+    </w:pPr>
+    <w:rPr>
+      <w:color w:val="365F91" w:themeColor="accent1" w:themeShade="BF"/>
+    </w:rPr>
+    <w:tblPr>
+      <w:tblStyleRowBandSize w:val="1"/>
+      <w:tblStyleColBandSize w:val="1"/>
+      <w:tblInd w:w="0" w:type="dxa"/>
+      <w:tblBorders>
+        <w:top w:val="single" w:sz="8" w:space="0" w:color="4F81BD" w:themeColor="accent1"/>
+        <w:bottom w:val="single" w:sz="8" w:space="0" w:color="4F81BD" w:themeColor="accent1"/>
+      </w:tblBorders>
+      <w:tblCellMar>
+        <w:top w:w="0" w:type="dxa"/>
+        <w:left w:w="108" w:type="dxa"/>
+        <w:bottom w:w="0" w:type="dxa"/>
+        <w:right w:w="108" w:type="dxa"/>
+      </w:tblCellMar>
+    </w:tblPr>
+    <w:tblStylePr w:type="firstRow">
+      <w:pPr>
+        <w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>
+      </w:pPr>
+      <w:rPr>
+        <w:b/>
+        <w:bCs/>
+      </w:rPr>
+      <w:tblPr/>
+      <w:tcPr>
+        <w:tcBorders>
+          <w:top w:val="single" w:sz="8" w:space="0" w:color="4F81BD" w:themeColor="accent1"/>
+          <w:left w:val="nil"/>
+          <w:bottom w:val="single" w:sz="8" w:space="0" w:color="4F81BD" w:themeColor="accent1"/>
+          <w:right w:val="nil"/>
+          <w:insideH w:val="nil"/>
+          <w:insideV w:val="nil"/>
+        </w:tcBorders>
+      </w:tcPr>
+    </w:tblStylePr>
+    <w:tblStylePr w:type="lastRow">
+      <w:pPr>
+        <w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>
+      </w:pPr>
+      <w:rPr>
+        <w:b/>
+        <w:bCs/>
+      </w:rPr>
+      <w:tblPr/>
+      <w:tcPr>
+        <w:tcBorders>
+          <w:top w:val="single" w:sz="8" w:space="0" w:color="4F81BD" w:themeColor="accent1"/>
+          <w:left w:val="nil"/>
+          <w:bottom w:val="single" w:sz="8" w:space="0" w:color="4F81BD" w:themeColor="accent1"/>
+          <w:right w:val="nil"/>
+          <w:insideH w:val="nil"/>
+          <w:insideV w:val="nil"/>
+        </w:tcBorders>
+      </w:tcPr>
+    </w:tblStylePr>
+    <w:tblStylePr w:type="firstCol">
+      <w:rPr>
+        <w:b/>
+        <w:bCs/>
+      </w:rPr>
+    </w:tblStylePr>
+    <w:tblStylePr w:type="lastCol">
+      <w:rPr>
+        <w:b/>
+        <w:bCs/>
+      </w:rPr>
+    </w:tblStylePr>
+    <w:tblStylePr w:type="band1Vert">
+      <w:tblPr/>
+      <w:tcPr>
+        <w:tcBorders>
+          <w:left w:val="nil"/>
+          <w:right w:val="nil"/>
+          <w:insideH w:val="nil"/>
+          <w:insideV w:val="nil"/>
+        </w:tcBorders>
+        <w:shd w:val="clear" w:color="auto" w:fill="D3DFEE" w:themeFill="accent1" w:themeFillTint="3F"/>
+      </w:tcPr>
+    </w:tblStylePr>
+    <w:tblStylePr w:type="band1Horz">
+      <w:tblPr/>
+      <w:tcPr>
+        <w:tcBorders>
+          <w:left w:val="nil"/>
+          <w:right w:val="nil"/>
+          <w:insideH w:val="nil"/>
+          <w:insideV w:val="nil"/>
+        </w:tcBorders>
+        <w:shd w:val="clear" w:color="auto" w:fill="D3DFEE" w:themeFill="accent1" w:themeFillTint="3F"/>
+      </w:tcPr>
+    </w:tblStylePr>
+  </w:style></w:styles>"#)?;
+        let mut candidate = self.clone_for_staging();
+        candidate.reserve_styles_bundle()?;
+        for definition in definitions.styles {
+            if let Some(existing) = candidate
+                .styles
+                .styles
+                .iter()
+                .find(|s| s.style_id == definition.style_id)
+            {
+                if existing.style_type != definition.style_type {
+                    return Err(Error::Other(
+                        "built-in table style base has a conflicting type".into(),
+                    ));
+                }
+            } else {
+                candidate.styles.styles.push(definition);
+            }
+        }
+        style::validate_style_graph(&candidate.styles)?;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(true)
+    }
+
     /// Validate all style IDs, defaults, links, next styles, and inheritance chains.
     pub fn validate_style_graph(&self) -> Result<()> {
         style::validate_style_graph(&self.styles)

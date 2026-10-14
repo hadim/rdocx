@@ -1020,6 +1020,7 @@ pub struct PyHyperlink {
     /// selects one of several identical links, and the story's link layout
     /// when the snapshot was taken. A constructed record has neither.
     position: Option<(usize, u64)>,
+    owner: Option<(ContentPath, RevisionState)>,
 }
 
 /// Equality covers the public fields only, so a snapshot equals a record
@@ -1068,6 +1069,7 @@ impl PyHyperlink {
             anchor,
             relationship_id,
             position: None,
+            owner: None,
         }
     }
 
@@ -1377,6 +1379,38 @@ impl PySectionHandle {
     }
     #[setter]
     fn set_margin_left(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
+        self.geometry(py, "margin_left", value)
+    }
+    #[getter]
+    fn top_margin(&self, py: Python<'_>) -> PyResult<Option<i64>> {
+        Ok(self.snapshot(py)?.margin_top)
+    }
+    #[setter]
+    fn set_top_margin(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
+        self.geometry(py, "margin_top", value)
+    }
+    #[getter]
+    fn right_margin(&self, py: Python<'_>) -> PyResult<Option<i64>> {
+        Ok(self.snapshot(py)?.margin_right)
+    }
+    #[setter]
+    fn set_right_margin(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
+        self.geometry(py, "margin_right", value)
+    }
+    #[getter]
+    fn bottom_margin(&self, py: Python<'_>) -> PyResult<Option<i64>> {
+        Ok(self.snapshot(py)?.margin_bottom)
+    }
+    #[setter]
+    fn set_bottom_margin(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
+        self.geometry(py, "margin_bottom", value)
+    }
+    #[getter]
+    fn left_margin(&self, py: Python<'_>) -> PyResult<Option<i64>> {
+        Ok(self.snapshot(py)?.margin_left)
+    }
+    #[setter]
+    fn set_left_margin(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
         self.geometry(py, "margin_left", value)
     }
     #[getter]
@@ -2038,7 +2072,7 @@ impl PyHeaderFooter {
             py,
             &candidate,
             "HeaderFooter.add_paragraph",
-            crate::document::WordPublication::Conservative,
+            crate::document::WordPublication::HeaderFooterAppend(self.index),
         )?;
         let path = document
             .revisions
@@ -3792,6 +3826,7 @@ pub(crate) enum WordOwnerLocation {
         story: rdocx::StoryId,
     },
     Section(usize),
+    Hyperlink(rdocx::ContentLocation, usize),
 }
 
 struct WordOwnerAddress {
@@ -3908,6 +3943,9 @@ impl WordOwnerLocation {
                 },
             ) => same_content_owner(a, b) && ar == br && ac == bc,
             (Self::Section(a), Self::Section(b)) => a == b,
+            (Self::Hyperlink(a, ai), Self::Hyperlink(b, bi)) => {
+                same_content_owner(a, b) && ai == bi
+            }
             _ => false,
         }
     }
@@ -3920,6 +3958,7 @@ impl WordOwnerLocation {
                 RevisionScope::Text,
             ],
             Self::Table(_) => &[RevisionScope::Owner, RevisionScope::Grid],
+            Self::Hyperlink(..) => &[RevisionScope::Owner],
             Self::Run(..) | Self::Cell { .. } | Self::Section(_) => {
                 &[RevisionScope::Owner, RevisionScope::Text]
             }
@@ -4071,6 +4110,20 @@ fn word_owner_locations(document: &rdocx::Document) -> rdocx::Result<Vec<WordOwn
             projection_ordinal: None,
         });
     }
+    let mut local_indexes = HashMap::<rdocx::ContentLocation, usize>::new();
+    let mut story_indexes = HashMap::<rdocx::StoryId, usize>::new();
+    for (location, _) in document.story_link_snapshots()? {
+        let local = local_indexes.entry(location.clone()).or_default();
+        let position = story_indexes.entry(location.story().clone()).or_default();
+        result.push(WordOwnerAddress {
+            location: WordOwnerLocation::Hyperlink(location.clone(), *local),
+            parent: None,
+            body_slot: None,
+            projection_ordinal: Some(*position),
+        });
+        *local += 1;
+        *position += 1;
+    }
     Ok(result)
 }
 
@@ -4078,7 +4131,11 @@ fn word_owner_locations(document: &rdocx::Document) -> rdocx::Result<Vec<WordOwn
 pub(crate) enum WordPublication {
     Conservative,
     AppendBody,
+    HeaderFooterAppend(usize),
     ParagraphText(rdocx::ContentLocation),
+    ParagraphAppend(rdocx::ContentLocation),
+    TableGrid(rdocx::ContentLocation),
+    HyperlinkRemove(WordOwnerLocation),
     CellText(rdocx::ContentLocation, usize, usize),
     ElementXml(WordOwnerLocation),
     RunText(WordOwnerLocation),
@@ -4194,6 +4251,7 @@ fn word_owners_with_states(
                     (Some(scopes[1].clone()), Some(scopes[2].clone()), None)
                 }
                 WordOwnerLocation::Table(_) => (None, None, Some(scopes[1].clone())),
+                WordOwnerLocation::Hyperlink(..) => (None, None, None),
                 _ => (Some(scopes[1].clone()), None, None),
             };
             WordOwner {
@@ -4749,8 +4807,13 @@ impl PyDocument {
         let locations =
             word_owner_locations(candidate).map_err(|error| rdocx_to_pyerr(py, error))?;
         let selected = match &publication {
-            WordPublication::ParagraphText(location) => {
+            WordPublication::HeaderFooterAppend(index) => Some(WordOwnerLocation::Section(*index)),
+            WordPublication::ParagraphText(location)
+            | WordPublication::ParagraphAppend(location) => {
                 Some(WordOwnerLocation::Paragraph(location.clone()))
+            }
+            WordPublication::TableGrid(location) => {
+                Some(WordOwnerLocation::Table(location.clone()))
             }
             WordPublication::CellText(table, row, cell) => {
                 self.owners.iter().find_map(|owner| match &owner.location {
@@ -4765,9 +4828,9 @@ impl PyDocument {
                     _ => None,
                 })
             }
-            WordPublication::ElementXml(location) | WordPublication::RunText(location) => {
-                Some(location.clone())
-            }
+            WordPublication::ElementXml(location)
+            | WordPublication::RunText(location)
+            | WordPublication::HyperlinkRemove(location) => Some(location.clone()),
             _ => None,
         };
         let selected_index = selected.as_ref().and_then(|selected| {
@@ -4788,10 +4851,27 @@ impl PyDocument {
         let mut births = Vec::new();
         for (index, address) in locations.iter().enumerate() {
             let location = &address.location;
-            let old =
-                self.owners.iter().enumerate().find(|(before, _)| {
-                    same_inventory_route(&self.owners, *before, &locations, index)
-                });
+            let old = self.owners.iter().enumerate().find(|(before, _)| {
+                if let (
+                    WordPublication::HyperlinkRemove(WordOwnerLocation::Hyperlink(
+                        removed,
+                        removed_index,
+                    )),
+                    WordOwnerLocation::Hyperlink(candidate_location, candidate_index),
+                    WordOwnerLocation::Hyperlink(old_location, old_index),
+                ) = (&publication, location, &self.owners[*before].location)
+                    && same_content_owner(removed, candidate_location)
+                {
+                    let previous_index = if candidate_index >= removed_index {
+                        candidate_index.checked_add(1)
+                    } else {
+                        Some(*candidate_index)
+                    };
+                    return same_content_owner(candidate_location, old_location)
+                        && previous_index == Some(*old_index);
+                }
+                same_inventory_route(&self.owners, *before, &locations, index)
+            });
             let mut states = Vec::new();
             let mut descendant = false;
             if let (Some((before, _)), Some(selected)) = (old, selected_index) {
@@ -4817,6 +4897,11 @@ impl PyDocument {
                     }
                     match &self.owners[root].location {
                         WordOwnerLocation::Section(_) => true,
+                        WordOwnerLocation::Hyperlink(..) => matches!(
+                            publication,
+                            WordPublication::ParagraphAppend(_)
+                                | WordPublication::HyperlinkRemove(_)
+                        ),
                         WordOwnerLocation::Paragraph(location)
                         | WordOwnerLocation::Table(location) => match location.story().kind() {
                             rdocx::StoryKind::Body => self.owners[root].body_slot.is_some(),
@@ -4836,11 +4921,16 @@ impl PyDocument {
                 let preserve = route_proved
                     && !matches!(publication, WordPublication::Conservative)
                     && !descendant
+                    && !(matches!(publication, WordPublication::HyperlinkRemove(_))
+                        && matches!(location, WordOwnerLocation::Paragraph(_))
+                        && slot == 1)
                     && !(old.is_some_and(|(before, _)| Some(before) == selected_index)
                         && slot != 0
                         && !matches!(publication, WordPublication::RunText(_))
-                        && (!matches!(publication, WordPublication::ParagraphText(_))
-                            || slot == 1));
+                        && (!matches!(
+                            publication,
+                            WordPublication::ParagraphText(_) | WordPublication::ParagraphAppend(_)
+                        ) || slot == 1));
                 let state = if preserve {
                     old.map(|(_, owner)| owner.states()[slot].clone())
                 } else {
@@ -5030,7 +5120,7 @@ impl PyDocument {
             py,
             &candidate,
             "Document.add_note",
-            crate::document::WordPublication::Conservative,
+            crate::document::WordPublication::ParagraphAppend(position.location.clone()),
         )?;
         let path = document
             .revisions
@@ -5095,14 +5185,52 @@ impl PyDocument {
 
     /// The live story of a `Hyperlink` record and the position of its link.
     ///
-    /// A snapshot resolves at its recorded position when the story's link
-    /// layout is unchanged and the link there still has the snapshot's
-    /// fields. A constructed record resolves when exactly one link matches.
+    /// A captured snapshot resolves through its current checked physical owner
+    /// state, independently of the source Story snapshot's global epoch.
+    /// A constructed record resolves only when exactly one current link matches.
     fn native_hyperlink(
         &self,
         py: Python<'_>,
         hyperlink: &PyHyperlink,
     ) -> PyResult<(rdocx::StoryId, usize)> {
+        if let Some((path, state)) = &hyperlink.owner {
+            if !path.belongs_to(&self.revisions) {
+                return Err(PyValueError::new_err(
+                    "hyperlink belongs to a different document",
+                ));
+            }
+            path.validate_scopes(
+                &self.revisions,
+                "hyperlink",
+                "re-fetch it with document.hyperlinks.",
+            )
+            .map_err(|error| crate::stale_to_pyerr(py, error))?;
+            let owner = self
+                .owners
+                .iter()
+                .find(|owner| owner.owner.same_state(state))
+                .ok_or_else(|| {
+                    PyValueError::new_err("hyperlink physical owner is no longer current")
+                })?;
+            let WordOwnerLocation::Hyperlink(location, _) = &owner.location else {
+                return Err(PyValueError::new_err(
+                    "hyperlink physical owner has the wrong kind",
+                ));
+            };
+            let story = self
+                .inner
+                .stories()
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+                .into_iter()
+                .find(|story| same_story_owner(story, location.story()))
+                .ok_or_else(|| {
+                    PyValueError::new_err("hyperlink story owner is no longer current")
+                })?;
+            let index = owner
+                .projection_ordinal
+                .ok_or_else(|| PyValueError::new_err("hyperlink source position is absent"))?;
+            return Ok((story, index));
+        }
         let story = self.native_story(py, &hyperlink.story)?;
         let links = self
             .inner
@@ -7886,6 +8014,22 @@ impl PyDocument {
                     .get_mut(location.story())
                     .expect("every snapshot story has a layout");
                 let position = Some((*next, *layout));
+                let owner = self
+                    .owners
+                    .iter()
+                    .find(|owner| {
+                        matches!(&owner.location, WordOwnerLocation::Hyperlink(current, _)
+                        if same_content_owner(current, &location))
+                            && owner.projection_ordinal == Some(*next)
+                    })
+                    .ok_or_else(|| {
+                        PyValueError::new_err("hyperlink has no checked physical source owner")
+                    })?;
+                let binding = self
+                    .revisions
+                    .capture_scopes(smallvec![], std::slice::from_ref(&owner.owner))
+                    .map_err(revision_to_pyerr)?;
+                let owner = Some((binding, owner.owner.clone()));
                 *next += 1;
                 Ok(PyHyperlink {
                     story: self.owned_story_snapshot(location.story())?,
@@ -7895,6 +8039,7 @@ impl PyDocument {
                     anchor: link.anchor,
                     relationship_id: link.rel_id,
                     position,
+                    owner,
                 })
             })
             .collect::<PyResult<Vec<_>>>()?;
@@ -7922,7 +8067,27 @@ impl PyDocument {
         let mut candidate = self.inner.clone_for_staging();
         py.detach(|| candidate.remove_hyperlink(&story, link_index))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.publish_api_candidate(py, candidate, "Document.remove_hyperlink")
+        let selected = self
+            .owners
+            .iter()
+            .find_map(|owner| match &owner.location {
+                WordOwnerLocation::Hyperlink(location, _)
+                    if same_story_owner(location.story(), &story)
+                        && owner.projection_ordinal == Some(link_index) =>
+                {
+                    Some(owner.location.clone())
+                }
+                _ => None,
+            })
+            .ok_or_else(|| {
+                PyValueError::new_err("hyperlink has no checked physical source owner")
+            })?;
+        self.publish_owner_candidate(
+            py,
+            candidate,
+            "Document.remove_hyperlink",
+            WordPublication::HyperlinkRemove(selected),
+        )
     }
 
     fn set_header(&mut self, py: Python<'_>, text: &str) -> PyResult<()> {

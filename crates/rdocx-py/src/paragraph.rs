@@ -539,7 +539,11 @@ impl PyParagraph {
             py,
             &candidate,
             "Paragraph.add_internal_hyperlink",
-            crate::document::WordPublication::Conservative,
+            crate::document::WordPublication::ParagraphAppend(
+                location
+                    .native(&document.inner)
+                    .map_err(|error| crate::rdocx_to_pyerr(py, error))?,
+            ),
         )?;
         let mut segments = self.path.segs.clone();
         segments.push(PathSeg::Run(position.run_index));
@@ -628,7 +632,11 @@ impl PyParagraph {
                 py,
                 &candidate,
                 operation,
-                crate::document::WordPublication::Conservative,
+                crate::document::WordPublication::ParagraphAppend(
+                    location
+                        .native(&document.inner)
+                        .map_err(|error| crate::rdocx_to_pyerr(py, error))?,
+                ),
             )?;
             let mut segments = self.path.segs.clone();
             segments.push(PathSeg::Run(run_index));
@@ -763,7 +771,11 @@ impl PyParagraph {
             py,
             &candidate,
             "Paragraph.add_equation",
-            crate::document::WordPublication::Conservative,
+            crate::document::WordPublication::ParagraphAppend(
+                location
+                    .native(&document.inner)
+                    .map_err(|error| crate::rdocx_to_pyerr(py, error))?,
+            ),
         )?;
         document.commit_word_revision(prepared)?;
         document.inner = candidate;

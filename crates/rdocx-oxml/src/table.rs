@@ -2107,10 +2107,12 @@ impl CT_Tc {
                 Event::Start(root) => {
                     let prefixes = word_prefixes_at(&root, &[])?;
                     let bindings = local_namespace_overrides(&root, &[])?;
-                    let mut model = Self::from_xml_with_prefixes_and_owner_bindings(
+                    let mut model = Self::from_xml_with_prefixes_and_owner_bindings_at_depth(
                         &mut reader,
                         &prefixes,
                         &bindings,
+                        0,
+                        Some(&root),
                     )?;
                     model.retain_root_attributes(&root, &prefixes)?;
                     return Ok(model);
@@ -2194,15 +2196,19 @@ impl CT_Tc {
             word_prefixes,
             owner_bindings,
             0,
+            None,
         )
     }
 
-    fn from_xml_with_prefixes_and_owner_bindings_at_depth(
+    pub(crate) fn from_xml_with_prefixes_and_owner_bindings_at_depth(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
         owner_bindings: &[(String, String)],
         table_depth: usize,
+        root: Option<&BytesStart<'_>>,
     ) -> Result<Self> {
+        let raw_owner_bindings =
+            crate::text::bindings_outside_retained_root(owner_bindings, root, word_prefixes)?;
         let mut properties = None;
         let mut content = Vec::new();
         let mut extra_xml = Vec::new();
@@ -2234,13 +2240,14 @@ impl CT_Tc {
                             &prefixes,
                             &table_bindings,
                             table_depth.saturating_add(1),
+                            Some(e),
                         )?;
                         table.retain_root_attributes(e, &prefixes)?;
                         content.push(CellContent::Table(table));
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_element(reader, e)?,
-                            owner_bindings,
+                            &raw_owner_bindings,
                         )?;
                         if let Some(sdt) = CT_Sdt::from_cell_raw(&raw, &prefixes) {
                             content.push(CellContent::ContentControl(sdt));
@@ -2256,7 +2263,7 @@ impl CT_Tc {
                             content.len(),
                             crate::text::raw_with_external_bindings(
                                 &capture_element(reader, e)?,
-                                owner_bindings,
+                                &raw_owner_bindings,
                             )?,
                         ));
                     }
@@ -2273,7 +2280,7 @@ impl CT_Tc {
                             content.len(),
                             crate::text::raw_with_external_bindings(
                                 &capture_empty_element(e)?,
-                                owner_bindings,
+                                &raw_owner_bindings,
                             )?,
                         ));
                     }
@@ -2496,6 +2503,7 @@ impl CT_Row {
                             &prefixes,
                             &cell_bindings,
                             table_depth,
+                            Some(e),
                         )?;
                         cell.retain_root_attributes(e, &prefixes)?;
                         cells.push(cell);
@@ -2697,10 +2705,12 @@ impl CT_Tbl {
                 Event::Start(root) => {
                     let prefixes = word_prefixes_at(&root, &[])?;
                     let bindings = local_namespace_overrides(&root, &[])?;
-                    let mut model = Self::from_xml_with_prefixes_and_owner_bindings(
+                    let mut model = Self::from_xml_with_prefixes_and_owner_bindings_at_depth(
                         &mut reader,
                         &prefixes,
                         &bindings,
+                        0,
+                        Some(&root),
                     )?;
                     model.retain_root_attributes(&root, &prefixes)?;
                     return Ok(model);
@@ -2791,15 +2801,19 @@ impl CT_Tbl {
             word_prefixes,
             owner_bindings,
             0,
+            None,
         )
     }
 
-    fn from_xml_with_prefixes_and_owner_bindings_at_depth(
+    pub(crate) fn from_xml_with_prefixes_and_owner_bindings_at_depth(
         reader: &mut Reader<&[u8]>,
         word_prefixes: &[String],
         owner_bindings: &[(String, String)],
         table_depth: usize,
+        root: Option<&BytesStart<'_>>,
     ) -> Result<Self> {
+        let raw_owner_bindings =
+            crate::text::bindings_outside_retained_root(owner_bindings, root, word_prefixes)?;
         if table_depth >= MAX_RECOGNIZED_TABLE_NESTING {
             return Err(OxmlError::InvalidValue(
                 "recognized model nesting exceeds table limit".to_owned(),
@@ -2841,7 +2855,7 @@ impl CT_Tbl {
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_element(reader, e)?,
-                            owner_bindings,
+                            &raw_owner_bindings,
                         )?;
                         if let Some(sdt) = CT_Sdt::from_table_raw(&raw, &prefixes) {
                             let raw_before =
@@ -2867,7 +2881,7 @@ impl CT_Tbl {
                             rows.len(),
                             crate::text::raw_with_external_bindings(
                                 &capture_element(reader, e)?,
-                                owner_bindings,
+                                &raw_owner_bindings,
                             )?,
                         ));
                     }
@@ -2896,7 +2910,7 @@ impl CT_Tbl {
                             rows.len(),
                             crate::text::raw_with_external_bindings(
                                 &capture_empty_element(e)?,
-                                owner_bindings,
+                                &raw_owner_bindings,
                             )?,
                         ));
                     }

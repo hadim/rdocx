@@ -118,7 +118,7 @@ impl ContentPath {
 /// A content handle whose captured revision no longer matches its document.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error(
-    "{element_kind} handle was created at document revision {captured_revision}, but the document is now at revision {current_revision} (a structural change invalidated it). {recovery_hint}"
+    "stale {element_kind} handle was created at document revision {captured_revision}, but the document is now at revision {current_revision} (a structural change invalidated it). {recovery_hint}"
 )]
 pub struct StaleElementError {
     /// Human-readable handle kind, such as `paragraph` or `run`.
@@ -728,7 +728,7 @@ mod tests {
         assert_eq!(error.current_revision, 5);
         assert_eq!(
             error.to_string(),
-            "paragraph handle was created at document revision 4, but the document is now at revision 5 (a structural change invalidated it). Re-fetch it with doc.paragraphs[i]."
+            "stale paragraph handle was created at document revision 4, but the document is now at revision 5 (a structural change invalidated it). Re-fetch it with doc.paragraphs[i]."
         );
     }
 

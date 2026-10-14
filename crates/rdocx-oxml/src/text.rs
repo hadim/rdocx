@@ -13788,6 +13788,40 @@ pub(crate) fn write_raw_with_word_override<W: std::io::Write>(
     Ok(())
 }
 
+// Only declarations the writer actually retains on this physical root can
+// replace a synthetic child binding. Namespace-only roots retain no record.
+pub(crate) fn bindings_outside_retained_root(
+    bindings: &[(String, String)],
+    root: Option<&BytesStart<'_>>,
+    word_prefixes: &[String],
+) -> Result<Vec<(String, String)>> {
+    let record = root
+        .map(|root| capture_root_attribute_record(root, word_prefixes))
+        .transpose()?
+        .flatten();
+    let declared = match record {
+        Some(record) => {
+            let mut reader = Reader::from_reader(record.as_slice());
+            match reader.read_event()? {
+                Event::Empty(root) => raw_namespace_declarations(&root)?,
+                _ => {
+                    return Err(OxmlError::InvalidValue(
+                        "retained root binding record is malformed".into(),
+                    ));
+                }
+            }
+        }
+        None => Vec::new(),
+    };
+    Ok(bindings
+        .iter()
+        .filter(|binding| {
+            !declared.contains(binding) || (binding.0 == "w" && binding.1 != crate::namespace::W_NS)
+        })
+        .cloned()
+        .collect())
+}
+
 pub(crate) fn raw_with_external_bindings(
     raw: &[u8],
     external_bindings: &[(String, String)],

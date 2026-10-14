@@ -25231,3 +25231,233 @@ fn fx202_malformed_story_picture_bytes_refuse_before_allocation() {
         }
     }
 }
+
+#[test]
+fn fx211d_opaque_word_owners_preserve_corpus_fragments() {
+    let opaque = "<corpus:keep key=\"one\"/><corpus:keep key=\"two\"/>";
+    let w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    for kind in ["table", "cell", "section"] {
+        let mut document = Document::new();
+        document.add_table(1, 1);
+        document.add_paragraph("XML sibling preserved");
+        let table_location = |document: &Document| {
+            document
+                .story_item_snapshots()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.location().item_kind() == StoryItemKind::Table)
+                .unwrap()
+                .location()
+                .clone()
+        };
+        let root = format!(
+            r#"xmlns:x="{w}" xmlns:corpus="urn:s91:corpus" corpus:stamp="opaque-attribute""#
+        );
+        let xml = match kind {
+            "table" => format!(
+                r#"<x:tbl {root}><x:tblGrid><x:gridCol x:w="1440"/></x:tblGrid><x:tr><x:tc><x:p><x:r><x:t>XML seed</x:t></x:r></x:p></x:tc></x:tr>{opaque}</x:tbl>"#
+            ),
+            "cell" => {
+                format!(r#"<x:tc {root}><x:p><x:r><x:t>XML seed</x:t></x:r></x:p>{opaque}</x:tc>"#)
+            }
+            _ => format!(
+                r#"<x:sectPr {root}><x:pgSz x:w="12240" x:h="15840"/><x:pgMar x:top="1440" x:right="1440" x:bottom="1440" x:left="1440" x:header="720" x:footer="720" x:gutter="0"/>{opaque}</x:sectPr>"#
+            ),
+        };
+        let replace = |document: &mut Document, xml: &str| {
+            match kind {
+                "table" => document.replace_table_xml(&table_location(document), xml),
+                "cell" => document.replace_cell_xml(&table_location(document), 0, 0, xml),
+                _ => document.replace_section_properties_xml(0, xml),
+            }
+            .unwrap();
+        };
+        replace(&mut document, &xml);
+        let selected = |document: &Document| {
+            match kind {
+                "table" => document.table_element_xml(&table_location(document)),
+                "cell" => document.cell_element_xml(&table_location(document), 0, 0),
+                _ => document.section_properties_xml(0),
+            }
+            .unwrap()
+        };
+        let exact = String::from_utf8(selected(&document)).unwrap();
+        assert!(exact.contains(opaque), "{kind}: {exact}");
+        let changed = if kind == "section" {
+            exact.replace("left=\"1440\"", "left=\"1600\"")
+        } else {
+            exact.replace("XML seed", "XML changed")
+        };
+        assert_ne!(changed, exact);
+        replace(&mut document, &changed);
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let exact = String::from_utf8(selected(&reopened)).unwrap();
+        assert!(
+            exact.contains(opaque) && exact.contains("opaque-attribute"),
+            "{kind}: {exact}"
+        );
+        assert!(
+            reopened
+                .paragraphs()
+                .iter()
+                .any(|p| p.text() == "XML sibling preserved")
+        );
+    }
+}
+
+#[test]
+fn fx211d_checked_merge_retains_text_and_refuses_boundary_loss() {
+    let mut document = Document::new();
+    document.add_table(2, 2);
+    document
+        .table_mut(0)
+        .unwrap()
+        .cell(0, 0)
+        .unwrap()
+        .set_text("origin");
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .table_mut(0)
+            .unwrap()
+            .merge_cells((0, 0), (8, 1))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let merged = document
+        .table_mut(0)
+        .unwrap()
+        .merge_cells((0, 0), (1, 1))
+        .unwrap();
+    assert_eq!(merged, (0, 0));
+    document
+        .table_mut(0)
+        .unwrap()
+        .split_cell(merged.0, merged.1)
+        .unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.table(0).unwrap().row_count(), 2);
+    for row in 0..2 {
+        assert_eq!(reopened.table(0).unwrap().row(row).unwrap().cell_count(), 2);
+    }
+    assert!(
+        reopened
+            .table(0)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .text()
+            .contains("origin")
+    );
+}
+
+#[test]
+fn fx211d_requested_builtin_table_style_is_lazy_and_does_not_change_defaults() {
+    let mut document = Document::new();
+    let before = document.to_bytes().unwrap();
+    assert!(
+        !document
+            .ensure_builtin_table_style("unknown guessed style")
+            .unwrap()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let defaults = document
+        .styles()
+        .iter()
+        .filter(|s| s.is_default())
+        .map(|s| s.style_id().to_owned())
+        .collect::<Vec<_>>();
+    assert!(
+        document
+            .ensure_builtin_table_style("Light Shading Accent 1")
+            .unwrap()
+    );
+    assert_eq!(
+        document.style("LightShading-Accent1").unwrap().name(),
+        Some("Light Shading Accent 1")
+    );
+    let styles = document.styles();
+    assert_eq!(
+        styles
+            .iter()
+            .filter(|s| s.is_default())
+            .map(|s| s.style_id().to_owned())
+            .collect::<Vec<_>>(),
+        defaults
+    );
+    let before = document.to_bytes().unwrap();
+    assert!(
+        !document
+            .ensure_builtin_table_style("LightShading-Accent1")
+            .unwrap()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn fx211d_merge_refuses_removed_opaque_properties_atomically() {
+    let w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let opaque = r#"<x:keep xmlns:x="urn:opaque" marker="preserve"/>"#;
+    let mut unsafe_successes = Vec::new();
+    for kind in ["properties", "borders"] {
+        let mut document = Document::new();
+        document.add_table(1, 2);
+        let location = document
+            .story_item_snapshots()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.location().item_kind() == StoryItemKind::Table)
+            .unwrap()
+            .location()
+            .clone();
+        let properties = if kind == "borders" {
+            format!("<w:tcBorders>{opaque}</w:tcBorders>")
+        } else {
+            opaque.to_owned()
+        };
+        let xml = format!(
+            r#"<w:tc xmlns:w="{w}"><w:tcPr>{properties}</w:tcPr><w:p><w:r><w:t>second</w:t></w:r></w:p></w:tc>"#
+        );
+        document.replace_cell_xml(&location, 0, 1, &xml).unwrap();
+        let before = document.to_bytes().unwrap();
+        assert_eq!(
+            document
+                .table_mut(0)
+                .unwrap()
+                .merge_cells((0, 1), (0, 1))
+                .unwrap(),
+            (0, 1)
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let result = document.table_mut(0).unwrap().merge_cells((0, 0), (0, 1));
+        if result.is_ok() {
+            unsafe_successes.push(kind);
+        } else {
+            assert_eq!(
+                document.to_bytes().unwrap(),
+                before,
+                "{kind}: refusal mutated package"
+            );
+            let reopened = Document::from_bytes(&before).unwrap();
+            let reopened_location = reopened
+                .story_item_snapshots()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.location().item_kind() == StoryItemKind::Table)
+                .unwrap()
+                .location()
+                .clone();
+            assert_eq!(reopened.table(0).unwrap().row(0).unwrap().cell_count(), 2);
+            assert!(
+                String::from_utf8(reopened.cell_element_xml(&reopened_location, 0, 1).unwrap())
+                    .unwrap()
+                    .contains(opaque)
+            );
+        }
+    }
+    assert!(
+        unsafe_successes.is_empty(),
+        "merge discarded opaque properties: {unsafe_successes:?}"
+    );
+}

@@ -677,10 +677,15 @@ impl PyTable {
 
     #[setter]
     fn set_style(&self, py: Python<'_>, value: &str) -> PyResult<()> {
-        self.validate(py)?;
+        let index = self.validate(py)?;
+        let related = self.current_related(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
+            .ensure_builtin_table_style(value)
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
         let style_id = {
-            let document = self.document.borrow(py);
-            let styles = document.inner.styles();
+            let styles = candidate.styles();
             let exact_id = styles.iter().any(|style| {
                 style.style_id() == value && style.style_type() == rdocx::StyleType::Table
             });
@@ -698,12 +703,16 @@ impl PyTable {
                     return Err(PyValueError::new_err("table style name is ambiguous"));
                 }
             }
-            crate::paragraph::style_id_of_type(&document.inner, value, rdocx::StyleType::Table)?
+            crate::paragraph::style_id_of_type(&candidate, value, rdocx::StyleType::Table)?
         };
-        self.edit(py, |table| {
-            table.set_style(&style_id);
-            Ok(())
-        })
+        TableLocation::new(index, &related)
+            .edit(&mut candidate, |table| {
+                table.set_style(&style_id);
+                Ok(())
+            })
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        document.inner = candidate;
+        Ok(())
     }
 
     #[getter]
@@ -1120,7 +1129,11 @@ impl PyTable {
             py,
             &candidate,
             "Table.add_row",
-            crate::document::WordPublication::Conservative,
+            crate::document::WordPublication::TableGrid(
+                TableLocation::new(index, &current_related)
+                    .native(&document.inner)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?,
+            ),
         )?;
         let mut segments = self.path.segs.clone();
         segments.push(PathSeg::Row(inserted));
@@ -2109,6 +2122,81 @@ impl PyCell {
                     document.try_replace_text_in_cell((table, row, cell), None, old, new, expect)
                 }
             })
+    }
+
+    fn merge(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        other: &Bound<'_, Self>,
+    ) -> PyResult<Py<PyCell>> {
+        let this = slf.borrow();
+        let other = other.borrow();
+        if this.document.as_ptr() != other.document.as_ptr() {
+            return Err(PyValueError::new_err(
+                "merge cell belongs to a different document",
+            ));
+        }
+        let (table, row, cell) = this.validate(py)?;
+        let (other_table, other_row, other_cell) = other.validate(py)?;
+        let related = this.current_related(py)?;
+        let other_related = other.current_related(py)?;
+        let mut document = this.document.borrow_mut(py);
+        let location = TableLocation::new(table, &related)
+            .native(&document.inner)
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        let other_location = TableLocation::new(other_table, &other_related)
+            .native(&document.inner)
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        if location != other_location {
+            return Err(PyValueError::new_err(
+                "merge cells belong to different physical tables",
+            ));
+        }
+        if (row, cell) == (other_row, other_cell) {
+            return Ok(slf.clone().unbind());
+        }
+        let mut candidate = document.inner.clone_for_staging();
+        let merged = candidate
+            .edit_story_table(&location, |table| {
+                table.merge_cells((row, cell), (other_row, other_cell))
+            })
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        let candidate_location = TableLocation::new(table, &related)
+            .native(&candidate)
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        let story = candidate
+            .story_table_cell(&candidate_location, merged.0, merged.1)
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        let prepared = document.prepare_word_revision(
+            py,
+            &candidate,
+            "Cell.merge",
+            crate::document::WordPublication::TableGrid(location),
+        )?;
+        let segments = smallvec![
+            PathSeg::Body(table),
+            PathSeg::Row(merged.0),
+            PathSeg::Cell(merged.1)
+        ];
+        let (path, owner) = document.capture_prepared_owner(
+            &prepared,
+            &crate::document::WordOwnerLocation::Cell {
+                table: candidate_location,
+                row: merged.0,
+                cell: merged.1,
+                story,
+            },
+            segments,
+            crate::document::WordView::Owner,
+            this.furniture_scope.as_ref(),
+        )?;
+        let mut result = PyCell::new(this.document.clone_ref(py), path, related);
+        result.owner = Some(owner);
+        result.furniture_scope = this.furniture_scope.clone();
+        let result = Py::new(py, result)?;
+        document.commit_word_revision(prepared)?;
+        document.inner = candidate;
+        Ok(result)
     }
 
     fn split(&self, py: Python<'_>) -> PyResult<()> {

@@ -844,14 +844,8 @@ def test_a_stale_hyperlink_snapshot_never_edits_another_link():
     links = document.hyperlinks
     document.remove_hyperlink(links[0])
     before = document.to_bytes()
-    # The bold link moved to position 0, and the plain one now sits at the
-    # snapshot's position with the same fields. Neither is edited.
-    with pytest.raises(rdocx.RdocxError, match="re-fetch"):
-        document.remove_hyperlink(links[1])
-    assert document.to_bytes() == before
-
-    # A record rebuilt from the public fields equals the snapshot and resolves
-    # only when exactly one link matches it.
+    # Both remaining links have equal public fields, but only the original
+    # bold physical owner is addressed by the held captured link.
     fresh = document.hyperlinks
     rebuilt = [
         rdocx.Hyperlink(
@@ -867,11 +861,30 @@ def test_a_stale_hyperlink_snapshot_never_edits_another_link():
     assert rebuilt == list(fresh)
     with pytest.raises(rdocx.RdocxError, match="re-fetch"):
         document.set_hyperlink_url(rebuilt[0], "https://z/")
-    document.set_hyperlink_url(fresh[1], "https://plain/")
-    document.set_hyperlink_url(fresh[0], "https://bold/")
+    assert document.to_bytes() == before
+    with pytest.raises(rdocx.StaleElementError, match="Document.remove_hyperlink"):
+        document.set_hyperlink_url(links[0], "https://removed/")
+    assert document.to_bytes() == before
+    document.set_hyperlink_url(links[1], "https://bold/")
     assert [(link.text, link.url) for link in document.hyperlinks] == [
         ("here", "https://bold/"),
-        ("here", "https://plain/"),
+        ("here", "https://u/"),
+    ]
+    saved = document.to_bytes()
+    import xml.etree.ElementTree as ET
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    r = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    with zipfile.ZipFile(io.BytesIO(saved)) as archive:
+        children = ET.fromstring(archive.read("word/document.xml")).findall(".//" + w + "hyperlink")
+        assert len(children) == 2
+        assert children[0].find(".//" + w + "b") is not None
+        assert children[1].find(".//" + w + "b") is None
+        targets = {rel.attrib["Id"]: rel.attrib["Target"] for rel in ET.fromstring(archive.read("word/_rels/document.xml.rels"))}
+        assert targets[children[0].attrib[r + "id"]] == "https://bold/"
+        assert targets[children[1].attrib[r + "id"]] == "https://u/"
+    reopened = rdocx.Document.from_bytes(saved)
+    assert [(link.text, link.url) for link in reopened.hyperlinks] == [
+        ("here", "https://bold/"), ("here", "https://u/"),
     ]
 
 
@@ -6265,3 +6278,283 @@ def test_fx211a_constructor_inventory_preserves_direct_control_and_cell_joins(st
         cell = document.tables[0].cell(0, 0)
         assert [p.text for p in cell.paragraphs] == ["1", "changed-second", "cell-last"]
         assert cell.tables[0].cell(0, 0).paragraphs[0].text == "inner"
+
+
+
+def test_fx211c_word_hyperlink_capture_survives_unrelated_append_and_reopens():
+    from rdocx import Document
+    document = Document()
+    paragraph = document.add_paragraph("")
+    paragraph.add_hyperlink("one", "https://example.com/one")
+    held = document.hyperlinks[0]
+    paragraph.add_hyperlink("two", "https://example.com/two")
+    document.set_hyperlink_url(held, "https://example.com/edited")
+    reopened = Document.from_bytes(document.to_bytes())
+    assert [link.url for link in reopened.hyperlinks] == ["https://example.com/edited", "https://example.com/two"]
+
+
+def test_fx211c_word_identical_hyperlink_removal_cannot_resurrect_capture():
+    from rdocx import Document
+    document = Document()
+    paragraph = document.add_paragraph("")
+    paragraph.add_hyperlink("same", "https://example.com/same")
+    paragraph.add_hyperlink("same", "https://example.com/same")
+    removed, survivor = document.hyperlinks
+    document.remove_hyperlink(removed)
+    paragraph.add_hyperlink("same", "https://example.com/same")
+    before = document.to_bytes()
+    with pytest.raises(Exception, match="removed|stale|hyperlink"):
+        document.set_hyperlink_url(removed, "https://example.com/unsafe")
+    assert document.to_bytes() == before
+    document.set_hyperlink_url(survivor, "https://example.com/survivor")
+    reopened = Document.from_bytes(document.to_bytes())
+    assert [link.url for link in reopened.hyperlinks] == ["https://example.com/survivor", "https://example.com/same"]
+
+
+def test_fx211c_word_table_append_preserves_owner_and_retires_old_grid():
+    from rdocx import Document, StaleElementError
+    document = Document()
+    table = document.add_table(1, 2)
+    cell = table.cell(0, 0)
+    cell.text = "before"
+    new_row = table.add_row()
+    assert len(table.rows) == 2
+    assert len(new_row.cells) == 2
+    before = document.to_bytes()
+    with pytest.raises(StaleElementError, match="Table.add_row"):
+        cell.text = "unsafe"
+    assert document.to_bytes() == before
+    reopened = Document.from_bytes(before)
+    assert len(reopened.tables[0].rows) == 2
+    assert reopened.tables[0].cell(0, 0).text == "before"
+
+
+
+def test_fx211c_word_captured_link_survives_append_with_fresh_paragraph_setup():
+    from rdocx import Document
+    document = Document()
+    document.add_paragraph("").add_hyperlink("one", "https://example.com/one")
+    held = document.hyperlinks[0]
+    document.paragraphs[0].add_hyperlink("two", "https://example.com/two")
+    document.set_hyperlink_url(held, "https://example.com/edited")
+    assert [link.url for link in document.hyperlinks] == ["https://example.com/edited", "https://example.com/two"]
+
+
+
+def test_fx211c_word_hyperlink_foreign_manual_and_noop_authority():
+    from rdocx import Document, Hyperlink
+    document = Document()
+    document.add_paragraph("").add_hyperlink("same", "https://example.com/same")
+    held = document.hyperlinks[0]
+    manual = Hyperlink(story=held.story, index_path=held.index_path, text=held.text, url=held.url,
+                      anchor=held.anchor, relationship_id=held.relationship_id)
+    assert manual == held
+    before = document.to_bytes()
+    document.set_hyperlink_url(manual, "https://example.com/same")
+    assert document.to_bytes() == before
+    foreign = Document()
+    foreign.add_paragraph("").add_hyperlink("same", "https://example.com/same")
+    foreign_before = foreign.to_bytes()
+    with pytest.raises(ValueError, match="different document"):
+        foreign.set_hyperlink_url(held, "https://example.com/unsafe")
+    assert foreign.to_bytes() == foreign_before
+    document.set_hyperlink_url(held, "https://example.com/changed")
+    document.set_hyperlink_url(held, "https://example.com/changed-again")
+    assert Document.from_bytes(document.to_bytes()).hyperlinks[0].url == "https://example.com/changed-again"
+
+
+def test_fx211c_word_removed_link_first_cause_survives_identical_replacements():
+    from rdocx import Document, StaleElementError
+    document = Document()
+    paragraph = document.add_paragraph("")
+    paragraph.add_hyperlink("same", "https://example.com/same")
+    removed = document.hyperlinks[0]
+    document.remove_hyperlink(removed)
+    paragraph.add_hyperlink("same", "https://example.com/same")
+    for i in range(32):
+        document.add_paragraph(str(i))
+    before = document.to_bytes()
+    with pytest.raises(StaleElementError) as error:
+        document.set_hyperlink_url(removed, "https://example.com/unsafe")
+    assert "Document.remove_hyperlink" in str(error.value)
+    assert "Document.add_paragraph" not in str(error.value)
+    assert document.to_bytes() == before
+    assert Document.from_bytes(before).hyperlinks[0].url == "https://example.com/same"
+
+
+def test_fx211c_word_run_keeps_first_global_cause_and_manual_item_equality():
+    from rdocx import Document, StaleElementError, StoryItem
+    document = Document()
+    paragraph = document.add_paragraph("old")
+    run = paragraph.add_run(" run")
+    item = document.story_items[0]
+    manual = StoryItem(story=item.story, kind=item.kind, index_path=item.index_path,
+                       direct_body_index=item.direct_body_index, text=item.text, xml=item.xml, revision=item.revision)
+    assert manual == item
+    before = document.to_bytes()
+    assert document.replace_text_at(manual, "absent", "unused", expect=0) == 0
+    with pytest.raises(Exception, match="count|expected"):
+        document.replace_text_at(item, "old", "unsafe", expect=2)
+    assert document.to_bytes() == before
+    foreign = Document()
+    foreign.add_paragraph("old run")
+    foreign_before = foreign.to_bytes()
+    with pytest.raises(ValueError, match="different document"):
+        foreign.replace_text_at(item, "old", "unsafe", expect=1)
+    assert foreign.to_bytes() == foreign_before
+    document.add_paragraph("first invalidating commit")
+    document.add_table(1, 1)
+    before = document.to_bytes()
+    with pytest.raises(StaleElementError) as error:
+        run.text = "unsafe"
+    assert "Document.add_paragraph" in str(error.value)
+    assert "Document.add_table" not in str(error.value)
+    assert document.to_bytes() == before
+    assert paragraph.text == "old run"
+    reopened = Document.from_bytes(before)
+    assert [p.text for p in reopened.paragraphs] == ["old run", "first invalidating commit"]
+
+
+def test_fx211c_word_grid_retirement_is_local_and_invalid_access_atomic():
+    from rdocx import Document, StaleElementError
+    document = Document()
+    first = document.add_table(1, 2)
+    second = document.add_table(1, 1)
+    second_cell = second.cell(0, 0)
+    second_cell.text = "unrelated"
+    old_cell = first.cell(0, 0)
+    first.add_row()
+    assert len(first.rows) == 2
+    assert second_cell.text == "unrelated" and len(second.rows) == 1
+    before = document.to_bytes()
+    with pytest.raises(StaleElementError, match="Table.add_row"):
+        old_cell.text = "unsafe"
+    assert document.to_bytes() == before
+    first.cell(1, 1).text = "new row"
+    before = document.to_bytes()
+    with pytest.raises(Exception):
+        first.cell(-100, 0).text = "unsafe"
+    assert document.to_bytes() == before
+    assert second_cell.text == "unrelated"
+    reopened = Document.from_bytes(before)
+    assert reopened.tables[0].cell(1, 1).text == "new row"
+    assert reopened.tables[1].cell(0, 0).text == "unrelated"
+
+
+@pytest.mark.parametrize("kind", ["table", "cell", "section"])
+def test_fx211d_opaque_word_owners_preserve_corpus_fragments(kind):
+    import xml.etree.ElementTree as ET
+    from rdocx import Document
+
+    document = Document()
+    table = document.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "XML seed"
+    document.add_paragraph("XML sibling preserved")
+    owner = table if kind == "table" else table.cell(0, 0) if kind == "cell" else document.section(0)
+    owner.element.replace_xml(ET.tostring(ET.fromstring(owner.element.xml), encoding="unicode"))
+    original = owner.element.xml
+    opening = re.search(r"<(?![?!])[^>]+>", original)
+    stamp = ' xmlns:corpus="urn:s91:corpus" corpus:stamp="opaque-attribute"'
+    seeded = original[:opening.end() - 1] + stamp + original[opening.end() - 1:]
+    opaque = '<corpus:keep key="one"/><corpus:keep key="two"/>'
+    closing = seeded.rfind("</")
+    owner.element.replace_xml(seeded[:closing] + opaque + seeded[closing:])
+    exact = owner.element.xml
+    assert 'corpus:stamp="opaque-attribute"' in exact and opaque in exact
+    if kind == "section":
+        changed = re.sub(r'((?:w:)?left=")[^"]+(" )', r'\g<1>1600\2', exact, count=1)
+        assert changed != exact
+    else:
+        changed = exact.replace("XML seed", "XML changed", 1)
+    owner.element.replace_xml(changed)
+    assert opaque in owner.element.xml
+    saved = document.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(saved)) as archive:
+        body = archive.read("word/document.xml")
+    assert opaque.encode() in body and b'corpus:stamp="opaque-attribute"' in body
+    assert b"XML sibling preserved" in body
+    reopened = Document.from_bytes(saved)
+    selected = reopened.tables[0] if kind == "table" else reopened.tables[0].cell(0, 0) if kind == "cell" else reopened.section(0)
+    assert opaque in selected.element.xml
+
+
+@pytest.mark.parametrize("case", ["margin", "header", "notes", "equation", "merge", "style"])
+def test_fx211d_word_current_compatibility_repairs(case):
+    from rdocx import Document, Inches
+
+    document = Document()
+    if case == "margin":
+        section = document.section(0)
+        section.left_margin = Inches(1.25)
+        assert int(section.left_margin) == int(Inches(1.25))
+        reopened = Document.from_bytes(document.to_bytes())
+        assert int(reopened.section(0).left_margin) == int(Inches(1.25))
+    elif case == "header":
+        section = document.section(0)
+        section.different_first_page_header_footer = True
+        section.header.add_paragraph("Default header")
+        section.first_page_header.add_paragraph("First header")
+        section.footer.add_paragraph("Footer")
+        with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+            assert any(b"Default header" in archive.read(name) for name in archive.namelist() if name.startswith("word/header"))
+            assert any(b"Footer" in archive.read(name) for name in archive.namelist() if name.startswith("word/footer"))
+    elif case == "notes":
+        paragraph = document.add_paragraph("Host ")
+        run = paragraph.add_run("reference")
+        document.add_footnote(run, "Footnote corpus")
+        document.add_endnote(paragraph, "Endnote corpus")
+        assert paragraph.text.startswith("Host")
+        with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+            assert b"Footnote corpus" in archive.read("word/footnotes.xml")
+            assert b"Endnote corpus" in archive.read("word/endnotes.xml")
+    elif case == "equation":
+        paragraph = document.add_paragraph("Equation ")
+        assert paragraph.add_equation("x^2", format="latex").diagnostics == ()
+        assert len(paragraph.equations()) == 1
+        with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+            assert b"oMath" in archive.read("word/document.xml")
+    elif case == "merge":
+        table = document.add_table(rows=2, cols=2)
+        table.cell(0, 0).text = "origin"
+        merged = table.cell(0, 0).merge(table.cell(1, 1))
+        merged.split()
+        reopened = Document.from_bytes(document.to_bytes())
+        assert len(reopened.tables[0].rows) == 2
+        assert all(len(row.cells) == 2 for row in reopened.tables[0].rows)
+        assert "origin" in reopened.tables[0].cell(0, 0).text
+    else:
+        table = document.add_table(rows=2, cols=2)
+        table.style = "Light Shading Accent 1"
+        assert table.style == "LightShading-Accent1"
+        reopened = Document.from_bytes(document.to_bytes())
+        assert reopened.tables[0].style == "LightShading-Accent1"
+        with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+            assert b'"LightShading-Accent1"' in archive.read("word/styles.xml")
+
+
+@pytest.mark.parametrize("kind", ["properties", "borders"])
+def test_fx211d_merge_opaque_refusal_preserves_package_and_owners(kind):
+    from rdocx import Document, RdocxError
+
+    document = Document()
+    table = document.add_table(1, 2)
+    first = table.cell(0, 0)
+    first.text = "first"
+    second = table.cell(0, 1)
+    second.text = "second"
+    opaque = '<x:keep xmlns:x="urn:opaque" marker="preserve"/>'
+    properties = '<w:tcBorders>' + opaque + '</w:tcBorders>' if kind == "borders" else opaque
+    xml = '<w:tc xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tcPr>' + properties + '</w:tcPr><w:p><w:r><w:t>second</w:t></w:r></w:p></w:tc>'
+    second.element.replace_xml(xml)
+    first = table.cell(0, 0)
+    before = document.to_bytes()
+    assert second.merge(second) is second
+    assert document.to_bytes() == before
+    with pytest.raises(RdocxError, match="opaque cell metadata"):
+        first.merge(second)
+    assert document.to_bytes() == before
+    assert first.text == "first" and second.text == "second"
+    assert len(table.rows[0].cells) == 2
+    assert opaque in second.element.xml
+    reopened = Document.from_bytes(before)
+    assert opaque in reopened.tables[0].cell(0, 1).element.xml

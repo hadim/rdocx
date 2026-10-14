@@ -1,6 +1,6 @@
 # F-X211d, Repair Word compatibility owners and aliases
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X211a, F-X200, F-X201, F-X202, F-X203
@@ -111,12 +111,12 @@ never an incidental baseline update.
 
 ## Implementation checklist
 
-- [ ] Authenticate failed candidate and inherited four Word carriers.
-- [ ] Add deciding current-source regression controls with genuine retained failures.
-- [ ] Repair exact XML, owner survival, units, merge and style behavior in existing carriers.
-- [ ] Qualify focused installed/native, safety, scoped policy and risk controls.
-- [ ] Obtain independent zero-finding review and coordinated HLD/archive completion.
-- [ ] Prepare valid handoff for integration before c's final paired corpus.
+- [x] Authenticate failed candidate and inherited four Word carriers.
+- [x] Add deciding current-source regression controls with genuine retained failures.
+- [x] Repair exact XML, owner survival, units, merge and style behavior in existing carriers.
+- [x] Qualify focused installed/native, safety, scoped policy and risk controls.
+- [x] Obtain independent zero-finding review and coordinated HLD/archive completion.
+- [x] Prepare valid handoff for integration before c's final paired corpus.
 
 ## Open questions
 
@@ -124,3 +124,25 @@ No new acceptance or product file is proposed. The user authorizes completion
 of every included issue/PR, parallel implementation and existing Office
 checks. This partition keeps that exact acceptance and changes only ownership
 of the failed Word residuals. Existing font and dependency approvals persist.
+
+## Completion evidence
+
+Independent completion pass 3 reports zero defects and zero smells. The final
+source capsule b0b388342e1f5e5b26383a8e75333021440c3daee62db58f911f6af8b36fb51a
+qualifies the numerical metadata and exact ordinary-member archive bridges.
+Current installed Word controls pass all 32 cases without skips, with strict
+typing and full native/stub inventories. The regression gate has genuine
+retained predecessor failures and current saved/reopened successors.
+
+Coordinated HLD completion is owned by the integrator at canonical commit
+70470e4a for the four listed HLD files. The worker does not overwrite those
+shared contracts with its earlier snapshot. Final full policy runs 141 cases,
+with 139 passes and two platform skips that receive no acceptance credit.
+The full README, prose and adapter gates pass. All 22 materialized archives
+have actual verified producers and current ordinary-source member bridges.
+The current 12-control release rider uses an ordinary 2 MiB stack. Four
+source-qualified LibreOffice integration successors pass. Prior failures and
+provider distinctions remain recorded in the feature progress and receipts.
+
+The unchanged parent frozen100 and final integrated sprint gate remain parent
+obligations. This completion establishes the Word repair partition only.
