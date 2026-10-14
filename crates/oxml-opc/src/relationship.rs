@@ -232,6 +232,7 @@ impl Relationships {
         items: Vec<Relationship>,
         ids: &HashMap<String, String>,
     ) -> Result<Self> {
+        self.validate_ids()?;
         let mut proposed = Self::new();
         proposed.items = items;
         proposed.validate_ids()?;
@@ -315,7 +316,29 @@ impl Relationships {
                 }
             }
         }
-        if ids.keys().any(|id| !old.contains(id.as_str())) {
+        let current_ids = self
+            .items
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<HashSet<_>>();
+        if ids
+            .keys()
+            .any(|id| !current_ids.contains(id.as_str()) && !old.contains(id.as_str()))
+        {
+            return Err(OpcError::InvalidRelationship);
+        }
+        // A changed public ID does not identify its historical opaque row.
+        // An explicit retained-ID map proves that ownership. Otherwise refuse
+        // a missing raw owner combined with newly emitted, unowned rows.
+        let unclaimed_raw_owner = old
+            .iter()
+            .any(|id| !current_ids.contains(*id) && !ids.contains_key(*id));
+        if unclaimed_raw_owner
+            && proposed
+                .items
+                .iter()
+                .any(|item| !seen.contains(item.id.as_str()))
+        {
             return Err(OpcError::InvalidRelationship);
         }
         let prefix = parsed
@@ -1435,6 +1458,146 @@ mod tests {
                 .is_err()
         );
         assert_eq!(original.to_xml().unwrap(), xml);
+    }
+
+    #[test]
+    fn fx216_relationship_rebind_maps_rows_added_after_parsing() {
+        let xml = br#"<q:Relationships xmlns:q="http://schemas.openxmlformats.org/package/2006/relationships" xmlns:z="urn:opaque" z:root='keep'><q:Relationship Id='kept' Type='urn:owned' Target='old.xml' z:record='keep'><!--inside--></q:Relationship><!--between--><z:tail/></q:Relationships>"#;
+        let mut original = Relationships::from_xml(xml).unwrap();
+        original.add_with_id("draft", "urn:new", "new.xml");
+        let before = original.to_xml().unwrap();
+        let mut items = original.items.clone();
+        items.last_mut().unwrap().id = "imported".into();
+        let map = HashMap::from([("draft".into(), "imported".into())]);
+        let changed = original.rebind_for_import(items.clone(), &map).unwrap();
+        assert_eq!(changed.items, items);
+        let saved = changed.to_xml().unwrap();
+        let written = std::str::from_utf8(&saved).unwrap();
+        for opaque in [
+            "z:root='keep'",
+            "z:record='keep'",
+            "<!--inside-->",
+            "<!--between-->",
+            "<z:tail/>",
+        ] {
+            assert!(written.contains(opaque), "lost {opaque}");
+        }
+        assert_eq!(Relationships::from_xml(&saved).unwrap().items, items);
+        assert!(
+            original
+                .rebind_for_import(
+                    items.clone(),
+                    &HashMap::from([("unknown".into(), "imported".into())])
+                )
+                .is_err()
+        );
+        let mut duplicate = original.clone();
+        duplicate.items.push(duplicate.items[0].clone());
+        assert!(duplicate.rebind_for_import(items, &map).is_err());
+        assert_eq!(original.to_xml().unwrap(), before);
+    }
+
+    #[test]
+    fn fx216_relationship_rebind_requires_explicit_renamed_raw_owner() {
+        let xml = br#"<q:Relationships xmlns:q="http://schemas.openxmlformats.org/package/2006/relationships" xmlns:z="urn:opaque" z:root='keep'><q:Relationship Id='kept' Type='urn:owned' Target='old.xml' z:record='keep'><z:child keep='&#65;'/><!--inside--></q:Relationship><!--between--><z:tail/></q:Relationships>"#;
+        let mut original = Relationships::from_xml(xml).unwrap();
+        original.items[0].id = "draft".into();
+        let before_items = original.items.clone();
+        let before_source = original.source.clone();
+        let before = original.to_xml().unwrap();
+        let mut items = original.items.clone();
+        items[0].id = "imported".into();
+        items[0].target = "new.xml".into();
+
+        // Neither the new public ID nor matching position/target proves which
+        // retained XML row owns the opaque payload.
+        let current_map = HashMap::from([("draft".into(), "imported".into())]);
+        assert!(matches!(
+            original.rebind_for_import(items.clone(), &current_map),
+            Err(crate::OpcError::InvalidRelationship)
+        ));
+        assert!(matches!(
+            original.rebind_for_import(original.items.clone(), &HashMap::new()),
+            Err(crate::OpcError::InvalidRelationship)
+        ));
+        assert_eq!(original.items, before_items);
+        assert_eq!(original.source, before_source);
+        assert_eq!(original.to_xml().unwrap(), before);
+
+        // Naming the retained source ID is a complete ownership route even
+        // though the caller has already changed the public item ID.
+        let retained_map = HashMap::from([("kept".into(), "imported".into())]);
+        let changed = original
+            .rebind_for_import(items.clone(), &retained_map)
+            .unwrap();
+        assert_eq!(changed.items, items);
+        let saved = changed.to_xml().unwrap();
+        let written = std::str::from_utf8(&saved).unwrap();
+        for opaque in [
+            "z:root='keep'",
+            "z:record='keep'",
+            "<z:child keep='&#65;'/>",
+            "<!--inside-->",
+            "<!--between-->",
+            "<z:tail/>",
+        ] {
+            assert!(written.contains(opaque), "lost {opaque}");
+        }
+        assert!(written.contains("Id='imported'"));
+        assert!(written.contains("Target='new.xml'"));
+        assert_eq!(Relationships::from_xml(&saved).unwrap().items, items);
+        assert_eq!(original.items, before_items);
+        assert_eq!(original.source, before_source);
+        assert_eq!(original.to_xml().unwrap(), before);
+    }
+
+    #[test]
+    fn fx216_relationship_rebind_distinguishes_removal_from_ambiguous_addition() {
+        let xml = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" xmlns:z="urn:opaque" z:root='keep'><Relationship Id='kept' Type='urn:owned' Target='old.xml' z:record='keep'><z:child/></Relationship><!--between--><z:tail/></Relationships>"#;
+        let parsed = Relationships::from_xml(xml).unwrap();
+        let mut ambiguous = parsed.clone();
+        ambiguous.items.clear();
+        ambiguous.add_with_id("draft", "urn:new", "new.xml");
+        let before_items = ambiguous.items.clone();
+        let before_source = ambiguous.source.clone();
+        let before = ambiguous.to_xml().unwrap();
+        let mut items = ambiguous.items.clone();
+        items[0].id = "imported".into();
+        let map = HashMap::from([("draft".into(), "imported".into())]);
+        assert!(matches!(
+            ambiguous.rebind_for_import(items.clone(), &map),
+            Err(crate::OpcError::InvalidRelationship)
+        ));
+        assert_eq!(ambiguous.items, before_items);
+        assert_eq!(ambiguous.source, before_source);
+        assert_eq!(ambiguous.to_xml().unwrap(), before);
+
+        // A removal is still supported. Staging it first makes a subsequent
+        // new row unambiguous without inventing a raw-owner correspondence.
+        let mut removed = parsed
+            .rebind_for_import(Vec::new(), &HashMap::new())
+            .unwrap();
+        let raw = String::from_utf8(removed.to_xml().unwrap()).unwrap();
+        assert!(!raw.contains("z:record") && !raw.contains("<z:child/>"));
+        assert!(
+            raw.contains("z:root='keep'")
+                && raw.contains("<!--between-->")
+                && raw.contains("<z:tail/>")
+        );
+        removed.add_with_id("draft", "urn:new", "new.xml");
+        let changed = removed.rebind_for_import(items.clone(), &map).unwrap();
+        assert_eq!(changed.items, items);
+        let raw = String::from_utf8(changed.to_xml().unwrap()).unwrap();
+        assert!(raw.contains("z:root='keep'") && raw.contains("<z:tail/>"));
+        assert!(
+            changed
+                .rebind_for_import(
+                    changed.items.clone(),
+                    &HashMap::from([("unknown".into(), "imported".into())]),
+                )
+                .is_err()
+        );
+        assert_eq!(parsed.to_xml().unwrap(), xml);
     }
 
     #[test]

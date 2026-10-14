@@ -8597,9 +8597,13 @@ impl Presentation {
                 })
                 .map(|relationship| relationship.id.clone())
                 .collect::<HashSet<_>>();
-            relationships
+            let kept = relationships
                 .items
-                .retain(|relationship| !back_ids.contains(&relationship.id));
+                .iter()
+                .filter(|relationship| !back_ids.contains(&relationship.id))
+                .cloned()
+                .collect();
+            relationships = relationships.rebind_for_import(kept, &HashMap::new())?;
             let back_relationship_id = relationships.add(rel_types::SLIDE, &back_target);
             relationships =
                 relationships.rebind_for_import(relationships.items.clone(), &HashMap::new())?;
@@ -16338,7 +16342,7 @@ impl SlideImportContext<'_> {
         part: &str,
         back_target: Option<&str>,
         xml: Vec<u8>,
-        mut relationships: Relationships,
+        relationships: Relationships,
     ) -> Result<(Vec<u8>, Relationships)> {
         let mut released = HashSet::new();
         for relationship in &relationships.items {
@@ -16376,12 +16380,16 @@ impl SlideImportContext<'_> {
                 ),
             ));
         }
-        relationships.items.retain(|relationship| {
-            !((released.contains(&relationship.id) || before.contains(&relationship.id))
-                && !after.contains(&relationship.id))
-        });
-        let relationships =
-            relationships.rebind_for_import(relationships.items.clone(), &HashMap::new())?;
+        let kept = relationships
+            .items
+            .iter()
+            .filter(|relationship| {
+                !((released.contains(&relationship.id) || before.contains(&relationship.id))
+                    && !after.contains(&relationship.id))
+            })
+            .cloned()
+            .collect();
+        let relationships = relationships.rebind_for_import(kept, &HashMap::new())?;
         Ok((released_xml, relationships))
     }
 }

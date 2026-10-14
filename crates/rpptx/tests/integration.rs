@@ -34654,6 +34654,22 @@ fn fx216_batch_jumps_map_existing_self_and_drop_only_unmapped_targets() {
     for (id, target) in ids.iter().zip([1, 2, 0, 1, 2, 0]) {
         source.set_shape_target_slide(0, *id, Some(target)).unwrap();
     }
+    // Reopen to retain the jump XML, then author a genuinely new image row.
+    // Dropping an unmapped jump must not mistake that row for a renamed owner.
+    let mut source = Presentation::from_bytes(&source.to_bytes().unwrap()).unwrap();
+    let new_image = f226_blue_pixel_png();
+    assert_ne!(new_image, valid_one_pixel_png());
+    source
+        .add_picture(
+            0,
+            &new_image,
+            "added-after-parse.png",
+            Emu(0),
+            Emu(0),
+            None,
+            None,
+        )
+        .unwrap();
     let source_before = source.to_bytes().unwrap();
     for mapped_existing in [true, false] {
         let mut destination = Presentation::new().unwrap();
@@ -34698,7 +34714,10 @@ fn fx216_batch_jumps_map_existing_self_and_drop_only_unmapped_targets() {
             assert_eq!(destination.shape_target_slide(2, id).unwrap(), target);
         }
         assert_eq!(destination.slide_xml(0).unwrap(), original);
+        assert_eq!(destination.slide(2).unwrap().shapes().len(), 7);
         let saved = destination.to_bytes().unwrap();
+        let package = open_opc(&saved, "mapped jumps and new image");
+        assert!(package.parts.values().any(|bytes| bytes == &new_image));
         let reopened = Presentation::from_bytes(&saved).unwrap();
         assert!(reopened.validate().is_empty());
     }
