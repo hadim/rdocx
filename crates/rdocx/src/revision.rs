@@ -692,6 +692,12 @@ impl<'a> XmlTree<'a> {
         if element.word && element.local == "tbl" && self.owned_rows_all_remove(index, state) {
             return Ok(Vec::new());
         }
+        if element.word
+            && element.local == "hyperlink"
+            && self.owned_content_all_removes(index, state)
+        {
+            return Ok(Vec::new());
+        }
         if removes_empty_property_shell
             && inner.iter().all(u8::is_ascii_whitespace)
             && !self.element_has_attributes(index)?
@@ -1084,6 +1090,23 @@ impl<'a> XmlTree<'a> {
                             .expect("row marker is a revision")
                             .kind;
                         removes_content(state.resolution, kind)
+                    })
+            })
+    }
+
+    /// Whether the resolution removes every child of a hyperlink, each a
+    /// revision wrapper, which would leave the hyperlink empty. Word reads a
+    /// hyperlink as a field, and an empty one shows nothing.
+    fn owned_content_all_removes(&self, index: usize, state: &RenderState<'_>) -> bool {
+        let children = &self.elements[index].children;
+        !children.is_empty()
+            && children.iter().all(|child| {
+                self.elements[*child]
+                    .revision
+                    .as_ref()
+                    .is_some_and(|metadata| {
+                        state.scope.matches(metadata)
+                            && removes_content(state.resolution, metadata.kind)
                     })
             })
     }

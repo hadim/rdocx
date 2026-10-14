@@ -5482,11 +5482,16 @@ fn inserted_paragraph(paragraph: &CT_P, metadata: &mut Metadata<'_>) -> Result<S
 /// The children of a whole deleted, inserted or moved paragraph after its
 /// properties, each group inside the wrapper that `wrap` writes.
 ///
-/// Hyperlinks, simple fields, bookmarks and comment ranges go inside the
-/// wrappers with the runs, so resolving the revision removes or keeps them
-/// with the text. A range or proofing marker shares the wrapper of the
-/// content after it, or of the content before it at the end of the
-/// paragraph, so a paragraph of runs alone keeps one wrapper per run.
+/// Simple fields, bookmarks and comment ranges go inside the wrappers with
+/// the runs, so resolving the revision removes or keeps them with the text.
+/// A range or proofing marker shares the wrapper of the content after it,
+/// or of the content before it at the end of the paragraph, so a paragraph
+/// of runs alone keeps one wrapper per run.
+///
+/// A revision wrapper may not hold a hyperlink, so a hyperlink stays outside
+/// and its own children go inside wrappers, as Word writes a tracked
+/// hyperlink run. Resolving the revision keeps the hyperlink when it keeps
+/// the text, and drops the hyperlink it leaves empty.
 fn wrapped_paragraph_children(
     paragraph: &CT_P,
     deleted: bool,
@@ -5497,11 +5502,41 @@ fn wrapped_paragraph_children(
     if deleted {
         children.runs = children.runs.iter().map(deleted_run).collect();
     }
-    let xml = paragraph_xml(&children)?;
+    wrapped_children(&paragraph_xml(&children)?, deleted, &mut wrap)
+}
+
+/// The children of the element `xml`, a paragraph or a hyperlink, as
+/// [`wrapped_paragraph_children`] writes them.
+fn wrapped_children(
+    xml: &str,
+    deleted: bool,
+    wrap: &mut impl FnMut(&str) -> Result<String>,
+) -> Result<String> {
+    let mut output = String::new();
     let mut groups: Vec<(String, bool)> = Vec::new();
-    for span in direct_element_spans(&xml)? {
+    for span in direct_element_spans(xml)? {
         let child = &xml[span];
         let local = element_local_name(child);
+        if local == "hyperlink" {
+            let open_end = child
+                .find('>')
+                .ok_or_else(|| Error::Other("hyperlink XML has no start".to_owned()))?
+                + 1;
+            for (group, _) in groups.drain(..) {
+                output.push_str(&wrap(&group)?);
+            }
+            // Resolution drops a hyperlink only when it removes its content.
+            let inner = wrapped_children(child, deleted, wrap)?;
+            if inner.is_empty() {
+                return Err(Error::Other(
+                    "comparison cannot track a whole paragraph's empty hyperlink".to_owned(),
+                ));
+            }
+            output.push_str(&child[..open_end]);
+            output.push_str(&inner);
+            output.push_str(&child[child.rfind("</").unwrap_or(child.len())..]);
+            continue;
+        }
         let marker = matches!(
             local,
             "bookmarkStart" | "bookmarkEnd" | "commentRangeStart" | "commentRangeEnd" | "proofErr"
@@ -5527,7 +5562,10 @@ fn wrapped_paragraph_children(
     {
         group.push_str(&markers);
     }
-    groups.iter().map(|(group, _)| wrap(group)).collect()
+    for (group, _) in &groups {
+        output.push_str(&wrap(group)?);
+    }
+    Ok(output)
 }
 
 fn paragraph_mark_properties(
@@ -7107,12 +7145,12 @@ struct CarriedParagraphs {
     edited: HashSet<usize>,
 }
 
-/// Refuse a whole deleted, inserted or moved paragraph that holds a
-/// hyperlink or simple field outside a complex field carried with it.
+/// Refuse a whole deleted, inserted or moved paragraph that holds a simple
+/// field outside a complex field carried with it.
 ///
-/// Neither may sit inside a revision wrapper, and Word reads each as a field
-/// whose codes stay untracked, so accepting or rejecting the paragraph in
-/// Word would leave an empty field behind.
+/// A simple field may not sit inside a revision wrapper. Its own children
+/// could, as a hyperlink's do, but rdocx reads a simple field as one field
+/// run and resolves no revision inside it.
 fn refuse_uncarried_field_owners(
     aligned: &[(Option<usize>, Option<usize>)],
     original: &[Option<&CT_P>],
@@ -7127,14 +7165,55 @@ fn refuse_uncarried_field_owners(
             _ => None,
         };
         if let Some(paragraph) = paragraph
-            && paragraph_field_events(paragraph)?.contains(&FieldEvent::Owner)
+            && paragraph_wraps_simple_field(paragraph)?
         {
             return Err(Error::Other(format!(
-                "comparison cannot track a whole paragraph's hyperlink or simple field outside a field it replaces at {location}"
+                "comparison cannot track a whole paragraph's simple field outside a field it replaces at {location}"
             )));
         }
     }
     Ok(())
+}
+
+/// Whether a whole-paragraph revision would wrap a simple field: one that is
+/// a child of the paragraph or of a hyperlink there, whose children the
+/// wrappers go inside.
+fn paragraph_wraps_simple_field(paragraph: &CT_P) -> Result<bool> {
+    let xml = paragraph_xml(paragraph)?;
+    let mut reader = Reader::from_reader(xml.as_bytes());
+    // For each open element, whether the wrappers go inside it.
+    let mut open: Vec<bool> = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("comparison XML scan failed: {error}")))?;
+        let (element, empty) = match &event {
+            Event::Start(element) => (element, false),
+            Event::Empty(element) => (element, true),
+            Event::End(_) => {
+                open.pop();
+                buffer.clear();
+                continue;
+            }
+            Event::Eof => return Ok(false),
+            _ => {
+                buffer.clear();
+                continue;
+            }
+        };
+        let local = element.local_name();
+        let parent_wrapped = open.last().copied();
+        if parent_wrapped == Some(true) && local.as_ref() == b"fldSimple" {
+            return Ok(true);
+        }
+        if !empty {
+            open.push(
+                parent_wrapped.is_none_or(|wrapped| wrapped && local.as_ref() == b"hyperlink"),
+            );
+        }
+        buffer.clear();
+    }
 }
 
 /// A complex field character or a field owner of a paragraph.

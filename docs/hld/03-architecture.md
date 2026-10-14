@@ -1064,7 +1064,9 @@ merges with the next paragraph across a table that immediately follows it when
 every row of that table is removed by the same resolution. A removed paragraph
 mark inside removed content, such as a cell paragraph of a removed row, needs
 no merge partner. The merged paragraph keeps the resolved properties of the
-last paragraph, whose mark remains. Resolution stages every affected package part, resolves
+last paragraph, whose mark remains. A hyperlink whose every child is a revision
+the resolution removes is removed with them, since Word reads a hyperlink as a
+field and an empty one shows nothing. Resolution stages every affected package part, resolves
 selected descendants before their enclosing subtree, reparses the complete
 candidate package, and commits once only after validation succeeds.
 
@@ -1089,10 +1091,12 @@ neighbouring paragraphs until each side holds every complex field it begins or
 ends, so a table of contents, whose end Word writes in a paragraph of its own,
 is deleted and inserted whole, which Word needs to accept or reject it. A
 whole deleted, inserted, or moved paragraph carries its bookmarks and comment
-ranges inside its revision wrappers, and its hyperlinks and simple fields only
-inside a complex field deleted or inserted whole with it, since neither may
-sit in a revision wrapper and Word reads each as a field whose codes stay
-untracked. Comparison refuses otherwise, and when the two sides of such a run
+ranges inside its revision wrappers. A hyperlink may not sit in a revision
+wrapper but may hold one, so the wrappers go inside each of its hyperlinks, as
+Word writes a tracked hyperlink run. A simple field may not sit in a revision
+wrapper either, and rdocx resolves no revision inside one, so the paragraph
+carries its simple fields only inside a complex field deleted or inserted
+whole with it. Comparison refuses otherwise, and when the two sides of such a run
 share a bookmark or comment range, or a moved paragraph holds one, since the
 redline would hold it twice. Deleted content writes a field code as
 `w:delInstrText`, since Word refuses to open a deletion that holds
@@ -1103,7 +1107,7 @@ When a matched paragraph changes its comment range, hyperlink, inline control,
 or preserved child boundary without moving a bookmark, comparison writes a
 paired paragraph deletion and insertion. This also covers a TOC entry whose
 cached text becomes a hyperlink and PAGEREF field. Unmatched paragraphs with a
-hyperlink outside a carried complex field still refuse the pair.
+simple field outside a carried complex field still refuse the pair.
 Changed field results remain inside their field owner, while instruction or
 form changes replace that complete owner. Supported run, paragraph, table, and
 section properties emit property revisions that retain the original property

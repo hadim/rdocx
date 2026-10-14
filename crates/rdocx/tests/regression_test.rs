@@ -24066,28 +24066,36 @@ fn comparison_carries_bookmarks_and_whole_fields_in_whole_paragraph_changes() {
 
 #[test]
 fn comparison_refuses_whole_paragraph_structures_word_cannot_resolve() {
-    // A hyperlink or simple field may not sit in a revision wrapper. Word
-    // reads either as a field whose codes stay untracked, so accepting a
-    // deleted one or rejecting an inserted one leaves an empty field, unless
-    // a field deleted or inserted whole around it goes with it. A moved
-    // paragraph's bookmark would be held by both ends of the move.
+    // A simple field may not sit in a revision wrapper, and rdocx resolves no
+    // revision inside one, unless a field deleted or inserted whole around it
+    // goes with it. That holds inside a hyperlink too, whose children the
+    // wrappers go inside. A hyperlink without content has nothing to wrap,
+    // so resolving would leave it behind. A moved paragraph's bookmark would
+    // be held by both ends of the move.
     let plain = r#"<w:p><w:r><w:t>Alpha</w:t></w:r></w:p>"#;
     let last = r#"<w:p><w:r><w:t>Omega</w:t></w:r></w:p>"#;
-    let linked = r#"<w:p><w:r><w:t xml:space="preserve">See </w:t></w:r><w:hyperlink w:anchor="elsewhere"><w:r><w:t>there</w:t></w:r></w:hyperlink></w:p>"#;
     let paged = r#"<w:p><w:r><w:t xml:space="preserve">Page </w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>"#;
+    let linked_field = r#"<w:p><w:hyperlink w:anchor="elsewhere"><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple></w:hyperlink></w:p>"#;
+    let empty_link = r#"<w:p><w:r><w:t xml:space="preserve">See </w:t></w:r><w:hyperlink w:anchor="elsewhere"/></w:p>"#;
     let bookmarked = r#"<w:p><w:bookmarkStart w:id="5" w:name="target"/><w:r><w:t>Moved text</w:t></w:r><w:bookmarkEnd w:id="5"/></w:p>"#;
     let cases = [
-        (
-            "hyperlink inserted",
-            format!("{plain}{last}"),
-            format!("{plain}{linked}{last}"),
-            "hyperlink or simple field outside a field",
-        ),
         (
             "simple field deleted",
             format!("{plain}{paged}{last}"),
             format!("{plain}{last}"),
-            "hyperlink or simple field outside a field",
+            "simple field outside a field",
+        ),
+        (
+            "hyperlink holding a simple field inserted",
+            format!("{plain}{last}"),
+            format!("{plain}{linked_field}{last}"),
+            "simple field outside a field",
+        ),
+        (
+            "empty hyperlink inserted",
+            format!("{plain}{last}"),
+            format!("{plain}{empty_link}{last}"),
+            "empty hyperlink",
         ),
         (
             "bookmarked paragraph moved",
@@ -24106,6 +24114,169 @@ fn comparison_refuses_whole_paragraph_structures_word_cannot_resolve() {
         assert!(error.to_string().contains(message), "{name}: {error}");
         assert_eq!(compared.to_bytes().unwrap(), before, "{name}");
     }
+}
+
+#[test]
+fn comparison_tracks_a_whole_paragraph_holding_a_hyperlink() {
+    // A whole inserted, deleted or moved paragraph that held a hyperlink was
+    // refused, since a revision wrapper may not hold a hyperlink. A hyperlink
+    // may hold revision wrappers, as Word writes a tracked hyperlink run, so
+    // the wrappers go inside it, and resolving drops the hyperlink it empties.
+    let build = |blocks: &str| {
+        let mut document = Document::new();
+        for block in blocks.split('|') {
+            if block == "LINK" {
+                let relationship = document.add_hyperlink_relationship("https://example.com");
+                let mut paragraph = document.add_paragraph("Write to ");
+                paragraph.add_hyperlink("the team", &relationship);
+                paragraph.add_run(" for help.");
+            } else {
+                document.add_paragraph(block);
+            }
+        }
+        document.to_bytes().unwrap()
+    };
+    // Paragraphs separated by `|`, then the revision kinds that mark the
+    // paragraph changes.
+    let cases = [
+        ("inserted", "One.|Two.", "One.|LINK|Two.", "ins"),
+        ("deleted", "One.|LINK|Two.", "One.|Two.", "del"),
+        (
+            "moved",
+            "LINK|One.|Two.|Three.",
+            "One.|Two.|LINK|Three.",
+            "moveFrom moveTo",
+        ),
+        ("appended", "One.|Two.", "One.|Two.|LINK", "ins"),
+        ("last deleted", "One.|Two.|LINK", "One.|Two.", "del"),
+        (
+            "control: edited beside it",
+            "One.|LINK|Two.",
+            "One.|LINK|Two, changed.",
+            "",
+        ),
+    ];
+    let hyperlinks = |xml: &str| xml.matches("<w:hyperlink ").count();
+    for (name, original, edited, kinds) in cases {
+        let (original, edited) = (build(original), build(edited));
+        for options in [
+            rdocx::ComparisonOptions::default(),
+            rdocx::ComparisonOptions {
+                granularity: rdocx::ComparisonGranularity::Word,
+                ..Default::default()
+            },
+            rdocx::ComparisonOptions {
+                granularity: rdocx::ComparisonGranularity::Word,
+                ignore_fields: true,
+                ignore_formatting: true,
+                ..Default::default()
+            },
+        ] {
+            let label = format!("{name} {options:?}");
+            let xml = compare_and_resolve(&original, &edited, &options);
+            for kind in kinds.split_whitespace() {
+                // The paragraph mark carries the change, and each hyperlink
+                // holds its runs inside a wrapper of the same kind.
+                assert!(
+                    xml.contains(&format!("<w:rPr><w:{kind} ")),
+                    "{label}: {xml}"
+                );
+                assert!(
+                    xml.contains(&format!(r#"<w:hyperlink r:id="rId1"><w:{kind} "#)),
+                    "{label}: {xml}"
+                );
+            }
+            for kind in ["ins", "del", "moveFrom", "moveTo"] {
+                for wrapper in xml.split(&format!("<w:{kind} ")).skip(1) {
+                    let wrapper = &wrapper[..wrapper.find(&format!("</w:{kind}>")).unwrap_or(0)];
+                    assert!(!wrapper.contains("<w:hyperlink"), "{label}: {xml}");
+                }
+            }
+            let mut compared = Document::from_bytes(&original).unwrap();
+            compared
+                .compare_with_options(
+                    &Document::from_bytes(&edited).unwrap(),
+                    "Ada",
+                    "2026-09-30T09:30:00Z",
+                    &options,
+                )
+                .unwrap();
+            let tracked = compared.to_bytes().unwrap();
+            let mut accepted = Document::from_bytes(&tracked).unwrap();
+            accepted.accept_all().unwrap();
+            let mut rejected = Document::from_bytes(&tracked).unwrap();
+            rejected.reject_all().unwrap();
+            for (resolved, expected) in [(&mut accepted, &edited), (&mut rejected, &original)] {
+                let mut expected = Document::from_bytes(expected).unwrap();
+                assert_eq!(resolved.text(), expected.text(), "{label}");
+                assert_eq!(
+                    hyperlinks(&document_xml(resolved)),
+                    hyperlinks(&document_xml(&mut expected)),
+                    "{label}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn resolving_away_a_hyperlinks_content_drops_the_hyperlink() {
+    // A hyperlink holds revision wrappers, so resolving them can leave it
+    // without content. Word reads a hyperlink as a field, and an empty one
+    // shows nothing, so the resolution drops it.
+    let paragraph = |link: &str| {
+        wrap_word_body(&format!(
+            r#"<w:p><w:r><w:t>Kept</w:t></w:r>{link}</w:p><w:p><w:r><w:t>Next</w:t></w:r></w:p>"#
+        ))
+    };
+    let deleted = |id: u32, text: &str| {
+        format!(
+            r#"<w:del w:id="{id}" w:author="Ada"><w:r><w:delText>{text}</w:delText></w:r></w:del>"#
+        )
+    };
+    let inserted = r#"<w:ins w:id="3" w:author="Ada"><w:r><w:t>new</w:t></w:r></w:ins>"#;
+    let link = |content: &str| format!(r#"<w:hyperlink w:anchor="target">{content}</w:hyperlink>"#);
+    let cases = [
+        ("deletion accepted", link(&deleted(1, "gone")), true, false),
+        ("insertion rejected", link(inserted), false, false),
+        ("insertion accepted", link(inserted), true, true),
+        ("deletion rejected", link(&deleted(1, "gone")), false, true),
+        (
+            "deletion beside a run accepted",
+            link(&format!(
+                "<w:r><w:t>stays</w:t></w:r>{}",
+                deleted(1, "gone")
+            )),
+            true,
+            true,
+        ),
+    ];
+    for (name, link, accept, kept) in cases {
+        let mut document = document_with_content_controls(&paragraph(&link));
+        if accept {
+            document.accept_all().unwrap();
+        } else {
+            document.reject_all().unwrap();
+        }
+        let xml = document_xml(&mut document);
+        assert_eq!(xml.contains("<w:hyperlink"), kept, "{name}: {xml}");
+        assert!(xml.contains("<w:t>Kept</w:t>"), "{name}: {xml}");
+    }
+
+    // Resolving one of two wrappers keeps the hyperlink, and the second
+    // empties it.
+    let both = link(&format!("{}{}", deleted(1, "first"), deleted(2, "second")));
+    let mut document = document_with_content_controls(&paragraph(&both));
+    assert_eq!(document.accept_revision_id(1).unwrap(), 1);
+    assert!(document_xml(&mut document).contains("<w:hyperlink"));
+    assert_eq!(document.accept_revision_id(2).unwrap(), 1);
+    assert!(!document_xml(&mut document).contains("<w:hyperlink"));
+
+    // A hyperlink that was empty before the resolution stays.
+    let empty = format!(r#"<w:hyperlink w:anchor="target"/>{}"#, deleted(1, "gone"));
+    let mut document = document_with_content_controls(&paragraph(&empty));
+    document.accept_all().unwrap();
+    assert!(document_xml(&mut document).contains(r#"<w:hyperlink w:anchor="target"/>"#));
 }
 
 #[test]
