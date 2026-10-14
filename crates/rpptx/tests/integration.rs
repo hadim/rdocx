@@ -34966,9 +34966,50 @@ fn fx216_existing_notes_master_registration_survives_creation_and_import() {
         + "</p:notesMasterIdLst>".len();
     main.replace_range(begin..end, "");
     legacy.set_part("/ppt/presentation.xml", main.into_bytes());
+    let legacy_note = related_part(&legacy, "/ppt/slides/slide1.xml", rel_types::NOTES_SLIDE);
+    let original_note_xml = legacy.get_part(&legacy_note).unwrap().to_vec();
+    let mut unproven_cases = Vec::new();
+    for mode in ["missing", "duplicate", "external", "different"] {
+        let mut unproven = legacy.clone();
+        let master = related_part(&unproven, &legacy_note, rel_types::NOTES_MASTER);
+        if mode == "different" {
+            let other_master = "/ppt/notesMasters/notesMasterOther.xml";
+            let xml = unproven.get_part(&master).unwrap().to_vec();
+            unproven.set_part(other_master, xml);
+            unproven
+                .content_types
+                .add_override(other_master, content_types::NOTES_MASTER);
+        }
+        let rels = unproven.get_or_create_part_rels(&legacy_note);
+        match mode {
+            "missing" => rels
+                .items
+                .retain(|rel| rel.rel_type != rel_types::NOTES_MASTER),
+            "duplicate" => {
+                let target = rels
+                    .get_by_type(rel_types::NOTES_MASTER)
+                    .unwrap()
+                    .target
+                    .clone();
+                rels.add(rel_types::NOTES_MASTER, &target);
+            }
+            _ => {
+                let rel = rels
+                    .items
+                    .iter_mut()
+                    .find(|rel| rel.rel_type == rel_types::NOTES_MASTER)
+                    .unwrap();
+                if mode == "external" {
+                    rel.target_mode = Some("External".into());
+                } else {
+                    rel.target = "../notesMasters/notesMasterOther.xml".into();
+                }
+            }
+        }
+        unproven_cases.push((mode, unproven));
+    }
     let mut legacy = open_package(legacy).unwrap();
-    let before = legacy.to_bytes().unwrap();
-    let error = legacy
+    legacy
         .import_slides(
             &source,
             &[0],
@@ -34978,14 +35019,33 @@ fn fx216_existing_notes_master_registration_survives_creation_and_import() {
             },
             &[],
         )
-        .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("would change existing notes inheritance"),
-        "{error}"
-    );
-    assert_eq!(legacy.to_bytes().unwrap(), before);
+        .unwrap();
+    let repaired = saved_valid_package(&legacy, "explicit same-master legacy notes import");
+    let main = std::str::from_utf8(repaired.get_part("/ppt/presentation.xml").unwrap()).unwrap();
+    assert_eq!(main.matches("<p:notesMasterId ").count(), 1, "{main}");
+    assert_eq!(repaired.get_part(&legacy_note).unwrap(), original_note_xml);
+    for (mode, unproven) in unproven_cases {
+        let mut unproven = open_package(unproven).unwrap();
+        let before = unproven.to_bytes().unwrap();
+        let error = unproven
+            .import_slides(
+                &source,
+                &[0],
+                &rpptx::ImportSlideOptions {
+                    keep_source_formatting: true,
+                    ..Default::default()
+                },
+                &[],
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("would change existing notes inheritance"),
+            "{mode}: {error}"
+        );
+        assert_eq!(unproven.to_bytes().unwrap(), before, "{mode}");
+    }
     let mut destination = Presentation::new().unwrap();
     destination.add_slide(6).unwrap();
     destination

@@ -7619,16 +7619,34 @@ impl Presentation {
         presentation
             .ensure_notes_master_relationship(&relationship.id)
             .map_err(|error| footer_malformed(&self.presentation_part, error.to_string()))?;
-        if self.slides.iter().any(|slide| slide.notes.is_some())
-            && presentation
-                .to_xml()
-                .map_err(|error| footer_malformed(&self.presentation_part, error.to_string()))?
-                != before
+        if presentation
+            .to_xml()
+            .map_err(|error| footer_malformed(&self.presentation_part, error.to_string()))?
+            != before
         {
-            return Err(footer_malformed(
-                &self.presentation_part,
-                "registering a notes master would change existing notes inheritance",
-            ));
+            for notes in self.slides.iter().filter_map(|slide| slide.notes.as_ref()) {
+                let explicit_same_master = self
+                    .package
+                    .get_part_rels(&notes.part_name)
+                    .is_some_and(|rels| {
+                        let mut masters = rels
+                            .items
+                            .iter()
+                            .filter(|rel| rel.rel_type == rel_types::NOTES_MASTER);
+                        masters.next().is_some_and(|rel| {
+                            matches!(rel.target_mode.as_deref(), None | Some("Internal"))
+                                && OpcPackage::resolve_rel_target(&notes.part_name, &rel.target)
+                                    == *master_part
+                                && masters.next().is_none()
+                        })
+                    });
+                if !explicit_same_master {
+                    return Err(footer_malformed(
+                        &self.presentation_part,
+                        "registering a notes master would change existing notes inheritance",
+                    ));
+                }
+            }
         }
         self.presentation = presentation;
         Ok(())
