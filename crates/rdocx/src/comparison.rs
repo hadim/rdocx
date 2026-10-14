@@ -4529,28 +4529,39 @@ fn merge_unit_runs(units: &[AttributedRunUnit], indices: &[usize]) -> Option<CT_
     Some(merged)
 }
 
+/// The paragraph source with `properties` in place of its own `w:pPr`. A
+/// self-closing paragraph, such as an empty one, is opened first, so the
+/// properties and runs go inside it.
+fn paragraph_with_properties(
+    paragraph: &CT_P,
+    original_source: Option<&str>,
+    properties: &str,
+) -> Result<String> {
+    let mut source = original_source
+        .map(str::to_owned)
+        .map_or_else(|| paragraph_xml(paragraph), Ok)?;
+    // The shell opens a self-closing start tag, which is then the whole source.
+    let (opening, closing) = paragraph_shell(Some(&source))?;
+    if !source.starts_with(&opening) {
+        source = format!("{opening}{closing}");
+    }
+    let property_spans = direct_word_element_spans(&source, "pPr")?;
+    match (property_spans.first(), properties.is_empty()) {
+        (Some(span), false) => source.replace_range(span.clone(), properties),
+        (Some(span), true) => source.replace_range(span.clone(), ""),
+        (None, false) => source.insert_str(opening.len(), properties),
+        (None, true) => {}
+    }
+    Ok(source)
+}
+
 fn replace_paragraph_properties_and_runs(
     paragraph: &CT_P,
     original_source: Option<&str>,
     properties: &str,
     runs: &[String],
 ) -> Result<String> {
-    let mut source = original_source
-        .map(str::to_owned)
-        .map_or_else(|| paragraph_xml(paragraph), Ok)?;
-    let property_spans = direct_word_element_spans(&source, "pPr")?;
-    match (property_spans.first(), properties.is_empty()) {
-        (Some(span), false) => source.replace_range(span.clone(), properties),
-        (Some(span), true) => source.replace_range(span.clone(), ""),
-        (None, false) => {
-            let open = source
-                .find('>')
-                .ok_or_else(|| Error::Other("paragraph XML has no start".to_owned()))?
-                + 1;
-            source.insert_str(open, properties);
-        }
-        (None, true) => {}
-    }
+    let source = paragraph_with_properties(paragraph, original_source, properties)?;
     replace_paragraph_run_elements(paragraph, &source, runs)
 }
 
@@ -4569,22 +4580,7 @@ fn interleave_granular_paragraph(
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
 ) -> Result<String> {
-    let mut source = original_source
-        .map(str::to_owned)
-        .map_or_else(|| paragraph_xml(original), Ok)?;
-    let property_spans = direct_word_element_spans(&source, "pPr")?;
-    match (property_spans.first(), properties.is_empty()) {
-        (Some(span), false) => source.replace_range(span.clone(), properties),
-        (Some(span), true) => source.replace_range(span.clone(), ""),
-        (None, false) => {
-            let open = source
-                .find('>')
-                .ok_or_else(|| Error::Other("paragraph XML has no start".to_owned()))?
-                + 1;
-            source.insert_str(open, properties);
-        }
-        (None, true) => {}
-    }
+    let source = paragraph_with_properties(original, original_source, properties)?;
     let spans = modeled_paragraph_run_spans(original, &source)?;
     if spans.len() != original.runs.len()
         || aligned.len() != replacements.len()

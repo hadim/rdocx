@@ -23858,6 +23858,172 @@ fn compare_and_resolve(
 }
 
 #[test]
+fn comparison_revises_an_empty_paragraph() {
+    // An empty paragraph is written self-closing. A property change or text
+    // inserted into it went after the `<w:p/>` at word granularity, so the
+    // tracked story did not resolve to either version.
+    fn space_after_zero(paragraph: &mut rdocx::Paragraph<'_>) {
+        paragraph.set_space_after(Length::pt(0.0));
+    }
+    fn centred(paragraph: &mut rdocx::Paragraph<'_>) {
+        paragraph.set_alignment(Alignment::Center);
+    }
+    fn unchanged(_: &mut rdocx::Paragraph<'_>) {}
+    let build = |text: &str, format: fn(&mut rdocx::Paragraph<'_>)| {
+        let mut document = Document::new();
+        document.add_paragraph(text);
+        document.add_paragraph("Body.");
+        format(&mut document.paragraph_mut(0).unwrap());
+        document.to_bytes().unwrap()
+    };
+    let resolved = |tracked: &mut Document| {
+        let tracked = tracked.to_bytes().unwrap();
+        let mut accepted = Document::from_bytes(&tracked).unwrap();
+        accepted.accept_all().unwrap();
+        let mut rejected = Document::from_bytes(&tracked).unwrap();
+        rejected.reject_all().unwrap();
+        (accepted, rejected)
+    };
+    for granularity in [
+        rdocx::ComparisonGranularity::Run,
+        rdocx::ComparisonGranularity::Word,
+    ] {
+        let options = rdocx::ComparisonOptions {
+            granularity,
+            ..Default::default()
+        };
+        for (text, format, property) in [
+            (
+                "",
+                space_after_zero as fn(&mut rdocx::Paragraph<'_>),
+                r#"<w:spacing w:after="0"/>"#,
+            ),
+            ("", centred, r#"<w:jc w:val="center"/>"#),
+            // The control: a paragraph with a run is not self-closing.
+            ("x", space_after_zero, r#"<w:spacing w:after="0"/>"#),
+        ] {
+            let label = format!("{granularity:?} {text:?} {property}");
+            let original = build(text, unchanged);
+            let edited = build(text, format);
+            let xml = compare_and_resolve(&original, &edited, &options);
+            let tracked = format!(
+                r#"<w:p><w:pPr>{property}<w:pPrChange w:id="0" w:author="Ada" w:date="2026-09-30T09:30:00Z"><w:pPr/></w:pPrChange></w:pPr>"#
+            );
+            assert!(xml.contains(&tracked), "{label}: {xml}");
+            let mut compared = Document::from_bytes(&original).unwrap();
+            compared
+                .compare_with_options(
+                    &Document::from_bytes(&edited).unwrap(),
+                    "Ada",
+                    "2026-09-30T09:30:00Z",
+                    &options,
+                )
+                .unwrap();
+            let (accepted, rejected) = resolved(&mut compared);
+            let edited = Document::from_bytes(&edited).unwrap();
+            let paragraph = accepted.paragraph(0).unwrap();
+            let wanted = edited.paragraph(0).unwrap();
+            assert_eq!(paragraph.space_after(), wanted.space_after(), "{label}");
+            assert_eq!(paragraph.alignment(), wanted.alignment(), "{label}");
+            let paragraph = rejected.paragraph(0).unwrap();
+            assert_eq!(paragraph.space_after(), None, "{label}");
+            assert_eq!(paragraph.alignment(), None, "{label}");
+        }
+
+        // Text typed into an empty paragraph, alone and with a property change.
+        for format in [unchanged as fn(&mut rdocx::Paragraph<'_>), space_after_zero] {
+            let mut edited = Document::new();
+            edited.add_paragraph("typed");
+            edited.add_paragraph("Body.");
+            format(&mut edited.paragraph_mut(0).unwrap());
+            let xml =
+                compare_and_resolve(&build("", unchanged), &edited.to_bytes().unwrap(), &options);
+            assert!(
+                xml.contains(r#"<w:ins w:id="#) && !xml.contains("<w:p/>"),
+                "{granularity:?}: {xml}"
+            );
+        }
+    }
+
+    // Ignoring formatting leaves the empty paragraph as it was.
+    let options = rdocx::ComparisonOptions {
+        granularity: rdocx::ComparisonGranularity::Word,
+        ignore_formatting: true,
+        ..Default::default()
+    };
+    let mut compared = Document::from_bytes(&build("", unchanged)).unwrap();
+    compared
+        .compare_with_options(
+            &Document::from_bytes(&build("", space_after_zero)).unwrap(),
+            "Ada",
+            "2026-09-30T09:30:00Z",
+            &options,
+        )
+        .unwrap();
+    assert!(compared.revisions().is_empty());
+    let (accepted, _) = resolved(&mut compared);
+    assert_eq!(accepted.paragraph(0).unwrap().space_after(), None);
+}
+
+#[test]
+fn comparison_revises_an_empty_header_paragraph() {
+    let original = document_with_comparison_header("<w:p/>")
+        .to_bytes()
+        .unwrap();
+    let edited =
+        document_with_comparison_header(r#"<w:p><w:pPr><w:spacing w:after="0"/></w:pPr></w:p>"#)
+            .to_bytes()
+            .unwrap();
+    for granularity in [
+        rdocx::ComparisonGranularity::Run,
+        rdocx::ComparisonGranularity::Word,
+    ] {
+        let options = rdocx::ComparisonOptions {
+            granularity,
+            ..Default::default()
+        };
+        let mut compared = Document::from_bytes(&original).unwrap();
+        compared
+            .compare_with_options(
+                &Document::from_bytes(&edited).unwrap(),
+                "Ada",
+                "2026-09-30T09:30:00Z",
+                &options,
+            )
+            .unwrap_or_else(|error| panic!("{granularity:?}: {error}"));
+        let header = comparison_part_xml(&mut compared, "/word/header1.xml");
+        assert!(
+            header.contains(
+                r#"<w:p><w:pPr><w:spacing w:after="0"/><w:pPrChange w:id="0" w:author="Ada" w:date="2026-09-30T09:30:00Z"><w:pPr/></w:pPrChange></w:pPr></w:p>"#
+            ),
+            "{granularity:?}: {header}"
+        );
+        let tracked = compared.to_bytes().unwrap();
+        for (resolve, wanted) in [
+            (Document::accept_all as fn(&mut Document) -> _, &edited),
+            (Document::reject_all, &original),
+        ] {
+            let mut resolved = Document::from_bytes(&tracked).unwrap();
+            resolve(&mut resolved).unwrap();
+            let mut wanted = Document::from_bytes(wanted).unwrap();
+            assert!(
+                resolved
+                    .compare(&wanted, "postcondition", "2026-09-30T09:31:00Z")
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                comparison_part_xml(&mut resolved, "/word/header1.xml")
+                    .contains(r#"<w:spacing w:after="0"/>"#),
+                comparison_part_xml(&mut wanted, "/word/header1.xml")
+                    .contains(r#"<w:spacing w:after="0"/>"#),
+                "{granularity:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn comparison_tracks_a_rebuilt_table_of_contents() {
     // The rebuild moves the field begin into a paragraph of its own, writes
     // each entry with a PAGEREF field, as a hyperlink under `\h`, and
