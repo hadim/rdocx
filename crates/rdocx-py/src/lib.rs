@@ -4,6 +4,7 @@ mod document;
 mod formatting;
 mod paragraph;
 mod run;
+mod story;
 mod table;
 
 use pyo3::exceptions::{PyAttributeError, PyIndexError, PyRuntimeError};
@@ -22,6 +23,9 @@ use document::{
 use formatting::{PyFont, PyParagraphFormat};
 use paragraph::{PyParagraph, PyParagraphCollection};
 use run::{PyRun, PyRunCollection};
+use story::{
+    PyHeaderFooter, PyHeaderFooterCell, PyHeaderFooterRow, PyHeaderFooterTable, PySettings,
+};
 use table::{
     PyCell, PyCellCollection, PyCellParagraphCollection, PyRow, PyRowCollection, PyTable,
     PyTableCollection,
@@ -114,11 +118,6 @@ const DIVERGENCES: &[(&str, &str, &str)] = &[
         "add_picture",
         "use document.add_picture(data, filename, width, height), which adds a paragraph holding the picture",
     ),
-    (
-        "Run",
-        "add_break",
-        "use document.add_page_break(), or paragraph.paragraph_format.page_break_before = True",
-    ),
     ("Run", "add_text", "use run.text = run.text + text"),
     ("Run", "clear", "use run.text = ''"),
     (
@@ -130,26 +129,6 @@ const DIVERGENCES: &[(&str, &str, &str)] = &[
         "Cell",
         "merge",
         "use table.set_cell_grid_span(row, col, span) to merge across and table.set_cell_vertical_merge(row, col, 'restart' or 'continue') to merge down",
-    ),
-    (
-        "Section",
-        "header",
-        "use document.set_header(text), or document.create_section_story(section, 'header', 'default') and its story items",
-    ),
-    (
-        "Section",
-        "footer",
-        "use document.set_footer(text), or document.create_section_story(section, 'footer', 'default') and its story items",
-    ),
-    (
-        "Section",
-        "first_page_header",
-        "use document.create_section_story(section, 'header', 'first')",
-    ),
-    (
-        "Section",
-        "first_page_footer",
-        "use document.create_section_story(section, 'footer', 'first')",
     ),
     (
         "Section",
@@ -190,11 +169,6 @@ const DIVERGENCES: &[(&str, &str, &str)] = &[
         "Document",
         "inline_shapes",
         "use document.story_items to find drawings and document.set_picture_size(relationship_id, width, height) to resize one",
-    ),
-    (
-        "Document",
-        "settings",
-        "use document.update_fields_on_open for the setting rdocx exposes",
     ),
 ];
 
@@ -386,6 +360,11 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCell>()?;
     module.add_class::<PyCellCollection>()?;
     module.add_class::<PyCellParagraphCollection>()?;
+    module.add_class::<PyHeaderFooter>()?;
+    module.add_class::<PyHeaderFooterTable>()?;
+    module.add_class::<PyHeaderFooterRow>()?;
+    module.add_class::<PyHeaderFooterCell>()?;
+    module.add_class::<PySettings>()?;
     Ok(())
 }
 

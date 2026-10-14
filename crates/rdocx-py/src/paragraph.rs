@@ -19,6 +19,11 @@ pub(crate) enum ParagraphLocation {
         cell: usize,
         paragraph: usize,
     },
+    /// A paragraph of a section's header or footer.
+    Story {
+        slot: crate::story::StorySlot,
+        at: rdocx::HeaderFooterParagraph,
+    },
 }
 
 pub(crate) fn paragraph_location(path: &ContentPath) -> PyResult<ParagraphLocation> {
@@ -43,6 +48,23 @@ pub(crate) fn paragraph_location(path: &ContentPath) -> PyResult<ParagraphLocati
         PathSeg::Cell(index) => Some(*index),
         _ => None,
     });
+    let story = path.segs.iter().find_map(|segment| match segment {
+        PathSeg::Story(code) => Some(crate::story::StorySlot::from_segment(*code)),
+        _ => None,
+    });
+    if let Some(slot) = story {
+        let at = match (table, row, cell) {
+            (Some(table), Some(row), Some(cell)) => rdocx::HeaderFooterParagraph::Cell {
+                table,
+                row,
+                cell,
+                paragraph,
+            },
+            (None, None, None) => rdocx::HeaderFooterParagraph::Direct(paragraph),
+            _ => return Err(PyRuntimeError::new_err("paragraph path is incomplete")),
+        };
+        return Ok(ParagraphLocation::Story { slot, at });
+    }
     match (table, row, cell) {
         (Some(table), Some(row), Some(cell)) => Ok(ParagraphLocation::Cell {
             table,
@@ -56,8 +78,8 @@ pub(crate) fn paragraph_location(path: &ContentPath) -> PyResult<ParagraphLocati
 }
 
 /// The raw XML address of the paragraph at `location`.
-pub(crate) fn xml_paragraph(location: ParagraphLocation) -> rdocx::XmlParagraph {
-    match location {
+pub(crate) fn xml_paragraph(location: ParagraphLocation) -> PyResult<rdocx::XmlParagraph> {
+    Ok(match location {
         ParagraphLocation::Body(index) => rdocx::XmlParagraph::Body(index),
         ParagraphLocation::Cell {
             table,
@@ -70,7 +92,12 @@ pub(crate) fn xml_paragraph(location: ParagraphLocation) -> rdocx::XmlParagraph 
             cell,
             paragraph,
         },
-    }
+        ParagraphLocation::Story { .. } => {
+            return Err(PyNotImplementedError::new_err(
+                "raw XML works on body and table-cell paragraphs, not yet in a header or footer",
+            ));
+        }
+    })
 }
 
 /// Find the style a value names among `styles` of `style_type`, or among
@@ -235,6 +262,7 @@ impl PyParagraph {
             } => format!(
                 "Re-fetch it with doc.tables[{table}].rows[{row}].cells[{cell}].paragraphs[{paragraph}]."
             ),
+            ParagraphLocation::Story { slot, at } => slot.recovery_hint(at),
         };
         self.document
             .borrow(py)
@@ -257,6 +285,8 @@ impl PyParagraph {
                     // Check the paragraph first, so a failure leaves no
                     // orphaned relationship behind.
                     let exists = match location {
+                        // The story relationship call below checks it.
+                        ParagraphLocation::Story { .. } => true,
                         ParagraphLocation::Body(index) => document.inner.paragraph(index).is_some(),
                         ParagraphLocation::Cell {
                             table,
@@ -272,7 +302,13 @@ impl PyParagraph {
                     if !exists {
                         return Err(PyIndexError::new_err("paragraph index out of range"));
                     }
-                    Some(document.inner.add_hyperlink_relationship(url))
+                    Some(match location {
+                        // A header or footer part owns its own relationships.
+                        ParagraphLocation::Story { slot, at } => {
+                            crate::story::hyperlink_relationship(py, &mut document, slot, at, url)?
+                        }
+                        _ => document.inner.add_hyperlink_relationship(url),
+                    })
                 }
                 None => None,
             };
@@ -292,6 +328,10 @@ impl PyParagraph {
                 (run_index, run_path)
             };
             let (run_index, run_path) = match location {
+                ParagraphLocation::Story { slot, at } => {
+                    crate::story::edit_paragraph(py, &mut document, slot, at, append)?
+                        .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+                }
                 ParagraphLocation::Body(index) => append(
                     &mut document
                         .inner
@@ -377,6 +417,9 @@ impl PyParagraph {
                     expect,
                 )
             }),
+            ParagraphLocation::Story { slot, at } => {
+                crate::story::replace_text(py, &mut document, slot, at, old, new, expect)
+            }
         }
     }
 
@@ -398,6 +441,9 @@ impl PyParagraph {
                 let cell = table.cell(row, cell)?;
                 cell.paragraph(paragraph).map(|paragraph| paragraph.text())
             }),
+            ParagraphLocation::Story { slot, at } => {
+                crate::story::read_paragraph(py, &document, slot, at, |paragraph| paragraph.text())?
+            }
         }
         .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
     }
@@ -434,6 +480,12 @@ impl PyParagraph {
                     .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
                     .set_text(text)
             }
+            ParagraphLocation::Story { slot, at } => {
+                crate::story::edit_paragraph(py, &mut document, slot, at, |paragraph| {
+                    paragraph.set_text(text)
+                })?
+                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+            }
         };
         result.map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         document.bump_edit("Paragraph.text", EditScope::Below(resolved.segs));
@@ -468,6 +520,12 @@ impl PyParagraph {
                 cell.paragraph(paragraph)
                     .and_then(|paragraph| paragraph.alignment())
             }),
+            ParagraphLocation::Story { slot, at } => {
+                crate::story::read_paragraph(py, &document, slot, at, |paragraph| {
+                    paragraph.alignment()
+                })?
+                .flatten()
+            }
         };
         alignment
             .map(|value| {
@@ -510,6 +568,12 @@ impl PyParagraph {
                     .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
                     .set_alignment_value(value);
             }
+            ParagraphLocation::Story { slot, at } => {
+                crate::story::edit_paragraph(py, &mut document, slot, at, |paragraph| {
+                    paragraph.set_alignment_value(value)
+                })?
+                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
+            }
         }
         Ok(())
     }
@@ -517,7 +581,7 @@ impl PyParagraph {
     /// This paragraph's `w:p` element as standalone XML bytes.
     #[getter]
     fn xml<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-        let target = rdocx::XmlTarget::Paragraph(xml_paragraph(self.validate(py)?));
+        let target = rdocx::XmlTarget::Paragraph(xml_paragraph(self.validate(py)?)?);
         let xml = self
             .document
             .borrow(py)
@@ -532,7 +596,7 @@ impl PyParagraph {
     fn replace_xml(&self, py: Python<'_>, xml: &Bound<'_, PyAny>) -> PyResult<()> {
         let xml = raw_xml_argument(xml)?;
         let resolved = self.resolved(py)?;
-        let target = rdocx::XmlTarget::Paragraph(xml_paragraph(paragraph_location(&resolved)?));
+        let target = rdocx::XmlTarget::Paragraph(xml_paragraph(paragraph_location(&resolved)?)?);
         let mut document = self.document.borrow_mut(py);
         document
             .inner

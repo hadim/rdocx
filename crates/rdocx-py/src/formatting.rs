@@ -216,6 +216,12 @@ pub(crate) fn run_snapshot(
             let paragraph = cell.paragraph(paragraph)?;
             paragraph.run(run_index).map(FontSnapshot::from_run)
         }),
+        ParagraphLocation::Story { slot, at } => {
+            crate::story::read_paragraph(py, &document, slot, at, |paragraph| {
+                paragraph.run(run_index).map(FontSnapshot::from_run)
+            })?
+            .flatten()
+        }
     };
     snapshot.ok_or_else(|| PyIndexError::new_err("run index out of range"))
 }
@@ -258,6 +264,13 @@ pub(crate) fn apply_run_update(
             paragraph
                 .edit_run(run_path, |run| update.apply(run))
                 .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        }
+        ParagraphLocation::Story { slot, at } => {
+            crate::story::edit_paragraph(py, &mut document, slot, at, |paragraph| {
+                paragraph.edit_run(run_path, |run| update.apply(run))
+            })?
+            .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         }
     }
     Ok(())
@@ -577,6 +590,13 @@ pub(crate) fn paragraph_snapshot(
             cell.paragraph(paragraph)
                 .map(ParagraphSnapshot::from_paragraph)
         }),
+        ParagraphLocation::Story { slot, at } => crate::story::read_paragraph(
+            py,
+            &document,
+            slot,
+            at,
+            ParagraphSnapshot::from_paragraph,
+        )?,
     };
     snapshot.ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
 }
@@ -614,6 +634,12 @@ pub(crate) fn apply_paragraph_update(
                 .paragraph_mut(paragraph)
                 .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
             update.apply(&mut paragraph);
+        }
+        ParagraphLocation::Story { slot, at } => {
+            crate::story::edit_paragraph(py, &mut document, slot, at, |paragraph| {
+                update.apply(paragraph)
+            })?
+            .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
         }
     }
     Ok(())

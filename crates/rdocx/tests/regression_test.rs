@@ -45850,7 +45850,7 @@ fn footnote_removal_clears_references_atomically() {
     let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
     assert!(!body.contains(&format!("footnoteReference w:id=\"{first}\"")));
     assert!(body.contains(&format!("footnoteReference w:id=\"{second}\"")));
-    assert_eq!(document.footnotes(), vec![(second, "second".to_owned())]);
+    assert_eq!(document.footnotes(), vec![(second, " second".to_owned())]);
 }
 
 #[test]
@@ -46375,9 +46375,11 @@ fn f276_complete_dependency_source() -> Document {
         );
     package.set_part("/word/styles.xml", styles.into_bytes());
     let binding = r#"<w:sdt><w:sdtPr><w:dataBinding w:storeItemID="{11111111-1111-1111-1111-111111111111}" w:xpath="/root"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>combined binding</w:t></w:r></w:p></w:sdtContent></w:sdt>"#;
-    let notes = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap())
-        .unwrap()
-        .replacen("</w:footnote>", &format!("{binding}</w:footnote>"), 1);
+    let notes = replace_in_first_normal_note(
+        std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap(),
+        "</w:footnote>",
+        &format!("{binding}</w:footnote>"),
+    );
     package.set_part("/word/footnotes.xml", notes.into_bytes());
     package.set_part(
         "/customXml/item276.xml",
@@ -46985,9 +46987,16 @@ fn fragment_import_remaps_nested_note_references_and_companion_bindings() {
         .unwrap()
         .replacen("</w:comment>", &format!("{comment_binding}</w:comment>"), 1);
     package.set_part("/word/comments.xml", comments.into_bytes());
-    let footnotes = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap()
-        .replacen("<w:p>", &format!("<w:p><w:pPr><w:pStyle w:val=\"NoteOnly\"/><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"{list}\"/></w:numPr></w:pPr>"), 1)
+    // The edits target the first normal note, after the separator records.
+    let footnotes = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap();
+    let start = footnotes.find(&format!("w:id=\"{first}\"")).unwrap();
+    let footnotes = footnotes[start..].to_owned();
+    let footnotes = footnotes
+        .replacen("<w:pStyle w:val=\"FootnoteText\"/>", &format!("<w:pStyle w:val=\"NoteOnly\"/><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"{list}\"/></w:numPr>"), 1)
         .replacen("</w:footnote>", &format!("<w:p><w:r><w:footnoteReference w:id=\"{second}\"/><w:endnoteReference w:id=\"{endnote}\"/></w:r></w:p>{binding}{marker}<w:p>{anchors}</w:p></w:footnote>"), 1);
+    let source_footnotes =
+        std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap();
+    let footnotes = format!("{}{footnotes}", &source_footnotes[..start]);
     let offset = footnotes.find("second companion").unwrap();
     let footnotes = format!(
         "{}{}",
@@ -47361,9 +47370,11 @@ fn fragment_import_numbering_maps_do_not_cascade_across_companions() {
         ("/word/footnotes.xml", "</w:footnote>"),
         ("/word/comments.xml", "</w:comment>"),
     ] {
-        let xml = std::str::from_utf8(package.get_part(part).unwrap())
-            .unwrap()
-            .replacen(end, &format!("{numbered}{end}"), 1);
+        let xml = replace_in_first_normal_note(
+            std::str::from_utf8(package.get_part(part).unwrap()).unwrap(),
+            end,
+            &format!("{numbered}{end}"),
+        );
         package.set_part(part, xml.into_bytes());
     }
     let mut bytes = std::io::Cursor::new(Vec::new());
@@ -47550,16 +47561,14 @@ fn fragment_import_store_allocation_reserves_incoming_companion_identities() {
             1,
         );
     package.set_part("/word/document.xml", xml.into_bytes());
-    let xml = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap())
-        .unwrap()
-        .replacen(
-            "</w:footnote>",
-            &format!(
-                "{}</w:footnote>",
-                binding("f2760000-0000-4000-8000-000000000001", "second store")
-            ),
-            1,
-        );
+    let xml = replace_in_first_normal_note(
+        std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap(),
+        "</w:footnote>",
+        &format!(
+            "{}</w:footnote>",
+            binding("f2760000-0000-4000-8000-000000000001", "second store")
+        ),
+    );
     package.set_part("/word/footnotes.xml", xml.into_bytes());
     for (ordinal, id) in [(1, original), (2, companion)] {
         let item = format!("/customXml/itemF276{ordinal}.xml");
@@ -47650,6 +47659,26 @@ fn fragment_import_store_allocation_reserves_incoming_companion_identities() {
     );
 }
 
+/// `xml` with its first `needle` from the first normal note on replaced,
+/// past the separator records that a created note brings. A part without
+/// notes, such as the comments, is searched from its start.
+fn replace_in_first_normal_note(xml: &str, needle: &str, replacement: &str) -> String {
+    let start = ["<w:footnote ", "<w:endnote "]
+        .iter()
+        .flat_map(|tag| xml.match_indices(tag).map(|(index, _)| index))
+        .filter(|&index| {
+            let open = &xml[index..];
+            !open[..open.find('>').unwrap()].contains("w:type=")
+        })
+        .min()
+        .unwrap_or(0);
+    format!(
+        "{}{}",
+        &xml[..start],
+        xml[start..].replacen(needle, replacement, 1)
+    )
+}
+
 #[test]
 fn rich_merge_rejects_companion_external_edges_while_fragment_import_preserves_them() {
     for part in ["/word/comments.xml", "/word/footnotes.xml"] {
@@ -47684,7 +47713,13 @@ fn rich_merge_rejects_companion_external_edges_while_fragment_import_preserves_t
             oxml_opc::relationship::rel_types::HYPERLINK,
             "https://example.test/companion",
         );
-        let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap().replacen("</w:p>", &format!(r#"<w:hyperlink xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="{id}"><w:r><w:t>companion link</w:t></w:r></w:hyperlink></w:p>"#), 1);
+        let xml = replace_in_first_normal_note(
+            std::str::from_utf8(package.get_part(part).unwrap()).unwrap(),
+            "</w:p>",
+            &format!(
+                r#"<w:hyperlink xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="{id}"><w:r><w:t>companion link</w:t></w:r></w:hyperlink></w:p>"#
+            ),
+        );
         package.set_part(part, xml.into_bytes());
         let mut bytes = std::io::Cursor::new(Vec::new());
         package.write_to(&mut bytes).unwrap();

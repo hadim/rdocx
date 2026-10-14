@@ -85,6 +85,13 @@ class Pt(Length):
         return super().__new__(cls, int(points * cls._EMUS_PER_PT))
 
 
+class Twips(Length):
+    """A length constructed from twips, the twentieths of a point Word stores."""
+
+    def __new__(cls, twips: float) -> "Twips":
+        return super().__new__(cls, int(twips * cls._EMUS_PER_TWIP))
+
+
 class Emu(Length):
     """A length constructed directly from English Metric Units."""
 
@@ -166,4 +173,4 @@ class _Styles(tuple[Any, ...]):
         return super().__contains__(key)
 
 
-__all__ = ["Length", "Inches", "Cm", "Mm", "Pt", "Emu", "RGBColor"]
+__all__ = ["Length", "Inches", "Cm", "Mm", "Pt", "Twips", "Emu", "RGBColor"]
