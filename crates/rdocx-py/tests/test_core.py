@@ -149,7 +149,11 @@ def test_revision_style_colours_only_the_tracked_view():
         plain = render(revision_view="tracked")
         assert plain == render(revision_view="tracked", revision_style="plain")
         assert plain != render(revision_view="tracked", revision_style="legal")
-        assert render() == render(revision_style="legal")
+        assert render() == render(revision_style="plain")
+        refused = 'revision_style applies only with revision_view="tracked"'
+        for view in ({}, {"revision_view": "accepted"}):
+            with pytest.raises(ValueError, match=refused):
+                render(revision_style="legal", **view)
         with pytest.raises(ValueError, match="unknown revision style"):
             render(revision_view="tracked", revision_style="color")
 

@@ -4138,7 +4138,8 @@ impl PyDocument {
 
     /// Render the document to PDF bytes. `revision_view="tracked"` shows both
     /// sides of tracked changes, and `revision_style="legal"` draws them in
-    /// colour: insertions blue, deletions red, moves green.
+    /// colour: insertions blue, deletions red, moves green. A style other
+    /// than `"plain"` needs `revision_view="tracked"`.
     #[pyo3(signature = (*, fonts = None, font_dir = None, revision_view = "accepted", revision_style = "plain"))]
     fn to_pdf<'py>(
         &self,
@@ -6760,6 +6761,13 @@ fn parse_render_options(
             )));
         }
     };
+    if revision_style != rdocx::RevisionStyle::Plain
+        && revision_view != rdocx::RevisionView::Tracked
+    {
+        return Err(PyValueError::new_err(
+            "revision_style applies only with revision_view=\"tracked\"",
+        ));
+    }
     Ok(rdocx::RenderOptions {
         revision_view,
         revision_style,

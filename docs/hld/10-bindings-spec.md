@@ -2625,8 +2625,8 @@ paths. The existing methods keep their accepted default. Python `to_pdf`,
 `revision_view` of `"accepted"` or `"tracked"`, with `"accepted"` as the
 default, and a keyword-only `revision_style` of `"plain"` or `"legal"`, with
 `"plain"` as the default, which `rdocx::RevisionStyle` and
-`RenderOptions::revision_style` carry. Any other value raises `ValueError`. The
-style changes only the tracked view. CLI `convert` for PDF and image
+`RenderOptions::revision_style` carry. Any other value raises `ValueError`, and
+so does a style other than `"plain"` without `revision_view="tracked"`. CLI `convert` for PDF and image
 formats and `render` take `--revision-view accepted` or
 `--revision-view tracked`, with `accepted` as the default, and
 `--revision-style plain` or `--revision-style legal`, with `plain` as the
