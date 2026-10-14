@@ -3245,6 +3245,19 @@ fn compare_body(
         })
         .map(|(position, _)| position)
         .last();
+    let trailing_paragraph_delete_start = aligned
+        .iter()
+        .enumerate()
+        .rev()
+        .take_while(|(_, (left, right))| {
+            right.is_none()
+                && left.is_some_and(|index| {
+                    moves.original[index].is_none()
+                        && matches!(original.body.content[index], BodyContent::Paragraph(_))
+                })
+        })
+        .map(|(position, _)| position)
+        .last();
     let mut output: Vec<(EmittedOwner, String)> = Vec::new();
     let mut trailing_merged = None;
     for (position, (original_index, edited_index)) in aligned.iter().copied().enumerate() {
@@ -3308,6 +3321,26 @@ fn compare_body(
                             EmittedOwner::of(content, content, None),
                             moved_body_content(content, "moveFrom", id, metadata)?,
                         ));
+                    }
+                } else if let BodyContent::Paragraph(paragraph) = content
+                    && trailing_paragraph_delete_start.is_some_and(|start| position >= start)
+                {
+                    if trailing_paragraph_delete_start == Some(position) {
+                        trailing_merged = mark_previous_paragraph(&mut output, "del", metadata)?;
+                    }
+                    if next_is_paragraph {
+                        output.push((
+                            EmittedOwner::of(content, content, Some("del")),
+                            deleted_body_content(content, metadata)?,
+                        ));
+                    } else {
+                        output.push(final_paragraph(
+                            paragraph,
+                            "del",
+                            None,
+                            trailing_merged,
+                            metadata,
+                        )?);
                     }
                 } else if let BodyContent::Paragraph(paragraph) = content
                     && !next_is_paragraph
@@ -6175,6 +6208,18 @@ fn compare_control_from_xml(
         })
         .map(|(position, _)| position)
         .last();
+    let trailing_paragraph_delete_start = aligned
+        .iter()
+        .enumerate()
+        .rev()
+        .take_while(|(_, (left, right))| {
+            right.is_none()
+                && left
+                    .and_then(|index| original_content.get(index))
+                    .is_some_and(|content| matches!(content, SdtContent::Paragraph(_)))
+        })
+        .map(|(position, _)| position)
+        .last();
     let content_spans = direct_word_element_spans(original_xml, "sdtContent")?;
     let content_span = content_spans.first().ok_or_else(|| {
         Error::Other(format!(
@@ -6231,6 +6276,26 @@ fn compare_control_from_xml(
             )),
             (Some(i), None) => {
                 if let SdtContent::Paragraph(paragraph) = original_content[i]
+                    && trailing_paragraph_delete_start.is_some_and(|start| position >= start)
+                {
+                    if trailing_paragraph_delete_start == Some(position) {
+                        trailing_merged = mark_previous_paragraph(&mut content, "del", metadata)?;
+                    }
+                    if next_is_paragraph {
+                        content.push((
+                            EmittedOwner::paragraph(paragraph, paragraph),
+                            marked_control_content(original_content[i], "del", metadata)?,
+                        ));
+                    } else {
+                        content.push(final_paragraph(
+                            paragraph,
+                            "del",
+                            None,
+                            trailing_merged,
+                            metadata,
+                        )?);
+                    }
+                } else if let SdtContent::Paragraph(paragraph) = original_content[i]
                     && !next_is_paragraph
                 {
                     let merged = mark_previous_paragraph(&mut content, "del", metadata)?;

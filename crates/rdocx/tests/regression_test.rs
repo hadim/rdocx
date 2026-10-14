@@ -24024,6 +24024,116 @@ fn comparison_revises_an_empty_header_paragraph() {
 }
 
 #[test]
+fn comparison_deletes_several_final_paragraphs() {
+    // The last deleted paragraph of a story keeps its mark, and the mark of
+    // the paragraph before the deleted ones carries the deletion. That mark
+    // went to the deleted paragraph just before the last one, already
+    // deleted whole, so accepting kept an empty paragraph.
+    const BREAK: &str = "<w:p><w:r><w:br/></w:r></w:p>";
+    let paragraph = |text: &str| format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>");
+    let centred = r#"<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>kept</w:t></w:r></w:p>"#;
+    let control = |paragraphs: &[String]| {
+        format!(
+            "<w:sdt><w:sdtContent>{}</w:sdtContent></w:sdt>{}",
+            paragraphs.concat(),
+            paragraph("After the control.")
+        )
+    };
+    let bytes = |body: &str| {
+        document_with_content_controls(&wrap_word_body(body))
+            .to_bytes()
+            .unwrap()
+    };
+    let cases = [
+        (
+            [BREAK.to_owned(), BREAK.to_owned(), paragraph("Heading.")].concat(),
+            BREAK.to_owned(),
+        ),
+        (
+            [paragraph("x"), paragraph("y"), paragraph("z")].concat(),
+            paragraph("x"),
+        ),
+        (
+            [centred.to_owned(), paragraph("y"), paragraph("z")].concat(),
+            centred.to_owned(),
+        ),
+        (
+            control(&[paragraph("x"), paragraph("y"), paragraph("z")]),
+            control(&[paragraph("x")]),
+        ),
+        // The controls: one deleted final paragraph.
+        ([BREAK, BREAK].concat(), BREAK.to_owned()),
+        (
+            [BREAK.to_owned(), paragraph("Heading.")].concat(),
+            BREAK.to_owned(),
+        ),
+    ];
+    for (original, edited) in cases {
+        for options in [
+            rdocx::ComparisonOptions::default(),
+            rdocx::ComparisonOptions {
+                granularity: rdocx::ComparisonGranularity::Word,
+                ..Default::default()
+            },
+            rdocx::ComparisonOptions {
+                granularity: rdocx::ComparisonGranularity::Word,
+                ignore_fields: true,
+                ignore_formatting: true,
+                ..Default::default()
+            },
+        ] {
+            let (original, edited) = (bytes(&original), bytes(&edited));
+            let xml = compare_and_resolve(&original, &edited, &options);
+            // The mark of the kept paragraph carries the deletion, and no
+            // paragraph mark is deleted twice.
+            let kept = &xml[xml.find("<w:p>").unwrap()..];
+            assert!(
+                kept[..kept.find("</w:p>").unwrap()].contains("<w:rPr><w:del "),
+                "{options:?}: {xml}"
+            );
+            assert!(!xml.contains(r#"/><w:del w:id="#), "{options:?}: {xml}");
+            if options.ignore_formatting {
+                continue;
+            }
+            // The kept paragraph merges into the final mark with its own
+            // properties, which rejecting gives back to each paragraph.
+            let mut compared = Document::from_bytes(&original).unwrap();
+            compared
+                .compare_with_options(
+                    &Document::from_bytes(&edited).unwrap(),
+                    "Ada",
+                    "2026-09-30T09:30:00Z",
+                    &options,
+                )
+                .unwrap();
+            let tracked = compared.to_bytes().unwrap();
+            let mut accepted = Document::from_bytes(&tracked).unwrap();
+            accepted.accept_all().unwrap();
+            let edited = Document::from_bytes(&edited).unwrap();
+            assert_eq!(
+                accepted.paragraph(0).unwrap().alignment(),
+                edited.paragraph(0).unwrap().alignment(),
+                "{options:?}"
+            );
+            let mut rejected = Document::from_bytes(&tracked).unwrap();
+            rejected.reject_all().unwrap();
+            let original = Document::from_bytes(&original).unwrap();
+            for index in 0..3 {
+                assert_eq!(
+                    rejected
+                        .paragraph(index)
+                        .map(|paragraph| paragraph.alignment()),
+                    original
+                        .paragraph(index)
+                        .map(|paragraph| paragraph.alignment()),
+                    "{options:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn comparison_tracks_a_rebuilt_table_of_contents() {
     // The rebuild moves the field begin into a paragraph of its own, writes
     // each entry with a PAGEREF field, as a hyperlink under `\h`, and
