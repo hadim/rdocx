@@ -9,6 +9,7 @@ from .enum import text as _text
 
 _Path = str | _os.PathLike[str]
 _RevisionView = _Literal["accepted", "tracked"]
+_RevisionStyle = _Literal["plain", "legal"]
 _Xml = str | bytes | bytearray
 _BorderStyle = _Literal[
     "none", "single", "thick", "double", "dotted", "dashed", "dotDash", "wave"
@@ -621,6 +622,7 @@ class Document:
         fonts: _Sequence[tuple[str, bytes]] | None = None,
         font_dir: _Path | None = None,
         revision_view: _RevisionView = "accepted",
+        revision_style: _RevisionStyle = "plain",
     ) -> bytes:
         """Render the document to PDF bytes.
 
@@ -630,13 +632,41 @@ class Document:
         ``rdocx convert --font-dir`` does, so a family they do not provide
         raises ``LayoutError``. A missing ``font_dir`` raises
         ``FileNotFoundError``.
+
+        ``revision_view="tracked"`` shows both sides of tracked changes, and
+        ``revision_style`` how it marks them: ``"plain"`` underlines
+        insertions and strikes deletions through in the text colour, and
+        ``"legal"`` draws insertions blue with a double underline, deletions
+        red, and moved text green, with change bars in the same colours. The
+        accepted view marks nothing. An unknown value raises ``ValueError``.
         """
     def to_pdfa_deterministic(
         self, profile: _Literal["pdfa-2b", "pdfa-3b"] = "pdfa-2b"
     ) -> bytes: ...
-    def render_page_to_png(self, page_index: int, dpi: float = 150.0, *, revision_view: _RevisionView = "accepted") -> bytes | None: ...
+    def render_page_to_png(
+        self,
+        page_index: int,
+        dpi: float = 150.0,
+        *,
+        revision_view: _RevisionView = "accepted",
+        revision_style: _RevisionStyle = "plain",
+    ) -> bytes | None:
+        """Render one page to PNG bytes, ``None`` past the last page.
+
+        ``revision_view`` and ``revision_style`` are those of ``to_pdf``.
+        """
     def render_page_to_svg(self, page_index: int) -> SvgRenderResult | None: ...
-    def render_all_pages(self, dpi: float = 150.0, *, revision_view: _RevisionView = "accepted") -> list[bytes]: ...
+    def render_all_pages(
+        self,
+        dpi: float = 150.0,
+        *,
+        revision_view: _RevisionView = "accepted",
+        revision_style: _RevisionStyle = "plain",
+    ) -> list[bytes]:
+        """Render every page to PNG bytes.
+
+        ``revision_view`` and ``revision_style`` are those of ``to_pdf``.
+        """
     def render_pages(
         self,
         *,
@@ -646,7 +676,12 @@ class Document:
         transparent: bool = False,
         pages: list[int] | None = None,
         revision_view: _RevisionView = "accepted",
-    ) -> list[bytes] | bytes: ...
+        revision_style: _RevisionStyle = "plain",
+    ) -> list[bytes] | bytes:
+        """Render pages to PNG, JPEG or TIFF.
+
+        ``revision_view`` and ``revision_style`` are those of ``to_pdf``.
+        """
     def compare(
         self,
         edited: Document,

@@ -1442,6 +1442,7 @@ mod tests {
             math_properties: None,
             note_defaults: [None, None],
             revision_view: crate::RevisionView::Accepted,
+            revision_style: crate::RevisionStyle::Plain,
             styles: CT_Styles::new_default(),
             numbering: None,
             story_part_names: Default::default(),

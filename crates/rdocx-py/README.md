@@ -70,7 +70,9 @@ with open("report.pdf", "wb") as output:
 - Deterministic layout fragments, page geometry, and PDF, PDF/A, SVG, PNG,
   JPEG, and TIFF output through the native document engine, with caller fonts
   or a font directory for PDF. PDF and raster methods accept keyword-only
-  `revision_view="tracked"` to show tracked changes.
+  `revision_view="tracked"` to show tracked changes, and
+  `revision_style="legal"` to colour them: insertions blue, deletions red,
+  moved text green.
 - The python-docx calls a first draft reaches for: `add_heading`,
   `add_page_break`, `add_paragraph(text, style=...)` with python-docx's list
   styles such as `'List Bullet'` added on demand, `add_table(..., style=...)`,

@@ -65,6 +65,10 @@ enum Command {
         /// Revision view for PDF and image output
         #[arg(long, default_value = "accepted", value_parser = commands::parse_revision_view)]
         revision_view: rdocx::RevisionView,
+        /// How the tracked view marks revisions: plain, or legal for blue
+        /// insertions, red deletions and green moves
+        #[arg(long, default_value = "plain", value_parser = commands::parse_revision_style)]
+        revision_style: rdocx::RevisionStyle,
         /// One-based page range for image output, such as 1,3-5
         #[arg(long)]
         pages: Option<String>,
@@ -143,6 +147,10 @@ enum Command {
         /// Revision view to render
         #[arg(long, default_value = "accepted", value_parser = commands::parse_revision_view)]
         revision_view: rdocx::RevisionView,
+        /// How the tracked view marks revisions: plain, or legal for blue
+        /// insertions, red deletions and green moves
+        #[arg(long, default_value = "plain", value_parser = commands::parse_revision_style)]
+        revision_style: rdocx::RevisionStyle,
         /// JPEG quality from 1 through 100
         #[arg(long, default_value = "90")]
         quality: u8,
@@ -478,6 +486,7 @@ fn run_cli() {
             dpi,
             font_dir,
             revision_view,
+            revision_style,
             pages,
             quality,
             transparent,
@@ -489,6 +498,7 @@ fn run_cli() {
             dpi,
             font_dir.as_deref(),
             revision_view,
+            revision_style,
             commands::ImageOptions {
                 pages: pages.as_deref(),
                 quality,
@@ -519,6 +529,7 @@ fn run_cli() {
             pages,
             format,
             revision_view,
+            revision_style,
             quality,
             transparent,
         } => commands::render(
@@ -531,6 +542,7 @@ fn run_cli() {
                 pages: pages.as_deref(),
                 format: &format,
                 revision_view,
+                revision_style,
                 quality,
                 transparent,
             },

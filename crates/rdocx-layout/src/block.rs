@@ -399,8 +399,9 @@ pub struct ParagraphReflow {
 pub struct ParagraphBlock {
     /// Laid-out lines.
     pub lines: Vec<LayoutLine>,
-    /// Whether the tracked projection contains a visible revision.
-    pub has_visible_revision: bool,
+    /// The colour of the change bar the tracked projection draws beside the
+    /// paragraph, `None` when it shows no revision.
+    pub change_bar: Option<Color>,
     /// Floating drawings anchored to this paragraph.
     ///
     /// These travel with the paragraph so the paginator can resolve a
@@ -480,7 +481,7 @@ pub fn build_paragraph_block(
 ) -> ParagraphBlock {
     ParagraphBlock {
         lines,
-        has_visible_revision: false,
+        change_bar: None,
         anchored: Vec::new(),
         space_before,
         space_after,
@@ -510,7 +511,7 @@ mod tests {
     fn paragraph_block_height() {
         let block = ParagraphBlock {
             anchored: Vec::new(),
-            has_visible_revision: false,
+            change_bar: None,
             lines: vec![
                 LayoutLine {
                     items: vec![],

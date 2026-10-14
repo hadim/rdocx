@@ -20,8 +20,8 @@ use rdocx::{
     FragmentConflictPolicy, HdrFtrType, HeaderFooterKind, HyperlinkItemRef, HyperlinkRef, Length,
     ListLevel, MailMergeControl, MailMergeData, MailMergeFormattedText, MailMergeImage,
     MailMergeRecord, MailMergeValue, ParagraphFrame, ParagraphItemRef, ParagraphRef, RasterFormat,
-    RasterOptions, RasterOutput, RenderOptions, RevisionKind, RevisionView, RunItemRef,
-    RunPosition, RunRange, RunRef, StoryId, StoryItemKind, StoryKind, StoryRunPosition,
+    RasterOptions, RasterOutput, RenderOptions, RevisionKind, RevisionStyle, RevisionView,
+    RunItemRef, RunPosition, RunRange, RunRef, StoryId, StoryItemKind, StoryKind, StoryRunPosition,
     StoryRunRange, StyleBuilder, StyleType, TableRef, TcField, TocEntrySelection, TocField,
     TocRebuildReport, UnderlineStyle, UnsupportedXmlRef, WordCreationProfile, WordPackageClass,
 };
@@ -15106,6 +15106,7 @@ fn both_revision_views_render_and_accepted_matches_resolved_document() {
             150.0,
             RenderOptions {
                 revision_view: RevisionView::Accepted,
+                revision_style: RevisionStyle::Plain,
             },
         )
         .unwrap()
@@ -15116,6 +15117,7 @@ fn both_revision_views_render_and_accepted_matches_resolved_document() {
             150.0,
             RenderOptions {
                 revision_view: RevisionView::Tracked,
+                revision_style: RevisionStyle::Plain,
             },
         )
         .unwrap()
@@ -15129,6 +15131,102 @@ fn both_revision_views_render_and_accepted_matches_resolved_document() {
         .unwrap()
         .expect("resolved page");
     assert_eq!(accepted, resolved);
+}
+
+#[test]
+fn legal_revision_style_colours_the_tracked_view() {
+    use oxml_layout::{Color, PositionedElement};
+
+    const BLUE: [u8; 3] = [0, 0, 0xFF];
+    const RED: [u8; 3] = [0xFF, 0, 0];
+    const GREEN: [u8; 3] = [0, 0xA0, 0];
+    const ORANGE: [u8; 3] = [0xFF, 0x80, 0];
+    let run =
+        |text: &str| format!(r#"<w:r><w:rPr><w:sz w:val="48"/></w:rPr><w:t>{text}</w:t></w:r>"#);
+    let deleted = r#"<w:r><w:rPr><w:sz w:val="48"/></w:rPr><w:delText>deleted</w:delText></w:r>"#;
+    let xml = wrap_word_body(&format!(
+        r#"<w:p>{}<w:ins w:id="1" w:author="Ada">{}</w:ins></w:p><w:p>{}<w:del w:id="2" w:author="Ben">{deleted}</w:del></w:p><w:p><w:moveFrom w:id="3" w:author="Cy">{}</w:moveFrom></w:p><w:p><w:moveTo w:id="4" w:author="Cy">{}</w:moveTo></w:p><w:p><w:pPr><w:jc w:val="center"/><w:pPrChange w:id="5" w:author="Dee"><w:pPr/></w:pPrChange></w:pPr>{}</w:p>"#,
+        run("kept "),
+        run("inserted").replace("<w:sz", r#"<w:color w:val="FF8000"/><w:sz"#),
+        run("kept "),
+        run("moved"),
+        run("moved"),
+        run("centred"),
+    ));
+    let document = document_with_content_controls(&xml);
+    let options = |revision_style| RenderOptions {
+        revision_view: RevisionView::Tracked,
+        revision_style,
+    };
+
+    // The layout gives each change its colour, the insertion and the move
+    // destination a double underline, and each change bar the colour of its
+    // change, black for the property change.
+    let layout = document
+        .layout_deterministic_with_options(options(RevisionStyle::Legal))
+        .unwrap();
+    let rgb =
+        |color: &Color| [color.r, color.g, color.b].map(|value| (value * 255.0).round() as u8);
+    let mut bars = Vec::new();
+    let mut strokes = Vec::new();
+    oxml_layout::walk(&layout.layout.pages[0].elements, &mut |element, _| {
+        if let PositionedElement::Line {
+            start, end, color, ..
+        } = element
+        {
+            if start.x == end.x {
+                bars.push((start.y, rgb(color)));
+            } else {
+                strokes.push(rgb(color));
+            }
+        }
+    });
+    bars.sort_by(|left, right| left.0.total_cmp(&right.0));
+    assert_eq!(
+        bars.iter().map(|(_, color)| *color).collect::<Vec<_>>(),
+        [BLUE, RED, GREEN, GREEN, [0, 0, 0]]
+    );
+    for (color, count) in [(BLUE, 2), (RED, 1), (GREEN, 3)] {
+        assert_eq!(
+            strokes.iter().filter(|line| **line == color).count(),
+            count,
+            "{color:?}: a double underline is two strokes, a strike one"
+        );
+    }
+
+    // The rendered page shows those colours over the colour of the run, and
+    // the plain style none of them.
+    let pixels = |revision_style| {
+        let png = document
+            .render_page_to_png_deterministic_with_options(0, 150.0, options(revision_style))
+            .unwrap()
+            .expect("tracked page");
+        resvg::tiny_skia::Pixmap::decode_png(&png).unwrap()
+    };
+    let count = |pixmap: &resvg::tiny_skia::Pixmap, target: [u8; 3]| {
+        pixmap
+            .pixels()
+            .iter()
+            .filter(|pixel| {
+                let pixel = pixel.demultiply();
+                [pixel.red(), pixel.green(), pixel.blue()]
+                    .iter()
+                    .zip(target)
+                    .all(|(channel, wanted)| channel.abs_diff(wanted) <= 40)
+            })
+            .count()
+    };
+    let legal = pixels(RevisionStyle::Legal);
+    let plain = pixels(RevisionStyle::Plain);
+    for target in [BLUE, RED, GREEN] {
+        assert!(
+            count(&legal, target) > 200,
+            "{target:?} in the legal render"
+        );
+        assert_eq!(count(&plain, target), 0, "{target:?} in the plain render");
+    }
+    assert_eq!(count(&legal, ORANGE), 0);
+    assert!(count(&plain, ORANGE) > 200);
 }
 
 #[test]
@@ -15251,6 +15349,7 @@ fn caller_font_layout_options_select_the_tracked_revision_projection() {
             &[(family, bytes)],
             RenderOptions {
                 revision_view: RevisionView::Tracked,
+                revision_style: RevisionStyle::Plain,
             },
         )
         .expect("tracked caller-font layout should succeed");
@@ -28515,6 +28614,7 @@ fn comparison_preserves_word_source_paths_in_every_revision_view() {
         let result = document
             .layout_with_options(RenderOptions {
                 revision_view: view,
+                revision_style: Default::default(),
             })
             .expect("layout revision source view");
         let mut header_sources = 0usize;
@@ -28889,6 +28989,7 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
         theme: None,
         fonts: Vec::new(),
         revision_view: rdocx_layout::RevisionView::Accepted,
+        revision_style: rdocx_layout::RevisionStyle::Plain,
     }
 }
 
@@ -40609,6 +40710,7 @@ mod advanced_table_geometry_regressions {
             theme: None,
             fonts: Vec::new(),
             revision_view: rdocx_layout::RevisionView::Accepted,
+            revision_style: rdocx_layout::RevisionStyle::Plain,
         }
     }
 
@@ -42341,6 +42443,7 @@ mod f266c_character_grid_and_vertical_text_regressions {
             let result = document
                 .layout_deterministic_with_options(rdocx::RenderOptions {
                     revision_view: rdocx_layout::RevisionView::Tracked,
+                    revision_style: rdocx_layout::RevisionStyle::Plain,
                 })
                 .expect("deterministic tracked layout");
             let mut bars = 0usize;
