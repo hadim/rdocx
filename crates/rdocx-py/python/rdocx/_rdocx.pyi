@@ -637,8 +637,9 @@ class Document:
         ``revision_style`` how it marks them: ``"plain"`` underlines
         insertions and strikes deletions through in the text colour, and
         ``"legal"`` draws insertions blue with a double underline, deletions
-        red, and moved text green, with change bars in the same colours. The
-        accepted view marks nothing. An unknown value raises ``ValueError``.
+        red, and moved text green, with change bars in the same colours. A
+        style other than ``"plain"`` without ``revision_view="tracked"``, or
+        an unknown value, raises ``ValueError``.
         """
     def to_pdfa_deterministic(
         self, profile: _Literal["pdfa-2b", "pdfa-3b"] = "pdfa-2b"
