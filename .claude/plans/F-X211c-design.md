@@ -107,3 +107,30 @@ Final c completion additionally requires completed d and exact composed
 source. Preserve all frozen100 bodies/support/inputs and source-specific
 failed candidates. A newly repaired source gets one complete unchanged run,
 not a best-of retry score. Full native/render acceptance remains due.
+
+
+## Reviewed frozen render and owner-path specimen conflicts
+
+Independent F-X211c-frozen-render-assumptions-pass-1, SHA256
+`6e8317b7f604a4c466215e7559a3d3669ff7b0ff93259351eb2b073ea00db9c5`,
+authenticates two further incompatible specimen assumptions. W-AREA-19
+requires Gelasio although the approved normal Word additional-font operation
+retains host discovery and the actual PDF contains the Georgia font program.
+P-AREA-02 filters a relative ZIP member spelling although the approved native
+owner identity is the absolute `/ppt/slides/slide1.xml`. Independent current
+H457 computation returned the expected92500 font scale and0 line reduction.
+Neither finding authorizes font coercion or a native owner-identity change.
+
+Adopt the existing deliberate-divergence route for these two named cases.
+Preserve their original bodies, support, inputs, expected values, digests and
+the100 denominator. They remain non-successes with no successful-file credit.
+Subsequent unreached assertions remain unqualified. Authenticate each
+disposition with its case-specific actual source, failure and independent
+proof. Reject arbitrary failure reclassification and altered evidence. Keep
+the first failed100 candidate unchanged rather than rescoring it.
+
+P-AREA-11 remains a real owned-font diagnostic defect until remediation and
+independent qualification, including stable first-use request deduplication
+and explicit actual-face approximation. The corrected source still requires
+one complete unchanged100 attempt, the original at-least90-percent complete
+correct-file gate and every independent XML, lifetime, native and render gate.
