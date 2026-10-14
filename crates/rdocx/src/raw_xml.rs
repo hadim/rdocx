@@ -1,10 +1,11 @@
-//! Raw XML of one body element: read it as standalone XML and replace it with
-//! checked XML, the way out when the model has no API for a feature.
+//! Raw XML of one body, header or footer element: read it as standalone XML
+//! and replace it with checked XML, the way out when the model has no API for
+//! a feature.
 //!
 //! A replacement must hold exactly one element of the addressed kind, parse
 //! with the model, keep every element it names, place the elements Word
 //! checks where the schema allows them, and reference only relationships of
-//! the right type that the main document part already has. Anything else is
+//! the right type that the part holding it already has. Anything else is
 //! refused before the document changes.
 
 use std::borrow::Cow;
@@ -19,7 +20,7 @@ use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc};
 use rdocx_oxml::text::{AcceptedRunPath, CT_P, CT_R};
 
 use crate::document::{close_content_fragment_namespaces, story_namespace_scope_at};
-use crate::{Document, Error, Result};
+use crate::{Document, Error, HeaderFooterParagraph, Result, StoryId};
 
 const W_NS: &[u8] = b"http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const R_NS: &[u8] = b"http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -28,8 +29,8 @@ const MC_NS: &[u8] = b"http://schemas.openxmlformats.org/markup-compatibility/20
 
 /// A paragraph addressed by the indexes of [`Document::paragraph`], or of
 /// [`Document::table`], [`crate::TableRef::cell`] and
-/// [`crate::CellRef::paragraph`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// [`crate::CellRef::paragraph`], or one of a header or footer.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum XmlParagraph {
     /// A body paragraph, by its index in [`Document::paragraphs`].
     Body(usize),
@@ -39,6 +40,12 @@ pub enum XmlParagraph {
         row: usize,
         cell: usize,
         paragraph: usize,
+    },
+    /// A paragraph of a header or footer story, as
+    /// [`Document::read_header_footer_paragraph`] addresses it.
+    Story {
+        story: StoryId,
+        at: HeaderFooterParagraph,
     },
 }
 
@@ -130,27 +137,47 @@ impl Element {
     }
 }
 
+/// The part an element lives in: the namespaces and attributes of its root
+/// element, and the part whose relationships the element may reference.
+struct OwningPart {
+    extra_namespaces: Vec<(String, String)>,
+    root_attributes: Vec<(String, String)>,
+    part_name: String,
+}
+
+impl XmlTarget {
+    /// The header or footer story the element lives in, `None` for the body.
+    fn story(&self) -> Option<&StoryId> {
+        match self {
+            Self::Paragraph(XmlParagraph::Story { story, .. })
+            | Self::Run(XmlParagraph::Story { story, .. }, _) => Some(story),
+            _ => None,
+        }
+    }
+}
+
 impl Document {
-    /// Return the XML of one body element as a standalone fragment that
-    /// declares every namespace prefix in scope at its position.
+    /// Return the XML of one element as a standalone fragment that declares
+    /// every namespace prefix in scope at its position.
     pub fn element_xml(&self, target: &XmlTarget) -> Result<Vec<u8>> {
         let element = self.current_element(target)?;
-        let xml = self.shell(element.into_body()).to_xml()?;
+        let part = self.owning_part(target)?;
+        let xml = self.shell(&part, element.into_body()).to_xml()?;
         let (start, end) = element_span(&xml, target.shell_path())?;
         let scope = story_namespace_scope_at(&xml, start)?;
         close_content_fragment_namespaces(&xml[start..end], &scope)
     }
 
-    /// Replace one body element with `xml`, which must hold exactly one
-    /// element of the same kind.
+    /// Replace one element with `xml`, which must hold exactly one element
+    /// of the same kind.
     ///
-    /// Prefixes the document root declares may be used without declaring
-    /// them. The replacement is refused, and the document left unchanged,
-    /// when the XML is malformed, holds another element or more than one,
-    /// names an element the model would drop, references a relationship id
-    /// the main document part does not have, or adds or removes a section
-    /// break (edit those through [`XmlTarget::Section`]). Identifiers such as
-    /// bookmark or comment ids are written as given.
+    /// Prefixes the root of the part holding the element declares may be
+    /// used without declaring them. The replacement is refused, and the
+    /// document left unchanged, when the XML is malformed, holds another
+    /// element or more than one, names an element the model would drop,
+    /// references a relationship id that part does not have, or adds or
+    /// removes a section break (edit those through [`XmlTarget::Section`]).
+    /// Identifiers such as bookmark or comment ids are written as given.
     pub fn replace_element_xml(&mut self, target: &XmlTarget, xml: &[u8]) -> Result<()> {
         let invalid = |message: String| {
             Error::Other(format!(
@@ -164,7 +191,8 @@ impl Document {
             return Err(invalid(format!("got {root}")));
         }
         let fragment = cdata_as_text(fragment)?;
-        let root_start = self.shell_root()?;
+        let part = self.owning_part(target)?;
+        let root_start = self.shell_root(&part)?;
         let fragment =
             declare_inherited_prefixes(fragment.as_ref(), &root_start).map_err(invalid)?;
         let fragment = fragment.as_ref();
@@ -207,7 +235,7 @@ impl Document {
             ));
         }
         let input = element_counts(&wrapped)?;
-        let current_counts = element_counts(&self.shell(current.into_body()).to_xml()?)?;
+        let current_counts = element_counts(&self.shell(&part, current.into_body()).to_xml()?)?;
         if !matches!(target, XmlTarget::Section(_))
             && section_breaks(&input) != section_breaks(&current_counts)
         {
@@ -216,7 +244,7 @@ impl Document {
                     .to_owned(),
             ));
         }
-        let shell = self.shell(element.into_body());
+        let shell = self.shell(&part, element.into_body());
         let written = shell.to_xml()?;
         let kept = element_counts(&written)?;
         let missing = input
@@ -230,17 +258,17 @@ impl Document {
                 missing.into_iter().collect::<Vec<_>>().join(", ")
             )));
         }
-        self.check_relationship_references(&wrapped)?;
+        self.check_relationship_references(&wrapped, &part.part_name)?;
         let element = extract(target, shell.body).expect("the shell holds the parsed element");
         self.write_element(target, element)
     }
 
-    /// Fail when `xml` references a relationship id the main document part
+    /// Fail when `xml` references a relationship id the part `part_name`
     /// does not have.
-    fn check_relationship_references(&self, xml: &[u8]) -> Result<()> {
+    fn check_relationship_references(&self, xml: &[u8], part_name: &str) -> Result<()> {
         let known = self
             .package
-            .get_part_rels(&self.doc_part_name)
+            .get_part_rels(part_name)
             .map(|relationships| {
                 relationships
                     .items
@@ -292,8 +320,8 @@ impl Document {
                         }
                     } else {
                         return Err(Error::Other(format!(
-                            "replace_xml refused: r:{}=\"{value}\" names no relationship of the \
-                             document part, add the target first (for example with add_picture \
+                            "replace_xml refused: r:{}=\"{value}\" names no relationship of \
+                             {part_name}, add the target first (for example with add_picture \
                              or add_hyperlink) and reference the id it creates",
                             String::from_utf8_lossy(local.as_ref())
                         )));
@@ -304,25 +332,82 @@ impl Document {
         }
     }
 
-    /// A document holding `body` under this document's root element, so it
-    /// declares the same namespaces.
-    fn shell(&self, body: CT_Body) -> CT_Document {
+    /// The part `target` lives in: the main document part, or the part of
+    /// its header or footer story.
+    fn owning_part(&self, target: &XmlTarget) -> Result<OwningPart> {
+        let Some(story) = target.story() else {
+            return Ok(OwningPart {
+                extra_namespaces: self.document.extra_namespaces.clone(),
+                root_attributes: self.document.root_attributes.clone(),
+                part_name: self.doc_part_name.clone(),
+            });
+        };
+        let xml = self.package.get_part(story.part_name()).ok_or_else(|| {
+            Error::Other(format!(
+                "header or footer part {} is missing",
+                story.part_name()
+            ))
+        })?;
+        let mut reader = Reader::from_reader(xml);
+        let mut buffer = Vec::new();
+        let root = loop {
+            match reader.read_event_into(&mut buffer).map_err(xml_error)? {
+                Event::Start(element) | Event::Empty(element) => break element.into_owned(),
+                Event::Eof => {
+                    return Err(Error::Other(format!("{} has no root", story.part_name())));
+                }
+                _ => buffer.clear(),
+            }
+        };
+        // The shell writes w, r, mc and wp itself, as the header and footer
+        // writer does for w, r and wp.
+        let mut part = OwningPart {
+            extra_namespaces: Vec::new(),
+            root_attributes: Vec::new(),
+            part_name: story.part_name().to_owned(),
+        };
+        for attribute in root.attributes() {
+            let attribute = attribute.map_err(|error| xml_error(error.into()))?;
+            let key = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
+            let value = attribute
+                .decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, root.decoder())
+                .map_err(xml_error)?
+                .into_owned();
+            if key == "xmlns" || matches!(key.as_str(), "xmlns:w" | "xmlns:r" | "xmlns:mc") {
+                continue;
+            }
+            if key.starts_with("xmlns:") {
+                part.extra_namespaces.push((key, value));
+            } else {
+                part.root_attributes.push((key, value));
+            }
+        }
+        Ok(part)
+    }
+
+    /// A document holding `body` under a root element that declares what the
+    /// root of `part` declares.
+    fn shell(&self, part: &OwningPart, body: CT_Body) -> CT_Document {
         CT_Document {
             body,
-            extra_namespaces: self.document.extra_namespaces.clone(),
+            extra_namespaces: part.extra_namespaces.clone(),
             background_xml: None,
             background_extra_xml: Vec::new(),
-            root_attributes: self.document.root_attributes.clone(),
+            root_attributes: part.root_attributes.clone(),
         }
     }
 
-    /// The start tag of this document's root element, with its declarations.
-    fn shell_root(&self) -> Result<Vec<u8>> {
+    /// The start tag of the shell root element of `part`, with its
+    /// declarations.
+    fn shell_root(&self, part: &OwningPart) -> Result<Vec<u8>> {
         let xml = self
-            .shell(CT_Body {
-                content: Vec::new(),
-                sect_pr: None,
-            })
+            .shell(
+                part,
+                CT_Body {
+                    content: Vec::new(),
+                    sect_pr: None,
+                },
+            )
             .to_xml()?;
         let (start, _) = element_span(&xml, &[b"document"])?;
         let mut reader = Reader::from_reader(&xml[start..]);
@@ -341,21 +426,26 @@ impl Document {
 
     fn current_element(&self, target: &XmlTarget) -> Result<Element> {
         let missing = || Error::Other(format!("no w:{} at {target:?}", target.local_name()));
-        let paragraph = |at: &XmlParagraph| match *at {
-            XmlParagraph::Body(index) => self.paragraph(index).map(|p| p.inner.clone()),
-            XmlParagraph::Cell {
-                table,
-                row,
-                cell,
-                paragraph,
-            } => self.table(table).and_then(|table| {
-                let cell = table.cell(row, cell)?;
-                cell.paragraph(paragraph).map(|p| p.inner.clone())
-            }),
+        let paragraph = |at: &XmlParagraph| -> Result<Option<CT_P>> {
+            Ok(match at {
+                XmlParagraph::Body(index) => self.paragraph(*index).map(|p| p.inner.clone()),
+                XmlParagraph::Cell {
+                    table,
+                    row,
+                    cell,
+                    paragraph,
+                } => self.table(*table).and_then(|table| {
+                    let cell = table.cell(*row, *cell)?;
+                    cell.paragraph(*paragraph).map(|p| p.inner.clone())
+                }),
+                XmlParagraph::Story { story, at } => {
+                    self.read_header_footer_paragraph(story, *at, |p| p.inner.clone())?
+                }
+            })
         };
         match target {
-            XmlTarget::Paragraph(at) => paragraph(at).map(Element::Paragraph),
-            XmlTarget::Run(at, path) => paragraph(at)
+            XmlTarget::Paragraph(at) => paragraph(at)?.map(Element::Paragraph),
+            XmlTarget::Run(at, path) => paragraph(at)?
                 .and_then(|paragraph| paragraph.accepted_run(path).cloned())
                 .map(Element::Run),
             XmlTarget::Table(index) => self.table(*index).map(|t| Element::Table(t.inner.clone())),
@@ -378,9 +468,9 @@ impl Document {
             at: &XmlParagraph,
             edit: impl FnOnce(&mut CT_P) -> Result<()>,
         ) -> Option<Result<()>> {
-            match *at {
+            match at {
                 XmlParagraph::Body(index) => document
-                    .paragraph_mut(index)
+                    .paragraph_mut(*index)
                     .map(|paragraph| edit(paragraph.inner)),
                 XmlParagraph::Cell {
                     table,
@@ -388,11 +478,15 @@ impl Document {
                     cell,
                     paragraph,
                 } => {
-                    let mut table = document.table_mut(table)?;
-                    let mut cell = table.cell(row, cell)?;
-                    let paragraph = cell.paragraph_mut(paragraph)?;
+                    let mut table = document.table_mut(*table)?;
+                    let mut cell = table.cell(*row, *cell)?;
+                    let paragraph = cell.paragraph_mut(*paragraph)?;
                     Some(edit(paragraph.inner))
                 }
+                XmlParagraph::Story { story, at } => document
+                    .edit_header_footer_paragraph(story, *at, |paragraph| edit(paragraph.inner))
+                    .transpose()
+                    .map(Result::flatten),
             }
         }
         let written = match (target, element) {

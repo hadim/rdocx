@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 
 use crate::document::{EditScope, PyDocument, raw_xml_argument, raw_xml_error};
 use crate::normalize_index;
-use crate::paragraph::{ParagraphLocation, paragraph_location, xml_paragraph};
+use crate::paragraph::{ParagraphLocation, paragraph_location, show_replaced_xml, xml_paragraph};
 
 fn path_indices(path: &ContentPath) -> PyResult<(ParagraphLocation, usize)> {
     let run = path.segs.iter().find_map(|segment| match segment {
@@ -192,10 +192,12 @@ impl PyRun {
     #[getter]
     fn xml<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         let (location, _) = self.validate(py)?;
-        let target = rdocx::XmlTarget::Run(xml_paragraph(location)?, self.run_path.clone());
-        let xml = self
-            .document
-            .borrow(py)
+        let document = self.document.borrow(py);
+        let target = rdocx::XmlTarget::Run(
+            xml_paragraph(py, &document.inner, location)?,
+            self.run_path.clone(),
+        );
+        let xml = document
             .inner
             .element_xml(&target)
             .map_err(|error| raw_xml_error(py, error))?;
@@ -207,12 +209,16 @@ impl PyRun {
     fn replace_xml(&self, py: Python<'_>, xml: &Bound<'_, PyAny>) -> PyResult<()> {
         let xml = raw_xml_argument(xml)?;
         let (location, _) = self.validate(py)?;
-        let target = rdocx::XmlTarget::Run(xml_paragraph(location)?, self.run_path.clone());
-        self.document
-            .borrow_mut(py)
+        let mut document = self.document.borrow_mut(py);
+        let target = rdocx::XmlTarget::Run(
+            xml_paragraph(py, &document.inner, location)?,
+            self.run_path.clone(),
+        );
+        document
             .inner
             .replace_element_xml(&target, &xml)
-            .map_err(|error| raw_xml_error(py, error))
+            .map_err(|error| raw_xml_error(py, error))?;
+        show_replaced_xml(py, &mut document, location)
     }
 
     // A tab is appended inside this run, so no run index moves and live

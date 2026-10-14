@@ -6147,6 +6147,64 @@ def test_raw_xml_resolves_a_prefix_declared_on_an_ancestor_inside_the_replacemen
         document.paragraphs[0].replace_xml(unbound)
 
 
+def test_raw_xml_reads_and_replaces_header_and_footer_paragraphs():
+    import rdocx
+
+    document = rdocx.Document()
+    body = document.add_paragraph("Body ")
+    body.add_hyperlink("body link", "https://example.com/body")
+    body_id = re.search(rb'r:id="([^"]+)"', body.xml).group(1).decode()
+    header = document.sections[0].header
+    header.paragraphs[0].text = "Header text."
+    header.paragraphs[0].add_hyperlink(" site", "https://example.com/header")
+    read = header.paragraphs[0].xml
+    header_id = re.search(rb'r:id="([^"]+)"', read).group(1).decode()
+    assert header_id != body_id
+    assert read.startswith(b"<w:p ") and b"Header text." in read
+    header.add_table(1, 1, rdocx.Inches(6))
+    footer = document.sections[0].footer
+    footer.paragraphs[0].text = "Footer."
+    paragraph = header.paragraphs[0]
+    cell = header.tables[0].cell(0, 0).paragraphs[0]
+
+    # Each paragraph, a header table cell's included, is replaced in its part,
+    # and may name a relationship of that part.
+    paragraph.replace_xml(
+        f'<w:p><w:hyperlink r:id="{header_id}"><w:r><w:t>Linked header</w:t></w:r></w:hyperlink></w:p>'
+    )
+    cell.replace_xml("<w:p><w:r><w:t>In the cell</w:t></w:r></w:p>")
+    footer.paragraphs[0].runs[0].replace_xml("<w:r><w:rPr><w:b/></w:rPr><w:t>Bold footer</w:t></w:r>")
+    assert paragraph.text == "Linked header" and cell.text == "In the cell"
+    assert footer.paragraphs[0].runs[0].bold is True
+    saved = document.to_bytes()
+    header_part = next(
+        name
+        for name in zipfile.ZipFile(io.BytesIO(saved)).namelist()
+        if name.startswith("word/header")
+    )
+    assert "Linked header" in _saved_part(saved, header_part)
+    assert "Linked header" not in _saved_part(saved)
+    reopened = rdocx.Document.from_bytes(saved)
+    assert reopened.sections[0].header.paragraphs[0].text == "Linked header"
+    assert b"Linked header" in reopened.sections[0].header.paragraphs[0].xml
+    assert reopened.sections[0].footer.paragraphs[0].text == "Bold footer"
+
+    # A relationship of document.xml, and what the body refuses, is refused and
+    # leaves the header part as it was.
+    for xml, message in [
+        (
+            f'<w:p><w:hyperlink r:id="{body_id}"><w:r><w:t>x</w:t></w:r></w:hyperlink></w:p>',
+            f'r:id="{body_id}" names no relationship of /{header_part}',
+        ),
+        ("<w:tbl/>", "got w:tbl"),
+        ("<w:p><w:r><w:rPr><w:b/><w:b/></w:rPr></w:r></w:p>", "would not keep b"),
+        ("<w:p><x:y/></w:p>", "prefix x is not declared"),
+    ]:
+        with pytest.raises(ValueError, match=re.escape(message)):
+            paragraph.replace_xml(xml)
+    assert _saved_part(document.to_bytes(), header_part) == _saved_part(saved, header_part)
+
+
 def test_paragraph_and_run_handles_survive_edits_that_do_not_move_them():
     import rdocx
 

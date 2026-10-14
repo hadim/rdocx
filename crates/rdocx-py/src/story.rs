@@ -267,7 +267,7 @@ pub(crate) fn image_relationship(
 /// Make Word show the variant just written: a first-page story needs its
 /// section's different first page, and an even-page story needs the
 /// document's odd and even pages setting.
-fn show_written_variant(
+pub(crate) fn show_written_variant(
     py: Python<'_>,
     document: &mut PyDocument,
     slot: StorySlot,

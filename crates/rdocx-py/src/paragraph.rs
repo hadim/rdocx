@@ -85,6 +85,50 @@ pub(crate) fn paragraph_location(path: &ContentPath) -> PyResult<ParagraphLocati
     }
 }
 
+/// The raw XML address of the paragraph at `location`. A header or footer
+/// paragraph is addressed in the story its slot shows now.
+pub(crate) fn xml_paragraph(
+    py: Python<'_>,
+    document: &rdocx::Document,
+    location: ParagraphLocation,
+) -> PyResult<rdocx::XmlParagraph> {
+    Ok(match location {
+        ParagraphLocation::Body(index) => rdocx::XmlParagraph::Body(index),
+        ParagraphLocation::Cell {
+            table,
+            row,
+            cell,
+            paragraph,
+        } => rdocx::XmlParagraph::Cell {
+            table,
+            row,
+            cell,
+            paragraph,
+        },
+        ParagraphLocation::Story { slot, at } => rdocx::XmlParagraph::Story {
+            story: slot
+                .story(py, document)?
+                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?,
+            at,
+        },
+    })
+}
+
+/// Show the header or footer variant a raw XML replacement at `location`
+/// wrote, as every other header or footer edit does.
+pub(crate) fn show_replaced_xml(
+    py: Python<'_>,
+    document: &mut crate::document::PyDocument,
+    location: ParagraphLocation,
+) -> PyResult<()> {
+    match location {
+        ParagraphLocation::Story { slot, .. } => {
+            crate::story::show_written_variant(py, document, slot)
+        }
+        ParagraphLocation::Body(_) | ParagraphLocation::Cell { .. } => Ok(()),
+    }
+}
+
 /// Find the style a value names among `styles` of `style_type`, or among
 /// every style when it is `None`: a style ID or, as python-docx accepts, a
 /// style name.
@@ -155,29 +199,6 @@ pub(crate) fn defined_style(
     find_style(&styles, value, None)
         .map(|style| (style.style_type(), style.style_id().to_owned()))
         .ok_or_else(|| no_style_error(value))
-}
-
-/// The raw XML address of the paragraph at `location`.
-pub(crate) fn xml_paragraph(location: ParagraphLocation) -> PyResult<rdocx::XmlParagraph> {
-    Ok(match location {
-        ParagraphLocation::Body(index) => rdocx::XmlParagraph::Body(index),
-        ParagraphLocation::Cell {
-            table,
-            row,
-            cell,
-            paragraph,
-        } => rdocx::XmlParagraph::Cell {
-            table,
-            row,
-            cell,
-            paragraph,
-        },
-        ParagraphLocation::Story { .. } => {
-            return Err(PyNotImplementedError::new_err(
-                "raw XML works on body and table-cell paragraphs, not yet in a header or footer",
-            ));
-        }
-    })
 }
 
 /// The list styles of python-docx's default template, by name, style ID,
@@ -647,10 +668,10 @@ impl PyParagraph {
     /// This paragraph's `w:p` element as standalone XML bytes.
     #[getter]
     fn xml<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-        let target = rdocx::XmlTarget::Paragraph(xml_paragraph(self.validate(py)?)?);
-        let xml = self
-            .document
-            .borrow(py)
+        let location = self.validate(py)?;
+        let document = self.document.borrow(py);
+        let target = rdocx::XmlTarget::Paragraph(xml_paragraph(py, &document.inner, location)?);
+        let xml = document
             .inner
             .element_xml(&target)
             .map_err(|error| raw_xml_error(py, error))?;
@@ -662,12 +683,14 @@ impl PyParagraph {
     fn replace_xml(&self, py: Python<'_>, xml: &Bound<'_, PyAny>) -> PyResult<()> {
         let xml = raw_xml_argument(xml)?;
         let resolved = self.resolved(py)?;
-        let target = rdocx::XmlTarget::Paragraph(xml_paragraph(paragraph_location(&resolved)?)?);
+        let location = paragraph_location(&resolved)?;
         let mut document = self.document.borrow_mut(py);
+        let target = rdocx::XmlTarget::Paragraph(xml_paragraph(py, &document.inner, location)?);
         document
             .inner
             .replace_element_xml(&target, &xml)
             .map_err(|error| raw_xml_error(py, error))?;
+        show_replaced_xml(py, &mut document, location)?;
         document.bump_edit("Paragraph.replace_xml", EditScope::Below(resolved.segs));
         Ok(())
     }
