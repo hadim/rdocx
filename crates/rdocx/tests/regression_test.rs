@@ -31358,6 +31358,223 @@ fn flat_mail_merge_output_remains_unchanged_after_rich_merge_is_added() {
     assert_eq!(sectioned.to_bytes().unwrap(), expected_bytes);
 }
 
+/// The first body paragraph of a tracked document as text with deletions
+/// written `[-...-]` and insertions `{+...+}`, and whether a field or a
+/// hyperlink sits inside a deletion or an insertion.
+fn tracked_paragraph_markup(xml: &str) -> (String, bool) {
+    let mut reader = XmlReader::from_str(xml);
+    let mut markup = String::new();
+    let mut revision = None::<&str>;
+    let mut wrapped_structure = false;
+    let mut in_text = false;
+    loop {
+        match reader.read_event().unwrap() {
+            XmlEvent::Eof => return (markup, wrapped_structure),
+            XmlEvent::Start(element) | XmlEvent::Empty(element) => {
+                match element.local_name().as_ref() {
+                    b"ins" => revision = Some("+}"),
+                    b"del" => revision = Some("-]"),
+                    b"t" | b"delText" => in_text = true,
+                    b"fldChar" | b"instrText" | b"fldSimple" | b"hyperlink" => {
+                        wrapped_structure |= revision.is_some();
+                    }
+                    _ => {}
+                }
+            }
+            XmlEvent::End(element) => match element.local_name().as_ref() {
+                b"ins" | b"del" => revision = None,
+                b"t" | b"delText" => in_text = false,
+                b"p" => return (markup, wrapped_structure),
+                _ => {}
+            },
+            XmlEvent::Text(text) if in_text => {
+                let text = text.decode().unwrap();
+                match revision {
+                    Some(close) => {
+                        let open = if close == "+}" { "{+" } else { "[-" };
+                        // Consecutive runs of one revision read as one span.
+                        if let Some(stripped) = markup.strip_suffix(close) {
+                            markup = format!("{stripped}{text}{close}");
+                        } else {
+                            markup.push_str(&format!("{open}{text}{close}"));
+                        }
+                    }
+                    None => markup.push_str(&text),
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Compare one-paragraph bodies and return the markup of the redline after
+/// checking that accepting gives the edited text and rejecting the original.
+fn granular_markup(
+    original: &str,
+    edited: &str,
+    granularity: rdocx::ComparisonGranularity,
+) -> (String, bool) {
+    let original_xml = wrap_word_body(original);
+    let original = document_with_content_controls(&original_xml);
+    let edited = document_with_content_controls(&wrap_word_body(edited));
+    let mut tracked = document_with_content_controls(&original_xml);
+    tracked
+        .compare_with_options(
+            &edited,
+            "Ada",
+            "2026-09-04T09:00:00Z",
+            &rdocx::ComparisonOptions {
+                granularity,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let bytes = tracked.to_bytes().unwrap();
+    let mut accepted = Document::from_bytes(&bytes).unwrap();
+    accepted.accept_all().unwrap();
+    assert_eq!(accepted.text(), edited.text());
+    let mut rejected = Document::from_bytes(&bytes).unwrap();
+    rejected.reject_all().unwrap();
+    assert_eq!(rejected.text(), original.text());
+    tracked_paragraph_markup(&document_xml(&mut tracked))
+}
+
+#[test]
+fn word_comparison_groups_a_rewritten_stretch_into_one_deletion_and_one_insertion() {
+    let paragraph =
+        |text: &str| format!(r#"<w:p><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>"#);
+    let original = paragraph(
+        "On receipt, the Sponsor inspects the material and notifies the site of any specimen \
+         that does not pass inspection, with the reason.",
+    );
+    let edited = paragraph(
+        "After receipt, the Sponsor confirms the delivery and reports to the laboratory any \
+         specimen that fails inspection.",
+    );
+    assert_eq!(
+        granular_markup(&original, &edited, rdocx::ComparisonGranularity::Word).0,
+        "[-On-]{+After+} receipt, the Sponsor [-inspects-]{+confirms+} the \
+         [-material-]{+delivery+} and [-notifies the site of-]{+reports to the laboratory+} \
+         any specimen that [-does not pass-]{+fails+} inspection[-, with the reason-]."
+    );
+    // Run granularity still replaces the run whole.
+    assert_eq!(
+        granular_markup(&original, &edited, rdocx::ComparisonGranularity::Run).0,
+        "[-On receipt, the Sponsor inspects the material and notifies the site of any \
+         specimen that does not pass inspection, with the reason.-]{+After receipt, the \
+         Sponsor confirms the delivery and reports to the laboratory any specimen that fails \
+         inspection.+}"
+    );
+    // Character granularity takes the same path and keeps accept and reject exact.
+    granular_markup(&original, &edited, rdocx::ComparisonGranularity::Character);
+
+    let cases = [
+        // A one-word change is unchanged by grouping.
+        (
+            "the quick brown fox",
+            "the slow brown fox",
+            "the [-quick-]{+slow+} brown fox",
+        ),
+        // An anchor with fewer words than the changes around it folds.
+        (
+            "red green and blue yellow end",
+            "cyan magenta and black white end",
+            "[-red green and blue yellow-]{+cyan magenta and black white+} end",
+        ),
+        // A long unchanged stretch stays between its changes.
+        (
+            "red green one two three four blue yellow",
+            "cyan magenta one two three four black white",
+            "[-red green-]{+cyan magenta+} one two three four [-blue yellow-]{+black white+}",
+        ),
+        // An anchor next to a pure deletion stays.
+        (
+            "keep red green and blue yellow",
+            "keep and black white",
+            "keep [-red green -]and [-blue yellow-]{+black white+}",
+        ),
+    ];
+    for (before, after, expected) in cases {
+        assert_eq!(
+            granular_markup(
+                &paragraph(before),
+                &paragraph(after),
+                rdocx::ComparisonGranularity::Word
+            )
+            .0,
+            expected
+        );
+    }
+    // The runs of an inline control group the same way.
+    let control = |text: &str| {
+        format!(
+            r#"<w:p><w:r><w:t xml:space="preserve">Lead </w:t></w:r><w:sdt><w:sdtPr><w:alias w:val="c"/></w:sdtPr><w:sdtContent><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:sdtContent></w:sdt></w:p>"#
+        )
+    };
+    assert_eq!(
+        granular_markup(
+            &control("red green and blue yellow"),
+            &control("cyan magenta and black white"),
+            rdocx::ComparisonGranularity::Word
+        )
+        .0,
+        "Lead [-red green and blue yellow-]{+cyan magenta and black white+}"
+    );
+}
+
+#[test]
+fn word_grouping_never_folds_a_field_a_hyperlink_or_a_formatting_change() {
+    let run = |text: &str| format!(r#"<w:r><w:t xml:space="preserve">{text}</w:t></w:r>"#);
+    let bold = |text: &str| {
+        format!(r#"<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">{text}</w:t></w:r>"#)
+    };
+    let link = |text: &str| {
+        format!(
+            r#"<w:hyperlink w:anchor="target">{}</w:hyperlink>"#,
+            run(text)
+        )
+    };
+    let simple = r#"<w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple>"#;
+    let complex = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+    let paragraph = |anchor: &str, before: &str, after: &str| {
+        format!("<w:p>{}{anchor}{}</w:p>", run(before), run(after))
+    };
+    for (label, original_anchor, edited_anchor, expected) in [
+        (
+            "hyperlink",
+            link("and"),
+            link("and"),
+            "[-red green-]{+cyan magenta+} and [-blue yellow-]{+black white+}",
+        ),
+        (
+            "simple field",
+            simple.to_owned(),
+            simple.to_owned(),
+            "[-red green-]{+cyan magenta+} 1 [-blue yellow-]{+black white+}",
+        ),
+        (
+            "complex field",
+            complex.to_owned(),
+            complex.to_owned(),
+            "[-red green-]{+cyan magenta+} 1 [-blue yellow-]{+black white+}",
+        ),
+        (
+            "formatting change",
+            run("and"),
+            bold("and"),
+            "[-red green-]{+cyan magenta+} and [-blue yellow-]{+black white+}",
+        ),
+    ] {
+        let (markup, wrapped) = granular_markup(
+            &paragraph(&original_anchor, "red green ", " blue yellow"),
+            &paragraph(&edited_anchor, "cyan magenta ", " black white"),
+            rdocx::ComparisonGranularity::Word,
+        );
+        assert_eq!(markup, expected, "{label}");
+        assert!(!wrapped, "{label}");
+    }
+}
+
 #[test]
 fn granular_insertions_stay_inside_leading_and_empty_paragraph_owners() {
     for (before, after) in [("world", "hello world"), ("", "hello")] {

@@ -4212,6 +4212,15 @@ fn compare_granular_paragraph(
             location,
         )?;
     }
+    let (aligned, segments) = grouped_text_alignment(
+        &aligned,
+        &segments,
+        &original_units,
+        &edited_units,
+        &original_signatures,
+        &edited_signatures,
+        metadata.options,
+    );
     let grouped = coalesced_granular_alignment(
         &aligned,
         &original_units,
@@ -4533,6 +4542,185 @@ fn coalesced_granular_alignment(
         start = end;
     }
     groups
+}
+
+/// The text of a unit that holds nothing but text, which grouping may move
+/// into a deletion or an insertion.
+fn unit_plain_text(unit: &AttributedRunUnit) -> Option<&str> {
+    match unit.run.content.as_slice() {
+        [RunContent::Text(text)]
+            if !unit.ignored
+                && semantic_run_raw(&unit.run).is_empty()
+                && unit.run.alt_drawings.is_empty() =>
+        {
+            Some(&text.text)
+        }
+        _ => None,
+    }
+}
+
+/// The number of words, runs of letters, digits and underscores, in `texts`
+/// read as one string.
+fn text_words<'a>(texts: impl IntoIterator<Item = &'a str>) -> usize {
+    let mut in_word = false;
+    let mut words = 0;
+    for character in texts.into_iter().flat_map(str::chars) {
+        let word = character.is_alphanumeric() || character == '_';
+        words += usize::from(word && !in_word);
+        in_word = word;
+    }
+    words
+}
+
+/// The word and character alignment with each stretch of changes written as
+/// all its deleted units, then all its inserted units, as Word shows a
+/// rewritten passage, and the segment of each pair.
+///
+/// A stretch is consecutive changed text units. It grows over an unchanged
+/// stretch between two changes when that stretch is only whitespace, then
+/// over one that has fewer words than the deletion and the insertion on each
+/// side of it, in the spirit of diff-match-patch `diff_cleanupSemantic`, so a
+/// one-word anchor between one-word replacements stays. Anything but plain
+/// text ends a stretch: a field, a drawing, a preserved child, an ignored
+/// unit, an unchanged unit whose formatting changed, and a shell segment
+/// boundary, where a hyperlink, an inline control, a bookmark or a comment
+/// range sits. Run granularity keeps its alignment.
+#[allow(clippy::type_complexity)]
+fn grouped_text_alignment(
+    aligned: &[(Option<usize>, Option<usize>)],
+    segments: &[usize],
+    original_units: &[AttributedRunUnit],
+    edited_units: &[AttributedRunUnit],
+    original_signatures: &[String],
+    edited_signatures: &[String],
+    options: &ComparisonOptions,
+) -> (Vec<(Option<usize>, Option<usize>)>, Vec<usize>) {
+    /// Consecutive pairs of one kind in one segment: `changed` is `None`
+    /// for a pair grouping must not move.
+    struct Block {
+        pairs: Range<usize>,
+        changed: Option<bool>,
+        deleted_words: usize,
+        inserted_words: usize,
+        whitespace: bool,
+    }
+    if options.granularity == ComparisonGranularity::Run {
+        return (aligned.to_vec(), segments.to_vec());
+    }
+    let mut blocks = Vec::<Block>::new();
+    for (index, &(left, right)) in aligned.iter().enumerate() {
+        let left_text = left.map(|index| unit_plain_text(&original_units[index]));
+        let right_text = right.map(|index| unit_plain_text(&edited_units[index]));
+        let plain = left_text.is_none_or(|text| text.is_some())
+            && right_text.is_none_or(|text| text.is_some());
+        let (left_text, right_text) = (left_text.flatten(), right_text.flatten());
+        let same_formatting = match (left, right) {
+            (Some(i), Some(j)) => {
+                original_units[i].run.properties == edited_units[j].run.properties
+            }
+            _ => true,
+        };
+        let changed = match granular_action(
+            (left, right),
+            original_units,
+            edited_units,
+            original_signatures,
+            edited_signatures,
+        ) {
+            // A replacement that ignores formatting writes its insertion in
+            // the formatting of its deletion, which an insertion of its own
+            // would not.
+            GranularAction::Replace if plain && (same_formatting || !options.ignore_formatting) => {
+                Some(true)
+            }
+            GranularAction::Delete | GranularAction::Insert if plain => Some(true),
+            GranularAction::Equal if plain && same_formatting => Some(false),
+            _ => None,
+        };
+        let deleted_words = text_words(left_text);
+        let inserted_words = text_words(right_text.filter(|_| changed == Some(true)));
+        let whitespace = left_text.is_some_and(|text| text.trim().is_empty());
+        match blocks.last_mut() {
+            Some(block)
+                if changed.is_some()
+                    && block.changed == changed
+                    && segments[block.pairs.start] == segments[index] =>
+            {
+                block.pairs.end = index + 1;
+                block.deleted_words += deleted_words;
+                block.inserted_words += inserted_words;
+                block.whitespace &= whitespace;
+            }
+            _ => blocks.push(Block {
+                pairs: index..index + 1,
+                changed,
+                deleted_words,
+                inserted_words,
+                whitespace,
+            }),
+        }
+    }
+    let between_changes = |block: usize| {
+        let segment = segments[blocks[block].pairs.start];
+        block > 0
+            && block + 1 < blocks.len()
+            && blocks[block].changed == Some(false)
+            && [&blocks[block - 1], &blocks[block + 1]]
+                .iter()
+                .all(|side| side.changed == Some(true) && segments[side.pairs.start] == segment)
+    };
+    let mut folded = (0..blocks.len())
+        .map(|block| between_changes(block) && blocks[block].whitespace)
+        .collect::<Vec<_>>();
+    // The words deleted and inserted by the change, grown over whitespace,
+    // that holds each change block.
+    let mut stretch = vec![0usize; blocks.len()];
+    let mut stretch_words = vec![(0usize, 0usize); blocks.len()];
+    for block in 0..blocks.len() {
+        if blocks[block].changed == Some(true) {
+            stretch[block] = if block >= 2 && folded[block - 1] {
+                stretch[block - 2]
+            } else {
+                block
+            };
+            stretch_words[stretch[block]].0 += blocks[block].deleted_words;
+            stretch_words[stretch[block]].1 += blocks[block].inserted_words;
+        }
+    }
+    for block in 0..blocks.len() {
+        if between_changes(block) && !folded[block] {
+            let (before, after) = (
+                stretch_words[stretch[block - 1]],
+                stretch_words[stretch[block + 1]],
+            );
+            folded[block] =
+                blocks[block].deleted_words < before.0.min(before.1).min(after.0).min(after.1);
+        }
+    }
+    let mut grouped = Vec::with_capacity(aligned.len());
+    let mut grouped_segments = Vec::with_capacity(aligned.len());
+    let mut block = 0;
+    while block < blocks.len() {
+        let mut end = block + 1;
+        if blocks[block].changed == Some(true) {
+            while end + 1 < blocks.len() && folded[end] {
+                end += 2;
+            }
+        }
+        let pairs = blocks[block].pairs.start..blocks[end - 1].pairs.end;
+        if blocks[block].changed == Some(true) && pairs.len() > 1 {
+            let deleted = pairs.clone().filter_map(|index| aligned[index].0);
+            let inserted = pairs.clone().filter_map(|index| aligned[index].1);
+            grouped.extend(deleted.map(|index| (Some(index), None)));
+            grouped.extend(inserted.map(|index| (None, Some(index))));
+            grouped_segments.resize(grouped.len(), segments[pairs.start]);
+        } else {
+            grouped.extend_from_slice(&aligned[pairs.clone()]);
+            grouped_segments.extend_from_slice(&segments[pairs]);
+        }
+        block = end;
+    }
+    (grouped, grouped_segments)
 }
 
 fn merge_unit_runs(units: &[AttributedRunUnit], indices: &[usize]) -> Option<CT_R> {
@@ -6509,6 +6697,15 @@ fn compare_control_runs_with_options(
             location,
         )?;
     }
+    let (aligned, _) = grouped_text_alignment(
+        &aligned,
+        &vec![0; aligned.len()],
+        &original_units,
+        &edited_units,
+        &original_signatures,
+        &edited_signatures,
+        metadata.options,
+    );
     let grouped = coalesced_granular_alignment(
         &aligned,
         &original_units,
