@@ -96,12 +96,28 @@ impl PyRun {
 
     pub(crate) fn validate(&self, py: Python<'_>) -> PyResult<(ParagraphLocation, usize)> {
         let document = self.document.borrow(py);
+        let recovery_hint = if self.related.is_some() {
+            "Re-fetch it from the current rich story paragraph's runs.".to_owned()
+        } else {
+            match paragraph_location(&self.path)? {
+                ParagraphLocation::Body(paragraph) => {
+                    format!("Re-fetch it with doc.paragraphs[{paragraph}].runs[i].")
+                }
+                ParagraphLocation::Cell {
+                    table,
+                    row,
+                    cell,
+                    paragraph,
+                } => format!(
+                    "Re-fetch it with doc.tables[{table}].rows[{row}].cells[{cell}].paragraphs[{paragraph}].runs[i]."
+                ),
+                ParagraphLocation::Related(_) => {
+                    "Re-fetch it from the current rich story paragraph's runs.".to_owned()
+                }
+            }
+        };
         self.path
-            .validate_scopes(
-                &document.revisions,
-                "run",
-                "Re-fetch it with paragraph.runs[i].",
-            )
+            .validate_scopes(&document.revisions, "run", &recovery_hint)
             .map_err(|error| stale_to_pyerr(py, error))?;
         let location = match &self.related {
             Some(location) => match &self.owner {
