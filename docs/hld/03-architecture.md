@@ -1083,7 +1083,11 @@ Unicode word, whitespace, and punctuation-or-symbol units, and applies
 left-biased ignores for formatting, textual whitespace, fields, comments, and
 selected story categories. Selected categories leave the original story bytes
 untouched and are excluded before shell checks and revision-id allocation.
-Non-text content remains atomic. Unmatched identical owners become move pairs
+Non-text content remains atomic. Between matched owners of a story or control,
+the remaining owners pair by kind in order, a paragraph with a paragraph, a
+table with a table and a control with a control, and the others are deleted,
+then inserted, before the next pair, so a table edited beside a deleted
+paragraph is compared in place. Unmatched identical owners become move pairs
 only within one story. A changed run of consecutive paragraphs that holds a
 pair whose hyperlinks, bookmarks, comment ranges, preserved raw children, or
 inline controls differ, that gains or loses a modeled field, or that holds a

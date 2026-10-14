@@ -3211,15 +3211,18 @@ fn compare_body(
     }
     let original_paragraphs = paragraphs(&original.body.content);
     let edited_paragraphs = paragraphs(&edited.body.content);
-    let (replaced, carried) = replace_changed_paragraph_runs(
-        align(&original_signatures, &edited_signatures),
+    let (aligned, carried) = replace_changed_paragraph_runs(
+        pair_gaps_by_kind(
+            align(&original_signatures, &edited_signatures),
+            &original_signatures,
+            &edited_signatures,
+        ),
         &original_paragraphs,
         &edited_paragraphs,
         &original_signatures,
         &edited_signatures,
         metadata.options,
     )?;
-    let aligned = expand_body_alignment(replaced, &original.body.content, &edited.body.content);
     refuse_uncarried_field_owners(
         &aligned,
         &original_paragraphs,
@@ -6400,15 +6403,18 @@ fn compare_control_from_xml(
     }
     let original_paragraphs = paragraphs(&original_content);
     let edited_paragraphs = paragraphs(&edited_content);
-    let (replaced, carried) = replace_changed_paragraph_runs(
-        align(&original_signatures, &edited_signatures),
+    let (aligned, carried) = replace_changed_paragraph_runs(
+        pair_gaps_by_kind(
+            align(&original_signatures, &edited_signatures),
+            &original_signatures,
+            &edited_signatures,
+        ),
         &original_paragraphs,
         &edited_paragraphs,
         &original_signatures,
         &edited_signatures,
         metadata.options,
     )?;
-    let aligned = expand_control_alignment(replaced, &original_content, &edited_content);
     refuse_uncarried_field_owners(
         &aligned,
         &original_paragraphs,
@@ -7263,6 +7269,79 @@ fn align(original: &[String], edited: &[String]) -> Vec<(Option<usize>, Option<u
     result
 }
 
+/// Pair the owners left over in each gap between matched owners by kind, in
+/// order: a paragraph with a paragraph, a table with a table and a control
+/// with a control, as the prefix of their signatures names the kind. The
+/// others stay deleted, then inserted, before the next pair. [`align`] pairs
+/// them by position, which would delete and insert a changed table whole
+/// beside a deleted paragraph.
+fn pair_gaps_by_kind(aligned: Alignment, original: &[String], edited: &[String]) -> Alignment {
+    fn kind(signature: &str) -> &str {
+        signature
+            .split_once(':')
+            .map_or(signature, |(kind, _)| kind)
+    }
+    fn flush(
+        gap: &mut (Vec<usize>, Vec<usize>),
+        original: &[String],
+        edited: &[String],
+        result: &mut Alignment,
+    ) {
+        let (left, right) = std::mem::take(gap);
+        let mut lcs = vec![vec![0usize; right.len() + 1]; left.len() + 1];
+        for i in (0..left.len()).rev() {
+            for j in (0..right.len()).rev() {
+                lcs[i][j] = if kind(&original[left[i]]) == kind(&edited[right[j]]) {
+                    1 + lcs[i + 1][j + 1]
+                } else {
+                    lcs[i + 1][j].max(lcs[i][j + 1])
+                };
+            }
+        }
+        let mut pairs = Vec::new();
+        let (mut i, mut j) = (0usize, 0usize);
+        while i < left.len() && j < right.len() {
+            if kind(&original[left[i]]) == kind(&edited[right[j]]) {
+                pairs.push((i, j));
+                i += 1;
+                j += 1;
+            } else if lcs[i + 1][j] >= lcs[i][j + 1] {
+                i += 1;
+            } else {
+                j += 1;
+            }
+        }
+        let (mut deleted, mut inserted) = (0usize, 0usize);
+        for (i, j) in pairs
+            .into_iter()
+            .chain(std::iter::once((left.len(), right.len())))
+        {
+            result.extend(left[deleted..i].iter().map(|&index| (Some(index), None)));
+            result.extend(right[inserted..j].iter().map(|&index| (None, Some(index))));
+            if i < left.len() {
+                result.push((Some(left[i]), Some(right[j])));
+            }
+            (deleted, inserted) = (i + 1, j + 1);
+        }
+    }
+    let mut result = Vec::with_capacity(aligned.len());
+    let mut gap = (Vec::new(), Vec::new());
+    for pair in aligned {
+        match pair {
+            (Some(i), Some(j)) if original[i] == edited[j] => {
+                flush(&mut gap, original, edited, &mut result);
+                result.push(pair);
+            }
+            (left, right) => {
+                gap.0.extend(left);
+                gap.1.extend(right);
+            }
+        }
+    }
+    flush(&mut gap, original, edited, &mut result);
+    result
+}
+
 /// Replace each changed run of paragraphs that revising in place cannot
 /// express, and name the paragraphs whose hyperlinks and simple fields a
 /// whole-paragraph revision may carry.
@@ -7605,62 +7684,6 @@ fn field_balance(paragraphs: &[&CT_P]) -> Result<FieldBalance> {
     } else {
         FieldBalance::Whole
     })
-}
-
-fn expand_body_alignment(
-    aligned: Vec<(Option<usize>, Option<usize>)>,
-    original: &[BodyContent],
-    edited: &[BodyContent],
-) -> Vec<(Option<usize>, Option<usize>)> {
-    let mut expanded = Vec::with_capacity(aligned.len());
-    for (left, right) in aligned {
-        match (left, right) {
-            (Some(i), Some(j))
-                if matches!(original[i], BodyContent::Paragraph(_))
-                    && matches!(edited[j], BodyContent::Table(_)) =>
-            {
-                expanded.push((None, Some(j)));
-                expanded.push((Some(i), None));
-            }
-            (Some(i), Some(j))
-                if matches!(original[i], BodyContent::Table(_))
-                    && matches!(edited[j], BodyContent::Paragraph(_)) =>
-            {
-                expanded.push((Some(i), None));
-                expanded.push((None, Some(j)));
-            }
-            pair => expanded.push(pair),
-        }
-    }
-    expanded
-}
-
-fn expand_control_alignment(
-    aligned: Vec<(Option<usize>, Option<usize>)>,
-    original: &[&SdtContent],
-    edited: &[&SdtContent],
-) -> Vec<(Option<usize>, Option<usize>)> {
-    let mut expanded = Vec::with_capacity(aligned.len());
-    for (left, right) in aligned {
-        match (left, right) {
-            (Some(i), Some(j))
-                if matches!(original[i], SdtContent::Paragraph(_))
-                    && matches!(edited[j], SdtContent::Table(_)) =>
-            {
-                expanded.push((None, Some(j)));
-                expanded.push((Some(i), None));
-            }
-            (Some(i), Some(j))
-                if matches!(original[i], SdtContent::Table(_))
-                    && matches!(edited[j], SdtContent::Paragraph(_)) =>
-            {
-                expanded.push((Some(i), None));
-                expanded.push((None, Some(j)));
-            }
-            pair => expanded.push(pair),
-        }
-    }
-    expanded
 }
 
 fn body_signature(content: &BodyContent) -> String {

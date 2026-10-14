@@ -29120,16 +29120,16 @@ fn comparison_preserves_unmodelled_story_xml_and_relationships_byte_for_byte() {
 fn a_failed_full_story_comparison_leaves_package_typed_state_and_caches_unchanged() {
     let mut original =
         document_with_comparison_header(r#"<w:p><w:r><w:t>same header</w:t></w:r></w:p>"#);
+    // The deleted final paragraph has no paragraph before it for its mark.
     let edited = document_with_comparison_header(
-        r#"<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#,
+        r#"<w:sdt><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
     );
     let before = original.to_bytes().expect("serialize original");
 
-    assert!(
-        original
-            .compare(&edited, "Word", "2026-09-04T09:00:00Z")
-            .is_err()
-    );
+    let error = original
+        .compare(&edited, "Word", "2026-09-04T09:00:00Z")
+        .expect_err("a final paragraph replaced by a control");
+    assert!(error.to_string().contains("adjacent paragraph"), "{error}");
     assert_eq!(
         original.to_bytes().expect("serialize after failure"),
         before
@@ -45801,6 +45801,50 @@ fn paragraph_deleted_before_a_table_carries_its_own_mark() {
     );
     let table = &xml[xml.find("<w:tbl>").unwrap()..xml.find("</w:tbl>").unwrap()];
     assert!(!table.contains("<w:del "), "{xml}");
+}
+
+#[test]
+fn table_edited_beside_a_deleted_paragraph_compares_in_place() {
+    // The gap holds "Old." and the old table on one side and the new table on
+    // the other. The tables pair, so only the cell text is revised.
+    for (original, edited) in [
+        (
+            &["Intro.", "Old.", "T:Old cell.", "End."][..],
+            &["Intro.", "T:New cell.", "End."][..],
+        ),
+        (
+            &["Intro.", "T:Old cell.", "End."][..],
+            &["Intro.", "New.", "T:New cell.", "End."][..],
+        ),
+    ] {
+        let mut compared = paragraph_next_to_table_document(original);
+        compared
+            .compare(
+                &paragraph_next_to_table_document(edited),
+                "Reviewer",
+                "2026-01-01T00:00:00Z",
+            )
+            .expect("compare");
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(compared.to_bytes().unwrap()))
+                .unwrap();
+        let xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        assert_eq!(xml.matches("<w:tbl>").count(), 1, "{xml}");
+        let table = &xml[xml.find("<w:tbl>").unwrap()..xml.find("</w:tbl>").unwrap()];
+        assert!(!table.contains("<w:trPr>"), "{xml}");
+        assert!(!table.contains("<w:pPr>"), "{xml}");
+        assert_eq!(
+            (
+                table.matches("<w:del ").count(),
+                table.matches("<w:ins ").count()
+            ),
+            (1, 1),
+            "{xml}"
+        );
+        assert!(table.contains("<w:delText>Old cell.</w:delText>"), "{xml}");
+        assert!(table.contains("<w:t>New cell.</w:t>"), "{xml}");
+    }
 }
 
 /// The properties of each body paragraph, with an empty `w:pPr` or mark
