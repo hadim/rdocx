@@ -3163,3 +3163,15 @@ Twenty-six of29 top-level stories are complete. Parent F-X211 remains running. F
 Complete slide import, source formatting and deck merge are integrated locally at501144b4. Issues347,348,349 and PR357 are locally addressed by the completed story. The validated handoff is consumed, current defining regression and scoped acceptance pass, and independent integration review reports zero defects and zero smells. Admitted native PowerPoint source comparisons, graph survival and two save/reopen cycles retain their exact documented boundaries.
 
 Twenty-seven of29 top-level stories are complete. Parent F-X211 and its compatibility child c remain running. F-X221 remains approved pending all repair prerequisites. Final full integrated verification, both explicitly ignored focused appearance riders and sprint review remain due. Four missing historical oracle assets remain uncredited in S92. Intake stays frozen40 issues/30 PRs, with264/281 excluded and open. No remote closure, main merge, tag, publication or push is claimed.
+
+
+## F-X211 failed candidate corrective partition, 2026-10-14
+
+The complete immutable first candidate records72 assertion successes and28
+failures, not a completed90-percent correct-file gate. F-X211d owns the
+exposed Word XML/alias/ancestor/style residuals in a separate worktree. c
+keeps PPT and shared causal/reporting fixes and final composed qualification.
+The parent retains every original acceptance condition and now has four
+delivery children. Twenty-nine top-level stories and the frozen40 issues/30
+PRs are unchanged. Preserve all failed candidates and never stitch a best-of
+retry rate or rewrite the corpus. Publication and close remain gated.

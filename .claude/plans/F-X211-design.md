@@ -1168,3 +1168,23 @@ existing test entrypoint. This independent current-owner control does not
 replace, refetch or adapt the frozen W-XML-02 specimen. No specimen is edited
 after observing execution, and no handle is revived by value, index, XML
 equality or the subsequent call being an XML operation.
+
+
+## Failed candidate corrective partition, 2026-10-14
+
+The actual first final candidate executed all100 unchanged scripts with72
+assertion successes and28 failures. It does not meet the original90-percent
+complete-correct-file acceptance, and no final metric is credited. Preserve
+this complete failed candidate, bodies, support, denominator and artifacts.
+F-X211d owns the exposed Word owner/alias/style repairs and receives c's four
+reviewed Word carriers once. F-X211c retains PPT bindings, shared causal
+messages, CI/reporting and final composed-source qualification. The parent
+now closes only after a, b, c and d are complete. This partition adds no issue,
+PR or top-level sprint story and weakens no acceptance.
+
+After genuine repairs, one complete unchanged100 run on the freshly admitted
+new source is ordinary regression qualification. Never compute a best-of
+retry rate or stitch individual successes from different candidates. Preserve
+each complete candidate separately with source identity and honest outcome.
+Contract conflicts require independent disposition and remain non-success
+without script, support, input, expected-value or denominator changes.

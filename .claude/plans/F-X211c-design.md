@@ -94,3 +94,16 @@ actionable first-cause and atomic refusal evidence, not successful-file credit.
 All fourteen XML kinds still require their separate current-owner installed
 positive/negative/source/save-reopen gates. No injected refetch, body adaptation
 or caller-sensitive retirement policy is permitted.
+
+
+## Corrective source partition, 2026-10-14
+
+The real first candidate's72 assertion successes and28 failures are retained,
+with full qualification unset. F-X211d receives the four reviewed Word
+binding/test carriers and owns the newly exposed Word XML/alias/ancestor
+repairs. c keeps PowerPoint bindings and its bounded native theme operation,
+shared causal messages, CI/reporting and final new-source qualification.
+Final c completion additionally requires completed d and exact composed
+source. Preserve all frozen100 bodies/support/inputs and source-specific
+failed candidates. A newly repaired source gets one complete unchanged run,
+not a best-of retry score. Full native/render acceptance remains due.

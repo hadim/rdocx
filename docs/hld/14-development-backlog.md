@@ -7482,7 +7482,7 @@ silent failure has a failing-before/fixed-after public control.
 #### Delivery children
 
 F-X211 retains the complete issue acceptance and closes only after F-X211a,
-F-X211b and F-X211c are completed. Splitting does not add issue scope or waive
+F-X211b, F-X211c and F-X211d are completed. Splitting does not add issue scope or waive
 any existing source, preservation, parser, lifetime or corpus requirement.
 The original approved parent plan remains the shared acceptance contract.
 
@@ -7545,6 +7545,24 @@ F-X218, F-X220 for final integrated capability acceptance.
 **Test gate**: regression. Installed isolated bindings execute the immutable100
 and saved-file assertions, actual per-area rates and named causal invalidation
 errors, with all remaining parent native, render, publication and risk gates.
+
+### F-X211d, Repair Word compatibility owners and aliases (L)
+
+Resolve the Word failures exposed by the actual unchanged first100 candidate:
+checked table/cell/section XML retains exact opaque attributes and adjacent
+children, held sections and paragraphs survive supported header/note/equation
+publication, section margin aliases consume canonical units, Cell.merge uses
+checked physical grid ownership, and the requested canonical built-in table
+style is defined before use. Transfer the four reviewed Word binding/test
+carriers from c once, without reimplementing them. All original parent
+acceptance, conservative Run retirement, manual/foreign refusal, atomicity,
+source preservation and frozen100 identities remain unchanged.
+
+**Depends on**: F-X211a, F-X200, F-X201, F-X202, F-X203.
+**Test gate**: regression. Current Word opaque-owner and alias/survival
+regressions fail on the actual retained candidate and pass after repair, with
+saved/reopened/source-qualified facts and all applicable parent scoped riders.
+Final complete immutable100 qualification remains owned by c.
 
 ### F-X212, Align native accessibility with visible paragraph content (M)
 

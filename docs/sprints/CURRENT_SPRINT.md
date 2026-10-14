@@ -7,7 +7,7 @@ and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
 S91 retains twenty-nine top-level stories, twenty-seven completed, one running,
-one approved pending implementation. F-X211 also has three delivery children
+one approved pending implementation. F-X211 also has four delivery children
 for parallel Word and PowerPoint work followed by integrated compatibility. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
 
 ## Spec references
@@ -46,6 +46,7 @@ for parallel Word and PowerPoint work followed by integrated compatibility. The 
 | F-X211a | Word checked XML owners and resource admission | L | done | - |
 | F-X211b | PowerPoint checked XML owners | L | done | - |
 | F-X211c | Integrated Python compatibility and causal errors | L | in-progress | codex |
+| F-X211d | Repair Word compatibility owners and aliases | L | pending | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | done | - |
 | F-X214 | Bound recursive PowerPoint parsing and traversal | L | done | - |
