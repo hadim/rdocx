@@ -4372,6 +4372,9 @@ def test_issue_217_complete_deck_chain(tmp_path):
     deck.slides[0].shapes.add_shape(MSO_SHAPE.RECTANGLE, unit, 3 * unit, 2 * unit, unit)
     deck.slides[0].shapes[2].auto_shape_type = MSO_SHAPE.CHEVRON
     deck.slides[0].shapes[2].text = "Preset"
+    # Isolate preset geometry from inherited endpoint-gradient interpolation.
+    deck.slides[0].shapes[2].fill.solid()
+    deck.slides[0].shapes[2].fill.fore_color.rgb = RGBColor(0x4F, 0x81, 0xBD)
     imported = deck.slides.import_slide(source.slides[0], index=1)
     assert imported.notes_text == "Imported notes"
     assert imported.shapes[1].image.blob == _tiny_png(0x22, 0x88, 0xCC)
@@ -4517,9 +4520,13 @@ def test_issue_158_deck_fixture_acceptance(tmp_path):
     # feature appears in the source deck, but both must survive the same edits.
     parts = _package_parts(source_bytes)
     slide7 = parts["ppt/slides/slide7.xml"]
+    # This sentinel checks omitted-angle source preservation and orientation.
+    # Three non-mirrored stops use piecewise-linear interpolation in both
+    # viewers. PowerPoint endpoint gamma has a separate native paint control.
     gradient = (
         b'<p:bg><p:bgPr><a:gradFill rotWithShape="1"><a:gsLst>'
         b'<a:gs pos="0"><a:srgbClr val="FFFFFF"/></a:gs>'
+        b'<a:gs pos="50000"><a:srgbClr val="F0F5FA"/></a:gs>'
         b'<a:gs pos="100000"><a:srgbClr val="E0EAF4"/></a:gs>'
         b'</a:gsLst><a:lin scaled="0"/></a:gradFill><a:effectLst/>'
         b'</p:bgPr></p:bg>'
