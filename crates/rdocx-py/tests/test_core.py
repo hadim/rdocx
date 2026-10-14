@@ -3748,7 +3748,7 @@ def test_issue_168_complete_edit_save_reopen_layout_and_render(tmp_path):
     document.remove_hyperlink(document.hyperlinks[-1])
     document.add_picture(_one_pixel_png(), "pixel.png")
     relationship_id = re.search(rb'r:embed="([^"]+)"', _document_xml(document)).group(1).decode()
-    assert document.set_picture_size(
+    assert document.set_picture_sizes_for_relationship(
         relationship_id, width=rdocx.Inches(1), height=rdocx.Inches(1)
     ) == 1
 
@@ -6603,7 +6603,9 @@ def test_fx211d_merge_opaque_refusal_preserves_package_and_owners(kind):
     '<w:id w:val="-1482736121"/><w:docPartObj>'
     '<w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj>',
 ])
-def test_preserved_control_paragraphs_keep_ordinary_reads_without_xml_authority(properties):
+def test_preserved_control_paragraphs_keep_checked_source_and_ordinary_reads(properties):
+    import xml.etree.ElementTree as ET
+
     import rdocx
 
     body = (
@@ -6618,19 +6620,38 @@ def test_preserved_control_paragraphs_keep_ordinary_reads_without_xml_authority(
     assert [paragraph.text for paragraph in document.paragraphs] == ["outside", "preserved"]
     held = document.paragraphs[1]
     outside = document.paragraphs[0]
-    assert held.text == "preserved"
-    for operation in (
-        lambda: held.element.xml,
-        lambda: held.element.replace_xml('<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'),
+    namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    original_xml = held.element.xml
+    root = ET.fromstring(original_xml)
+    assert root.tag == "{" + namespace + "}p"
+    assert "".join(root.itertext()) == "preserved"
+    preserved_properties = re.search(rb"<w:sdtPr>.*?</w:sdtPr>", before_xml, re.S).group(0)
+    assert held.element.replace_xml(original_xml) is None
+    assert document.to_bytes() == before
+    for invalid in (
+        '<x:p xmlns:x="urn:foreign"/>',
+        original_xml + '<w:p xmlns:w="' + namespace + '"/>',
     ):
-        with pytest.raises(ValueError, match="paragraph XML owner route is unsupported"):
-            operation()
+        with pytest.raises(rdocx.RdocxError):
+            held.element.replace_xml(invalid)
         assert document.to_bytes() == before
-    reopened = rdocx.Document.from_bytes(before)
-    assert reopened.paragraphs[1].text == "preserved"
-    assert _document_xml(reopened) == before_xml
+        assert held.element.xml == original_xml
+        assert held.text == "preserved" and outside.text == "outside"
+    # The physical two-segment route owns this paragraph, not its sdtPr wrapper.
+    alias = (
+        '<x:p xmlns:x="' + namespace + '">'
+        '<x:r><x:t>updated</x:t></x:r></x:p>'
+    )
+    assert held.element.replace_xml(alias) is None
+    assert held.text == "updated" and outside.text == "outside"
+    after_xml = _document_xml(document)
+    assert re.search(rb"<w:sdtPr>.*?</w:sdtPr>", after_xml, re.S).group(0) == preserved_properties
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [paragraph.text for paragraph in reopened.paragraphs] == ["outside", "updated"]
+    assert _document_xml(reopened) == after_xml
+    run = held.runs[0]
     document.add_paragraph("later")
-    assert outside.text == "outside"
-    with pytest.raises(rdocx.StaleElementError):
-        _ = held.text
-    assert document.paragraphs[1].text == "preserved"
+    assert outside.text == "outside" and held.text == "updated"
+    with pytest.raises(rdocx.StaleElementError, match="Document.add_paragraph"):
+        _ = run.text
+    assert [paragraph.text for paragraph in document.paragraphs] == ["outside", "updated", "later"]

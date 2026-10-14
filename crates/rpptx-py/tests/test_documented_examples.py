@@ -731,6 +731,21 @@ def _add_speaker_notes(source, target, text):
     assert len(local_masters) == len(global_masters) == 1
     assert not local_masters[0].is_external and not global_masters[0].is_external
     assert local_masters[0].target_part.partname == global_masters[0].target_part.partname
+    # python-pptx 1.0.2 relates its notes master without registering its XML id.
+    # Build a complete independent fixture before testing the consumer.
+    if not oracle._element.xpath("./p:notesMasterIdLst"):
+        registration = parse_xml(
+            '<p:notesMasterIdLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+            '<p:notesMasterId/></p:notesMasterIdLst>'
+        )
+        registration[0].set(
+            "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id",
+            global_masters[0].rId,
+        )
+        prior = oracle._element.find(
+            "{http://schemas.openxmlformats.org/presentationml/2006/main}sldMasterIdLst"
+        )
+        oracle._element.insert(0 if prior is None else oracle._element.index(prior) + 1, registration)
     assert oracle._element.xpath("./p:notesMasterIdLst/p:notesMasterId/@r:id") == [global_masters[0].rId]
     notes.notes_text_frame.text = text
     run = notes.notes_text_frame.paragraphs[0].runs[0]
@@ -4773,9 +4788,11 @@ def test_cell_text_frame_structural_edits_stale_every_earlier_nested_handle():
     retired_runs = new_paragraph.runs
     new_run = new_paragraph.add_run("new run")
     assert new_run.text == "new run"
-    assert new_paragraph.text == "new run"
+    with pytest.raises(StaleElementError, match=r"First invalidated by Paragraph.add_run at committed revision"):
+        _ = new_paragraph.text
     with pytest.raises(StaleElementError, match=r"First invalidated by Paragraph.add_run at committed revision"):
         len(retired_runs)
+    assert fresh_frame.paragraphs[1].text == "new run"
     assert fresh_frame.text == cell.text
     paragraph = cell.text_frame.paragraphs[0]
     held_run = paragraph.runs[0]
@@ -6064,7 +6081,14 @@ def test_fx206_imported_identity_raw_ungroup_and_nested_namespace_roundtrip(tmp_
             with pytest.raises(StaleElementError, match=r"First invalidated by ShapeCollection.remove "):
                 retired()
         remaining = _package_parts(q.to_bytes())["ppt/slides/slide1.xml"]
-        assert b"<f:before/>" in remaining and b"unchanged" in remaining
+        assert b'<f:before xmlns:f="urn:ancestor"/>' in remaining
+        assert b'<f:after xmlns:f="urn:ancestor">  unchanged  </f:after>' in remaining
+        remaining_tree = ET.fromstring(remaining).find(
+            './/{http://schemas.openxmlformats.org/presentationml/2006/main}spTree'
+        )
+        assert [child.tag for child in list(remaining_tree)[2:]] == [
+            "{urn:ancestor}before", "{urn:ancestor}after",
+        ]
 
 
 def test_fx206_imported_opaque_composition_and_group_owner_refusals_are_atomic():

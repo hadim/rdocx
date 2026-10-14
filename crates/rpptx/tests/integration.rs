@@ -12205,7 +12205,7 @@ struct M21RecordedMovieSample {
 
 #[cfg(all(feature = "digital-signatures", feature = "render"))]
 const M21_CURRENT_MINIMAL_SOURCE_SHA256: &str =
-    "5b2a7f2dd18cfc0b77eda496b52166811646f00cf752fc2c0b265caa361464a3";
+    "411f028c4b51c6aac0a0e2ae11bc63592a6d0947ab1a5f0d15116d19bfe766bc";
 
 #[cfg(all(feature = "digital-signatures", feature = "render"))]
 const M21_LEGACY_UNSIGNED_SOURCE_SHA256: &str =
