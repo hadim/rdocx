@@ -7147,7 +7147,14 @@ def _fx195_pinned_poppler():
     import os
     from pathlib import Path
     executable = Path(os.environ['F_X195_POPPLER'])
-    assert executable.is_file() and hashlib.sha256(executable.read_bytes()).hexdigest() == 'd813ee83025433b811b5b7e982dc061751a1ea6cf03773107c398d2a597b70d9'
+    assert executable.is_file()
+    if hashlib.sha256(executable.read_bytes()).hexdigest() != 'd813ee83025433b811b5b7e982dc061751a1ea6cf03773107c398d2a597b70d9':
+        import runpy
+        installer = Path(__file__).resolve().parents[3] / 'scripts/install_pinned_poppler.py'
+        runpy.run_path(str(installer))['authenticated_tool'](
+            Path(os.environ['F_X195_POPPLER_BUILD_RECEIPT']),
+            os.environ['F_X195_POPPLER_BUILD_RECEIPT_SHA'], executable,
+        )
     version = subprocess.run([str(executable), '-v'], capture_output=True, timeout=10, check=False)
     assert version.returncode == 0 and version.stderr.startswith(b'pdftoppm version 26.01.0\n')
     return str(executable)

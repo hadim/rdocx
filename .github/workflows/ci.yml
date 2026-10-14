@@ -234,7 +234,7 @@ jobs:
         run: |
           brew install \
             cmake ninja pkg-config fontconfig freetype jpeg-turbo \
-            libpng libtiff little-cms2 openjpeg
+            libpng libtiff little-cms2 openjpeg cairo glib
           python3 scripts/install_pinned_poppler.py
       - name: Install pinned LibreOffice 26.2.5.2
         if: matrix.package.distribution == 'rpptx'
@@ -265,6 +265,8 @@ jobs:
           "$binding_python" -m pip install \
             maturin==1.13.3 \
             pytest==9.1.1 \
+            Pillow==12.3.0 \
+            meson==1.9.1 \
             "${{ matrix.package.oracle }}"
       - name: Build Python extension
         shell: bash
@@ -274,6 +276,17 @@ jobs:
           VIRTUAL_ENV="$binding_venv" \
             "$binding_python" -m maturin develop --locked \
               --manifest-path "crates/${{ matrix.package.crate }}/Cargo.toml"
+      - name: Prepare independent font acceptance inputs
+        shell: bash
+        env:
+          CARGO_BUILD_JOBS: "4"
+        run: |
+          binding_venv="${RUNNER_TEMP}/${{ matrix.package.distribution }}-venv"
+          binding_python="$binding_venv/bin/python"
+          export PATH="$binding_venv/bin:$PATH"
+          "$binding_python" -I -B crates/rdocx-py/tests/test_rendering_threads.py \
+            --prepare-fx195-inputs "${RUNNER_TEMP}/${{ matrix.package.distribution }}-font-inputs" \
+            --family "${{ matrix.package.distribution }}"
       - name: Run full Python binding suite
         shell: bash
         run: |

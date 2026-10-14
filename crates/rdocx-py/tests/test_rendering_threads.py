@@ -1411,7 +1411,14 @@ def _fx195_pinned_poppler():
     import os
     from pathlib import Path
     executable = Path(os.environ['F_X195_POPPLER'])
-    assert executable.is_file() and hashlib.sha256(executable.read_bytes()).hexdigest() == 'd813ee83025433b811b5b7e982dc061751a1ea6cf03773107c398d2a597b70d9'
+    assert executable.is_file()
+    if hashlib.sha256(executable.read_bytes()).hexdigest() != 'd813ee83025433b811b5b7e982dc061751a1ea6cf03773107c398d2a597b70d9':
+        import runpy
+        installer = Path(__file__).resolve().parents[3] / 'scripts/install_pinned_poppler.py'
+        runpy.run_path(str(installer))['authenticated_tool'](
+            Path(os.environ['F_X195_POPPLER_BUILD_RECEIPT']),
+            os.environ['F_X195_POPPLER_BUILD_RECEIPT_SHA'], executable,
+        )
     version = subprocess.run([str(executable), '-v'], capture_output=True, timeout=10, check=False)
     assert version.returncode == 0 and version.stderr.startswith(b'pdftoppm version 26.01.0\n')
     return str(executable)
@@ -2033,3 +2040,345 @@ def test_fx211c_word_unknown_symbol_source_and_same_pass_diagnostics(owner, tmp_
         levels = ET.fromstring(saved.read("word/numbering.xml")).iter(ns + "lvl")
         assert any(level.find(ns + "lvlText").get(ns + "val") == "\uf0ff" for level in levels)
     assert reopened.to_pdf_with_diagnostics(**kwargs)[1] == facts
+
+
+# CI preparation runs explicitly before pytest. Both binding families consume
+# these independent controls. Importing this module never prepares or compiles.
+def _fx195_prepare_inputs(directory, family, harfbuzz_archive=None):
+    import hashlib
+    import json
+    import os
+    from pathlib import Path
+    import shutil
+    import stat
+    import subprocess
+    import tarfile
+    import tomllib
+    import urllib.request
+    import xml.etree.ElementTree as ET
+
+    root = Path(__file__).resolve().parents[3]
+    directory = Path(directory).resolve()
+    directory.mkdir(parents=True, exist_ok=False)
+    digest = lambda p: hashlib.sha256(Path(p).read_bytes()).hexdigest()
+    commands = []
+
+    def run(argv, timeout=120):
+        index = len(commands)
+        result = subprocess.run([str(a) for a in argv], cwd=root,
+                                capture_output=True, timeout=timeout, check=False)
+        stdout, stderr = directory / f'command-{index}.stdout', directory / f'command-{index}.stderr'
+        stdout.write_bytes(result.stdout)
+        stderr.write_bytes(result.stderr)
+        commands.append({'argv': [str(a) for a in argv], 'exit': result.returncode,
+                         'stdout': str(stdout), 'stdoutSHA256': digest(stdout),
+                         'stderr': str(stderr), 'stderrSHA256': digest(stderr)})
+        (directory / 'commands.json').write_text(json.dumps(commands, indent=2) + '\n')
+        if result.returncode:
+            raise RuntimeError(f'font preparation failed: {argv}: {result.stderr.decode(errors="replace")}')
+        return result.stdout
+
+    def source_guard():
+        files = subprocess.check_output(['git', 'ls-files', '-z'], cwd=root).decode().split('\0')
+        return {p: {'sha256': digest(root / p), 'mode': stat.S_IMODE((root / p).stat().st_mode)}
+                for p in files if p}
+
+    before = source_guard()
+    archive_sha = '2357ed966c6ced7bfa720b0640c0231065af01158fbea215093ffa15aed44371'
+    archive_url = 'https://github.com/harfbuzz/harfbuzz/releases/download/14.4.0/harfbuzz-14.4.0.tar.xz'
+    archive = directory / 'harfbuzz-14.4.0.tar.xz'
+    if harfbuzz_archive is not None:
+        shutil.copyfile(harfbuzz_archive, archive)
+    else:
+        with urllib.request.urlopen(archive_url, timeout=120) as response, archive.open('wb') as out:
+            size = 0
+            while chunk := response.read(1024 * 1024):
+                size += len(chunk)
+                if size > 32 * 1024 * 1024:
+                    raise RuntimeError('HarfBuzz source archive exceeds its bound')
+                out.write(chunk)
+    assert digest(archive) == archive_sha
+    source = directory / 'harfbuzz-source'
+    source.mkdir()
+    total, count = 0, 0
+    with tarfile.open(archive, 'r|xz') as tar:
+        for member in tar:
+            count += 1
+            total += member.size
+            if count > 4096 or total > 128 * 1024 * 1024 or member.size < 0:
+                raise RuntimeError('HarfBuzz source inventory exceeds its bounds')
+            target = source / member.name
+            target.resolve().relative_to(source)
+            if member.issym() and member.name == 'harfbuzz-14.4.0/CLAUDE.md' and member.linkname == 'AGENTS.md':
+                continue  # Reviewed documentation link, not a build input.
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+            elif member.isfile():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tar.extractfile(member) as data, target.open('wb') as out:
+                    shutil.copyfileobj(data, out)
+                target.chmod(stat.S_IMODE(member.mode))
+            else:
+                raise RuntimeError('unexpected HarfBuzz source entry')
+    build = directory / 'harfbuzz-build'
+    run(['meson', 'setup', build, source / 'harfbuzz-14.4.0', '--buildtype=release',
+         '--default-library=static', '-Dtests=disabled', '-Ddocs=disabled',
+         '-Dintrospection=disabled', '-Dicu=disabled', '-Dgraphite=disabled',
+         '-Dcairo=enabled', '-Dfreetype=enabled', '-Dglib=enabled',
+         '-Dgobject=disabled', '-Dcoretext=disabled', '-Dutilities=enabled'], 300)
+    run(['meson', 'compile', '-C', build, '-j', '4', 'hb-shape', 'hb-subset', 'hb-view'], 1200)
+    tools = {name: build / 'util' / name for name in ('hb-shape', 'hb-subset', 'hb-view')}
+    identities = {}
+    for name, tool in tools.items():
+        identities[name] = run([tool, '--version']).decode().splitlines()[0]
+        assert identities[name] == name + ' (HarfBuzz) 14.4.0'
+    tool_guards = {str(p): digest(p) for p in tools.values()}
+
+    fonts = root / 'crates/oxml-layout/fonts'
+    pinned_fonts = {
+        'Carlito-Regular.ttf': 'b4ff23ba370cc95a3c349336b73f9c28514a1371210f89832efc85c4b1ea7131',
+        'Carlito-Italic.ttf': '718a0663864d37a4868220a19b9668a5fe10a46197f6df367b4c2c30c04c026c',
+        'NotoSansThai.ttf': '5a1c559bb539583c8a1fd99d1c5b9491e5e14478c9cd2bd0970d5c3096cc9ef8',
+        'LICENSE-Carlito': 'bbcf8ce9c8acc91355ab5d263ec9e37d498de2222336e7d42e589f791afe56c4',
+        'LICENSE-Noto': 'df5143cdf3380169f2d03bf6d2cd243e85621fd097e608c3607cf7f9c9884ae6',
+    }
+    assert all(digest(fonts / name) == sha for name, sha in pinned_fonts.items())
+    guards = directory / 'style-font-guards.json'
+    guards.write_text(json.dumps(pinned_fonts, indent=2) + '\n')
+
+    def tables(data):
+        return {data[o:o + 4]: data[off:off + length]
+                for o in range(12, 12 + 16 * struct.unpack_from('>H', data, 4)[0], 16)
+                for off, length in [struct.unpack_from('>II', data, o + 8)]}
+
+    def default_static(data):
+        # Keep the original default outline and metrics, remove only its axes.
+        selected = {k: v for k, v in tables(data).items() if k not in (b'fvar', b'gvar')}
+        selected[b'head'] = selected[b'head'][:8] + b'\0' * 4 + selected[b'head'][12:]
+        count = len(selected)
+        power = 1 << (count.bit_length() - 1)
+        result = bytearray(struct.pack('>IHHHH', 65536, count, 16 * power, power.bit_length() - 1, 16 * (count - power)))
+        result.extend(b'\0' * (16 * count))
+        head = None
+        for index, (tag, value) in enumerate(sorted(selected.items())):
+            offset = len(result)
+            struct.pack_into('>4sIII', result, 12 + index * 16, tag, _fx195_checksum(value), offset, len(value))
+            result.extend(value + b'\0' * (-len(value) % 4))
+            if tag == b'head':
+                head = offset
+        struct.pack_into('>I', result, head + 8, (0xB1B0AFBA - _fx195_checksum(result)) & 0xFFFFFFFF)
+        assert _fx195_checksum(result) == 0xB1B0AFBA
+        return bytes(result)
+
+    def glyph_one_points(data):
+        ts = tables(data)
+        long_loca = struct.unpack_from('>h', ts[b'head'], 50)[0]
+        offset = struct.unpack_from('>I' if long_loca else '>H', ts[b'loca'], 4 if long_loca else 2)[0]
+        if not long_loca:
+            offset *= 2
+        raw = ts[b'glyf'][offset:]
+        assert struct.unpack_from('>h', raw)[0] == 1
+        count = struct.unpack_from('>H', raw, 10)[0] + 1
+        at = 14 + struct.unpack_from('>H', raw, 12)[0]
+        flags = []
+        while len(flags) < count:
+            flag = raw[at]
+            at += 1
+            repetitions = raw[at] if flag & 8 else 0
+            at += bool(flag & 8)
+            flags.extend([flag] * (repetitions + 1))
+        coordinates = []
+        for short, same in [(2, 16), (4, 32)]:
+            values, current = [], 0
+            for flag in flags:
+                if flag & short:
+                    delta = raw[at] if flag & same else -raw[at]
+                    at += 1
+                elif flag & same:
+                    delta = 0
+                else:
+                    delta = struct.unpack_from('>h', raw, at)[0]
+                    at += 2
+                current += delta
+                values.append(current)
+            coordinates.append(values)
+        return [list(p) for p in zip(*coordinates)]
+
+    axis = directory / 'axis-oracles'
+    axis.mkdir()
+    fixture_source = (root / 'crates/oxml-pdf/src/font.rs').read_text()
+    controls = []
+    original_axis = None
+    for name in ('ital', 'slnt', 'none'):
+        if name != 'none':
+            section = fixture_source.split(f'fn fx195_{name}_axis_causal_selected_source_and_embedded_outline()', 1)[1]
+            arrays = re.findall(r'&\[([\d,\s]+)\]', section)[:2]
+            assert len(arrays) == 2
+            original, independent_static = [bytes(int(n) for n in re.findall(r'\d+', a)) for a in arrays]
+            if name == 'ital':
+                original_axis = original
+            assert glyph_one_points(independent_static) == [[50, 0], [450, 0], [590, 700], [190, 700]]
+        else:
+            original = default_static(original_axis)
+        input_path = axis / (name + '.ttf')
+        input_path.write_bytes(original)
+        coords = [f'--variations={name}={1 if name == "ital" else -12}'] if name != 'none' else []
+        shaped = run([tools['hb-shape'], input_path, 'A', '--font-size=upem', '--no-glyph-names', '--output-format=json', *coords])
+        assert json.loads(shaped) == [{'g': 1, 'cl': 0, 'dx': 0, 'dy': 0, 'ax': 600, 'ay': 0}]
+        row = {'axis': name, 'input_sha256': digest(input_path), 'exit_code': 0, 'stdout': shaped.decode()}
+        if name != 'none':
+            static = axis / (name + '-static.ttf')
+            run([tools['hb-subset'], input_path, '--unicodes=*', '--name-IDs=*', '--output-file=' + str(static), *coords])
+            points = glyph_one_points(static.read_bytes())
+            assert points == [[50, 0], [450, 0], [590, 700], [190, 700]]
+            assert b'fvar' not in tables(static.read_bytes())
+            row['static'] = {'sha256': digest(static), 'glyph1_points': points, 'fvar_absent': True}
+        controls.append(row)
+    (axis / 'receipt.json').write_text(json.dumps({'controls': controls, 'tools': identities}, indent=2) + '\n')
+
+    def svg_facts(path):
+        node = ET.fromstring(path.read_bytes())
+        definitions = {e.get('id'): e for e in node.iter() if e.get('id')}
+        href = '{http://www.w3.org/1999/xlink}href'
+        token = re.compile(r'[A-DF-Za-df-z]|[-+]?(?:\d*\.?\d+)(?:[eE][-+]?\d+)?')
+        uses = []
+        for use in node.iter():
+            if use.tag.endswith('}use'):
+                paths = [token.findall(e.get('d', '')) for e in definitions[use.get(href)[1:]].iter() if e.tag.endswith('}path')]
+                uses.append(({k: v for k, v in use.attrib.items() if k != href}, paths))
+        return node.attrib, uses
+
+    variable = directory / 'variable-oracles'
+    variable.mkdir()
+    rows = []
+    for weight in (400, 700):
+        source_font = fonts / 'NotoSansThai.ttf'
+        static = variable / f'Thai-{weight}-static.ttf'
+        coords = f'--variations=wght={weight},wdth=100'
+        run([tools['hb-subset'], source_font, '--unicodes=*', '--name-IDs=*', coords, '--output-file=' + str(static)])
+        shapes, paintings = [], []
+        for label, font in [('source', source_font), ('static', static)]:
+            variations = [coords] if label == 'source' else []
+            shape = json.loads(run([tools['hb-shape'], font, 'ภาษาไทยยินดีต้อนรับ', '--font-size=upem', '--no-glyph-names', '--output-format=json', *variations]))
+            shapes.append(shape)
+            svg = variable / f'Thai-{weight}-{label}.svg'
+            run([tools['hb-view'], font, 'ภาษาไทยยินดีต้อนรับ', '--font-size=1000', '--margin=0', '--output-format=svg', '--output-file=' + str(svg), *variations])
+            paintings.append(svg_facts(svg))
+        positions = lambda shape: [{k: v for k, v in glyph.items() if k != 'g'} for glyph in shape]
+        assert positions(shapes[0]) == positions(shapes[1])
+        left, right = paintings
+        assert left[0] == right[0] and len(left[1]) == len(right[1]) > 0
+        delta, coordinates = 0., 0
+        for (lp, lpaths), (rp, rpaths) in zip(left[1], right[1]):
+            assert lp == rp and len(lpaths) == len(rpaths)
+            for lpath, rpath in zip(lpaths, rpaths):
+                assert len(lpath) == len(rpath)
+                for l, r in zip(lpath, rpath):
+                    try:
+                        lf, rf = float(l), float(r)
+                    except ValueError:
+                        assert l == r
+                    else:
+                        delta = max(delta, abs(lf - rf))
+                        coordinates += 1
+        assert coordinates > 0 and delta <= .008
+        rows.append({'script': 'Thai', 'weight': weight, 'units_per_em': 1000,
+                     'text': 'ภาษาไทยยินดีต้อนรับ', 'source': str(source_font), 'output': str(static),
+                     'source_sha256': digest(source_font), 'output_sha256': digest(static),
+                     'shape': shapes[1], 'source_shape': shapes[0],
+                     'total_x_advance': sum(glyph['ax'] for glyph in shapes[1]),
+                     'source_instance_positioning_matches_static': True,
+                     'source_static_svg_path_topology_matches': True,
+                     'source_static_svg_path_max_coordinate_delta_font_units': delta,
+                     'source_static_svg_coordinate_pairs_compared': coordinates})
+    (variable / 'receipt.json').write_text(json.dumps({'tools': identities, 'controls': rows, 'sourceArchiveSHA256': archive_sha, 'toolPins': tool_guards}, indent=2) + '\n')
+
+    # Cargo supplies the real CLI path and the actual independent renderer ABI.
+    cargo = json.loads(run(['cargo', 'metadata', '--locked', '--format-version=1', '--no-deps']))
+    assert any(p['name'] == family + '-cli' for p in cargo['packages'])
+    cli_output = run(['cargo', 'build', '--locked', '-p', family + '-cli', '--message-format=json-render-diagnostics'], 1200)
+    cli_records = [json.loads(line) for line in cli_output.splitlines() if line.startswith(b'{')]
+    cli = next(r['executable'] for r in cli_records if r.get('reason') == 'compiler-artifact' and r.get('executable') and r['target']['name'] == family)
+    output = run(['cargo', 'test', '--locked', '-p', 'rdocx', '--lib', '--no-run', '--message-format=json-render-diagnostics'], 1200)
+    artifacts = [json.loads(line) for line in output.splitlines() if line.startswith(b'{')]
+    versions = {'resvg': '0.48.1', 'usvg': '0.48.1', 'tiny-skia': '0.12.0'}
+    lock = tomllib.loads((root / 'Cargo.lock').read_text())
+    selected = {}
+    for name, version in versions.items():
+        assert any(p['name'] == name and p['version'] == version for p in lock['package'])
+        records = [r for r in artifacts if r.get('reason') == 'compiler-artifact' and r['package_id'].endswith('#' + name + '@' + version)]
+        paths = {p for r in records for p in r['filenames'] if p.endswith('.rlib')}
+        assert len(paths) == 1, (name, paths)
+        selected[name] = Path(paths.pop())
+    # Never link against an open shared cache or qualify a PATH shim as rustc.
+    rustc = Path(run(['rustup', 'which', 'rustc']).decode().strip()).resolve()
+    compiler_version = run([rustc, '-vV']).decode()
+    assert compiler_version.startswith('rustc 1.97.1 ')
+    sysroot = Path(run([rustc, '--print', 'sysroot']).decode().strip()).resolve()
+    # This superset includes compiler libraries, target stdlib and proc-macro ABI.
+    compiler_inputs = [rustc, *sorted(p for p in (sysroot / 'lib').rglob('*') if p.is_file())]
+    assert len(compiler_inputs) > 1
+    dependency_paths = sorted({Path(p).resolve() for record in artifacts
+                               if record.get('reason') == 'compiler-artifact'
+                               for p in record['filenames']
+                               if p.endswith(('.rlib', '.dylib', '.so'))})
+    assert set(selected.values()).issubset(set(dependency_paths))
+    dependency_directory = directory / 'reference-dependencies'
+    dependency_directory.mkdir()
+    assert len({p.name for p in dependency_paths}) == len(dependency_paths)
+    for path in dependency_paths:
+        (dependency_directory / path.name).symlink_to(path)
+    reference = directory / 'original-path-reference.rs'
+    reference.write_text(_FX195_REFERENCE_RENDERER_SOURCE)
+    binary = directory / 'original-path-reference'
+    input_guards = {str(p): digest(p) for p in [reference, root / 'Cargo.lock',
+                                               *compiler_inputs, *dependency_paths]}
+    inventory = {str(p): str(p.resolve()) for p in dependency_directory.iterdir()}
+    run([rustc, '--sysroot', sysroot, '--edition=2024', reference,
+         '--extern', 'resvg=' + str(dependency_directory / selected['resvg'].name),
+         '-L', 'dependency=' + str(dependency_directory), '-o', binary], 300)
+    assert all(digest(p) == sha for p, sha in input_guards.items())
+    assert {str(p): str(p.resolve()) for p in dependency_directory.iterdir()} == inventory
+    assert sorted(str(p) for p in (sysroot / 'lib').rglob('*') if p.is_file()) == sorted(str(p) for p in compiler_inputs[1:])
+    assert source_guard() == before
+    compile_receipt = directory / 'reference-compile-receipt.json'
+    compile_receipt.write_text(json.dumps({'actualExit': 0, 'guardsBefore': True, 'guardsAfter': True,
+                                         'binarySHA': digest(binary), 'inputs': input_guards,
+                                         'actualCompiler': str(rustc), 'actualCompilerSHA256': digest(rustc),
+                                         'sysroot': str(sysroot), 'isolatedDependencyInventory': inventory,
+                                         'cargoCompilerArtifacts': [record for record in artifacts if record.get('reason') == 'compiler-artifact'],
+                                         'rustcVerboseVersion': compiler_version,
+                                         'command': commands[-1]}, indent=2) + '\n')
+    qualification = directory / 'path-reference-qualification.json'
+    qualification.write_text(json.dumps({'actual_compiler_exit': 0, 'actual_transitive_abi_qualified': True,
+                                        'renderer_source_sha256': digest(reference), 'rustc_verbose_version': compiler_version,
+                                        'actual_transitive_versions': versions, 'actualCompileReceipt': str(compile_receipt),
+                                        'actualCompileReceiptSHA': digest(compile_receipt), 'renderer_binary': str(binary),
+                                        'renderer_binary_sha256': digest(binary), 'qualified_resvg_rlib': str(selected['resvg']),
+                                        'qualified_resvg_rlib_sha256': digest(selected['resvg'])}, indent=2) + '\n')
+    assert all(digest(p) == sha for p, sha in tool_guards.items())
+    environment = {'F_X195_AXIS_ORACLES': str(axis), 'F_X195_VARIABLE_ORACLES': str(variable),
+                   'F_X195_STYLE_FONT_GUARDS': str(guards), 'F_X195_PATH_REFERENCE_QUALIFICATION': str(qualification),
+                   'F_X195_PATH_REFERENCE_QUALIFICATION_SHA': digest(qualification),
+                   family.upper() + '_CLI': cli}
+    (directory / 'environment.json').write_text(json.dumps(environment, indent=2) + '\n')
+    if os.environ.get('GITHUB_ENV'):
+        with Path(os.environ['GITHUB_ENV']).open('a') as out:
+            for key, value in environment.items():
+                out.write(key + '=' + value + '\n')
+    (directory / 'receipt.json').write_text(json.dumps({'status': 'actual-independent-inputs-prepared',
+        'sourceGuardsBeforeAfter': True, 'sourceInputs': before, 'commands': commands,
+        'harfbuzzSourceURL': archive_url, 'harfbuzzSourceSHA256': archive_sha,
+        'harfbuzzTools': tool_guards, 'environment': environment}, indent=2) + '\n')
+    print(json.dumps(environment, indent=2))
+    return environment
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Prepare independent font controls before binding pytest.')
+    parser.add_argument('--prepare-fx195-inputs', required=True)
+    parser.add_argument('--family', required=True, choices=('rdocx', 'rpptx'))
+    parser.add_argument('--harfbuzz-archive')
+    args = parser.parse_args()
+    _fx195_prepare_inputs(args.prepare_fx195_inputs, args.family, args.harfbuzz_archive)

@@ -1092,6 +1092,7 @@ class SprintWorkflowTests(unittest.TestCase):
             "Install pinned LibreOffice 26.2.5.2",
             "Create isolated binding environment",
             "Build Python extension",
+            "Prepare independent font acceptance inputs",
             "Run full Python binding suite",
             "Validate retained compatibility report contracts",
         )
@@ -1164,7 +1165,7 @@ class SprintWorkflowTests(unittest.TestCase):
             (
                 "brew install \\",
                 "cmake ninja pkg-config fontconfig freetype jpeg-turbo \\",
-                "libpng libtiff little-cms2 openjpeg",
+                "libpng libtiff little-cms2 openjpeg cairo glib",
                 "python3 scripts/install_pinned_poppler.py",
             ),
         )
@@ -1179,6 +1180,8 @@ class SprintWorkflowTests(unittest.TestCase):
                 '"$binding_python" -m pip install \\',
                 'maturin==1.13.3 \\',
                 'pytest==9.1.1 \\',
+                'Pillow==12.3.0 \\',
+                'meson==1.9.1 \\',
                 '"${{ matrix.package.oracle }}"',
             ),
         )
@@ -1195,6 +1198,20 @@ class SprintWorkflowTests(unittest.TestCase):
                 '--manifest-path "crates/${{ matrix.package.crate }}/Cargo.toml"',
             ),
         )
+
+        bootstrap = self.yaml_step(job, "Prepare independent font acceptance inputs")
+        self.assertEqual(self.yaml_direct_lines(bootstrap, 8), ("shell: bash", "env:", "run: |"))
+        self.assertEqual(self.yaml_direct_lines(self.yaml_block(bootstrap, "        env:"), 10), ('CARGO_BUILD_JOBS: "4"',))
+        self.assertEqual(self.yaml_run_lines(bootstrap), (
+            'binding_venv="${RUNNER_TEMP}/${{ matrix.package.distribution }}-venv"',
+            'binding_python="$binding_venv/bin/python"',
+            'export PATH="$binding_venv/bin:$PATH"',
+            '"$binding_python" -I -B crates/rdocx-py/tests/test_rendering_threads.py \\',
+            '--prepare-fx195-inputs "${RUNNER_TEMP}/${{ matrix.package.distribution }}-font-inputs" \\',
+            '--family "${{ matrix.package.distribution }}"',
+        ))
+        self.assertNotIn("continue-on-error", bootstrap)
+        self.assert_no_success_short_circuit(self.yaml_run_lines(bootstrap))
 
         tests = self.yaml_step(job, "Run full Python binding suite")
         self.assertEqual(
@@ -1225,6 +1242,70 @@ class SprintWorkflowTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assert_python_pr_job_contract(ci)
+
+    def test_python_font_bootstrap_cannot_be_skipped_or_narrowed(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text()
+        job = self.yaml_block(ci, "  python-bindings:")
+        bootstrap = self.yaml_step(job, "Prepare independent font acceptance inputs")
+        mutations = {
+            "missing-bootstrap": ci.replace(bootstrap, "", 1),
+            "wrong-family": ci.replace(bootstrap, bootstrap.replace(
+                '--family "${{ matrix.package.distribution }}"', '--family "rdocx"'), 1),
+            "failure-swallowed": ci.replace(bootstrap, bootstrap.replace(
+                '        shell: bash', '        continue-on-error: true\n        shell: bash'), 1),
+            "pillow-missing": ci.replace('            Pillow==12.3.0 \\\n', '', 1),
+        }
+        for name, changed in mutations.items():
+            self.assertNotEqual(ci, changed, name)
+            with self.subTest(mutation=name), self.assertRaises(AssertionError):
+                self.assert_python_pr_job_contract(changed)
+
+    def test_poppler_source_build_requires_source_compiler_and_tool_custody(self) -> None:
+        digest = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source, compiler = directory / "source.tar.xz", directory / "compiler"
+            source.write_bytes(b"bounded test source archive")
+            compiler.write_bytes(b"test compiler bytes")
+            tools = {}
+            for name in install_pinned_poppler.TOOLS:
+                path = directory / name
+                path.write_bytes(("test executable " + name).encode())
+                tools[name] = {"path": str(path), "sha256": digest(path)}
+            receipt = {
+                "status": "actual-source-build",
+                "sourceURL": install_pinned_poppler.POPLER_URL,
+                "sourceArchiveSHA256": digest(source), "sourceArchive": str(source),
+                "installerSHA256": digest(install_pinned_poppler.__file__),
+                "configureExit": 0, "compileExit": 0,
+                "sourceAndCompilerGuardsPassed": True,
+                "configureArgv": ["cmake", "-S", "source"],
+                "compileArgv": ["cmake", "--build", "build"],
+                "compiler": str(compiler), "compilerSHA256": digest(compiler),
+                "compilerVersion": "test compiler identity", "tools": tools,
+            }
+            record = directory / "receipt.json"
+            executable = Path(tools["pdftoppm"]["path"])
+            def authenticate(value):
+                record.write_text(json.dumps(value))
+                install_pinned_poppler.authenticated_tool(record, digest(record), executable)
+            with patch.object(install_pinned_poppler, "POPLER_SHA256", digest(source)):
+                authenticate(receipt)
+                for key, bad in [("status", "version-only"), ("sourceArchiveSHA256", "0" * 64),
+                                 ("compilerSHA256", "0" * 64), ("compileExit", 1),
+                                 ("sourceAndCompilerGuardsPassed", False)]:
+                    with self.subTest(field=key), self.assertRaises(RuntimeError):
+                        authenticate({**receipt, key: bad})
+                authenticate(receipt)
+                with self.assertRaisesRegex(RuntimeError, "receipt changed"):
+                    install_pinned_poppler.authenticated_tool(record, "0" * 64, executable)
+                executable.write_bytes(b"substituted same-version executable")
+                with self.assertRaisesRegex(RuntimeError, "executable"):
+                    authenticate(receipt)
+                executable.write_bytes(b"test executable pdftoppm")
+                source.write_bytes(b"substituted archive")
+                with self.assertRaises(RuntimeError):
+                    authenticate(receipt)
 
     def test_pinned_poppler_installer_contract(self) -> None:
         installer_path = workflow.REPO / "scripts/install_pinned_poppler.py"

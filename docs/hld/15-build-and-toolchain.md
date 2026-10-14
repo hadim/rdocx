@@ -925,8 +925,24 @@ rather than running on generic wheel hosts.
 for each Python package. Every row creates an isolated Python 3.12.9 environment,
 installs exact maturin, pytest, and package-oracle versions, builds the current
 extension with `maturin develop --locked`, and runs the package's complete
-pytest directory. The Poppler installation supplies the reviewed 26.01.0 tools
-asserted by the rdocx rendering suite. Build and test failures propagate
+pytest directory. Before pytest, the existing Word rendering test carrier
+prepares independent inputs for either family without importing either product.
+Pillow12.3.0 and Meson1.9.1 are explicit test and build tools. A SHA-pinned
+HarfBuzz14.4.0 source build shapes and subsets the licensed bundled Thai400/700
+controls and the original synthetic ital/slnt SFNT literals. Original and static
+glyph positions, SVG topology and every coordinate retain the0.008-font-unit
+bound. Bundled static-family hashes and licenses are authenticated separately.
+Actual Cargo JSON artifacts identify the current family CLI and the existing
+rdocx development dependency used to compile the standalone path-only reference
+renderer before pytest. Compiler, artifact, source and transitive-version receipts
+bind that executable. Tests never compile a missing reference or use product
+output as its expected paint. All104 font cases and their0.99 comparisons remain
+mandatory, including the separate serial native-eight SVG acceptance.
+The Poppler installation supplies reviewed26.01.0 tools and a retained source
+archive, actual compiler/command and output-hash receipt. Font comparisons accept
+the exact historical binary or this authenticated source build, always using
+the same tool for product PDFs and independent references. Version output alone
+does not establish that provenance. Build and test failures propagate
 directly, with no failure-tolerant condition, inherited pytest override, or
 fallback. The top-level pull-request trigger is operative and the job condition
 uses only the change detector's `python_bindings` output. Workflow root
