@@ -88,8 +88,8 @@ with open("report.pdf", "wb") as output:
   `run.underline`, `font.highlight_color`, `styles['Normal']`, and
   `Document(stream)` and `save(stream)`.
 - Raw XML for a missing feature: `xml` and `replace_xml` on paragraphs, runs,
-  tables and cells, and `section_xml` and `replace_section_xml` for section
-  properties. A replacement that holds another element, would lose an element,
+  tables and cells, header and footer paragraphs and runs included, and
+  `section_xml` and `replace_section_xml` for section properties. A replacement that holds another element, would lose an element,
   misplaces an element Word checks, or references an unknown relationship id
   or one of the wrong type raises `ValueError`.
 - Python collections with negative indexes, slices, and iteration. Paragraph,

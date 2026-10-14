@@ -1137,15 +1137,18 @@ class Paragraph:
     def replace_xml(self, xml: _Xml) -> None:
         """Replace this paragraph with one ``w:p`` given as XML.
 
-        Prefixes the document root declares need no declaration, and CDATA is
-        read as the text it holds. Raises ``ValueError``, leaving the document
-        unchanged, when the XML is malformed or has a DOCTYPE, holds another
-        element or several, names an element rdocx would drop, places a ``w:``
-        element where Word refuses it or uses a namespace mc:Ignorable does
-        not cover, leaves a cell without a paragraph or a row without a cell,
-        references a relationship id the document part lacks or one of the
-        wrong type, or adds or removes a section break. This handle stays
-        valid and its run handles retire.
+        A paragraph of a header or footer, or of a table cell in one, is
+        replaced in the part of the header or footer. Prefixes the root of
+        that part declares need no declaration, a prefix an ancestor in the
+        XML declares is resolved through it, and CDATA is read as the text it
+        holds. Raises ``ValueError``, leaving the document unchanged, when the
+        XML is malformed or has a DOCTYPE, holds another element or several,
+        uses a prefix declared nowhere, names an element rdocx would drop,
+        places a ``w:`` element where Word refuses it or uses a namespace
+        mc:Ignorable does not cover, leaves a cell without a paragraph or a
+        row without a cell, references a relationship id that part lacks or
+        one of the wrong type, or adds or removes a section break. This handle
+        stays valid and its run handles retire.
         """
     def insert_paragraph_before(self, text: str = "", style: str | None = None) -> Paragraph:
         """Insert a body paragraph before this one. Every held handle stays valid."""

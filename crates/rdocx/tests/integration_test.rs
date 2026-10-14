@@ -24753,3 +24753,132 @@ mod issue_304_stories_and_pages {
         assert!(!settings_xml(&mut document).contains("displayBackgroundShape"));
     }
 }
+
+#[test]
+fn raw_xml_reads_and_replaces_header_and_footer_paragraphs_in_their_own_part() {
+    use rdocx::{HeaderFooterKind, HeaderFooterParagraph, XmlParagraph, XmlTarget};
+
+    let mut doc = Document::new();
+    doc.add_paragraph("body");
+    let body_link = doc.add_hyperlink_relationship("https://example.com/body");
+    let story = doc
+        .create_section_story(0, HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap();
+    doc.add_header_footer_paragraph(&story, "Header text.")
+        .unwrap();
+    let table = doc.add_header_footer_table(&story, 1, 1, None).unwrap();
+    // Each edit of the part changes its identity: fetch the current one.
+    let current = |doc: &Document| {
+        doc.section_story(0, HeaderFooterKind::Header, HdrFtrType::Default)
+            .unwrap()
+            .unwrap()
+            .story()
+            .clone()
+    };
+    let story = current(&doc);
+    let header_link = doc
+        .add_hyperlink_relationship_to_story(&story, "https://example.com/header")
+        .unwrap();
+    assert_ne!(header_link, body_link);
+    let story = current(&doc);
+    let header_part = story.part_name().to_owned();
+    let header_xml = |doc: &mut Document| {
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(doc.to_bytes().unwrap())).unwrap();
+        String::from_utf8(package.get_part(&header_part).unwrap().to_vec()).unwrap()
+    };
+    let paragraph = XmlTarget::Paragraph(XmlParagraph::Story {
+        story: story.clone(),
+        at: HeaderFooterParagraph::Direct(0),
+    });
+    let cell = XmlTarget::Paragraph(XmlParagraph::Story {
+        story: story.clone(),
+        at: HeaderFooterParagraph::Cell {
+            table,
+            row: 0,
+            cell: 0,
+            paragraph: 0,
+        },
+    });
+
+    // Read, and write back unchanged, a direct and a table-cell paragraph.
+    let read = String::from_utf8(doc.element_xml(&paragraph).unwrap()).unwrap();
+    assert!(
+        read.starts_with("<w:p ") && read.contains("Header text."),
+        "{read}"
+    );
+    for target in [&paragraph, &cell] {
+        let xml = doc.element_xml(target).unwrap();
+        doc.replace_element_xml(target, &xml).unwrap();
+        assert_eq!(doc.element_xml(target).unwrap(), xml, "{target:?}");
+    }
+
+    // A replacement lands in the header part, with a relationship of that
+    // part, and survives a save and reopen.
+    doc.replace_element_xml(
+        &paragraph,
+        format!(
+            r#"<w:p><w:hyperlink r:id="{header_link}"><w:r><w:rPr><w:color w:val="0000FF"/></w:rPr><w:t>Linked header</w:t></w:r></w:hyperlink></w:p>"#
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    doc.replace_element_xml(&cell, b"<w:p><w:r><w:t>In the cell</w:t></w:r></w:p>")
+        .unwrap();
+    let saved = header_xml(&mut doc);
+    assert!(
+        saved.contains("Linked header") && saved.contains("In the cell"),
+        "{saved}"
+    );
+    assert!(
+        saved.contains(&format!(r#"r:id="{header_link}""#)),
+        "{saved}"
+    );
+    assert!(
+        !String::from_utf8(document_xml(&mut doc))
+            .unwrap()
+            .contains("Linked header")
+    );
+    let reopened = Document::from_bytes(&doc.to_bytes().unwrap()).unwrap();
+    let reopened_xml = reopened
+        .element_xml(&XmlTarget::Paragraph(XmlParagraph::Story {
+            story: current(&reopened),
+            at: HeaderFooterParagraph::Direct(0),
+        }))
+        .unwrap();
+    assert!(
+        String::from_utf8(reopened_xml)
+            .unwrap()
+            .contains("Linked header")
+    );
+
+    // A relationship of document.xml, and everything the body refuses, is
+    // refused and leaves the header part as it was.
+    let before = header_xml(&mut doc);
+    let body_relationship = format!(
+        r#"<w:p><w:hyperlink r:id="{body_link}"><w:r><w:t>x</w:t></w:r></w:hyperlink></w:p>"#
+    );
+    for (xml, message) in [
+        (body_relationship.as_str(), body_link.as_str()),
+        ("<w:tbl/>", "got w:tbl"),
+        (
+            r#"<w:p><w:pPr><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:pPr></w:p>"#,
+            "section break",
+        ),
+        (
+            "<w:p><w:r><w:rPr><w:b/><w:b/></w:rPr></w:r></w:p>",
+            "would not keep b",
+        ),
+        ("<w:p><x:y/></w:p>", "prefix x is not declared"),
+    ] {
+        let error = doc
+            .replace_element_xml(&paragraph, xml.as_bytes())
+            .unwrap_err();
+        assert!(error.to_string().contains(message), "{error}");
+    }
+    let error = doc
+        .replace_element_xml(&paragraph, body_relationship.as_bytes())
+        .unwrap_err();
+    assert!(error.to_string().contains(&header_part), "{error}");
+    assert_eq!(header_xml(&mut doc), before);
+}
