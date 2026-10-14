@@ -46,7 +46,7 @@ for parallel Word and PowerPoint work followed by integrated compatibility. The 
 | F-X211a | Word checked XML owners and resource admission | L | done | - |
 | F-X211b | PowerPoint checked XML owners | L | done | - |
 | F-X211c | Integrated Python compatibility and causal errors | L | in-progress | codex |
-| F-X211d | Repair Word compatibility owners and aliases | L | pending | - |
+| F-X211d | Repair Word compatibility owners and aliases | L | in-progress | codex |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | done | - |
 | F-X214 | Bound recursive PowerPoint parsing and traversal | L | done | - |
