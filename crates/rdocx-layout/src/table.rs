@@ -2239,6 +2239,7 @@ mod tests {
         let input = LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -2508,6 +2509,7 @@ mod tests {
         let input = crate::input::LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,

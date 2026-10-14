@@ -57,6 +57,7 @@ rdocx convert report.docx --to pdf -o report.pdf
 rdocx convert redline.docx --to pdf --revision-view tracked -o redline.pdf
 rdocx convert page.html -o page.docx
 rdocx convert notes.md --template brand.dotx -o notes.docx
+rdocx render redline.docx --revision-view tracked --revision-style legal
 rdocx diff before.docx after.docx
 rdocx diff before.docx after.docx --exit-code --json
 rdocx validate report.docx
@@ -238,7 +239,10 @@ printed on stderr as a `Warning:` line with its location, a Markdown line
 number for Markdown input.
 
 `convert` to PDF or images and `render` use the accepted revision view by
-default. `--revision-view tracked` shows both sides of tracked changes.
+default. `--revision-view tracked` shows both sides of tracked changes, and
+`--revision-style legal` colours them as legal comparison tools do: insertions
+blue with a double underline, deletions red and struck through, moved text
+green. `--revision-style` needs `--revision-view tracked`.
 Unknown view names are usage errors. HTML and Markdown conversion refuse
 the tracked view before creating output.
 

@@ -75,6 +75,8 @@ use crate::table::{Table, TableRef, row_cell_ranges, validate_table_topology};
 pub struct RenderOptions {
     /// The tracked-revision view to render.
     pub revision_view: rdocx_layout::RevisionView,
+    /// How the tracked view marks revisions.
+    pub revision_style: rdocx_layout::RevisionStyle,
 }
 
 /// Which of Word's independent note streams a policy governs.
@@ -15683,6 +15685,7 @@ impl Document {
 
         let mut input = self.build_layout_input();
         input.revision_view = options.revision_view;
+        input.revision_style = options.revision_style;
         #[cfg(test)]
         record_layout_invocation();
         let layout = if deterministic {
@@ -29983,6 +29986,7 @@ impl Document {
     ) -> rdocx_layout::LayoutInput {
         let mut input = self.build_layout_input();
         input.revision_view = options.revision_view;
+        input.revision_style = options.revision_style;
         // Caller faces load before the embedded ones so they win a family
         // both supply, as an installed font is reported to win in Office.
         let embedded = std::mem::take(&mut input.fonts);
@@ -30796,6 +30800,7 @@ impl Document {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: rdocx_layout::RevisionView::Accepted,
+            revision_style: rdocx_layout::RevisionStyle::Plain,
             document,
             automatic_hyphenation: self
                 .settings
@@ -36107,6 +36112,7 @@ mod tests {
         doc.add_paragraph("tracked view");
         let options = RenderOptions {
             revision_view: rdocx_layout::RevisionView::Tracked,
+            revision_style: rdocx_layout::RevisionStyle::Plain,
         };
 
         reset_layout_invocations();
@@ -37144,6 +37150,7 @@ mod tests {
         doc.add_paragraph("revision cache separation");
         let tracked = RenderOptions {
             revision_view: rdocx_layout::RevisionView::Tracked,
+            revision_style: rdocx_layout::RevisionStyle::Plain,
         };
 
         reset_layout_invocations();
@@ -37184,6 +37191,7 @@ mod tests {
         doc.add_paragraph("tracked engine reuse");
         let tracked = RenderOptions {
             revision_view: rdocx_layout::RevisionView::Tracked,
+            revision_style: rdocx_layout::RevisionStyle::Plain,
         };
 
         let first = doc

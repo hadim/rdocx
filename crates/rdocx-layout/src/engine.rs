@@ -34,7 +34,7 @@ use crate::block::{
     SharedLayoutBlock, TableSemantics,
 };
 use crate::convert;
-use crate::input::{LayoutInput, MediaRegistry, RevisionView};
+use crate::input::{LayoutInput, MediaRegistry, RevisionStyle, RevisionView};
 use crate::notes::NoteRegistry;
 use crate::paginator::{
     self, ColumnTrack, HeaderFooterContent, HeaderFooterSemantics, LineNumbering, PageBorderFrame,
@@ -74,6 +74,9 @@ struct ProjectedRun<'a> {
     hyperlink_index: Option<usize>,
     force_underline: bool,
     force_strike: bool,
+    /// The innermost insertion, deletion or move that marks the run in the
+    /// tracked view.
+    revision: Option<RevisionKind>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -2043,6 +2046,7 @@ fn project_paragraph_runs(para: &CT_P, view: RevisionView) -> Vec<ProjectedRun<'
                 hyperlink_index: None,
                 force_underline: false,
                 force_strike: false,
+                revision: None,
             });
         }
     }
@@ -2135,6 +2139,7 @@ fn project_control_runs<'a>(
                     hyperlink_index: None,
                     force_underline: false,
                     force_strike: false,
+                    revision: None,
                 }),
                 SdtContent::ContentControl(control) => {
                     project_control_runs(control, view, boundary, raw_order, projected);
@@ -2272,6 +2277,7 @@ fn project_revision_runs<'a>(
                 revision.kind(),
                 RevisionKind::Deletion | RevisionKind::MoveFrom
             ));
+    let marked = (view == RevisionView::Tracked).then(|| revision.kind());
     if matches!(
         revision.kind(),
         RevisionKind::Insertion | RevisionKind::MoveTo
@@ -2285,6 +2291,7 @@ fn project_revision_runs<'a>(
                 hyperlink_index,
                 force_underline: force_underline || nested.force_underline,
                 force_strike: force_strike || nested.force_strike,
+                revision: nested.revision.or(marked),
                 ..nested
             });
         }
@@ -2325,6 +2332,7 @@ fn project_revision_runs<'a>(
                 hyperlink_index,
                 force_underline,
                 force_strike,
+                revision: marked,
             });
         }
     }
@@ -2447,6 +2455,69 @@ fn paragraph_has_visible_revision(para: &CT_P) -> bool {
             .revisions
             .iter()
             .any(|(_, _, revision)| revision_is_visible(revision))
+}
+
+/// The colour of an insertion, deletion or move in the legal revision style.
+fn legal_revision_color(kind: RevisionKind) -> Option<Color> {
+    let (r, g, b) = match kind {
+        RevisionKind::Insertion => (0, 0, 0xFF),
+        RevisionKind::Deletion => (0xFF, 0, 0),
+        RevisionKind::MoveFrom | RevisionKind::MoveTo => (0, 0xA0, 0),
+        _ => return None,
+    };
+    Some(Color {
+        r: f64::from(r) / 255.0,
+        g: f64::from(g) / 255.0,
+        b: f64::from(b) / 255.0,
+        a: 1.0,
+    })
+}
+
+/// The text colour and underline of `projected`, given those of its run:
+/// the tracked view underlines an insertion or a move destination, double
+/// in the legal style, which also gives the run the colour of its revision.
+fn tracked_marks(
+    projected: &ProjectedRun<'_>,
+    style: RevisionStyle,
+    color: Color,
+    underline: Option<Underline>,
+) -> (Color, Option<Underline>) {
+    let legal = style == RevisionStyle::Legal;
+    let underline = match (projected.force_underline, legal) {
+        (true, true) => Some(Underline::Double),
+        (true, false) => Some(Underline::Single),
+        (false, _) => underline,
+    };
+    let color = projected
+        .revision
+        .filter(|_| legal)
+        .and_then(legal_revision_color)
+        .unwrap_or(color);
+    (color, underline)
+}
+
+/// The colour of the change bar beside `para`, or `None` when the tracked
+/// view shows no revision in it. In the legal style the bar takes the colour
+/// of the first insertion, deletion or move, its runs' or its mark's.
+fn change_bar_color(para: &CT_P, input: &LayoutInput) -> Option<Color> {
+    if input.revision_view != RevisionView::Tracked || !paragraph_has_visible_revision(para) {
+        return None;
+    }
+    if input.revision_style == RevisionStyle::Plain {
+        return Some(Color::BLACK);
+    }
+    let mark = para
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.rpr.as_ref())
+        .into_iter()
+        .flat_map(|properties| properties.revision_markers.iter().map(CT_Revision::kind));
+    project_paragraph_runs(para, RevisionView::Tracked)
+        .iter()
+        .filter_map(|projected| projected.revision)
+        .chain(mark)
+        .find_map(legal_revision_color)
+        .or(Some(Color::BLACK))
 }
 
 fn run_properties_have_revision(properties: &rdocx_oxml::properties::CT_RPr) -> bool {
@@ -2614,6 +2685,7 @@ pub struct Engine {
 struct ReusableEngineContext {
     sequence_snapshot: Option<Arc<crate::WordSequenceSnapshot>>,
     revision_view: RevisionView,
+    revision_style: RevisionStyle,
     automatic_hyphenation: bool,
     mirror_margins: bool,
     gutter_at_top: bool,
@@ -2710,6 +2782,7 @@ impl ReusableEngineContext {
         Self {
             sequence_snapshot: input.sequence_snapshot.clone(),
             revision_view: input.revision_view,
+            revision_style: input.revision_style,
             automatic_hyphenation: input.automatic_hyphenation,
             mirror_margins: input.mirror_margins,
             gutter_at_top: input.gutter_at_top,
@@ -2801,6 +2874,7 @@ impl ReusableEngineContext {
         let sections_match = self.sections.iter().eq(document_sections(&input.document));
         self.sequence_snapshot == input.sequence_snapshot
             && self.revision_view == input.revision_view
+            && self.revision_style == input.revision_style
             && self.automatic_hyphenation == input.automatic_hyphenation
             && self.mirror_margins == input.mirror_margins
             && self.gutter_at_top == input.gutter_at_top
@@ -9070,14 +9144,12 @@ fn layout_paragraph_with_source_and_table(
         );
 
         // Resolve color: theme color takes priority over literal color value
-        let color = resolve_run_color(&effective_rpr, input.theme.as_ref());
-
-        // Decoration properties
-        let underline = if projected.force_underline {
-            Some(Underline::Single)
-        } else {
-            convert::underline(effective_rpr.underline)
-        };
+        let (color, underline) = tracked_marks(
+            &projected,
+            input.revision_style,
+            resolve_run_color(&effective_rpr, input.theme.as_ref()),
+            convert::underline(effective_rpr.underline),
+        );
         let strike = projected.force_strike || effective_rpr.strike.unwrap_or(false);
         let dstrike = effective_rpr.dstrike.unwrap_or(false);
         let highlight = effective_rpr.highlight.and_then(highlight_to_color);
@@ -9483,12 +9555,12 @@ fn layout_paragraph_with_source_and_table(
                             input.theme.as_ref(),
                             word_font_slot_for_text(value, segment_rpr.font_hint.as_deref()),
                         );
-                        let segment_color = resolve_run_color(&segment_rpr, input.theme.as_ref());
-                        let segment_underline = if projected.force_underline {
-                            Some(Underline::Single)
-                        } else {
-                            convert::underline(segment_rpr.underline)
-                        };
+                        let (segment_color, segment_underline) = tracked_marks(
+                            &projected,
+                            input.revision_style,
+                            resolve_run_color(&segment_rpr, input.theme.as_ref()),
+                            convert::underline(segment_rpr.underline),
+                        );
                         let segment_strike =
                             projected.force_strike || segment_rpr.strike.unwrap_or(false);
                         let segment_dstrike = segment_rpr.dstrike.unwrap_or(false);
@@ -9946,8 +10018,7 @@ fn layout_paragraph_with_source_and_table(
         page_break_before,
         widow_control,
     );
-    result.has_visible_revision =
-        input.revision_view == RevisionView::Tracked && paragraph_has_visible_revision(para);
+    result.change_bar = change_bar_color(para, input);
     result.list = list_num_id.map(|num_id| (num_id, list_ilvl.min(8) as u8));
     result.anchored = collect_anchored_drawings(
         para,
@@ -12545,14 +12616,10 @@ fn push_annotation_decorations(
     };
     if let Some(style) = base.underline {
         let underline_y = baseline + descent * 0.3;
-        let thickness = match style {
-            Underline::Thick => base.font_size / 12.0,
-            Underline::Double => base.font_size / 24.0,
-            _ => base.font_size / 18.0,
-        };
+        let (thickness, second) = convert::underline_strokes(style, base.font_size);
         line_at(underline_y, thickness, children);
-        if style == Underline::Double {
-            line_at(underline_y + thickness * 2.5, thickness, children);
+        if let Some(offset) = second {
+            line_at(underline_y + offset, thickness, children);
         }
     }
     let thickness = base.font_size / 24.0;
@@ -14882,6 +14949,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -21672,6 +21740,7 @@ mod tests {
         let input = LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -22210,6 +22279,7 @@ mod tests {
         let input = LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -22285,6 +22355,7 @@ mod tests {
         let input = LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -22381,6 +22452,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -22573,6 +22645,7 @@ mod tests {
             LayoutInput {
                 sequence_snapshot: None,
                 revision_view: crate::input::RevisionView::Accepted,
+                revision_style: crate::input::RevisionStyle::Plain,
                 automatic_hyphenation: false,
                 mirror_margins: false,
                 gutter_at_top: false,
@@ -22717,6 +22790,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -23028,6 +23102,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -23288,6 +23363,7 @@ mod tests {
             LayoutInput {
                 sequence_snapshot: None,
                 revision_view: crate::input::RevisionView::Accepted,
+                revision_style: crate::input::RevisionStyle::Plain,
                 automatic_hyphenation: false,
                 mirror_margins: false,
                 gutter_at_top: false,
@@ -23438,6 +23514,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -23784,6 +23861,7 @@ mod tests {
         let input = LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -23880,6 +23958,7 @@ mod tests {
         let input = LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -24002,6 +24081,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -24223,6 +24303,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,

@@ -132,6 +132,28 @@ def test_issue_253_python_render_views():
         original.to_pdf(revision_view="final")
 
 
+def test_revision_style_colours_only_the_tracked_view():
+    import rdocx
+
+    original = rdocx.Document()
+    original.add_paragraph("Keep OLDWORD here.")
+    edited = rdocx.Document()
+    edited.add_paragraph("Keep NEWWORD here.")
+    original.compare(edited, "Reviewer", "2026-09-30T12:00:00Z")
+    for render in (
+        lambda **view: original.to_pdf(**view),
+        lambda **view: original.render_page_to_png(0, 24.0, **view),
+        lambda **view: original.render_all_pages(24.0, **view),
+        lambda **view: original.render_pages(dpi=24.0, **view),
+    ):
+        plain = render(revision_view="tracked")
+        assert plain == render(revision_view="tracked", revision_style="plain")
+        assert plain != render(revision_view="tracked", revision_style="legal")
+        assert render() == render(revision_style="legal")
+        with pytest.raises(ValueError, match="unknown revision style"):
+            render(revision_view="tracked", revision_style="color")
+
+
 def test_issue_253_selected_view_controls_page_count():
     import rdocx
 

@@ -202,6 +202,10 @@ def exercise_rdocx_types(path: Path) -> None:
     pdf_bytes: bytes = opened.to_pdf()
     tracked_pdf: bytes = opened.to_pdf(revision_view="tracked")
     tracked_pages: list[bytes] | bytes = opened.render_pages(revision_view="tracked")
+    legal_pdf: bytes = opened.to_pdf(revision_view="tracked", revision_style="legal")
+    legal_pages: list[bytes] | bytes = opened.render_pages(
+        revision_view="tracked", revision_style="legal"
+    )
     pages: list[bytes] = opened.render_all_pages()
     maybe_page: bytes | None = opened.render_page_to_png(0)
     font_pdf: bytes = opened.to_pdf(fonts=[("Carlito", b"font")], font_dir=path)

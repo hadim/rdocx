@@ -1611,7 +1611,17 @@ paragraphs. Accepted layout includes insertions and move
 destinations and omits deletions and move sources. Tracked layout includes both
 sides. It forces single underline on insertion and move destination text and
 single strike on deletion and move source text while retaining the remaining
-resolved formatting.
+resolved formatting. `LayoutInput::revision_style` chooses how the tracked view
+marks them. `RevisionStyle::Plain`, the default, is that. `RevisionStyle::Legal`
+follows legal comparison tools: insertion text is blue (`0000FF`) with a
+double underline, deletion text red (`FF0000`) and struck through, move source
+text green (`00A000`) and struck through, and move destination text green with
+a double underline. The revision colour replaces the run colour. The change
+bar takes the colour of the paragraph's first insertion, deletion or move, from
+its runs or its mark, and stays black for a property change only. The
+accepted view marks nothing in either style. A double underline, from either
+style or from `w:u w:val="double"`, is two strokes of a twenty-fourth of the
+font size, with a gap twice their width.
 
 In the accepted view, a body paragraph whose mark is deleted or moved away
 joins the next direct body paragraph when no section break or intervening

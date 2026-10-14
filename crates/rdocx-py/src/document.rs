@@ -4136,15 +4136,19 @@ impl PyDocument {
         Ok(boundary)
     }
 
-    #[pyo3(signature = (*, fonts = None, font_dir = None, revision_view = "accepted"))]
+    /// Render the document to PDF bytes. `revision_view="tracked"` shows both
+    /// sides of tracked changes, and `revision_style="legal"` draws them in
+    /// colour: insertions blue, deletions red, moves green.
+    #[pyo3(signature = (*, fonts = None, font_dir = None, revision_view = "accepted", revision_style = "plain"))]
     fn to_pdf<'py>(
         &self,
         py: Python<'py>,
         fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
         font_dir: Option<PathBuf>,
         revision_view: &str,
+        revision_style: &str,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let options = parse_render_options(revision_view)?;
+        let options = parse_render_options(revision_view, revision_style)?;
         let fonts = caller_fonts(fonts, font_dir)?;
         py.detach(|| match &fonts {
             None => self.inner.to_pdf_with_options(options),
@@ -4176,17 +4180,18 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
-    #[pyo3(signature = (page_index, dpi = 150.0, *, revision_view = "accepted", fonts = None, font_dir = None))]
+    #[pyo3(signature = (page_index, dpi = 150.0, *, revision_view = "accepted", revision_style = "plain", fonts = None, font_dir = None))]
     fn render_page_to_png<'py>(
         &self,
         py: Python<'py>,
         page_index: usize,
         dpi: f64,
         revision_view: &str,
+        revision_style: &str,
         fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
         font_dir: Option<PathBuf>,
     ) -> PyResult<Option<Bound<'py, PyBytes>>> {
-        let options = parse_render_options(revision_view)?;
+        let options = parse_render_options(revision_view, revision_style)?;
         let fonts = caller_fonts(fonts, font_dir)?;
         py.detach(|| match &fonts {
             None => self
@@ -4235,16 +4240,17 @@ impl PyDocument {
         }))
     }
 
-    #[pyo3(signature = (dpi = 150.0, *, revision_view = "accepted", fonts = None, font_dir = None))]
+    #[pyo3(signature = (dpi = 150.0, *, revision_view = "accepted", revision_style = "plain", fonts = None, font_dir = None))]
     fn render_all_pages<'py>(
         &self,
         py: Python<'py>,
         dpi: f64,
         revision_view: &str,
+        revision_style: &str,
         fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
         font_dir: Option<PathBuf>,
     ) -> PyResult<Bound<'py, PyList>> {
-        let options = parse_render_options(revision_view)?;
+        let options = parse_render_options(revision_view, revision_style)?;
         let fonts = caller_fonts(fonts, font_dir)?;
         let pages = py
             .detach(|| match &fonts {
@@ -4259,7 +4265,7 @@ impl PyDocument {
         PyList::new(py, pages.iter().map(|page| PyBytes::new(py, page)))
     }
 
-    #[pyo3(signature = (*, dpi = 150.0, format = "png", quality = 90, transparent = false, pages = None, revision_view = "accepted", fonts = None, font_dir = None))]
+    #[pyo3(signature = (*, dpi = 150.0, format = "png", quality = 90, transparent = false, pages = None, revision_view = "accepted", revision_style = "plain", fonts = None, font_dir = None))]
     #[allow(clippy::too_many_arguments)]
     fn render_pages<'py>(
         &self,
@@ -4270,10 +4276,11 @@ impl PyDocument {
         transparent: bool,
         pages: Option<Vec<usize>>,
         revision_view: &str,
+        revision_style: &str,
         fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
         font_dir: Option<PathBuf>,
     ) -> PyResult<Py<PyAny>> {
-        let options = parse_render_options(revision_view)?;
+        let options = parse_render_options(revision_view, revision_style)?;
         let fonts = caller_fonts(fonts, font_dir)?;
         let rendered = py
             .detach(|| {
@@ -6731,7 +6738,10 @@ fn caller_fonts(
     Ok(Some(files))
 }
 
-fn parse_render_options(revision_view: &str) -> PyResult<rdocx::RenderOptions> {
+fn parse_render_options(
+    revision_view: &str,
+    revision_style: &str,
+) -> PyResult<rdocx::RenderOptions> {
     let revision_view = match revision_view {
         "accepted" => rdocx::RevisionView::Accepted,
         "tracked" => rdocx::RevisionView::Tracked,
@@ -6741,7 +6751,19 @@ fn parse_render_options(revision_view: &str) -> PyResult<rdocx::RenderOptions> {
             )));
         }
     };
-    Ok(rdocx::RenderOptions { revision_view })
+    let revision_style = match revision_style {
+        "plain" => rdocx::RevisionStyle::Plain,
+        "legal" => rdocx::RevisionStyle::Legal,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unknown revision style {other:?}, expected plain or legal"
+            )));
+        }
+    };
+    Ok(rdocx::RenderOptions {
+        revision_view,
+        revision_style,
+    })
 }
 
 fn parse_raster_format(

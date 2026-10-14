@@ -122,7 +122,7 @@ pub use paragraph::{
     SectionBreak, TabAlignment, TabLeader, TabStopRef, TextboxTightWrap,
 };
 pub use raw_xml::{XmlParagraph, XmlTarget};
-pub use rdocx_layout::{FontFile, RevisionView};
+pub use rdocx_layout::{FontFile, RevisionStyle, RevisionView};
 pub use rdocx_oxml::content_control::SdtListItem;
 pub use rdocx_oxml::document::{CT_DocGrid, ST_DocGrid};
 pub use rdocx_oxml::header_footer::HdrFtrType;

@@ -15,7 +15,7 @@ use oxml_layout::TextDirection;
 use oxml_layout::{
     Align, Color, FontManager, ForcedBreakKind, GlyphRun, GroupElement, LayoutLine, LineItem,
     MediaId, MultilingualGlyphRun, NoteRef, NoteStream, OutlineEntry, PageFrame, Path, Point,
-    PositionedElement, Rect, TabAlign, TabAlignedField, Transform, Underline, break_into_lines,
+    PositionedElement, Rect, TabAlign, TabAlignedField, Transform, break_into_lines,
     break_multilingual_into_lines,
 };
 
@@ -2862,11 +2862,7 @@ fn push_multilingual_text(
     }));
     if let Some(underline) = base.underline {
         let underline_y = adjusted_baseline + base.descent * 0.3;
-        let thickness = match underline {
-            Underline::Thick => base.font_size / 12.0,
-            Underline::Double => base.font_size / 24.0,
-            _ => base.font_size / 18.0,
-        };
+        let (thickness, second) = crate::convert::underline_strokes(underline, base.font_size);
         elements.push(PositionedElement::Line {
             start: Point { x, y: underline_y },
             end: Point {
@@ -2877,8 +2873,8 @@ fn push_multilingual_text(
             color: base.color,
             dash_pattern: None,
         });
-        if underline == Underline::Double {
-            let second_y = underline_y + thickness * 2.5;
+        if let Some(offset) = second {
+            let second_y = underline_y + offset;
             elements.push(PositionedElement::Line {
                 start: Point { x, y: second_y },
                 end: Point {
@@ -3001,7 +2997,7 @@ fn draw_note(
         cursor_y += lines.iter().map(|line| line.height).sum::<f64>();
     }
 
-    for range in &note.revision_ranges {
+    for (range, color) in &note.revision_ranges {
         let visible_start = range.start.max(first);
         let visible_end = range.end.min(first + count);
         if visible_start >= visible_end {
@@ -3021,7 +3017,14 @@ fn draw_note(
             .take(visible_end - visible_start)
             .map(|line| line.height)
             .sum::<f64>();
-        render_change_bar_at(top + offset, height, geometry, page_number, elements);
+        render_change_bar_at(
+            top + offset,
+            height,
+            *color,
+            geometry,
+            page_number,
+            elements,
+        );
     }
 
     cursor_y - top
@@ -4046,7 +4049,7 @@ fn render_para_split(
     let remaining_height: f64 = remaining_lines.iter().map(|l| l.height).sum();
     let ends_with_run_page_break = para.shading.is_none()
         && para.borders.is_none()
-        && !para.has_visible_revision
+        && para.change_bar.is_none()
         && para.content_offset_top == 0.0
         && para.lines[split_at - 1].forced_break_after == Some(ForcedBreakKind::Page)
         && remaining_lines.iter().all(|line| {
@@ -4072,7 +4075,7 @@ fn render_para_split(
             // The anchors were placed with the first part of the paragraph, so
             // the continuation must not place them again.
             anchored: Vec::new(),
-            has_visible_revision: para.has_visible_revision,
+            change_bar: para.change_bar,
             lines: remaining_lines.to_vec(),
             space_before: 0.0,
             space_after: para.space_after,
@@ -4391,11 +4394,8 @@ fn render_paragraph_lines(
                     // Render underline
                     if let Some(ul_style) = seg.underline.filter(|_| !hanging) {
                         let ul_y = adjusted_baseline + seg.descent * 0.3;
-                        let ul_thickness = match ul_style {
-                            Underline::Thick => seg.font_size / 12.0,
-                            Underline::Double => seg.font_size / 24.0,
-                            _ => seg.font_size / 18.0,
-                        };
+                        let (ul_thickness, second) =
+                            crate::convert::underline_strokes(ul_style, seg.font_size);
                         elements.push(PositionedElement::Line {
                             start: Point { x, y: ul_y },
                             end: Point {
@@ -4407,8 +4407,8 @@ fn render_paragraph_lines(
                             dash_pattern: None,
                         });
                         // Second line for double underline
-                        if ul_style == Underline::Double {
-                            let ul_y2 = ul_y + ul_thickness * 2.5;
+                        if let Some(offset) = second {
+                            let ul_y2 = ul_y + offset;
                             elements.push(PositionedElement::Line {
                                 start: Point { x, y: ul_y2 },
                                 end: Point {
@@ -5134,12 +5134,16 @@ fn render_change_bar(
     page_number: usize,
     elements: &mut Vec<PositionedElement>,
 ) {
-    if !para.has_visible_revision || !height.is_finite() || height <= 0.0 {
+    let Some(color) = para.change_bar else {
+        return;
+    };
+    if !height.is_finite() || height <= 0.0 {
         return;
     }
     render_change_bar_at(
         geometry.margin_top + start_y,
         height,
+        color,
         geometry,
         page_number,
         elements,
@@ -5149,6 +5153,7 @@ fn render_change_bar(
 fn render_change_bar_at(
     start_y: f64,
     height: f64,
+    color: Color,
     geometry: &PageGeometry,
     page_number: usize,
     elements: &mut Vec<PositionedElement>,
@@ -5171,7 +5176,7 @@ fn render_change_bar_at(
             y: start_y + height,
         },
         width: 1.5,
-        color: Color::BLACK,
+        color,
         dash_pattern: None,
     });
 }
@@ -5505,7 +5510,7 @@ fn render_table_row(
                             page_number,
                             anchor_front,
                         );
-                        change_bar_drawn |= rotated && paragraph.has_visible_revision;
+                        change_bar_drawn |= rotated && paragraph.change_bar.is_some();
                     }
                     content_y += paragraph.content_height() + paragraph.space_after;
                 }
@@ -5967,7 +5972,7 @@ fn distribute_justify_advances(text: &str, advances: &[f64], extra_per_gap: f64)
 mod tests {
     use super::*;
     use crate::block::{ParagraphBlock, ParagraphSemantics};
-    use oxml_layout::LayoutLine;
+    use oxml_layout::{LayoutLine, Underline};
 
     fn empty_media() -> MediaRegistry {
         MediaRegistry::new(&HashMap::new())
@@ -5995,7 +6000,7 @@ mod tests {
         }
         ParagraphBlock {
             anchored: Vec::new(),
-            has_visible_revision: false,
+            change_bar: None,
             lines,
             space_before: 0.0,
             space_after: 0.0,
@@ -7313,7 +7318,7 @@ mod tests {
         shaded.shading = Some(Color::BLACK);
         visible_boundaries.push(shaded);
         let mut revised = trailing_run_break.clone();
-        revised.has_visible_revision = true;
+        revised.change_bar = Some(Color::BLACK);
         visible_boundaries.push(revised);
         let mut cleared = trailing_run_break.clone();
         cleared.content_offset_top = 12.0;
@@ -7431,7 +7436,7 @@ mod tests {
         let fm = FontManager::new();
         let para = ParagraphBlock {
             anchored: Vec::new(),
-            has_visible_revision: false,
+            change_bar: None,
             lines: vec![make_text_line(14.0, Some(Underline::Single), false)],
             space_before: 0.0,
             space_after: 0.0,
@@ -7475,7 +7480,7 @@ mod tests {
         let fm = FontManager::new();
         let para = ParagraphBlock {
             anchored: Vec::new(),
-            has_visible_revision: false,
+            change_bar: None,
             lines: vec![make_text_line(14.0, None, true)],
             space_before: 0.0,
             space_after: 0.0,
@@ -7562,7 +7567,7 @@ mod tests {
         };
         let para = ParagraphBlock {
             anchored: Vec::new(),
-            has_visible_revision: false,
+            change_bar: None,
             lines: vec![line],
             space_before: 0.0,
             space_after: 0.0,
@@ -7606,7 +7611,7 @@ mod tests {
         let fm = FontManager::new();
         let para = ParagraphBlock {
             anchored: Vec::new(),
-            has_visible_revision: false,
+            change_bar: None,
             lines: vec![make_line(14.0)],
             space_before: 0.0,
             space_after: 0.0,
@@ -7665,7 +7670,7 @@ mod tests {
         let fm = FontManager::new();
         let para = ParagraphBlock {
             anchored: Vec::new(),
-            has_visible_revision: false,
+            change_bar: None,
             lines: vec![make_line(14.0)],
             space_before: 0.0,
             space_after: 0.0,
@@ -7713,7 +7718,7 @@ mod tests {
         let fm = FontManager::new();
         let para = ParagraphBlock {
             anchored: Vec::new(),
-            has_visible_revision: false,
+            change_bar: None,
             lines: vec![make_text_line(14.0, Some(Underline::Double), false)],
             space_before: 0.0,
             space_after: 0.0,
@@ -7749,6 +7754,20 @@ mod tests {
             .filter(|e| matches!(e, PositionedElement::Line { .. }))
             .collect();
         assert_eq!(lines.len(), 2, "expected 2 lines for double underline");
+        // The gap between the lines is twice their width, so they do not
+        // blur into one at screen resolutions.
+        let [
+            PositionedElement::Line {
+                start: first,
+                width,
+                ..
+            },
+            PositionedElement::Line { start: second, .. },
+        ] = lines.as_slice()
+        else {
+            unreachable!()
+        };
+        assert!((second.y - first.y - width - 2.0 * width).abs() < 1e-9);
     }
 
     fn make_justified_line(text: &str, seg_width: f64, is_last: bool) -> LayoutLine {
@@ -7837,7 +7856,7 @@ mod tests {
         };
         let para = ParagraphBlock {
             anchored: Vec::new(),
-            has_visible_revision: false,
+            change_bar: None,
             lines: vec![line],
             space_before: 0.0,
             space_after: 0.0,
@@ -7884,7 +7903,7 @@ mod tests {
         // Line with "Hello World" (1 space = 1 gap), width 200 out of 468 available
         let para = ParagraphBlock {
             anchored: Vec::new(),
-            has_visible_revision: false,
+            change_bar: None,
             lines: vec![
                 make_justified_line("Hello World", 200.0, false),
                 make_justified_line("End.", 40.0, true),
@@ -7942,7 +7961,7 @@ mod tests {
         let fm = FontManager::new();
         let para = ParagraphBlock {
             anchored: Vec::new(),
-            has_visible_revision: false,
+            change_bar: None,
             lines: vec![
                 make_justified_line("Hello World Test", 200.0, false),
                 make_justified_line("End.", 40.0, true),
@@ -8005,7 +8024,7 @@ mod tests {
         // A line with a single word (no spaces) should not be stretched
         let para = ParagraphBlock {
             anchored: Vec::new(),
-            has_visible_revision: false,
+            change_bar: None,
             lines: vec![
                 make_justified_line("Superlongword", 100.0, false),
                 make_justified_line("End.", 40.0, true),

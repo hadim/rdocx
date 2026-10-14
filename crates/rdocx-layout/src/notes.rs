@@ -51,8 +51,9 @@ pub struct NoteLayout {
     pub marker_rise: f64,
     /// The note's lines, flattened across its paragraphs.
     pub lines: Vec<LayoutLine>,
-    /// Line ranges belonging to paragraphs with a visible tracked revision.
-    pub revision_ranges: Vec<std::ops::Range<usize>>,
+    /// Line ranges belonging to paragraphs with a visible tracked revision,
+    /// with the colour of their change bar.
+    pub revision_ranges: Vec<(std::ops::Range<usize>, Color)>,
 }
 
 impl NoteLayout {
@@ -273,8 +274,10 @@ impl NoteRegistry {
                         };
                         for (block, direction) in laid_out_blocks {
                             let first = lines.len();
-                            if block.has_visible_revision && !block.lines.is_empty() {
-                                revision_ranges.push(first..first + block.lines.len());
+                            if let Some(color) = block.change_bar
+                                && !block.lines.is_empty()
+                            {
+                                revision_ranges.push((first..first + block.lines.len(), color));
                             }
                             lines.extend(block.lines.iter().cloned());
                             let last = lines.len();
@@ -415,6 +418,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,

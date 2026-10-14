@@ -2623,10 +2623,15 @@ raster output, page layout, deterministic rendering, and caller-supplied font
 paths. The existing methods keep their accepted default. Python `to_pdf`,
 `render_page_to_png`, `render_all_pages`, and `render_pages` take a keyword-only
 `revision_view` of `"accepted"` or `"tracked"`, with `"accepted"` as the
-default. Any other value raises `ValueError`. CLI `convert` for PDF and image
+default, and a keyword-only `revision_style` of `"plain"` or `"legal"`, with
+`"plain"` as the default, which `rdocx::RevisionStyle` and
+`RenderOptions::revision_style` carry. Any other value raises `ValueError`. The
+style changes only the tracked view. CLI `convert` for PDF and image
 formats and `render` take `--revision-view accepted` or
-`--revision-view tracked`, with `accepted` as the default. An unknown value is
-a usage error.
+`--revision-view tracked`, with `accepted` as the default, and
+`--revision-style plain` or `--revision-style legal`, with `plain` as the
+default. An unknown value is a usage error. A style other than `plain` without
+`--revision-view tracked` is refused before output is created.
 HTML and Markdown conversion refuse tracked view before creating output. WASM
 retains its existing rendering behavior.
 Native selected-image rendering adds zero-based page-list entry points that

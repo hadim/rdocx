@@ -8,8 +8,8 @@
     "contract:word/numbering.xml": "831dc1977beaa48b4f2999f50751dc3b075418daabe1307cc7b3242267b7f1b4",
     "contract:word/styles.xml": "49687b10d19688bf634d4967a488eca42eec85ee54c4730af334e5fb1107a7f4",
     "feature_showcase:page1.png": "e1d30437e2618cff6da70163038427c32e1cd6523b0b58c5cd6376594ee742eb",
-    "feature_showcase:pdf/bytes": "b4fe360e1dc26d0f3d848b3d9be0bcba8af613cb417e3d310b8ee17b150f993b",
-    "feature_showcase:pdf/pages": "f0578124411527a6dcccbcd0701908226ce570dfc94c62bb55961f4df60d9fa2",
+    "feature_showcase:pdf/bytes": "6a3a915e9c77e71126a3e9f7226d55f54a640de8aa4a17d6109b90ea9353e242",
+    "feature_showcase:pdf/pages": "f3e7a7932bd0f416dd223da8f4b30f89ba0346d0c91dad052eeb3b8d7cf90911",
     "feature_showcase:pdf/resources": "3573cc6e7183b5e912bfde97f11edea4ec44bb40e1b8f066eeb9b4e5e7726d62",
     "feature_showcase:word/document.xml": "ada34bba6c97288dce7f60a96b32f2d20c3ea2254f6f82e08c660a39ecfc3b54",
     "feature_showcase:word/numbering.xml": "59283ab7d3fbd70ab110b2c9aa4b9f7f41443ef7c24bc6db3c248ee908e44232",
@@ -50,5 +50,5 @@
     "report:word/numbering.xml": "59283ab7d3fbd70ab110b2c9aa4b9f7f41443ef7c24bc6db3c248ee908e44232",
     "report:word/styles.xml": "49687b10d19688bf634d4967a488eca42eec85ee54c4730af334e5fb1107a7f4"
   },
-  "reason": "#298: audit_accessibility no longer counts picture paragraphs as empty, so the feature showcase lists one accessibility issue fewer; #313: Georgia now resolves to the bundled metric-compatible Gelasio instead of Caladea: contract, proposal and report page-one PNG and PDF entries move, 12 keys, every other key unchanged"
+  "reason": "w:u double draws its two strokes a gap of twice their width apart (#373), which moves only feature_showcase pdf bytes and pages"
 }

@@ -31,6 +31,7 @@ _VerticalFrom = _Literal[
 ]
 _FontFile = _Path | bytes | bytearray | memoryview | _IO[bytes]
 _RevisionView = _Literal["accepted", "tracked"]
+_RevisionStyle = _Literal["plain", "legal"]
 _Xml = str | bytes | bytearray
 _EmbeddedFontKind = _Literal["regular", "bold", "italic", "bold_italic"]
 _BorderStyle = _Literal[
@@ -1040,6 +1041,7 @@ class Document:
         fonts: _Sequence[tuple[str, bytes]] | None = None,
         font_dir: _Path | None = None,
         revision_view: _RevisionView = "accepted",
+        revision_style: _RevisionStyle = "plain",
     ) -> bytes:
         """Render the document to PDF bytes.
 
@@ -1053,6 +1055,13 @@ class Document:
         ``FileNotFoundError`` and a file ``NotADirectoryError``. The PNG, image
         and SVG render methods, ``layout`` and ``layout_page`` take the same two
         arguments. ``to_pdfa_deterministic`` does not.
+
+        ``revision_view="tracked"`` shows both sides of tracked changes, and
+        ``revision_style`` how it marks them: ``"plain"`` underlines
+        insertions and strikes deletions through in the text colour, and
+        ``"legal"`` draws insertions blue with a double underline, deletions
+        red, and moved text green, with change bars in the same colours. The
+        accepted view marks nothing. An unknown value raises ``ValueError``.
         """
     def to_pdfa_deterministic(
         self, profile: _Literal["pdfa-2b", "pdfa-3b"] = "pdfa-2b"
@@ -1063,9 +1072,15 @@ class Document:
         dpi: float = 150.0,
         *,
         revision_view: _RevisionView = "accepted",
+        revision_style: _RevisionStyle = "plain",
         fonts: _Sequence[tuple[str, bytes]] | None = None,
         font_dir: _Path | None = None,
-    ) -> bytes | None: ...
+    ) -> bytes | None:
+        """Render one page to PNG bytes, ``None`` past the last page.
+
+        ``revision_view``, ``revision_style``, ``fonts`` and ``font_dir`` are
+        those of ``to_pdf``.
+        """
     def render_page_to_svg(
         self,
         page_index: int,
@@ -1078,9 +1093,15 @@ class Document:
         dpi: float = 150.0,
         *,
         revision_view: _RevisionView = "accepted",
+        revision_style: _RevisionStyle = "plain",
         fonts: _Sequence[tuple[str, bytes]] | None = None,
         font_dir: _Path | None = None,
-    ) -> list[bytes]: ...
+    ) -> list[bytes]:
+        """Render every page to PNG bytes.
+
+        ``revision_view``, ``revision_style``, ``fonts`` and ``font_dir`` are
+        those of ``to_pdf``.
+        """
     def render_pages(
         self,
         *,
@@ -1090,9 +1111,15 @@ class Document:
         transparent: bool = False,
         pages: list[int] | None = None,
         revision_view: _RevisionView = "accepted",
+        revision_style: _RevisionStyle = "plain",
         fonts: _Sequence[tuple[str, bytes]] | None = None,
         font_dir: _Path | None = None,
-    ) -> list[bytes] | bytes: ...
+    ) -> list[bytes] | bytes:
+        """Render pages to PNG, JPEG or TIFF.
+
+        ``revision_view``, ``revision_style``, ``fonts`` and ``font_dir`` are
+        those of ``to_pdf``.
+        """
     def compare(
         self,
         edited: Document,

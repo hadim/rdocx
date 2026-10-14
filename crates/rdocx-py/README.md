@@ -111,7 +111,9 @@ with open("report.pdf", "wb") as output:
   SVG, and layout methods take caller fonts as keyword-only `fonts=` and
   `font_dir=`, so a PNG preview draws the faces the PDF embeds. PDF/A output
   uses the bundled fonts only. PDF and raster methods
-  accept keyword-only `revision_view="tracked"` to show tracked changes.
+  accept keyword-only `revision_view="tracked"` to show tracked changes, and
+  `revision_style="legal"` to colour them: insertions blue, deletions red,
+  moved text green.
 - The python-docx calls a first draft reaches for: `add_heading`,
   `add_page_break`, `add_paragraph(text, style=...)` with python-docx's list
   styles such as `'List Bullet'` added on demand, `add_table(..., style=...)`,
