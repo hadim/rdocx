@@ -6,7 +6,7 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 retains twenty-nine top-level stories, twenty-seven completed, one running,
+S91 retains twenty-nine top-level stories, twenty-eight completed and
 one approved pending implementation. F-X211 also has four delivery children
 for parallel Word and PowerPoint work followed by integrated compatibility. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
 
@@ -42,7 +42,7 @@ for parallel Word and PowerPoint work followed by integrated compatibility. The 
 | F-X208 | Author PowerPoint footer fields themes and transitions | L | done | - |
 | F-X209 | Edit PowerPoint masters layouts and themes | L | done | - |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | done | - |
-| F-X211 | Complete Python script compatibility and safe XML access | L | in-progress | - |
+| F-X211 | Complete Python script compatibility and safe XML access | L | done | - |
 | F-X211a | Word checked XML owners and resource admission | L | done | - |
 | F-X211b | PowerPoint checked XML owners | L | done | - |
 | F-X211c | Integrated Python compatibility and causal errors | L | done | - |
@@ -1243,3 +1243,7 @@ main merge, tag, publication or push is claimed.
 ## F-X211c compatibility checkpoint, 2026-10-14
 
 Child c is completed and integrated atf62976d3. The unchanged100 qualifies95 correct files, all42 hard gates and51 native clauses, with24of24 documentation cases and no unexpected failures. Five documented divergences remain in the denominator without successful-file credit. Actual source383 and outputs retain independent build/install/native authority. Whole-feature and integration reviews are clean. Parent aggregate completion and F-X221 release preparation remain due. Intake stays closed40 issues/30 PRs,264/281 stay open and S92 deferrals remain unchanged. No publication or remote closure is claimed.
+
+## F-X211 aggregate checkpoint, 2026-10-14
+
+All four delivery children and the parent are complete. Independent aggregate review reports zero defects and smells. The admitted final unchanged100 report qualifies95 correct files, all42 hard gates,51 native clauses and24 documentation examples, with five reviewed non-successes and no unexpected failures. All28 repair prerequisites are complete. F-X221 release preparation is the only unfinished top-level story. Final integrated full verification, sprint review, close and publication remain due. Intake is closed40 issues/30 PRs,264/281 remain open, and S92 carryovers are untouched.

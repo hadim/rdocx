@@ -19481,3 +19481,20 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** Exactly HLD02,03,04,06,10,12 and14, preserving current canonical intent through manually reviewed HLD reconciliation.
 
 **Notes for future sessions.** Progress is preserved under /private/tmp/S91-F-X211c-preserved-worker-evidence-1. Keep required immutable producer/native/corpus/compiler artifacts through final verification and release. The clean worker is temporarily required for evidence custody. Parent aggregate completion and release F-X221 remain due. Intake stays frozen40 issues/30 PRs,264/281 stay open and S92 carryovers are untouched. No main merge, push, tag, publication or remote closure is claimed.
+
+### F-X211, Complete Python script compatibility and safe XML access
+
+**Completed.** 2026-10-14, S91 aggregate dependency-prefix checkpoint
+**Size.** L, actual not recorded
+
+**What was built.** The completed a/b/c/d children deliver checked XML for all fourteen concrete family owners, qualified resource admission, atomic relationship-aware replacement, supported owner survival, causal invalidation and actionable compatibility errors. Provider fixes are integrated once.
+
+**Tests.** The original isolated Base remains17of100. Actual final unchanged100 qualifies95 correct files with five reviewed no-credit divergences and no unexpected failures. All42 hard gates,51 native clauses and24 documentation cases qualify. Child scoped, installed, native, rendering, packaging and policy authorities retain their exact source boundaries. Independent aggregate completion review6bb96a0b reports zero defects and smells, without replaying completed children or relabelling failed candidates.
+
+**Integrated evidence.** Child c product integrationf62976d3 and completionf0e71a89 compose completed a/b/d and provider acceptance. The final report and packet remain at /private/tmp/S91-F-X211c-current-output-qualification-preparation-1/root-final-admission-and-report-successor-2, stdoutf8c254c1 and packet063c7aab. Full observed rates and original source identities are recorded in the child entries and .claude/reviews/F-X211-aggregate-completion-pass-1.md.
+
+**Hash harness.**49 unchanged deterministic outputs. Final integrated full sprint verification and review remain due.
+
+**Spec sections touched.** Exactly HLD02,03,04,06,10,12 and14, already updated by the completed children and reviewed integration.
+
+**Notes for future sessions.** All28 repair prerequisites are complete, permitting F-X221 claim. Preserve required immutable evidence through release. Intake stays closed40 issues/30 PRs,264/281 stay open and S92 carryovers remain deferred. No publication, remote closure, push, main merge or tag is claimed.

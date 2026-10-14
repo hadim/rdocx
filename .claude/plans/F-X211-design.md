@@ -1,6 +1,6 @@
 # F-X211, Python script compatibility and safe XML access
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X211a, F-X211b, F-X211c and F-X211d, retaining F-X200 through F-X210 for final corpus acceptance and refined source barriers below
@@ -377,17 +377,17 @@ change baselines or corpus denominators to manufacture a passing rate.
 
 ## Implementation checklist
 
-- [ ] Reconcile provider ownership and final corpus/source capability barriers.
-- [ ] Freeze complete corpus IDs, statements, assertions and per-area denominators.
+- [x] Reconcile provider ownership and final corpus/source capability barriers.
+- [x] Freeze complete corpus IDs, statements, assertions and per-area denominators.
 - [x] Measure actual isolated installed Base first-draft rate and missing API failures.
-- [ ] Inventory each native XML owner/parser/namespace/relationship validator.
-- [ ] Apply the shared native Issue331 control-depth admission and default-stack regression gates.
-- [ ] Finalize concrete native/Python element signatures and atomic replacement.
-- [ ] Implement only assigned residual stable-owner/provenance/error behaviour.
-- [ ] Reuse provider silent-failure fixes with exact integrated public controls.
-- [ ] Add existing-entrypoint tests, stubs, CI reporting and HLD contract updates.
-- [ ] Run scoped/risk gates and independent microscope over actual final diff.
-- [ ] Measure final integrated first-draft rate and record observed PR evidence.
+- [x] Inventory each native XML owner/parser/namespace/relationship validator.
+- [x] Apply the shared native Issue331 control-depth admission and default-stack regression gates.
+- [x] Finalize concrete native/Python element signatures and atomic replacement.
+- [x] Implement only assigned residual stable-owner/provenance/error behaviour.
+- [x] Reuse provider silent-failure fixes with exact integrated public controls.
+- [x] Add existing-entrypoint tests, stubs, CI reporting and HLD contract updates.
+- [x] Run scoped/risk gates and independent microscope over actual final diff.
+- [x] Measure final integrated first-draft rate and record observed PR evidence.
 
 ## Open questions
 
