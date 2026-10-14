@@ -7540,6 +7540,9 @@ Word49/PowerPoint51 allocation, Base17/100 evidence and honest per-area rates.
 Qualify source-built paired bindings, saved files, the complete lifetime
 contract and candidate-bound CI reporting. Bounded aliases reuse checked
 native providers, and causal errors retain their first public invalidator.
+Unknown explicit symbol diagnostics use the actual Word and PowerPoint
+accepted-layout consumers, preserving original codes and physical-face
+precedence without retaining probe history.
 Named reviewed non-successes remain in the denominator without correct-file
 credit. No corpus rewriting or provider duplication.
 

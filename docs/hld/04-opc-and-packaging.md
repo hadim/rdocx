@@ -1880,6 +1880,10 @@ retires its captured record even when an identical public record remains or
 is inserted later. Public-field equality cannot resurrect captured authority.
 Manually constructed records retain their separate unique-match contract.
 
+Read-only symbol layout retains explicit Word symbol and numbering source
+codes. Owned diagnostics describe an unknown semantic mapping without rewriting
+that source or claiming an existing fallback glyph is missing.
+
 Document import closes the native fragment dependency graph before publication. Physical locations retain story identity, item kind and index path. Invalid destination indices refuse even when the imported document is empty. Reading properties or exporting text does not allocate package parts. Custom-property snapshots retain PID, fmtid, type and raw unsupported values. App-property mutations act on the latest owner and preserve unrelated producer fields.
 
 Checkbox admission and state selection use expanded Word2010 names, including qualified aliases and the default namespace. Only the selected qualified checked value changes. Foreign same-name elements, attributes, namespace declarations and opaque child order remain source-owned. The selected Unicode scalar and state font are admitted together before any matching control changes. Forbidden XML text and late invalid state values refuse the entire operation.

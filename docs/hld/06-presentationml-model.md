@@ -506,6 +506,13 @@ for final rendering diagnostics. Approximation reports describe actual
 physical font contributions, deduplicated in first-use order. A supplied
 physical face that satisfies the requested family suppresses that family's
 approximation report. Trial-only contributions do not appear as final use.
+Accepted visible character markers report unknown Symbol or Wingdings legacy
+codes with their original family and scalar. Known semantic replacements and
+genuine requested-face original-code coverage suppress that warning. Facts
+are deduplicated in first-use order within the current text-body output,
+with at most1024 distinct family/original-code pairs. Empty or discarded
+markers contribute no such facts. This local output is separate from font
+discovery history and approximation diagnostics.
 Imported autofit choices with opaque attributes or comments retain their lexical
 XML and original text-body wrapper attribute scope. Owned choice-name and scale
 edits preserve foreign payload, quoting and entities. Fully modeled choices keep

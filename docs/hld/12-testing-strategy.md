@@ -4209,3 +4209,12 @@ and independently admitted companion controls. They remain in the denominator
 without successful-file credit. Unexpected failures, missing or duplicate IDs,
 changed bodies and unsafe process cleanup reject the report and CI gate.
 Original failed candidates remain distinct from genuinely changed successors.
+
+Unknown-symbol controls retain the original source and compare same-pass
+diagnostics for Word explicit symbols and numbering, and PowerPoint character
+markers. Known mappings, genuine physical-face coverage and misleading caller
+labels are distinct inverse controls. Cold and warm rendering, discarded
+measurement, empty or hidden content and first-use dedup exclude historical
+facts. Unknown semantic meaning and actual glyph absence remain separate
+claims. Test-only family-name rewriting authenticates complete font checksums
+and unchanged glyph tables without adding a font asset.

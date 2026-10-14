@@ -3681,6 +3681,14 @@ ordered report payload.
 
 ## Python Word document operations
 
+Both families' PDF diagnostic companions return the encoded payload and an
+owned diagnostic tuple from the same successful layout. Explicit Word symbols
+and numbering markers, and accepted PowerPoint character markers, preserve
+unknown source codes and name their family and original scalar. Unknown symbol
+meaning does not imply missing glyph coverage. Caller font labels alone do not
+authenticate an original symbol face. Genuine physical requested-face coverage
+and known semantic mappings retain precedence.
+
 Document exposes HTML and Markdown, CLI-equivalent text and owned TextReport, typed ODT, RTF and EPUB payloads with complete ordered diagnostic tuples, and explicit body word and character counts. Validation accepts an owned document snapshot, bytes or a path. Package decode and path errors propagate, while admitted advisory findings preserve native severity, order and validity.
 
 Template input accepts a string-keyed dict of bounded JSON values. Bool precedes integer conversion. Nonfinite values, cyclic containers, out-of-range integers and arbitrary objects refuse before publication. FragmentConflictPolicy exposes independent style, numbering and related-part reuse choices. ContentLocation and DocumentFragment retain physical source boundaries. Checked insertion uses the native fragment path and excludes final section properties by default.
