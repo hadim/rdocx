@@ -19,7 +19,7 @@
 |------|-------|------|--------|-------|
 | F-X228 | Qualify faster CI without weakening gates | M | in-progress | codex |
 | F-X178 | Clearable direct run formatting setters | S | in-progress | codex |
-| F-X231 | Preserve PowerPoint HTML import whitespace | M | pending | - |
+| F-X231 | Preserve PowerPoint HTML import whitespace | M | in-progress | codex |
 | F-X229 | Repair comparison reconstruction correctness | L | pending | - |
 | F-X230 | Group comparison changes for readable revisions | M | pending | - |
 
