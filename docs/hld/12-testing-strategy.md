@@ -1071,6 +1071,21 @@ exact accept and reject reconstruction when the original ends in a
 self-closing empty paragraph and when retained content includes a field,
 drawing, media relationship, and unrelated opaque package part.
 
+Comparison reconstruction regressions cover whole-paragraph external hyperlinks,
+namespace aliases and foreign lookalikes, table-adjacent insertions and deletions,
+empty body and header properties, typed text in an empty paragraph and multiple
+trailing deletions. Run, word and character cases retain default and ignored
+formatting policies. Independent reopened link text, target and anchor checks
+supplement modeled reconstruction. Table-mark resolution refuses opaque children
+and meaningful raw text, comments or processing instructions before a retained
+table without mutating package bytes. Whole-paragraph wrapping preserves foreign
+subtrees and raw gaps, and hyperlink cleanup retains opaque resolved content.
+The captured raw hyperlink boundary admits one owner and refuses nested chains
+at depths2 and257 atomically across insertion, deletion and all granularities.
+A bounded mixed-owner gap matrix retains every source and destination owner once,
+pairs only compatible kinds and remains deterministic. Grouping behavior is
+reviewed separately from these correctness changes.
+
 The source-built external differential pins Microsoft Word 16.104 build
 16.104.25121423 and locale `en-US`. Its 24 normalized records cover every
 supported story, move, field owner, and property revision, and calibrated

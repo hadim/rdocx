@@ -1,6 +1,6 @@
 # F-X229, Repair comparison reconstruction correctness
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S92
 **Size**: L
 **Depends on**: F-X203
@@ -162,13 +162,13 @@ Keep presentation grouping deltas exclusively in F-X230.
 
 ## Implementation checklist
 
-- [ ] Establish reported failures on current source.
-- [ ] Adapt only the five correctness commits and relevant tests.
-- [ ] Add independent properties, relationship and opaque XML assertions.
-- [ ] Preserve unsupported-input refusals, atomic staging and resource bounds.
-- [ ] Pass focused tests and existing comparison controls.
-- [ ] Pass independent microscope and scoped verification.
-- [ ] Complete the dependency-prefix checkpoint before F-X230 starts.
+- [x] Establish reported failures on current source.
+- [x] Adapt only the five correctness commits and relevant tests.
+- [x] Add independent properties, relationship and opaque XML assertions.
+- [x] Preserve unsupported-input refusals, atomic staging and resource bounds.
+- [x] Pass focused tests and existing comparison controls.
+- [x] Pass independent microscope and scoped verification.
+- [x] Prepare reviewed scoped evidence for the orchestrator dependency-prefix checkpoint.
 
 ## Open questions
 
@@ -187,3 +187,106 @@ Keep compression tolerance and10MiB bounds unchanged. This is required evidence
 maintenance, not a behavioral or performance claim. README.md and
 scripts/readme_doctests.py are exclusive integration resources. Reconcile them
 against exact combined source and independently review any measured changes.
+
+
+## Concrete helper instantiations
+
+The private next_kept_owner generic receives two existing closure types, the
+body owner selector and the block-control owner selector. The private
+wrapped_children generic is instantiated by the current inserted, deleted and
+moved paragraph wrapper closures. No hypothetical implementer justifies either.
+
+## Preservation hardening
+
+Actual donor-only and follow-up regressions reproduced foreign same-local-name
+hyperlink mutation and loss of foreign text in a deleted paragraph. Namespace-
+qualified child selection retains opaque lookalikes. Whole-owner wrapping keeps
+raw comments and processing instructions in their original positions. Paragraph
+mark removal before a retained table refuses meaningful raw gaps and opaque
+children atomically. Hyperlink cleanup requires the resolved inner bytes to be
+empty apart from whitespace, so opaque raw gaps cannot disappear with its shell.
+
+
+## Actual worker archive measurement
+
+The post-D1 source archive was generated with the existing cargo package
+--locked --allow-dirty --no-verify mechanism and22 local patches. Actual rdocx
+compressed bytes3711139, normalized member bytes51833489 and37 members match
+both the README row and policy tuple, dated2026-10-15. The archive generated
+AFTER the packaged root README carrier update has SHA256
+fb3d1fb87066d2999b032cb329cc7e6005aa244052aa21184962bf48580aa040.
+Receipt: /private/tmp/F-X229-archive-D1-final.json. The separate before-carrier
+artifact is recorded at /private/tmp/F-X229-archive-D1-before-carriers.json.
+Existing64-byte tolerance and10MiB bound remain unchanged. Combined integration
+must remeasure its own source. Earlier pre-D1 receipts are not final evidence.
+
+## Microscope D1 remediation
+
+Pass1 identified captured nested Word hyperlinks bypassing modeled nesting
+admission and entering unbounded recursive wrapping. Whole-paragraph comparison
+now refuses a hyperlink nested inside another Word hyperlink explicitly and
+atomically. The established parser leaves these nested owners raw, so this
+repair does not add nested hyperlink support. Calls are statically bounded to
+one paragraph and one direct hyperlink owner. Namespace and span scans remain
+iterative and their simultaneous copied subtrees remain linear in input size.
+Direct and aliased hyperlinks remain supported, and foreign lookalikes stay
+opaque. A source-built captured-owner test checks depth1 admission and depth2
+and257 atomic refusal on both insertion and deletion at all granularities.
+The actual pre-fix RED reached depth2 and failed because only the later package
+postcondition refused it, without the required bounded ownership diagnostic.
+
+
+## Final scoped acceptance evidence
+
+The actual final post-D1 source passed cargo fmt --all --check, rdocx
+all-target/all-feature clippy with warnings denied and cargo test -p rdocx.
+The complete native suite passed625 unit,379 integration,2409 regression and2
+compile doctests, with existing ignored counts12,8 and7. The regression suite
+ran24.60s. Every assertion remained enabled under development opt-level1 with
+CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=true and
+CARGO_PROFILE_DEV_OVERFLOW_CHECKS=true. Pinned LibreOffice26.2.5.2 and
+Poppler26.01.0 equipped the successful native gate outside sandbox converter
+restrictions. The captured raw-depth boundary gate passes in this final suite.
+
+Final source hash harness passed49 unchanged entries. Prose passed0 violations
+and generated adapters26 in sync. The complete repository policy suite passed
+180 tests with2 skipped in85.545s using real registry access and the expected
+archive target path. Independent microscope pass2 reports0 defects and0 smells
+and independently verifies the final archive tuple, hash and packaged README.
+Pre-remediation broad results remain separate and are superseded by these gates.
+
+The scoped gate does not require workspace-wide tests, no-default-features,
+WASM, workspace documentation, publication dry run or supply-chain checks because
+this plan triggers none of those riders. Their full sprint gate remains due.
+No public signature or semver boundary changes. Intentional comparison XML
+changes are the hyperlink wrapper placement, revised paragraph marks beside
+tables, contained empty-paragraph properties and trailing deletion mark chains.
+Word and character presentation grouping remains assigned to F-X230.
+
+Worker preparation supplies the evidence for the canonical dependency-prefix
+checkpoint. It does not complete that checkpoint or mark sprint ledgers done.
+F-X230 remains barred until the orchestrator completes canonical F-X229
+integration and the required dependency-prefix checkpoint.
+
+## Canonical integration reconciliation
+
+Integration onto6e9fe1f4 preserves F-X178 setters and F-X231 HTML behavior.
+Product and HLD hunks merge without semantic conflict. The shared README and
+policy tuple conflict is reconciled from actual combined-source metadata,
+using the unchanged22-patch helper. No isolated worker number is authoritative.
+The rdocx row declares3714005 compressed bytes,51847828 normalized member
+bytes and37 members. Its actual after-carrier archive is3714006 bytes, with
+exact normalized member bytes and count. The one-byte difference is within
+the unchanged64-byte allowance and the archive is below10MiB. Other current
+package rows remain intact. Metadata generation does not replace verified
+publication dry runs.
+
+The before and after archives remain under
+`/private/tmp/S92-integration-preflight`. The combined receipt SHA-256 is
+`9817499112aa3eeeb3ae292338c83eaea6e0078260bd20c2a50fd22dabc72495`.
+Independent canonical reconciliation review reports zero defects, smells and
+nitpicks. Actual focused canonical tests pass54 comparison cases with one
+existing ignored case,73 paragraph cases, one table case and one hyperlink
+resolution case. All49 hash entries match. The focused receipt and logs remain
+in the same evidence directory. Final full verification and sprint review
+remain due after F-X230 integration.

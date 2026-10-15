@@ -2541,6 +2541,17 @@ and insertion if its bookmarks remain in place. The rebuilt TOC entry
 transition to a hyperlink and PAGEREF field uses this path. Granular matching
 cuts at bookmark and comment range boundaries so inserted text stays on its
 edited side of a marker.
+Whole inserted, deleted and moved hyperlink paragraphs keep the hyperlink shell
+outside revisions and track its content inside. Resolved hyperlink targets and
+display text survive save and reopen. Empty whole-paragraph hyperlinks and simple
+fields outside a complex field carried whole remain explicit atomic refusals.
+Nested captured Word hyperlinks are also refused atomically, keeping wrapper
+call depth bounded to one paragraph and one direct hyperlink owner.
+Edits before retained tables carry the changed paragraph's own mark, and a
+removed mark before a retained table requires no content to remain. Opaque
+children and meaningful raw gaps prevent that removal. Empty paragraphs can gain
+properties or text, and multiple trailing deletions retain both property states.
+Foreign same-name XML stays opaque. This changes no public method signature.
 When comment owners or metadata change, comparison carries the edited comments
 and their related package graph in the redline. A related private custom XML
 part retains the original comment graph for rejection. Acceptance keeps the
