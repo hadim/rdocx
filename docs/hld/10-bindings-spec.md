@@ -2526,6 +2526,15 @@ formatting, textual whitespace, fields, comments, and any public
 `ComparisonStoryKind`. The non-exhaustive story enum names the main, header,
 footer, comment, text-box, footnote, and endnote categories. The comparison
 surface covers relationship-resolved stories, fields, and nested text boxes.
+Word and character revisions group changed stretches as deletions followed by
+insertions. Whitespace between changes folds, while a non-whitespace anchor
+folds only when its joined word count is strictly shorter than both changed
+sides before and after it. Character units count joined words rather than
+letters. Structural, opaque and formatting boundaries, fields, drawings and
+ignored units remain barriers. Default and explicit run granularity retain their
+existing output. Inside supported inline controls, retained raw children keep
+their physical text ownership on both sides through accept, reject and reopen.
+No new comparison option or public signature is introduced.
 The native facade stages the main story from package-authoritative XML and
 preserves exact unchanged drawing wrappers even when sibling text in the same
 paragraph, table, cell, or control changes. Accepting and rejecting the result

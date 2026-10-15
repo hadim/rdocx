@@ -1083,8 +1083,24 @@ subtrees and raw gaps, and hyperlink cleanup retains opaque resolved content.
 The captured raw hyperlink boundary admits one owner and refuses nested chains
 at depths2 and257 atomically across insertion, deletion and all granularities.
 A bounded mixed-owner gap matrix retains every source and destination owner once,
-pairs only compatible kinds and remains deterministic. Grouping behavior is
-reviewed separately from these correctness changes.
+pairs only compatible kinds and remains deterministic. Word and character grouping has a separate exact-output matrix.
+
+The word and character grouping matrix independently pins the Issue372 sentence
+to11 word revisions and its exact readable markup, while run granularity keeps
+the two whole-run changes. Equal one-word anchors, including long words at
+character granularity, remain unchanged. Strictly shorter word anchors and
+intervening whitespace fold only inside structural and formatting segments.
+Adjacent changed normal and bold owners retain separate change stretches.
+Bookmark, comment, opaque XML, PI, field, ignored-whitespace and inline-control
+controls retain their exact boundaries. Accepted and rejected outputs reopen
+with independently checked link targets, display text and per-character bold
+properties. Inline-control PI, foreign raw XML, bookmark and comment markers
+retain independently checked text before and after each exact preserved marker
+in both Word and Character modes, including pure insertions and deletions.
+Default and explicit Run records remain equal. Existing drawing and full
+reconstruction controls remain active.
+A bounded unit matrix checks coverage, deterministic output and retained segment
+identity without timing thresholds or an additional alignment algorithm.
 
 The source-built external differential pins Microsoft Word 16.104 build
 16.104.25121423 and locale `en-US`. Its 24 normalized records cover every

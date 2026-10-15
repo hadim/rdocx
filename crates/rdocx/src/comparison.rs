@@ -4247,6 +4247,15 @@ fn compare_granular_paragraph(
             location,
         )?;
     }
+    let (aligned, segments) = grouped_text_alignment(
+        &aligned,
+        &segments,
+        &original_units,
+        &edited_units,
+        &original_signatures,
+        &edited_signatures,
+        metadata.options,
+    );
     let grouped = coalesced_granular_alignment(
         &aligned,
         &original_units,
@@ -4353,13 +4362,18 @@ fn hyperlink_shells(paragraph: &CT_P, options: &ComparisonOptions) -> Vec<String
 
 /// The run boundaries of the shells that the attributed path keeps from the
 /// original: where each hyperlink starts and ends and where each inline
-/// control sits.
+/// control or opaque child sits.
 fn shell_run_boundaries(paragraph: &CT_P, options: &ComparisonOptions) -> Vec<usize> {
     paragraph
         .hyperlinks
         .iter()
         .flat_map(|link| [link.run_start, link.run_end])
         .chain(paragraph.content_controls.iter().map(|(at, ..)| *at))
+        .chain(paragraph.extra_xml.iter().filter_map(|(at, raw)| {
+            (options.granularity != ComparisonGranularity::Run
+                && !CT_P::raw_is_root_attributes(*at, raw))
+            .then_some(*at)
+        }))
         .chain(
             paragraph
                 .bookmark_markers
@@ -4568,6 +4582,218 @@ fn coalesced_granular_alignment(
         start = end;
     }
     groups
+}
+
+/// The text of a unit that holds nothing but text, which grouping may move
+/// into a deletion or an insertion.
+fn unit_plain_text(unit: &AttributedRunUnit) -> Option<&str> {
+    match unit.run.content.as_slice() {
+        [RunContent::Text(text)]
+            if !unit.ignored
+                && semantic_run_raw(&unit.run).is_empty()
+                && unit.run.alt_drawings.is_empty() =>
+        {
+            Some(&text.text)
+        }
+        _ => None,
+    }
+}
+
+/// Count word starts while carrying state across adjacent attributed units.
+/// Character fragments from one word must not count as separate words.
+fn text_words(text: Option<&str>, in_word: &mut bool) -> usize {
+    let mut words = 0;
+    if let Some(text) = text {
+        for character in text.chars() {
+            let word = character.is_alphanumeric() || character == '_';
+            words += usize::from(word && !*in_word);
+            *in_word = word;
+        }
+    }
+    words
+}
+
+/// The word and character alignment with each stretch of changes written as
+/// all its deleted units, then all its inserted units, as Word shows a
+/// rewritten passage, and the segment of each pair.
+///
+/// A stretch is consecutive changed text units. It grows over an unchanged
+/// stretch between two changes when that stretch is only whitespace, then
+/// over one that has fewer words than the deletion and the insertion on each
+/// side of it, in the spirit of diff-match-patch `diff_cleanupSemantic`, so a
+/// one-word anchor between one-word replacements stays. Anything but plain
+/// text ends a stretch: a field, a drawing, a preserved child, an ignored
+/// unit, an unchanged unit whose formatting changed, and a shell segment
+/// boundary, where a hyperlink, an inline control, a bookmark or a comment
+/// range sits. Run granularity keeps its alignment.
+fn grouped_text_alignment(
+    aligned: &[(Option<usize>, Option<usize>)],
+    segments: &[usize],
+    original_units: &[AttributedRunUnit],
+    edited_units: &[AttributedRunUnit],
+    original_signatures: &[String],
+    edited_signatures: &[String],
+    options: &ComparisonOptions,
+) -> (Alignment, Vec<usize>) {
+    /// Consecutive pairs of one kind in one segment: `changed` is `None`
+    /// for a pair grouping must not move.
+    struct Block {
+        pairs: Range<usize>,
+        changed: Option<bool>,
+        deleted_words: usize,
+        inserted_words: usize,
+        whitespace: bool,
+        deleted_in_word: bool,
+        inserted_in_word: bool,
+        original_owner: Option<usize>,
+        edited_owner: Option<usize>,
+    }
+    if options.granularity == ComparisonGranularity::Run {
+        return (aligned.to_vec(), segments.to_vec());
+    }
+    let same_owner_formatting =
+        |left: Option<usize>, right: Option<usize>, units: &[AttributedRunUnit]| {
+            left.zip(right).is_none_or(|(left, right)| {
+                units[left].owner == units[right].owner
+                    || units[left].run.properties == units[right].run.properties
+            })
+        };
+    let mut blocks = Vec::<Block>::new();
+    for (index, &(left, right)) in aligned.iter().enumerate() {
+        let left_text = left.map(|index| unit_plain_text(&original_units[index]));
+        let right_text = right.map(|index| unit_plain_text(&edited_units[index]));
+        let plain = left_text.is_none_or(|text| text.is_some())
+            && right_text.is_none_or(|text| text.is_some());
+        let (left_text, right_text) = (left_text.flatten(), right_text.flatten());
+        let same_formatting = match (left, right) {
+            (Some(i), Some(j)) => {
+                original_units[i].run.properties == edited_units[j].run.properties
+            }
+            _ => true,
+        };
+        let changed = match granular_action(
+            (left, right),
+            original_units,
+            edited_units,
+            original_signatures,
+            edited_signatures,
+        ) {
+            // A replacement that ignores formatting writes its insertion in
+            // the formatting of its deletion, which an insertion of its own
+            // would not.
+            GranularAction::Replace if plain && (same_formatting || !options.ignore_formatting) => {
+                Some(true)
+            }
+            GranularAction::Delete | GranularAction::Insert if plain => Some(true),
+            GranularAction::Equal if plain && same_formatting => Some(false),
+            _ => None,
+        };
+        let inserted_text = right_text.filter(|_| changed == Some(true));
+        let whitespace = left_text.is_some_and(|text| text.trim().is_empty());
+        match blocks.last_mut() {
+            Some(block)
+                if changed.is_some()
+                    && block.changed == changed
+                    && segments[block.pairs.start] == segments[index]
+                    && same_owner_formatting(block.original_owner, left, original_units)
+                    && same_owner_formatting(block.edited_owner, right, edited_units) =>
+            {
+                block.pairs.end = index + 1;
+                block.deleted_words += text_words(left_text, &mut block.deleted_in_word);
+                block.inserted_words += text_words(inserted_text, &mut block.inserted_in_word);
+                block.whitespace &= whitespace;
+                block.original_owner = left.or(block.original_owner);
+                block.edited_owner = right.or(block.edited_owner);
+            }
+            _ => {
+                let mut deleted_in_word = false;
+                let mut inserted_in_word = false;
+                blocks.push(Block {
+                    pairs: index..index + 1,
+                    changed,
+                    deleted_words: text_words(left_text, &mut deleted_in_word),
+                    inserted_words: text_words(inserted_text, &mut inserted_in_word),
+                    whitespace,
+                    deleted_in_word,
+                    inserted_in_word,
+                    original_owner: left,
+                    edited_owner: right,
+                });
+            }
+        }
+    }
+    let between_changes = |block: usize| {
+        let segment = segments[blocks[block].pairs.start];
+        block > 0
+            && block + 1 < blocks.len()
+            && blocks[block].changed == Some(false)
+            && [&blocks[block - 1], &blocks[block + 1]].iter().all(|side| {
+                side.changed == Some(true)
+                    && segments[side.pairs.start] == segment
+                    && same_owner_formatting(
+                        side.original_owner,
+                        blocks[block].original_owner,
+                        original_units,
+                    )
+                    && same_owner_formatting(
+                        side.edited_owner,
+                        blocks[block].edited_owner,
+                        edited_units,
+                    )
+            })
+    };
+    let mut folded = (0..blocks.len())
+        .map(|block| between_changes(block) && blocks[block].whitespace)
+        .collect::<Vec<_>>();
+    // The words deleted and inserted by the change, grown over whitespace,
+    // that holds each change block.
+    let mut stretch = vec![0usize; blocks.len()];
+    let mut stretch_words = vec![(0usize, 0usize); blocks.len()];
+    for block in 0..blocks.len() {
+        if blocks[block].changed == Some(true) {
+            stretch[block] = if block >= 2 && folded[block - 1] {
+                stretch[block - 2]
+            } else {
+                block
+            };
+            stretch_words[stretch[block]].0 += blocks[block].deleted_words;
+            stretch_words[stretch[block]].1 += blocks[block].inserted_words;
+        }
+    }
+    for block in 0..blocks.len() {
+        if between_changes(block) && !folded[block] {
+            let (before, after) = (
+                stretch_words[stretch[block - 1]],
+                stretch_words[stretch[block + 1]],
+            );
+            folded[block] =
+                blocks[block].deleted_words < before.0.min(before.1).min(after.0).min(after.1);
+        }
+    }
+    let mut grouped = Vec::with_capacity(aligned.len());
+    let mut grouped_segments = Vec::with_capacity(aligned.len());
+    let mut block = 0;
+    while block < blocks.len() {
+        let mut end = block + 1;
+        if blocks[block].changed == Some(true) {
+            while end + 1 < blocks.len() && folded[end] {
+                end += 2;
+            }
+        }
+        let pairs = blocks[block].pairs.start..blocks[end - 1].pairs.end;
+        if blocks[block].changed == Some(true) && pairs.len() > 1 {
+            let deleted = pairs.clone().filter_map(|index| aligned[index].0);
+            let inserted = pairs.clone().filter_map(|index| aligned[index].1);
+            grouped.extend(deleted.map(|index| (Some(index), None)));
+            grouped.extend(inserted.map(|index| (None, Some(index))));
+            grouped_segments.resize(grouped.len(), segments[pairs.start]);
+        } else {
+            grouped.extend_from_slice(&aligned[pairs.clone()]);
+            grouped_segments.extend_from_slice(&segments[pairs]);
+        }
+        block = end;
+    }
+    (grouped, grouped_segments)
 }
 
 fn merge_unit_runs(units: &[AttributedRunUnit], indices: &[usize]) -> Option<CT_R> {
@@ -6231,10 +6457,32 @@ fn compare_control_from_xml(
         })?;
         let content_source = &original_xml[content_span.clone()];
         let inner = element_inner_range_any_prefix(content_source, "sdtContent")?;
+        // Raw children remain physical shell boundaries after the runs are
+        // extracted. Logical boundary equality above does not preserve them
+        // in the run-only alignment by itself.
+        let raw_runs = |content: &[&SdtContent]| {
+            let mut runs = 0;
+            content
+                .iter()
+                .filter_map(|child| match child {
+                    SdtContent::Run(_) => {
+                        runs += 1;
+                        None
+                    }
+                    SdtContent::RawXml(_) => Some(runs),
+                    _ => unreachable!(),
+                })
+                .collect::<Vec<_>>()
+        };
+        let boundaries = raw_runs(&original_content)
+            .into_iter()
+            .zip(raw_runs(&edited_content))
+            .collect::<Vec<_>>();
         let compared = compare_control_runs_with_options(
             &original_runs,
             &edited_runs,
             Some(&content_source[inner]),
+            &boundaries,
             location,
             metadata,
             diagnostics,
@@ -6526,6 +6774,7 @@ fn compare_control_content(
                     std::slice::from_ref(left),
                     std::slice::from_ref(right),
                     None,
+                    &[],
                     location,
                     metadata,
                     diagnostics,
@@ -6570,6 +6819,7 @@ fn compare_control_runs_with_options(
     original: &[CT_R],
     edited: &[CT_R],
     original_source: Option<&str>,
+    raw_boundaries: &[(usize, usize)],
     location: &str,
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
@@ -6584,7 +6834,28 @@ fn compare_control_runs_with_options(
         .iter()
         .map(attributed_unit_signature)
         .collect::<Vec<_>>();
-    let aligned = align(&original_signatures, &edited_signatures);
+    let cuts = if metadata.options.granularity == ComparisonGranularity::Run {
+        Vec::new()
+    } else {
+        shell_unit_cuts(
+            &original_units,
+            &edited_units,
+            raw_boundaries.iter().copied(),
+        )
+        .ok_or_else(|| {
+            Error::Other(format!(
+                "comparison cannot revise inline-control raw boundaries at {location}"
+            ))
+        })?
+    };
+    let (aligned, segments) = align_between_shells(&original_signatures, &edited_signatures, &cuts);
+    let segment_runs = std::iter::once(0)
+        .chain(cuts.iter().map(|&(cut, _)| {
+            original_units
+                .get(cut)
+                .map_or(original.len(), |unit| unit.owner)
+        }))
+        .collect::<Vec<_>>();
     if !metadata.options.ignore_fields {
         validate_field_alignment(
             &aligned,
@@ -6601,6 +6872,15 @@ fn compare_control_runs_with_options(
             location,
         )?;
     }
+    let (aligned, segments) = grouped_text_alignment(
+        &aligned,
+        &segments,
+        &original_units,
+        &edited_units,
+        &original_signatures,
+        &edited_signatures,
+        metadata.options,
+    );
     let grouped = coalesced_granular_alignment(
         &aligned,
         &original_units,
@@ -6609,9 +6889,11 @@ fn compare_control_runs_with_options(
         &edited_signatures,
     );
     let mut grouped_alignment = Vec::with_capacity(grouped.len());
+    let mut grouped_segment_runs = Vec::with_capacity(grouped.len());
     let mut replacements = Vec::with_capacity(grouped.len());
     for (action, members) in grouped {
         grouped_alignment.push(aligned[members.start]);
+        grouped_segment_runs.push(segment_runs[segments[members.start]]);
         let left_indices = members
             .clone()
             .filter_map(|index| aligned[index].0)
@@ -6683,7 +6965,20 @@ fn compare_control_runs_with_options(
     let mut output = source[..insertion_boundary].to_owned();
     let mut cursor = insertion_boundary;
     let mut consumed_owner = None;
-    for ((left, _), replacement) in grouped_alignment.iter().zip(&replacements) {
+    for (((left, _), replacement), &segment_run) in grouped_alignment
+        .iter()
+        .zip(&replacements)
+        .zip(&grouped_segment_runs)
+    {
+        // An insertion can be the first action after a raw child, with no
+        // original unit to consume. Copy that shell before its new text.
+        let segment_start = spans
+            .get(segment_run)
+            .map_or(source.len(), |span| span.start);
+        if segment_start > cursor {
+            output.push_str(&source[cursor..segment_start]);
+            cursor = segment_start;
+        }
         if let Some(unit) = left.map(|index| &original_units[index])
             && consumed_owner != Some(unit.owner)
         {
@@ -8929,9 +9224,10 @@ fn utf8_error(error: impl std::fmt::Display) -> Error {
 mod tests {
     use super::{
         ComparisonGranularity, ComparisonOptions, FAIL_AFTER_COMPARISON_STAGING, align,
-        attributed_run_units, canonical_owned_story, comparison_postcondition_error,
-        complex_field_result, deleted_text_xml, normalized_body_with_options, pair_gaps_by_kind,
-        postcondition_body, story_document, word_fragments,
+        attributed_run_units, attributed_unit_signature, canonical_owned_story,
+        comparison_postcondition_error, complex_field_result, deleted_text_xml,
+        grouped_text_alignment, normalized_body_with_options, pair_gaps_by_kind,
+        postcondition_body, story_document, text_words, word_fragments,
     };
     use crate::Document;
     use crate::Length;
@@ -8939,6 +9235,109 @@ mod tests {
     use rdocx_oxml::document::BodyContent;
     use rdocx_oxml::namespace::W_NS;
     use rdocx_oxml::text::{BreakType, CT_R, CT_Text, RunContent};
+
+    #[test]
+    fn grouping_counts_joined_character_fragments_as_words() {
+        let mut in_word = false;
+        assert_eq!(text_words(Some("ins"), &mut in_word), 1);
+        assert_eq!(text_words(Some("pec"), &mut in_word), 0);
+        assert_eq!(text_words(Some("tion_123"), &mut in_word), 0);
+        assert_eq!(text_words(None, &mut in_word), 0);
+        assert_eq!(text_words(Some(" next"), &mut in_word), 1);
+    }
+
+    #[test]
+    fn grouping_scan_preserves_unit_coverage_segments_and_determinism() {
+        for granularity in [
+            ComparisonGranularity::Run,
+            ComparisonGranularity::Word,
+            ComparisonGranularity::Character,
+        ] {
+            let options = ComparisonOptions {
+                granularity,
+                ..Default::default()
+            };
+            let left = attributed_run_units(
+                &[CT_R::new(&"red green and blue yellow ".repeat(12))],
+                &options,
+            );
+            let right = attributed_run_units(
+                &[CT_R::new(&"cyan magenta and black white ".repeat(12))],
+                &options,
+            );
+            let left_signatures = left
+                .iter()
+                .map(attributed_unit_signature)
+                .collect::<Vec<_>>();
+            let right_signatures = right
+                .iter()
+                .map(attributed_unit_signature)
+                .collect::<Vec<_>>();
+            let aligned = align(&left_signatures, &right_signatures);
+            let segments = (0..aligned.len())
+                .map(|index| index / 7)
+                .collect::<Vec<_>>();
+            let grouped = grouped_text_alignment(
+                &aligned,
+                &segments,
+                &left,
+                &right,
+                &left_signatures,
+                &right_signatures,
+                &options,
+            );
+            assert_eq!(
+                grouped,
+                grouped_text_alignment(
+                    &aligned,
+                    &segments,
+                    &left,
+                    &right,
+                    &left_signatures,
+                    &right_signatures,
+                    &options
+                )
+            );
+            if granularity == ComparisonGranularity::Run {
+                assert_eq!(grouped, (aligned.clone(), segments.clone()));
+            }
+            assert!(grouped.0.len() <= left.len() + right.len());
+            assert_eq!(
+                grouped
+                    .0
+                    .iter()
+                    .filter_map(|pair| pair.0)
+                    .collect::<Vec<_>>(),
+                (0..left.len()).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                grouped
+                    .0
+                    .iter()
+                    .filter_map(|pair| pair.1)
+                    .collect::<Vec<_>>(),
+                (0..right.len()).collect::<Vec<_>>()
+            );
+            let mut left_segments = vec![0; left.len()];
+            let mut right_segments = vec![0; right.len()];
+            for ((left, right), &segment) in aligned.iter().zip(&segments) {
+                if let Some(left) = left {
+                    left_segments[*left] = segment;
+                }
+                if let Some(right) = right {
+                    right_segments[*right] = segment;
+                }
+            }
+            for ((left, right), &segment) in grouped.0.iter().zip(&grouped.1) {
+                if let Some(left) = left {
+                    assert_eq!(left_segments[*left], segment);
+                }
+                if let Some(right) = right {
+                    assert_eq!(right_segments[*right], segment);
+                }
+            }
+        }
+    }
 
     #[test]
     fn mixed_owner_gap_pairing_is_deterministic_and_preserves_every_owner() {

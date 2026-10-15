@@ -1141,6 +1141,19 @@ Unicode word, whitespace, and punctuation-or-symbol units, and applies
 left-biased ignores for formatting, textual whitespace, fields, comments, and
 selected story categories. Selected categories leave the original story bytes
 untouched and are excluded before shell checks and revision-id allocation.
+A linear post-pass groups word and character changes into consecutive deletions
+followed by insertions within each structural and formatting owner segment.
+Whitespace anchors between changes fold. Other anchors fold only when their
+joined word count is strictly smaller than both deleted and inserted word counts
+on each side. Character fragments carry word state across units, so an unchanged
+one-word anchor between one-word edits stays even when those words are long.
+Fields, drawings, ignored units, opaque children, bookmark and comment markers,
+hyperlinks, controls and formatting transitions stop grouping. Formatting-only
+changes and replacements using ignored formatting also stop it. Different runs
+retain their own formatting and coalescing ownership. Run granularity retains
+its existing alignment and revision output. Supported inline controls retain raw
+child run cuts before extraction, align Word and Character units within those
+shell segments and copy each shell before its first inserted unit.
 Non-text content remains atomic. Unmatched identical owners become move pairs
 only within one story. A changed run of consecutive paragraphs that holds a
 pair whose hyperlinks, bookmarks, comment ranges, preserved raw children, or

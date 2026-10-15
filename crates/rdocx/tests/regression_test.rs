@@ -32164,6 +32164,612 @@ fn flat_mail_merge_output_remains_unchanged_after_rich_merge_is_added() {
     assert_eq!(sectioned.to_bytes().unwrap(), expected_bytes);
 }
 
+/// The first body paragraph of a tracked document as text with deletions
+/// written `[-...-]` and insertions `{+...+}`, and whether a field or a
+/// hyperlink sits inside a deletion or an insertion.
+fn tracked_paragraph_markup(xml: &str) -> (String, bool) {
+    let mut reader = XmlReader::from_str(xml);
+    let mut markup = String::new();
+    let mut revision = None::<&str>;
+    let mut wrapped_structure = false;
+    let mut in_text = false;
+    loop {
+        match reader.read_event().unwrap() {
+            XmlEvent::Eof => return (markup, wrapped_structure),
+            XmlEvent::Start(element) | XmlEvent::Empty(element) => {
+                match element.local_name().as_ref() {
+                    b"ins" => revision = Some("+}"),
+                    b"del" => revision = Some("-]"),
+                    b"t" | b"delText" => in_text = true,
+                    b"fldChar" | b"instrText" | b"fldSimple" | b"hyperlink" => {
+                        wrapped_structure |= revision.is_some();
+                    }
+                    _ => {}
+                }
+            }
+            XmlEvent::End(element) => match element.local_name().as_ref() {
+                b"ins" | b"del" => revision = None,
+                b"t" | b"delText" => in_text = false,
+                b"p" => return (markup, wrapped_structure),
+                _ => {}
+            },
+            XmlEvent::Text(text) if in_text => {
+                let text = text.decode().unwrap();
+                match revision {
+                    Some(close) => {
+                        let open = if close == "+}" { "{+" } else { "[-" };
+                        // Consecutive runs of one revision read as one span.
+                        if let Some(stripped) = markup.strip_suffix(close) {
+                            markup = format!("{stripped}{text}{close}");
+                        } else {
+                            markup.push_str(&format!("{open}{text}{close}"));
+                        }
+                    }
+                    None => markup.push_str(&text),
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Compare one-paragraph bodies and return the markup of the redline after
+/// checking that accepting gives the edited text and rejecting the original.
+fn granular_redline(original: &str, edited: &str, options: &rdocx::ComparisonOptions) -> String {
+    let original_xml = wrap_word_body(original);
+    let original = document_with_content_controls(&original_xml);
+    let edited = document_with_content_controls(&wrap_word_body(edited));
+    let mut tracked = document_with_content_controls(&original_xml);
+    tracked
+        .compare_with_options(&edited, "Ada", "2026-09-04T09:00:00Z", options)
+        .unwrap();
+    let bytes = tracked.to_bytes().unwrap();
+    let mut accepted = Document::from_bytes(&bytes).unwrap();
+    accepted.accept_all().unwrap();
+    assert_eq!(accepted.text(), edited.text());
+    let mut rejected = Document::from_bytes(&bytes).unwrap();
+    rejected.reject_all().unwrap();
+    assert_eq!(rejected.text(), original.text());
+    for (mut resolved, expected) in [(accepted, &edited), (rejected, &original)] {
+        let reopened = Document::from_bytes(&resolved.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.text(), expected.text());
+        let links = |document: &Document| {
+            document
+                .links()
+                .into_iter()
+                .map(|link| (link.text, link.url, link.anchor))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(links(&reopened), links(expected));
+    }
+    document_xml(&mut tracked)
+}
+
+fn granular_markup(
+    original: &str,
+    edited: &str,
+    granularity: rdocx::ComparisonGranularity,
+) -> (String, bool) {
+    tracked_paragraph_markup(&granular_redline(
+        original,
+        edited,
+        &rdocx::ComparisonOptions {
+            granularity,
+            ..Default::default()
+        },
+    ))
+}
+
+#[test]
+fn word_comparison_groups_a_rewritten_stretch_into_one_deletion_and_one_insertion() {
+    let paragraph =
+        |text: &str| format!(r#"<w:p><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>"#);
+    let original = paragraph(
+        "On receipt, the Sponsor inspects the material and notifies the site of any specimen \
+         that does not pass inspection, with the reason.",
+    );
+    let edited = paragraph(
+        "After receipt, the Sponsor confirms the delivery and reports to the laboratory any \
+         specimen that fails inspection.",
+    );
+    assert_eq!(
+        granular_markup(&original, &edited, rdocx::ComparisonGranularity::Word).0,
+        "[-On-]{+After+} receipt, the Sponsor [-inspects-]{+confirms+} the \
+         [-material-]{+delivery+} and [-notifies the site of-]{+reports to the laboratory+} \
+         any specimen that [-does not pass-]{+fails+} inspection[-, with the reason-]."
+    );
+    let counted = granular_redline(
+        &original,
+        &edited,
+        &rdocx::ComparisonOptions {
+            granularity: rdocx::ComparisonGranularity::Word,
+            ..Default::default()
+        },
+    );
+    let records = policy_comparison_records(&counted, "main");
+    assert_eq!(records.len(), 11, "{records:?}");
+    // Run granularity still replaces the run whole.
+    assert_eq!(
+        granular_markup(&original, &edited, rdocx::ComparisonGranularity::Run).0,
+        "[-On receipt, the Sponsor inspects the material and notifies the site of any \
+         specimen that does not pass inspection, with the reason.-]{+After receipt, the \
+         Sponsor confirms the delivery and reports to the laboratory any specimen that fails \
+         inspection.+}"
+    );
+    // Character granularity takes the same path and keeps accept and reject exact.
+    granular_markup(&original, &edited, rdocx::ComparisonGranularity::Character);
+
+    let cases = [
+        // A one-word change is unchanged by grouping.
+        (
+            "the quick brown fox",
+            "the slow brown fox",
+            "the [-quick-]{+slow+} brown fox",
+        ),
+        // An anchor with fewer words than the changes around it folds.
+        (
+            "red green and blue yellow end",
+            "cyan magenta and black white end",
+            "[-red green and blue yellow-]{+cyan magenta and black white+} end",
+        ),
+        // A long unchanged stretch stays between its changes.
+        (
+            "red green one two three four blue yellow",
+            "cyan magenta one two three four black white",
+            "[-red green-]{+cyan magenta+} one two three four [-blue yellow-]{+black white+}",
+        ),
+        // An anchor next to a pure deletion stays.
+        (
+            "keep red green and blue yellow",
+            "keep and black white",
+            "keep [-red green -]and [-blue yellow-]{+black white+}",
+        ),
+    ];
+    for (before, after, expected) in cases {
+        assert_eq!(
+            granular_markup(
+                &paragraph(before),
+                &paragraph(after),
+                rdocx::ComparisonGranularity::Word
+            )
+            .0,
+            expected
+        );
+    }
+    // The runs of an inline control group the same way.
+    let control = |text: &str| {
+        format!(
+            r#"<w:p><w:r><w:t xml:space="preserve">Lead </w:t></w:r><w:sdt><w:sdtPr><w:alias w:val="c"/></w:sdtPr><w:sdtContent><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:sdtContent></w:sdt></w:p>"#
+        )
+    };
+    assert_eq!(
+        granular_markup(
+            &control("red green and blue yellow"),
+            &control("cyan magenta and black white"),
+            rdocx::ComparisonGranularity::Word
+        )
+        .0,
+        "Lead [-red green and blue yellow-]{+cyan magenta and black white+}"
+    );
+}
+
+#[test]
+fn word_grouping_keeps_a_one_word_edit_and_long_anchors() {
+    let paragraph =
+        |text: &str| format!(r#"<w:p><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>"#);
+    for anchor in ["and", "inspection"] {
+        let before =
+            format!("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx {anchor} zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
+        let after =
+            format!("YYYYYYYYYYYYYYYYYYYYYYYYYYYYYY {anchor} QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ");
+        let expected = format!(
+            "[-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-]{{+YYYYYYYYYYYYYYYYYYYYYYYYYYYYYY+}} {anchor} [-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-]{{+QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ+}}"
+        );
+        for granularity in [
+            rdocx::ComparisonGranularity::Word,
+            rdocx::ComparisonGranularity::Character,
+        ] {
+            assert_eq!(
+                granular_markup(&paragraph(&before), &paragraph(&after), granularity).0,
+                expected,
+                "{anchor} {granularity:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn word_grouping_stops_at_adjacent_changed_formatting_owners() {
+    let paragraph = |left: &str, right: &str| {
+        format!(
+            r#"<w:p><w:r><w:t xml:space="preserve">{left} </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>{right}</w:t></w:r></w:p>"#
+        )
+    };
+    let original = paragraph("red green", "blue yellow");
+    let edited = paragraph("cyan magenta", "black white");
+    assert_eq!(
+        granular_markup(&original, &edited, rdocx::ComparisonGranularity::Word).0,
+        "[-red green-]{+cyan magenta+} [-blue yellow-]{+black white+}"
+    );
+    let xml = granular_redline(
+        &original,
+        &edited,
+        &rdocx::ComparisonOptions {
+            granularity: rdocx::ComparisonGranularity::Word,
+            ..Default::default()
+        },
+    );
+    for (accept, left, right) in [
+        (true, "cyan magenta", "black white"),
+        (false, "red green", "blue yellow"),
+    ] {
+        let mut resolved = document_with_content_controls(&xml);
+        if accept {
+            resolved.accept_all().unwrap();
+        } else {
+            resolved.reject_all().unwrap();
+        }
+        let reopened = Document::from_bytes(&resolved.to_bytes().unwrap()).unwrap();
+        let actual = reopened
+            .paragraph(0)
+            .unwrap()
+            .runs()
+            .flat_map(|run| {
+                let bold = run.bold_value();
+                run.text()
+                    .chars()
+                    .map(|character| (character, bold))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let expected = format!("{left} ")
+            .chars()
+            .map(|character| (character, None))
+            .chain(right.chars().map(|character| (character, Some(true))))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn word_grouping_preserves_bookmark_comment_and_raw_boundaries() {
+    let run = |text: &str| format!(r#"<w:r><w:t xml:space="preserve">{text}</w:t></w:r>"#);
+    for marker in [
+        r#"<w:bookmarkStart w:id="9" w:name="kept"/><w:bookmarkEnd w:id="9"/>"#,
+        r#"<w:commentRangeStart w:id="9"/><w:commentRangeEnd w:id="9"/>"#,
+        r#"<x:keep xmlns:x="urn:producer" x:flag="exact"/>"#,
+        "<?producer exact?>",
+    ] {
+        let paragraph =
+            |left: &str, right: &str| format!("<w:p>{}{marker}{}</w:p>", run(left), run(right));
+        let before = paragraph("red green ", "blue yellow");
+        let after = paragraph("cyan magenta ", "black white");
+        let xml = granular_redline(
+            &before,
+            &after,
+            &rdocx::ComparisonOptions {
+                granularity: rdocx::ComparisonGranularity::Word,
+                ..Default::default()
+            },
+        );
+        let kinds = policy_comparison_records(&xml, "main")
+            .into_iter()
+            .map(|record| record.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, ["del", "ins", "del", "ins"], "{marker}: {xml}");
+        assert_eq!(xml.matches(marker).count(), 1, "{marker}: {xml}");
+        for accept in [true, false] {
+            let mut resolved = document_with_content_controls(&xml);
+            if accept {
+                resolved.accept_all().unwrap();
+            } else {
+                resolved.reject_all().unwrap();
+            }
+            let mut reopened = Document::from_bytes(&resolved.to_bytes().unwrap()).unwrap();
+            assert_eq!(
+                document_xml(&mut reopened).matches(marker).count(),
+                1,
+                "{marker}"
+            );
+        }
+    }
+}
+
+#[test]
+fn word_grouping_respects_ignored_units_and_non_text_content() {
+    let run = |text: &str| format!(r#"<w:r><w:t xml:space="preserve">{text}</w:t></w:r>"#);
+    let simple = r#"<w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple>"#;
+    for middle in [simple, "<w:r><w:br/></w:r>"] {
+        let before = format!(
+            "<w:p>{}{middle}{}</w:p>",
+            run("red green "),
+            run("blue yellow")
+        );
+        let after = format!(
+            "<w:p>{}{middle}{}</w:p>",
+            run("cyan magenta "),
+            run("black white")
+        );
+        for ignore_fields in [false, true] {
+            let xml = granular_redline(
+                &before,
+                &after,
+                &rdocx::ComparisonOptions {
+                    granularity: rdocx::ComparisonGranularity::Word,
+                    ignore_fields,
+                    ..Default::default()
+                },
+            );
+            let kinds = policy_comparison_records(&xml, "main")
+                .into_iter()
+                .map(|record| record.kind)
+                .collect::<Vec<_>>();
+            assert_eq!(kinds, ["del", "ins", "del", "ins"], "{middle}: {xml}");
+            assert_eq!(xml.matches(middle).count(), 1, "{middle}: {xml}");
+        }
+    }
+    let before = format!("<w:p>{}</w:p>", run("red green"));
+    let after = format!("<w:p>{}</w:p>", run("cyan magenta"));
+    let xml = granular_redline(
+        &before,
+        &after,
+        &rdocx::ComparisonOptions {
+            granularity: rdocx::ComparisonGranularity::Word,
+            ignore_whitespace: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        tracked_paragraph_markup(&xml).0,
+        "[-red-]{+cyan+} [-green-]{+magenta+}"
+    );
+}
+
+#[test]
+fn word_grouping_preserves_inline_control_raw_boundaries() {
+    let run = |text: &str| format!(r#"<w:r><w:t xml:space="preserve">{text}</w:t></w:r>"#);
+    for marker in [
+        "<?kept boundary?>",
+        r#"<x:keep xmlns:x="urn:kept"/>"#,
+        r#"<w:bookmarkStart w:id="90" w:name="kept"/><w:bookmarkEnd w:id="90"/>"#,
+        r#"<w:commentRangeStart w:id="90"/><w:commentRangeEnd w:id="90"/>"#,
+    ] {
+        let control = |left: &str, right: &str| {
+            format!(
+                "<w:p><w:sdt><w:sdtPr/><w:sdtContent>{}{marker}{}</w:sdtContent></w:sdt></w:p>",
+                run(left),
+                if right.is_empty() {
+                    String::new()
+                } else {
+                    run(right)
+                }
+            )
+        };
+        for (old_right, new_right) in [(" ppp qqq", " AAA BBB"), ("", " AAA BBB"), (" ppp qqq", "")]
+        {
+            let before = control("xxx zzz ", old_right);
+            let after = control("YYY QQQ ", new_right);
+            let edited = document_with_content_controls(&wrap_word_body(&after));
+            let mut default = document_with_content_controls(&wrap_word_body(&before));
+            let mut explicit_run = document_with_content_controls(&wrap_word_body(&before));
+            let default_before = default.to_bytes().unwrap();
+            let run_before = explicit_run.to_bytes().unwrap();
+            let default_result = default
+                .compare(&edited, "Ada", "2026-09-04T09:00:00Z")
+                .map(|_| ())
+                .map_err(|error| error.to_string());
+            let run_result = explicit_run
+                .compare_with_options(
+                    &edited,
+                    "Ada",
+                    "2026-09-04T09:00:00Z",
+                    &rdocx::ComparisonOptions {
+                        granularity: rdocx::ComparisonGranularity::Run,
+                        ..Default::default()
+                    },
+                )
+                .map(|_| ())
+                .map_err(|error| error.to_string());
+            assert_eq!(default_result, run_result);
+            if default_result.is_err() {
+                assert_eq!(default.to_bytes().unwrap(), default_before);
+                assert_eq!(explicit_run.to_bytes().unwrap(), run_before);
+            } else {
+                assert_eq!(document_xml(&mut default), document_xml(&mut explicit_run));
+            }
+            let mut expected_kinds = vec!["del", "ins"];
+            if !old_right.is_empty() {
+                expected_kinds.push("del");
+            }
+            if !new_right.is_empty() {
+                expected_kinds.push("ins");
+            }
+            for granularity in [
+                rdocx::ComparisonGranularity::Word,
+                rdocx::ComparisonGranularity::Character,
+            ] {
+                let original_xml = wrap_word_body(&before);
+                let edited = document_with_content_controls(&wrap_word_body(&after));
+                let mut tracked = document_with_content_controls(&original_xml);
+                tracked
+                    .compare_with_options(
+                        &edited,
+                        "Ada",
+                        "2026-09-04T09:00:00Z",
+                        &rdocx::ComparisonOptions {
+                            granularity,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                let xml = document_xml(&mut tracked);
+                assert_eq!(
+                    policy_comparison_records(&xml, "main")
+                        .iter()
+                        .map(|record| record.kind.as_str())
+                        .collect::<Vec<_>>(),
+                    expected_kinds,
+                    "{granularity:?}: {xml}"
+                );
+                let bytes = tracked.to_bytes().unwrap();
+                for (accept, left, right) in [
+                    (true, "YYY QQQ ", new_right),
+                    (false, "xxx zzz ", old_right),
+                ] {
+                    let mut resolved = Document::from_bytes(&bytes).unwrap();
+                    if accept {
+                        resolved.accept_all().unwrap();
+                    } else {
+                        resolved.reject_all().unwrap();
+                    }
+                    let mut reopened = Document::from_bytes(&resolved.to_bytes().unwrap()).unwrap();
+                    let xml = document_xml(&mut reopened);
+                    assert_eq!(xml.matches(marker).count(), 1, "{xml}");
+                    let (prefix, suffix) = xml.split_once(marker).unwrap();
+                    let text = |xml: &str| {
+                        xml.split("<w:t")
+                            .skip(1)
+                            .map(|part| {
+                                let part = &part[part.find('>').unwrap() + 1..];
+                                &part[..part.find("</w:t>").unwrap()]
+                            })
+                            .collect::<String>()
+                    };
+                    assert_eq!(
+                        (text(prefix), text(suffix)),
+                        (left.to_owned(), right.to_owned()),
+                        "{granularity:?}, accept={accept}: {xml}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn word_grouping_applies_inside_an_inline_control() {
+    let control = |text: &str| {
+        format!(
+            r#"<w:p><w:sdt><w:sdtPr><w:tag w:val="kept"/></w:sdtPr><w:sdtContent><w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:sdtContent></w:sdt></w:p>"#
+        )
+    };
+    let xml = granular_redline(
+        &control("red green and blue yellow"),
+        &control("cyan magenta and black white"),
+        &rdocx::ComparisonOptions {
+            granularity: rdocx::ComparisonGranularity::Word,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        tracked_paragraph_markup(&xml).0,
+        "[-red green and blue yellow-]{+cyan magenta and black white+}"
+    );
+    assert_eq!(xml.matches("<w:sdt>").count(), 1);
+}
+
+#[test]
+fn word_grouping_preserves_external_hyperlink_relationships_through_reopen() {
+    let build = |before: &str, after: &str| {
+        let mut document = Document::new();
+        let relationship = document.add_hyperlink_relationship("https://example.com/kept");
+        let mut paragraph = document.add_paragraph(before);
+        paragraph.add_hyperlink("and", &relationship);
+        paragraph.add_run(after);
+        document
+    };
+    let original = build("red green ", " blue yellow");
+    let edited = build("cyan magenta ", " black white");
+    let mut tracked = build("red green ", " blue yellow");
+    tracked
+        .compare_with_options(
+            &edited,
+            "Reviewer",
+            "2026-01-01T00:00:00Z",
+            &rdocx::ComparisonOptions {
+                granularity: rdocx::ComparisonGranularity::Word,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let xml = document_xml(&mut tracked);
+    assert_eq!(
+        policy_comparison_records(&xml, "main")
+            .iter()
+            .map(|record| record.kind.as_str())
+            .collect::<Vec<_>>(),
+        ["del", "ins", "del", "ins"]
+    );
+    let bytes = tracked.to_bytes().unwrap();
+    for (accept, expected) in [(true, &edited), (false, &original)] {
+        let mut resolved = Document::from_bytes(&bytes).unwrap();
+        if accept {
+            resolved.accept_all().unwrap();
+        } else {
+            resolved.reject_all().unwrap();
+        }
+        let reopened = Document::from_bytes(&resolved.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.text(), expected.text());
+        let links = reopened.links();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].text, "and");
+        assert_eq!(links[0].url.as_deref(), Some("https://example.com/kept"));
+    }
+}
+
+#[test]
+fn word_grouping_never_folds_a_field_a_hyperlink_or_a_formatting_change() {
+    let run = |text: &str| format!(r#"<w:r><w:t xml:space="preserve">{text}</w:t></w:r>"#);
+    let bold = |text: &str| {
+        format!(r#"<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">{text}</w:t></w:r>"#)
+    };
+    let link = |text: &str| {
+        format!(
+            r#"<w:hyperlink w:anchor="target">{}</w:hyperlink>"#,
+            run(text)
+        )
+    };
+    let simple = r#"<w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple>"#;
+    let complex = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+    let paragraph = |anchor: &str, before: &str, after: &str| {
+        format!("<w:p>{}{anchor}{}</w:p>", run(before), run(after))
+    };
+    for (label, original_anchor, edited_anchor, expected) in [
+        (
+            "hyperlink",
+            link("and"),
+            link("and"),
+            "[-red green-]{+cyan magenta+} and [-blue yellow-]{+black white+}",
+        ),
+        (
+            "simple field",
+            simple.to_owned(),
+            simple.to_owned(),
+            "[-red green-]{+cyan magenta+} 1 [-blue yellow-]{+black white+}",
+        ),
+        (
+            "complex field",
+            complex.to_owned(),
+            complex.to_owned(),
+            "[-red green-]{+cyan magenta+} 1 [-blue yellow-]{+black white+}",
+        ),
+        (
+            "formatting change",
+            run("and"),
+            bold("and"),
+            "[-red green-]{+cyan magenta+} and [-blue yellow-]{+black white+}",
+        ),
+    ] {
+        let (markup, wrapped) = granular_markup(
+            &paragraph(&original_anchor, "red green ", " blue yellow"),
+            &paragraph(&edited_anchor, "cyan magenta ", " black white"),
+            rdocx::ComparisonGranularity::Word,
+        );
+        assert_eq!(markup, expected, "{label}");
+        assert!(!wrapped, "{label}");
+    }
+}
+
 #[test]
 fn granular_insertions_stay_inside_leading_and_empty_paragraph_owners() {
     for (before, after) in [("world", "hello world"), ("", "hello")] {

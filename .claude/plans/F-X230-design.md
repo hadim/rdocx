@@ -1,6 +1,6 @@
 # F-X230, Group comparison changes for readable revisions
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S92
 **Size**: M
 **Depends on**: F-X229
@@ -79,6 +79,7 @@ Use the existing `crates/rdocx/tests/regression_test.rs` binary.
 | regression | `word_grouping_preserves_bookmark_comment_and_raw_boundaries` | Bookmark, comment range, foreign raw child and PI retain exact ordering and ownership through reopen. |
 | regression | `word_grouping_respects_ignored_units_and_non_text_content` | Field, formatting and whitespace ignores, drawings and hard breaks retain left-biased policy and owner boundaries. |
 | regression | `word_grouping_applies_inside_an_inline_control` | Mixed rewrite inside an inline control groups identically while preserving its shell once. |
+| regression | `word_grouping_preserves_inline_control_raw_boundaries` | Word and Character changes, pure insertions and deletions retain PI, foreign raw XML, bookmark and comment marker physical ownership after accept, reject and reopen. Default and explicit Run outcomes and atomicity match. |
 | regression | existing comparison policy matrix | Only deliberately changed word and character records change. Run/default equality and unchanged controls remain exact. |
 | regression | F-X229 repair matrix | All hyperlink, table, empty and trailing paragraph cases still reconstruct exactly. |
 | round-trip | existing granular unmodelled XML preservation tests | Opaque XML and relationship ownership survive tracked, accepted, rejected and reopened paths. |
@@ -139,13 +140,13 @@ is planned.
 
 ## Implementation checklist
 
-- [ ] Confirm F-X229 completed with dependency-prefix evidence.
-- [ ] Establish current Issue372 output.
-- [ ] Adapt only grouping commit and relevant tests.
-- [ ] Add bookmark, comment, opaque-child and ignored-unit boundary controls.
-- [ ] Prove both property and relationship outcomes through reopen.
-- [ ] Review intentional normalized output changes separately.
-- [ ] Pass independent microscope and scoped verification.
+- [x] Confirm F-X229 completed with dependency-prefix evidence.
+- [x] Establish current Issue372 output.
+- [x] Adapt only grouping commit and relevant tests.
+- [x] Add bookmark, comment, opaque-child and ignored-unit boundary controls.
+- [x] Prove both property and relationship outcomes through reopen.
+- [x] Review intentional normalized output changes separately.
+- [x] Pass independent microscope and scoped verification.
 
 ## Open questions
 
@@ -164,3 +165,67 @@ Keep compression tolerance and10MiB bounds unchanged. This is required evidence
 maintenance, not a behavioral or performance claim. README.md and
 scripts/readme_doctests.py are exclusive integration resources. Reconcile them
 against exact combined source and independently review any measured changes.
+
+
+## Donor qualification and contract clarifications
+
+Actual Base Issue372 RED reproduced the reported alternating revisions. Actual
+donor-only independent tests then exposed letter-count folding at Character
+granularity, folding across adjacent changed formatting owners and opaque
+paragraph boundary crossing. The adaptation counts joined text with a concrete
+Option<&str> helper carrying word state across each block. No new generic helper
+is needed. Formatting transitions split blocks and also prohibit anchor folding.
+Word and Character opaque paragraph children join existing shell cuts, while Run
+cuts and default behavior remain unchanged. These changes implement the approved
+word-count and formatting and opaque-boundary contract, with no new API policy.
+A bounded unit matrix checks ordered coverage, segment identity and deterministic
+output. Separate reopened per-character bold and external hyperlink controls
+supplement the shared reconstruction helper.
+
+
+## Independent review clarifications
+
+D1 identified lost raw-child boundaries in the supported inline-control run path.
+The adaptation retains physical run cuts before extracting run vectors. Word and
+Character alignment uses those shell segments. Emission copies each shell before
+its first insertion, including a segment with no original text unit. Run alignment
+remains unchanged. The actual pre-repair regression failed acceptance, exit101 in
+/private/tmp/F-X230-inline-raw-red.log.
+
+D2 identified a test probe that assumed established Run support for every raw
+inline control. The corrected probe compares actual default and explicit Run
+outcomes. Success compares exact output bytes. Matching refusals compare errors
+and prove byte-identical package atomicity independently. The pure insertion and
+deletion fixtures omit the absent-side run, preserving existing empty-run output.
+No product policy or admission boundary was expanded for these test corrections.
+The complete24-scenario focused Word and Character matrix passed, exit0 in
+/private/tmp/F-X230-inline-raw-green-3.log, including48resolved reopen checks.
+
+## Final archive evidence
+
+The actual final source BEFORE-carrier archive was produced by the real policy
+packaging command. Its comparison source, regression source and packaged README
+were byte-compared to current files. It measured3721131 compressed bytes,
+51887993 normalized member bytes and37members. Both authorized carriers record
+that exact tuple. Regenerating AFTER the packaged README update produced the same
+tuple, SHA256
+21270539ff064a88537f5610bc8fbf32008fb02cbee6332315f8dbc5da5d3f28.
+The original64-byte compression tolerance and10MiB bound pass unchanged.
+Current receipts are /private/tmp/F-X230-final-archive-before-carriers.json and
+/private/tmp/F-X230-final-archive.json. Earlier pre-remediation and intermediate
+fixture receipts and actual failures remain in the progress checkpoint and their
+original logs. They do not supply final acceptance. Integration must remeasure
+its exact combined source.
+
+
+## Scoped acceptance
+
+Independent microscope pass3 reports0defects,0smells and0nitpicks. Final actual
+native suite passes631unit tests,380integration tests,2418regression tests and
+2doctests with27existing ignored tests. The exact Issue372 gate and all inline
+physical-owner scenarios ran in that suite. Changed-crate all-target/all-feature
+clippy passes with warnings denied. All49hash entries match, fmt and diff checks
+pass, prose has0violations and26skill adapters are in sync. Repository policy
+passes182tests with2expected skips. Exact final logs use
+/private/tmp/F-X230-accepted-{full-test,clippy,hash,policy,fmt}.log.
+Full sprint verification remains the integrator's combined-source gate.
