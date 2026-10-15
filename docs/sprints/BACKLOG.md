@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 260 | 240 | 4 | 12 |
-| **Total** | **591** | **514** | **4** | **69** |
+| X, Cross-cutting | 260 | 240 | 5 | 11 |
+| **Total** | **591** | **514** | **5** | **68** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -803,7 +803,7 @@ HLD14 contract before adopting contributor changes.
 | F-X232 | Render legal revisions and qualify checked XML repros | S93 | L | in-progress |
 | F-X233 | Repair paragraph border geometry | S93 | M | in-progress |
 | F-X234 | Preserve supported LaTeX conversion structure | S93 | M | done |
-| F-X235 | Qualify equation layout against native Word | S93 | L | pending |
+| F-X235 | Qualify equation layout against native Word | S93 | L | in-progress |
 | F-X236 | Measure public setter inlining before changing policy | S93 | S | in-progress |
 | F-X237 | Restore linear Python table owner inventory | S92 | L | done |
 | F-X238 | Restore python-docx Word names from the first-draft corpus | S94 | L | pending |
