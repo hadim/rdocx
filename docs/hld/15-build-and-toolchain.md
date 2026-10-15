@@ -1108,6 +1108,18 @@ Workflow regressions keep the fetch singular and immediately after the cache,
 reject weakened or misplaced commands, and keep all dependency network access
 ahead of the offline helper.
 
+Independent Word legal-paint geometry evidence uses actual Microsoft Word
+16.113.2 build 16.113.26092012 exports of frozen static colour and decoration
+inputs, with retained input and PDF digests and native export receipts. Pinned
+Poppler 26.01.0 supplies raster verification. This component-level authority
+is separate from the existing historical native corpus. Product baseline
+rendering keeps deterministic bundled fonts. Static native paint inputs do
+not qualify tracked change-bar selection, and native versus product font and
+page differences prevent a full-page similarity claim. Archive observations
+for affected published crates are re-derived from current packaged sources
+under the existing exact member inventory, 64 byte compression allowance and
+10 MiB ceiling.
+
 ## Dependency policy
 
 `deny.toml` keeps the unused ZIP codec bans (`zstd`, `bzip2`, `lzma-rust2`, and

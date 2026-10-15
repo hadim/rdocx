@@ -614,7 +614,21 @@ selected SEQ and TC fields, the separator, and the end marker inside accepted
 revision and content-control owners. They require the total nested position to
 retain sources before the result while excluding sources inside it. Tracked
 layout tests compose revision and inline control wrappers in both orders and
-require exact visible text plus one paragraph change bar. Outer-coordinate
+require exact visible text plus one paragraph change bar. Legal-paint controls
+assert all four revision kinds, innermost nested colours, first visible bar
+selection and unchanged source formatting. Plain/legal cache alternation uses
+actual nonempty caller font bytes and related headers, footers, footnotes and
+endnotes, compares retained results with fresh engines after mutation, and
+requires every visible fragment of a split note to retain its bar colour.
+Checked XML cases cover inline and anchored drawings with namespace bindings
+on paragraph, run, drawing and payload roots, local shadows and foreign
+lookalikes, exact opaque interiors, reopen stability and atomic refusal.
+Double-underline tests aggregate segmented line primitives into physical
+stroke bands at 12, 24 and 36 points. Independent static Word colour and
+geometry evidence qualifies those paint components, with a 0.36 point native
+metric bound. It does not establish native legal-bar selection or full-page
+font-contour parity. Mutating either prior double-gap rule, legal colour or
+ancestor namespace closure must fail its matching control. Outer-coordinate
 cases place revision and control owners after preserved raw paragraph children
 and put a TOC in a terminal hyperlink revision. A hyperlink-retained simple
 field before the TOC proves raw child shapes do not advance typed run

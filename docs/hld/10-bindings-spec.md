@@ -2605,8 +2605,14 @@ document changes, and a duplicated story keeps the native rejection.
 the `comment` story excludes only the comments part. Python and WASM preserve
 comparison output when they save their owned document.
 
-Native Word rendering exposes `rdocx::RevisionView` and the concrete
-`rdocx::RenderOptions`, whose default selects the accepted view. Additive
+Native Word rendering exposes `rdocx::RevisionView`, `rdocx::RevisionStyle`
+and the concrete `rdocx::RenderOptions`, whose default selects accepted view
+and plain style. `RevisionStyle::Legal` requires `RevisionView::Tracked`.
+The public pre-1.0 source changes add `revision_style` to `RenderOptions` and
+`LayoutInput`, replace `ParagraphBlock::has_visible_revision` with the optional
+colour `change_bar`, and change `NoteLayout::revision_ranges` from ranges to
+`(Range<usize>, Color)` pairs. Rust struct literal consumers supply the new
+field and direct layout consumers use the colour-bearing fields. Additive
 option-taking counterparts cover PDF bytes and files, single-page and all-page
 raster output, page layout, deterministic rendering, and caller-supplied font
 paths. The existing methods keep their accepted default. Python `to_pdf`,
@@ -2615,7 +2621,12 @@ paths. The existing methods keep their accepted default. Python `to_pdf`,
 default. Any other value raises `ValueError`. CLI `convert` for PDF and image
 formats and `render` take `--revision-view accepted` or
 `--revision-view tracked`, with `accepted` as the default. An unknown value is
-a usage error.
+a usage error. The PDF, PNG, SVG and selected-page Python render methods,
+including their diagnostic counterparts, accept keyword-only
+`revision_style="plain"` or `"legal"`. CLI `convert` and `render` accept
+`--revision-style plain|legal`. Unknown styles and legal style with accepted
+view fail before output or cached layout is returned. Existing positional
+Python arguments and caller font inputs retain their meaning.
 HTML and Markdown conversion refuse tracked view before creating output. WASM
 retains its existing rendering behavior.
 Native selected-image rendering adds zero-based page-list entry points that
@@ -3896,7 +3907,13 @@ descendants. No-op and refusal publish nothing. Candidate inventory, revision
 successors and returned Python allocations all complete before the single
 prepared publication. The five Word element objects return namespace-complete
 str and replace_xml(str) returns None through the concrete checked native
-operation.
+operation. Checked paragraph replacement retains ancestor-declared namespace
+bindings needed by preserved inline and anchored drawing payloads when the
+typed paragraph serializer drops the original declaration. It accounts for
+bindings retained on paragraph and run roots and for local namespace shadows.
+The opaque payload interior remains exact. Ordinary parsing and physical
+picture snapshots keep their source authority, and invalid replacement or
+save candidates fail atomically.
 
 Complete Word owner snapshots use the native hidden
 `Document.story_owner_snapshots` provider across the existing crate boundary.

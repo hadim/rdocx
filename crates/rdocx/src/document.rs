@@ -75,6 +75,8 @@ use crate::table::{Table, TableRef, row_cell_ranges, validate_table_topology};
 pub struct RenderOptions {
     /// The tracked-revision view to render.
     pub revision_view: rdocx_layout::RevisionView,
+    /// How the tracked view marks revisions.
+    pub revision_style: rdocx_layout::RevisionStyle,
 }
 
 /// Which of Word's independent note streams a policy governs.
@@ -17575,6 +17577,13 @@ impl Document {
         options: RenderOptions,
         deterministic: bool,
     ) -> Result<Arc<rdocx_layout::WordLayoutResult>> {
+        if options.revision_style != rdocx_layout::RevisionStyle::Plain
+            && options.revision_view != rdocx_layout::RevisionView::Tracked
+        {
+            return Err(Error::Other(
+                "revision style applies only with tracked view".to_owned(),
+            ));
+        }
         if options.revision_view == rdocx_layout::RevisionView::Accepted {
             return if deterministic {
                 self.cached_deterministic_layout()
@@ -17585,6 +17594,7 @@ impl Document {
 
         let mut input = self.build_layout_input()?;
         input.revision_view = options.revision_view;
+        input.revision_style = options.revision_style;
         #[cfg(test)]
         record_layout_invocation();
         let layout = if deterministic {
@@ -22127,9 +22137,11 @@ impl Document {
             selected.xml(),
             xml.as_bytes(),
         )?;
+        let mut replacement = Vec::new();
+        paragraph.to_xml(&mut Writer::new(&mut replacement))?;
         let fragment = ContentFragment {
             kind: StoryItemKind::Paragraph,
-            xml: xml.as_bytes().to_vec(),
+            xml: replacement,
             namespace_scope: BTreeMap::new(),
             source_part_name: Some(location.story.part_name.clone()),
             source_story_kind: Some(location.story.kind),
@@ -34667,8 +34679,16 @@ impl Document {
         font_files: &[(&str, &[u8])],
         options: RenderOptions,
     ) -> Result<rdocx_layout::LayoutInput> {
+        if options.revision_style != rdocx_layout::RevisionStyle::Plain
+            && options.revision_view != rdocx_layout::RevisionView::Tracked
+        {
+            return Err(Error::Other(
+                "revision style applies only with tracked view".to_owned(),
+            ));
+        }
         let mut input = self.build_layout_input()?;
         input.revision_view = options.revision_view;
+        input.revision_style = options.revision_style;
         input.fonts.extend(
             font_files
                 .iter()
@@ -35573,6 +35593,7 @@ impl Document {
         Ok(LayoutInput {
             sequence_snapshot: None,
             revision_view: rdocx_layout::RevisionView::Accepted,
+            revision_style: rdocx_layout::RevisionStyle::Plain,
             document,
             automatic_hyphenation: self
                 .settings
@@ -43410,6 +43431,7 @@ mod tests {
             RenderOptions::default(),
             RenderOptions {
                 revision_view: rdocx_layout::RevisionView::Tracked,
+                revision_style: rdocx_layout::RevisionStyle::Plain,
             },
         ] {
             reset_layout_invocations();
@@ -43698,6 +43720,7 @@ mod tests {
         doc.add_paragraph("tracked view");
         let options = RenderOptions {
             revision_view: rdocx_layout::RevisionView::Tracked,
+            revision_style: rdocx_layout::RevisionStyle::Plain,
         };
 
         reset_layout_invocations();
@@ -44564,6 +44587,7 @@ mod tests {
         doc.add_paragraph("revision cache separation");
         let tracked = RenderOptions {
             revision_view: rdocx_layout::RevisionView::Tracked,
+            revision_style: rdocx_layout::RevisionStyle::Plain,
         };
 
         reset_layout_invocations();
@@ -44604,6 +44628,7 @@ mod tests {
         doc.add_paragraph("tracked engine reuse");
         let tracked = RenderOptions {
             revision_view: rdocx_layout::RevisionView::Tracked,
+            revision_style: rdocx_layout::RevisionStyle::Plain,
         };
 
         let first = doc

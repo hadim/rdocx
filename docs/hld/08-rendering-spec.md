@@ -1722,9 +1722,25 @@ control remain raw and do not enter accepted or tracked layout. The
 same projection applies to body, table, header, footer, footnote, and endnote
 paragraphs. Accepted layout includes insertions and move
 destinations and omits deletions and move sources. Tracked layout includes both
-sides. It forces single underline on insertion and move destination text and
-single strike on deletion and move source text while retaining the remaining
-resolved formatting.
+sides. `LayoutInput::revision_style` defaults to `RevisionStyle::Plain`, which
+forces single underline on insertion and move destination text and single
+strike on deletion and move source text while retaining other resolved
+formatting. `RevisionStyle::Legal` requires the tracked view. It paints
+insertions blue (`0000FF`) with double underline, deletions red (`FF0000`)
+with strike, and moves green (`00A000`) with strike for the source and double
+underline for the destination. Nested revision text takes the innermost colour
+while retaining inherited decorations. This paint never changes stored XML.
+
+A legal paragraph change bar takes the first visible revision colour, then a
+revised paragraph mark, with property-only changes using black. Empty revision
+runs do not choose the bar. `ParagraphBlock::change_bar` stores its optional
+colour. `NoteLayout::revision_ranges` retains range and colour pairs through
+note continuation splitting. Render-context, paragraph, table and field
+substitution identities include the style, so plain and legal warm results
+match fresh layout across body and related stories and caller font paths.
+Double underline uses two strokes of width `font_size / 24`, with centre
+offset `max(font_size / 12, 1.5)` in points. Body, notes and annotation text
+share this geometry.
 
 In the accepted view, a body paragraph whose mark is deleted or moved away
 joins the next direct body paragraph when no section break or intervening

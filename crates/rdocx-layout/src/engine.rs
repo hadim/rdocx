@@ -34,7 +34,7 @@ use crate::block::{
     SharedLayoutBlock, TableSemantics,
 };
 use crate::convert;
-use crate::input::{EmbeddedFontSource, LayoutInput, MediaRegistry, RevisionView};
+use crate::input::{EmbeddedFontSource, LayoutInput, MediaRegistry, RevisionStyle, RevisionView};
 use crate::notes::NoteRegistry;
 use crate::paginator::{
     self, ColumnTrack, HeaderFooterContent, HeaderFooterSemantics, LineNumbering, PageBorderFrame,
@@ -75,6 +75,9 @@ struct ProjectedRun<'a> {
     hyperlink_index: Option<usize>,
     force_underline: bool,
     force_strike: bool,
+    /// The innermost insertion, deletion or move that marks the run in the
+    /// tracked view.
+    revision: Option<RevisionKind>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -2044,6 +2047,7 @@ fn project_paragraph_runs(para: &CT_P, view: RevisionView) -> Vec<ProjectedRun<'
                 hyperlink_index: None,
                 force_underline: false,
                 force_strike: false,
+                revision: None,
             });
         }
     }
@@ -2136,6 +2140,7 @@ fn project_control_runs<'a>(
                     hyperlink_index: None,
                     force_underline: false,
                     force_strike: false,
+                    revision: None,
                 }),
                 SdtContent::ContentControl(control) => {
                     project_control_runs(control, view, boundary, raw_order, projected);
@@ -2273,6 +2278,7 @@ fn project_revision_runs<'a>(
                 revision.kind(),
                 RevisionKind::Deletion | RevisionKind::MoveFrom
             ));
+    let marked = (view == RevisionView::Tracked).then(|| revision.kind());
     if matches!(
         revision.kind(),
         RevisionKind::Insertion | RevisionKind::MoveTo
@@ -2286,6 +2292,7 @@ fn project_revision_runs<'a>(
                 hyperlink_index,
                 force_underline: force_underline || nested.force_underline,
                 force_strike: force_strike || nested.force_strike,
+                revision: nested.revision.or(marked),
                 ..nested
             });
         }
@@ -2326,6 +2333,7 @@ fn project_revision_runs<'a>(
                 hyperlink_index,
                 force_underline,
                 force_strike,
+                revision: marked,
             });
         }
     }
@@ -2448,6 +2456,70 @@ fn paragraph_has_visible_revision(para: &CT_P) -> bool {
             .revisions
             .iter()
             .any(|(_, _, revision)| revision_is_visible(revision))
+}
+
+/// The colour of an insertion, deletion or move in the legal revision style.
+fn legal_revision_color(kind: RevisionKind) -> Option<Color> {
+    let (r, g, b) = match kind {
+        RevisionKind::Insertion => (0, 0, 0xFF),
+        RevisionKind::Deletion => (0xFF, 0, 0),
+        RevisionKind::MoveFrom | RevisionKind::MoveTo => (0, 0xA0, 0),
+        _ => return None,
+    };
+    Some(Color {
+        r: f64::from(r) / 255.0,
+        g: f64::from(g) / 255.0,
+        b: f64::from(b) / 255.0,
+        a: 1.0,
+    })
+}
+
+/// The text colour and underline of `projected`, given those of its run:
+/// the tracked view underlines an insertion or a move destination, double
+/// in the legal style, which also gives the run the colour of its revision.
+fn tracked_marks(
+    projected: &ProjectedRun<'_>,
+    style: RevisionStyle,
+    color: Color,
+    underline: Option<Underline>,
+) -> (Color, Option<Underline>) {
+    let legal = style == RevisionStyle::Legal;
+    let underline = match (projected.force_underline, legal) {
+        (true, true) => Some(Underline::Double),
+        (true, false) => Some(Underline::Single),
+        (false, _) => underline,
+    };
+    let color = projected
+        .revision
+        .filter(|_| legal)
+        .and_then(legal_revision_color)
+        .unwrap_or(color);
+    (color, underline)
+}
+
+/// The colour of the change bar beside `para`, or `None` when the tracked
+/// view shows no revision in it. In the legal style the bar takes the colour
+/// of the first insertion, deletion or move, its runs' or its mark's.
+fn change_bar_color(para: &CT_P, input: &LayoutInput) -> Option<Color> {
+    if input.revision_view != RevisionView::Tracked || !paragraph_has_visible_revision(para) {
+        return None;
+    }
+    if input.revision_style == RevisionStyle::Plain {
+        return Some(Color::BLACK);
+    }
+    let mark = para
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.rpr.as_ref())
+        .into_iter()
+        .flat_map(|properties| properties.revision_markers.iter().map(CT_Revision::kind));
+    project_paragraph_runs(para, RevisionView::Tracked)
+        .iter()
+        .filter(|projected| run_has_visible_content(projected.run))
+        .filter_map(|projected| projected.revision)
+        .chain(mark)
+        .find_map(legal_revision_color)
+        .or(Some(Color::BLACK))
 }
 
 fn run_properties_have_revision(properties: &rdocx_oxml::properties::CT_RPr) -> bool {
@@ -2615,6 +2687,7 @@ pub struct Engine {
 struct ReusableEngineContext {
     sequence_snapshot: Option<Arc<crate::WordSequenceSnapshot>>,
     revision_view: RevisionView,
+    revision_style: RevisionStyle,
     automatic_hyphenation: bool,
     mirror_margins: bool,
     gutter_at_top: bool,
@@ -2712,6 +2785,7 @@ impl ReusableEngineContext {
         Self {
             sequence_snapshot: input.sequence_snapshot.clone(),
             revision_view: input.revision_view,
+            revision_style: input.revision_style,
             automatic_hyphenation: input.automatic_hyphenation,
             mirror_margins: input.mirror_margins,
             gutter_at_top: input.gutter_at_top,
@@ -2805,6 +2879,7 @@ impl ReusableEngineContext {
         let sections_match = self.sections.iter().eq(document_sections(&input.document));
         self.sequence_snapshot == input.sequence_snapshot
             && self.revision_view == input.revision_view
+            && self.revision_style == input.revision_style
             && self.automatic_hyphenation == input.automatic_hyphenation
             && self.mirror_margins == input.mirror_margins
             && self.gutter_at_top == input.gutter_at_top
@@ -2861,6 +2936,7 @@ struct ParagraphCacheKey {
     paragraph: CT_P,
     content_width_bits: u64,
     revision_view: RevisionView,
+    revision_style: RevisionStyle,
     /// The section character grid the block was broken against.
     ///
     /// A gridded and an ungridded section give the same paragraph different
@@ -2884,6 +2960,7 @@ struct TableCacheKey {
     table: CT_Tbl,
     content_width_bits: u64,
     revision_view: RevisionView,
+    revision_style: RevisionStyle,
     with_provenance: bool,
     /// The section character grid, for the reason `ParagraphCacheKey` states.
     doc_grid: Option<CT_DocGrid>,
@@ -3294,6 +3371,7 @@ struct FieldSubstitutionInputs {
     bookmark_pages: Vec<(usize, usize)>,
     font_identity: Vec<FontId>,
     revision_view: RevisionView,
+    revision_style: RevisionStyle,
 }
 
 const CACHE_MAX_ENTRIES: usize = 5_216;
@@ -4820,6 +4898,7 @@ impl Engine {
                 bookmark_pages: bookmark_identity.clone(),
                 font_identity: font_trace.clone(),
                 revision_view: input.revision_view,
+                revision_style: input.revision_style,
             };
             let reusable = input.sequence_snapshot.is_none()
                 && self.restart_cache.as_ref().is_some_and(|cache| {
@@ -5133,6 +5212,7 @@ impl Engine {
                     && entry.key.paragraph == *paragraph
                     && entry.key.content_width_bits == content_width.to_bits()
                     && entry.key.revision_view == input.revision_view
+                    && entry.key.revision_style == input.revision_style
                     && entry.key.doc_grid.as_ref() == doc_grid
             })
         {
@@ -5184,6 +5264,7 @@ impl Engine {
                     paragraph: paragraph.clone(),
                     content_width_bits: content_width.to_bits(),
                     revision_view: input.revision_view,
+                    revision_style: input.revision_style,
                     doc_grid: doc_grid.cloned(),
                 },
                 block: Arc::clone(&block),
@@ -5257,6 +5338,7 @@ impl Engine {
                     && entry.key.table == *table
                     && entry.key.content_width_bits == content_width.to_bits()
                     && entry.key.revision_view == input.revision_view
+                    && entry.key.revision_style == input.revision_style
                     && entry.key.with_provenance == sources.is_some()
                     && entry.key.doc_grid.as_ref() == doc_grid
             })
@@ -5306,6 +5388,7 @@ impl Engine {
                 table: table.clone(),
                 content_width_bits: content_width.to_bits(),
                 revision_view: input.revision_view,
+                revision_style: input.revision_style,
                 with_provenance: sources.is_some(),
                 doc_grid: doc_grid.cloned(),
             };
@@ -9124,14 +9207,12 @@ fn layout_paragraph_with_source_and_table(
         );
 
         // Resolve color: theme color takes priority over literal color value
-        let color = resolve_run_color(&effective_rpr, input.theme.as_ref());
-
-        // Decoration properties
-        let underline = if projected.force_underline {
-            Some(Underline::Single)
-        } else {
-            convert::underline(effective_rpr.underline)
-        };
+        let (color, underline) = tracked_marks(
+            &projected,
+            input.revision_style,
+            resolve_run_color(&effective_rpr, input.theme.as_ref()),
+            convert::underline(effective_rpr.underline),
+        );
         let strike = projected.force_strike || effective_rpr.strike.unwrap_or(false);
         let dstrike = effective_rpr.dstrike.unwrap_or(false);
         let highlight = effective_rpr.highlight.and_then(highlight_to_color);
@@ -9539,12 +9620,12 @@ fn layout_paragraph_with_source_and_table(
                             input.theme.as_ref(),
                             word_font_slot_for_text(value, segment_rpr.font_hint.as_deref()),
                         );
-                        let segment_color = resolve_run_color(&segment_rpr, input.theme.as_ref());
-                        let segment_underline = if projected.force_underline {
-                            Some(Underline::Single)
-                        } else {
-                            convert::underline(segment_rpr.underline)
-                        };
+                        let (segment_color, segment_underline) = tracked_marks(
+                            &projected,
+                            input.revision_style,
+                            resolve_run_color(&segment_rpr, input.theme.as_ref()),
+                            convert::underline(segment_rpr.underline),
+                        );
                         let segment_strike =
                             projected.force_strike || segment_rpr.strike.unwrap_or(false);
                         let segment_dstrike = segment_rpr.dstrike.unwrap_or(false);
@@ -10057,8 +10138,7 @@ fn layout_paragraph_with_source_and_table(
         page_break_before,
         widow_control,
     );
-    result.has_visible_revision =
-        input.revision_view == RevisionView::Tracked && paragraph_has_visible_revision(para);
+    result.change_bar = change_bar_color(para, input);
     result.list = list_num_id.map(|num_id| (num_id, list_ilvl.min(8) as u8));
     result.anchored = collect_anchored_drawings(
         para,
@@ -12699,14 +12779,10 @@ fn push_annotation_decorations(
     };
     if let Some(style) = base.underline {
         let underline_y = baseline + descent * 0.3;
-        let thickness = match style {
-            Underline::Thick => base.font_size / 12.0,
-            Underline::Double => base.font_size / 24.0,
-            _ => base.font_size / 18.0,
-        };
+        let (thickness, second) = convert::underline_strokes(style, base.font_size);
         line_at(underline_y, thickness, children);
-        if style == Underline::Double {
-            line_at(underline_y + thickness * 2.5, thickness, children);
+        if let Some(offset) = second {
+            line_at(underline_y + offset, thickness, children);
         }
     }
     let thickness = base.font_size / 24.0;
@@ -14199,6 +14275,55 @@ mod tests {
     }
 
     #[test]
+    fn fx232_nested_controls_keep_inner_revision_colour_and_first_visible_bar() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:ins w:id="1" w:author="A"><w:r><w:t/></w:r></w:ins><w:sdt><w:sdtContent><w:del w:id="2" w:author="B"><w:r><w:delText>deleted</w:delText></w:r></w:del></w:sdtContent></w:sdt><w:ins w:id="3" w:author="A"><w:sdt><w:sdtContent><w:r><w:t>inserted</w:t></w:r><w:moveTo w:id="4" w:author="C"><w:r><w:t>moved</w:t></w:r></w:moveTo></w:sdtContent></w:sdt></w:ins></w:p></w:body></w:document>"#;
+        let document = rdocx_oxml::CT_Document::from_xml(xml).unwrap();
+        let BodyContent::Paragraph(paragraph) = &document.body.content[0] else {
+            panic!("paragraph");
+        };
+        let projected = project_paragraph_runs(paragraph, RevisionView::Tracked);
+        let actual = projected
+            .iter()
+            .filter(|run| !run.run.text().is_empty())
+            .map(|run| {
+                let (color, underline) =
+                    tracked_marks(run, RevisionStyle::Legal, Color::BLACK, None);
+                (run.run.text(), color, underline, run.force_strike)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            [
+                (
+                    "deleted".into(),
+                    legal_revision_color(RevisionKind::Deletion).unwrap(),
+                    None,
+                    true
+                ),
+                (
+                    "inserted".into(),
+                    legal_revision_color(RevisionKind::Insertion).unwrap(),
+                    Some(Underline::Double),
+                    false
+                ),
+                (
+                    "moved".into(),
+                    legal_revision_color(RevisionKind::MoveTo).unwrap(),
+                    Some(Underline::Double),
+                    false
+                ),
+            ]
+        );
+        let mut input = make_input_with_text("bar");
+        input.revision_view = RevisionView::Tracked;
+        input.revision_style = RevisionStyle::Legal;
+        assert_eq!(
+            change_bar_color(paragraph, &input),
+            legal_revision_color(RevisionKind::Deletion)
+        );
+    }
+
+    #[test]
     fn revision_views_project_wrapped_runs_in_document_order() {
         let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>
             <w:r><w:t>A</w:t></w:r>
@@ -15066,6 +15191,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -19773,6 +19899,110 @@ mod tests {
     }
 
     #[test]
+    fn fx232_related_stories_and_caller_fonts_match_fresh_styles_across_note_fragments() {
+        let revised = |kind: &str, text: &str| {
+            let xml = format!(
+                r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:{kind} w:id="1" w:author="Reviewer"><w:r><w:rPr><w:rFonts w:ascii="FX232 Caller" w:hAnsi="FX232 Caller"/></w:rPr><w:t xml:space="preserve">{text}</w:t></w:r></w:{kind}></w:p></w:body></w:document>"#
+            );
+            let mut document = rdocx_oxml::CT_Document::from_xml(xml.as_bytes()).unwrap();
+            let BodyContent::Paragraph(paragraph) = document.body.content.remove(0) else {
+                panic!("paragraph");
+            };
+            paragraph
+        };
+        let mut input = related_story_restart_input(45);
+        input.revision_view = RevisionView::Tracked;
+        input.fonts.push(oxml_layout::FontFile {
+            family: "FX232 Caller".into(),
+            data: include_bytes!("../../oxml-layout/fonts/Selawik-Regular.ttf").to_vec(),
+        });
+        let mut engine = Engine::new_deterministic().unwrap();
+        for changed in [false, true] {
+            let suffix = if changed { " MUTATED" } else { "" };
+            input.headers.get_mut("rIdHeader").unwrap().paragraphs =
+                vec![revised("ins", &format!("InsertedHeader{suffix}"))];
+            input.footers.get_mut("rIdFooter").unwrap().paragraphs =
+                vec![revised("del", &format!("DeletedFooter{suffix}"))];
+            input.footnotes.as_mut().unwrap().footnotes[0].paragraphs = vec![revised(
+                "moveFrom",
+                &format!("{}{suffix}", "MovedNote ".repeat(800)),
+            )];
+            input.endnotes.as_mut().unwrap().footnotes[0].paragraphs =
+                vec![revised("moveTo", &format!("MovedEndnote{suffix}"))];
+            for style in [
+                RevisionStyle::Plain,
+                RevisionStyle::Legal,
+                RevisionStyle::Plain,
+                RevisionStyle::Legal,
+            ] {
+                input.revision_style = style;
+                let warm = engine.layout(&input).unwrap();
+                let cold = Engine::new_deterministic().unwrap().layout(&input).unwrap();
+                assert_eq!(
+                    format!("{:?}", warm.pages),
+                    format!("{:?}", cold.pages),
+                    "style {style:?}, changed {changed}"
+                );
+                assert!(
+                    warm.fonts
+                        .iter()
+                        .any(|font| font.data.as_ref() == input.fonts[0].data.as_slice()),
+                    "actual caller font must shape revised related stories"
+                );
+                let mut note_fragments = 0;
+                for page in &warm.pages {
+                    let Some(separator_y) = separator_y_of(page) else {
+                        continue;
+                    };
+                    let expected = if style == RevisionStyle::Legal {
+                        legal_revision_color(RevisionKind::MoveFrom).unwrap()
+                    } else {
+                        Color::BLACK
+                    };
+                    let bars = compatibility_page_elements(page).into_iter().filter(|element| matches!(element,
+                        PositionedElement::Line { start, end, width, color, .. }
+                            if start.x==end.x && start.y>=separator_y && end.y>start.y && (*width-1.5).abs()<1e-9 && *color==expected
+                    )).count();
+                    assert!(
+                        bars > 0,
+                        "the visible split note range retains its {style:?} bar on page {}",
+                        page.page_number
+                    );
+                    note_fragments += 1;
+                }
+                assert!(
+                    note_fragments >= 2,
+                    "the revised note must actually split across pages"
+                );
+                if style == RevisionStyle::Legal {
+                    let mut colors = Vec::new();
+                    for page in &warm.pages {
+                        oxml_layout::walk(&page.elements, &mut |element, _| {
+                            if let PositionedElement::Line {
+                                start, end, color, ..
+                            } = element
+                                && start.x == end.x
+                            {
+                                colors.push(*color);
+                            }
+                        });
+                    }
+                    for kind in [
+                        RevisionKind::Insertion,
+                        RevisionKind::Deletion,
+                        RevisionKind::MoveFrom,
+                    ] {
+                        assert!(
+                            colors.contains(&legal_revision_color(kind).unwrap()),
+                            "related story {kind:?} bar must render"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn default_explicit_and_unused_document_end_notes_preserve_bounded_restart() {
         for explicit in [false, true] {
             for (unused, note_paragraphs) in [(true, 1), (false, 1), (false, 80)] {
@@ -20504,6 +20734,7 @@ mod tests {
                             Vec::new()
                         },
                         revision_view: RevisionView::Accepted,
+                        revision_style: crate::input::RevisionStyle::Plain,
                     }));
             });
         }
@@ -20893,6 +21124,7 @@ mod tests {
                     paragraph,
                     content_width_bits: PageGeometry::default().content_width().to_bits(),
                     revision_view: RevisionView::Accepted,
+                    revision_style: crate::input::RevisionStyle::Plain,
                     doc_grid: None,
                 },
                 block: template.block.clone(),
@@ -20989,6 +21221,7 @@ mod tests {
                 paragraph: paragraph.clone(),
                 content_width_bits: PageGeometry::default().content_width().to_bits(),
                 revision_view: RevisionView::Accepted,
+                revision_style: crate::input::RevisionStyle::Plain,
                 doc_grid: None,
             },
             block: Arc::new(block),
@@ -21096,6 +21329,7 @@ mod tests {
                 paragraph,
                 content_width_bits: PageGeometry::default().content_width().to_bits(),
                 revision_view: RevisionView::Accepted,
+                revision_style: crate::input::RevisionStyle::Plain,
                 doc_grid: None,
             },
             block,
@@ -22336,6 +22570,7 @@ mod tests {
         let input = LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -22877,6 +23112,7 @@ mod tests {
         let input = LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -22953,6 +23189,7 @@ mod tests {
         let input = LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -23050,6 +23287,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -23243,6 +23481,7 @@ mod tests {
             LayoutInput {
                 sequence_snapshot: None,
                 revision_view: crate::input::RevisionView::Accepted,
+                revision_style: crate::input::RevisionStyle::Plain,
                 automatic_hyphenation: false,
                 mirror_margins: false,
                 gutter_at_top: false,
@@ -23388,6 +23627,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -23700,6 +23940,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -23961,6 +24202,7 @@ mod tests {
             LayoutInput {
                 sequence_snapshot: None,
                 revision_view: crate::input::RevisionView::Accepted,
+                revision_style: crate::input::RevisionStyle::Plain,
                 automatic_hyphenation: false,
                 mirror_margins: false,
                 gutter_at_top: false,
@@ -24112,6 +24354,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -24459,6 +24702,7 @@ mod tests {
         let input = LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -24556,6 +24800,7 @@ mod tests {
         let input = LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -24679,6 +24924,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,
@@ -24901,6 +25147,7 @@ mod tests {
         LayoutInput {
             sequence_snapshot: None,
             revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
             automatic_hyphenation: false,
             mirror_margins: false,
             gutter_at_top: false,

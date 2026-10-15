@@ -12984,6 +12984,7 @@ fn save_pdf_to_file() {
         &tracked_path,
         rdocx::RenderOptions {
             revision_view: rdocx::RevisionView::Tracked,
+            revision_style: rdocx::RevisionStyle::Plain,
         },
     );
     if result.is_ok() {
@@ -19624,6 +19625,7 @@ mod advanced_table_authoring_and_geometry {
             fonts: Vec::new(),
             embedded_fonts: Vec::new(),
             revision_view: rdocx_layout::RevisionView::Accepted,
+            revision_style: rdocx_layout::RevisionStyle::Plain,
         }
     }
 
