@@ -7801,6 +7801,8 @@ installed, deterministic render, hostile-input and verified archive evidence.
 
 Prepare matching patch Rust/CLI/Python families after every included S91 repair completes. Update exact stable seven-package Word family to0.16.1 and exact fifteen-package shared/PowerPoint family to0.14.1, with corresponding binding projects, internal pins/lock and meaningful authenticated family release notes. Use existing unified allowlists and release pipeline. Build-only manual rehearsal emits both families across six CLI targets, while each pushed release tag selects one family. Archive validation checks ordered member count and uniqueness before constructing ZIP or TAR member dictionaries, preserving exact binary, README and licence payload checks. Qualify current-source archives below10MiB, exact installed wheel/metadata/runtime/typing on Python3.9/3.12, both WASM graphs and reviewed-SHA build-only hosted artifacts. Current registry/tag facts are checked, then rechecked at release. Shared/PowerPoint publishes before Word consumes it. Preparation does not publish. Final integrated verification/review and close precede publication from the exact reviewed main SHA under the user's explicit corrected patch publication authority. Actual roles, publisher configuration and final assets remain mandatory. Final addressed issue and PR reconciliation follows successful publication. Bibliography, navigation, full-range watermark and standalone authoring remain S92, and discussion264/281 stay open.
 
+The complete binding CI suite prepares licensed independent font and synthetic-axis inputs from source. It retains all104 paint cases and the separate native-eight gate.
+
 ### F-X222, Restore linear Word story range inventory and empty owners
 
 **Size**: M
