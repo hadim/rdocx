@@ -1005,3 +1005,5 @@ Issues264 and281 remain excluded and open.
 | F-X225 | S91.1 | M | 2 | not recorded | 2026-10-15 | Private parser storage preserves public/XML contracts and passes original plus populated default1MiB Node callers. Scoped native/WASM/archive/hash/policy and independent reviews qualified |
 
 | F-X226 | S91.1 | M | 2 | not recorded | 2026-10-15 | Targeted checked-owner relationship retirement preserves shared/opaque graphs, debug validation and atomicity. Actual debug and optimized public regression plus scoped gates qualified |
+
+| F-X227 | S91.1 | L | 4 | not recorded | 2026-10-15 | Actual ownerCI38702668217 qualifies95/100,42hard51native24docs and5no-credit with safe one-job cleanup. Exact source215 rehearsal artifacts and installed156/typing4 qualify their recorded source. Final gates/publication pending |

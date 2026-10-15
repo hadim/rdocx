@@ -1,6 +1,6 @@
 # F-X227, Execute the unchanged first-draft compatibility corpus in owner CI
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91.1
 **Size**: L
 **Depends on**: F-X211, F-X221
@@ -173,7 +173,7 @@ All49 accepted outputs remain unchanged. No baseline update is authorized.
 - [x] Prove the local owner admission, finite cleanup and no resource upload controls.
 - [x] Preserve full hosted debug assertions while qualifying any opt2 change.
 - [x] Pass local scoped checks and a zero-finding independent microscope.
-- [ ] Qualify the final integrated result before release and remote closure.
+- [x] Qualify the current integrated product and external CI result for scoped completion. Final reviewed-commit full verification and sprint review remain mandatory close gates.
 
 ## Source availability checkpoint
 
@@ -186,14 +186,20 @@ gates and51 native clauses, five no-credit cases and no unexpected failure.
 The successful one-job runner was removed. Three preceding refused
 assignments ran no corpus cases and remain retained as failures.
 
-The current primary hosted run has passed both full Python suites and both
-fidelity jobs. Its Rust and MSRV consumers passed, while the enclosing Test job failed
-on three stale golden-PNG expectations from the already approved F-X210
-font change. F-X224 owns that attributed correction and actual hosted
-acceptance. Final integrated verification and sprint review remain pending.
-Hosted debug assertions and overflow checks remain enabled. The plan stays approved and the feature stays in-progress
-until these remaining gates pass. This checkpoint does not claim completion,
-main merge, tagging or publication.
+Corrected primary CI38708235000 succeeded at
+6d7c7da729e0ecb34252e821341f22844e37a9fd. Its full native, installed binding,
+MSRV, animation, raster and fidelity consumers qualify the corrected source.
+Original primary CI38696954013 remains failed. F-X224's independently reviewed
+three-value propagation repairs the omitted F-X210 raster expectations without
+changing product hashes or comparison thresholds.
+
+Authenticated current integrated product qualification, actual owner CI and
+corrected primary acceptance permit ordinary scoped feature completion.
+This clarifies sequencing, not the acceptance criteria. Final full verification
+of the reviewed sprint commit and the clean sprint review are mandatory
+sprint-close gates. Exact-main full verification, publication and remote
+closure remain separate later gates. Hosted debug assertions and overflow
+checks remain enabled. No earlier failed result becomes a passing execution.
 
 - Actual owner CI receipt: `/private/tmp/S91.1-F-X227-owner-ci/actual-CI38702668217-success/receipt.json`, SHA364fc8df596ac143943de2d33ac0dc30933c273621ba2692fbad60b7091e1140.
 - ROOT qualification decision: `/private/tmp/S91.1-F227-qualification-routing-preparation-1/root-CI38702668217-adoption-1/root-decision.json`, SHA7a2c28c8f82e0f88f567d384177484ee4c4cde374a0f92725af3a830ded364df.
@@ -210,3 +216,5 @@ Issue360 is approved for closure after publication, with its upstream
 follow-up recorded. This does not change the corpus contract. PyPI ownership
 and the two trusted publishers have been verified after authentication was
 restored.
+
+Corrected primary terminal receipt: `/private/tmp/S91.1-primary-corrected-raster-acceptance-1/terminal-receipt.json`, SHAad03f29ef28fe9a5174cdb7cb30a8811c4cb25fa237eac4df1b8a0d63d388792.

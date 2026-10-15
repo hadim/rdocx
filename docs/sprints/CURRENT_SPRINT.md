@@ -19,68 +19,28 @@
 | F-X224 | Repair hosted release tool and stack routing | M | done | - |
 | F-X225 | Keep DrawingML text-style parsing within the default WASM stack | M | done | - |
 | F-X226 | Release superseded relationships after checked PowerPoint XML edits | M | done | - |
-| F-X227 | Execute the unchanged first-draft compatibility corpus in owner CI | L | in-progress | codex |
+| F-X227 | Execute the unchanged first-draft compatibility corpus in owner CI | L | done | - |
 
 ## Sequencing note
 
-All prerequisite features are already done in S91. F-X224 through F-X226 implemented in parallel in separate worktrees with disjoint source leases. F-X227 is implemented and independently reviewed, with actual external acceptance pending. ROOT owns shared records, integration and final artifact qualification. No S92 feature work or new contributor intake is included.
+All prerequisite features are already done in S91. F-X224 through F-X226 implemented in parallel in separate worktrees with disjoint source leases. F-X227 is implemented and independently reviewed, with actual external acceptance now qualified. ROOT owns shared records, integration and final artifact qualification. No S92 feature work or new contributor intake is included.
 
 ## Current qualification
 
-F-X224, F-X225 and F-X226 are implemented, independently reviewed and
-integrated atb3b2163482ae42f68a66594ab2064481bd7b406b. Current local full
-verification passes:6463 Rust tests,778 Word and854 PowerPoint Python tests,
-78 priority cases on each of Python3.9/3.12, four typing checks,104 font
-cases, eight native SVG owners, two F216 controls and Node2/2/3 at the
-unchanged1MiB stack. Literal24 documentation cases retain34 byte-identical
-outputs. Selected XML controls retain nine byte-identical successes and one
-documented non-success, without a new100 score. All49 hashes match.
+F-X224 through F-X227 are implemented and independently reviewed. Scoped completion records bind their actual worker and integrated evidence. Corrected primary CI38708235000 is SUCCESS at 6d7c7da729e0ecb34252e821341f22844e37a9fd, with receipt /private/tmp/S91.1-primary-corrected-raster-acceptance-1/terminal-receipt.json and SHAad03f29ef28fe9a5174cdb7cb30a8811c4cb25fa237eac4df1b8a0d63d388792. The successful terminal results and all18 job logs were authenticated before completion.
 
-Original main CI38662802341 is terminal and failed overall. Its Word binding
-job passed all778 cases in5982.92 seconds. Dot-only logs isolate a slow parity
-block but do not establish individual case timings. This is evidence for
-reviewing dev-profile optimization, not a measured speedup or a corrective
-hosted pass. Original failed jobs remain retained.
+Local integrated b3b qualification passed6463 Rust tests,778 Word and854 PowerPoint Python tests,104 font cases, eight native SVG owners, two F216 controls and Node2/2/3 at the unchanged1MiB stack. Source215 verification passed all15 core stages and supply-chain checks. Its exact-source build-only rehearsal38696969789 passed27 jobs with publication jobs intentionally skipped,12 wheels, two source distributions,12 CLI archives,156 installed priority checks and four typing/stub checks. Complete relevant source/body/mode and artifact bridges preserve those actual producer identities rather than calling them new executions.
 
-The original corpus-in-CI criterion for Issues314/316 and PR333 remains
-undelivered. F-X227 is implemented and independently reviewed at
-215715b3b733307832202147243738f5b7b6279d. The reviewed sprint ref is
-available on GitHub solely for external acceptance. Local policy180 tests
-with two platform skips and all49 hashes pass. Primary hosted CI38696954013
-is running. Exact-source build-only rehearsal38696969789 passed27 jobs,
-with four publication jobs intentionally skipped. Its12 wheels, two source
-distributions and12 CLI archives were authenticated. Fresh installed wheels
-passed156 priority checks across Python3.9/3.12 and four typing checks.
+Actual owner CI38702668217 atsource215 completed all100 original first attempts with safe cleanup and no timeout. Independent admissions qualify95 correct files,42 hard gates,51 native clauses and24 documentation cases. Per-area counts are BASE24/24, XML13/14, LIFE16/16 and AREA42/46. Five approved non-successes remain in the denominator without correct-file credit. All114 unaffected saved files match historical bytes and the three revised-input cases have fresh observations. Historical native and app witnesses retain their original provenance. The one-job runner was removed with API404 and reaped process groups.
 
-The owner-only corpus CI38702668217 passed at the same source, including
-its aggregate CI gate. All100 original cases ran once with safe cleanup and
-no timeout. Independent output/source qualification and separate admissions
-produced95 qualified correct files, all42 hard gates and51 native clauses,
-five preserved no-credit cases and no unexpected failures. All114 unaffected
-saved outputs match their authenticated historical bytes. The three cases
-using the revised native inputs have fresh package observations. Historical
-native and app witnesses retain their original producer identities.
-Three preceding assignments were refused before any corpus case ran. Their
-failed runs and finite cleanup receipts remain retained. The successful
-runner was removed after its single job, with API404 and reaped process groups.
+Original main CI38662802341 and primary CI38696954013 remain failed. The latter passed its full native, binding, MSRV, animation and fidelity consumers but failed three stale raster expectations omitted from the approved F-X210 change. Their attributed correction leaves all49 product hashes, four unrelated rasters and exact thresholds unchanged. Failed preparers, refused assignments and missing historical S92 oracles remain separately recorded.
 
-Current215 integrated verification has passed all22 packaging dry runs,
-formatting, Clippy,6463 Rust tests,49 hashes, prose and adapter checks.
-All15 local core stages and supply-chain checks passed. Primary hosted
-CI38696954013 completed with a golden-PNG failure after its full Rust,
-Python, MSRV, animation and fidelity consumers passed. Only three old raster
-expectations failed. They predate the approved F-X210 Georgia-to-Gelasio
-change, whose12 product hashes were updated without the separate raster
-manifest. Mac and Linux independently reproduce the same three new hashes.
-F-X224 now includes the attributed correction, independent review and fresh
-actual acceptance. No final full-gate or sprint-review completion is claimed.
-Issue360's external
-skill PR37 remains open. Its owner reviewed it and asked to combine its
-merge with a package pin update after our release is available. The
-user approved closing Issue360 after publication, counting the reviewed
-submission as delivery and retaining upstream merge as an external
-follow-up. Fresh PyPI management checks confirm both package owners and
-trusted publishers. No release or contributed-record closure is claimed.
+Final reviewed-source full verification of the final reviewed sprint commit and clean sprint review remain due. Normal close, exact-main full verification, both family publications and acceptance-aware reconciliation of the70 included records remain pending. Discussions264 and281 stay open, and S92 deferrals remain unchanged. Issue360 may close only after publication under the approved reviewed-submission delivery boundary, with skills PR37 merge tracked externally. Registry roles, trusted publishers, exact final notes and release URLs must be revalidated at release.
+
+Advanced PR359 remains partially addressed, with new PowerPoint HTML import
+whitespace acceptance assigned to the separately planned repair sprint. Its
+release-bound comment must state that remaining scope and leave the PR open.
+Discussions264,281 and377 remain open. No new intake enters S91.1.
 
 ## Definition of done for this sprint
 

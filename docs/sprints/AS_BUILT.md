@@ -19590,3 +19590,25 @@ The exact22-package locally patched publication dry run passes without uploading
 **Notes for future sessions.** Actual debug and optimized results retain their separate artifacts. No optimized pass substitutes for debug validation. Final reviewed-source full gate and clean sprint review remain due. Normal close, exact-main release verification, publication and acceptance-aware contributor reconciliation remain separate pending gates. Original failed attempts and producer identities remain unchanged.
 
 **Evidence references.** `.claude/reviews/F-X226-metadata-pass-2.md`. Relevant source/artifact bridge b7890b384a31ad34d6e00107607ebf2dfe17176628666eec8b069edecc1e31a8 retains actual producer identities.
+
+### F-X227, Execute the unchanged first-draft compatibility corpus in owner CI
+
+**Sprint.** S91.1
+**Completed.** 2026-10-15, scoped completion
+**Size.** L, estimated4 days, actual not recorded
+
+**What was built.** An owner-only manual job executes the frozen100 original scripts with clean Git, paired artifact and complete input custody, finite first-attempt process groups and per-area correct-file reporting. The approved two-input revision preserves original missing hashes and separately qualifies the three affected saved packages.
+
+**Non-obvious choices.** The reviewed pre-Worker boundary validates exact server identity and literal script before the official Worker can prepare actions. It is trusted-job admission, not filesystem sandboxing. The ephemeral runner is removed after its single job. Hosted binding opt2 explicitly retains debug assertions and overflow checks.
+
+**Deviations from the design plan.** The approved native input revision changes runtime fixtures only, not the original corpus bodies, support, manifest, denominator or five non-successes. Earlier refused assignments ran no corpus cases and remain failed.
+
+**Spec sections touched.** Exactly HLD12 actual corpus qualification and HLD15 owner CI execution.
+
+**Tests.** Actual owner CI38702668217 at215715b3b733307832202147243738f5b7b6279d runs all100 once with safe cleanup, zero timeouts,96 assertion-zero exits and95 qualified files. Independent admissions cover42 hard gates and51 native clauses. BASE24/24, XML13/14, LIFE16/16 and AREA42/46 qualify, including24/24 documentation cases. Five approved non-successes receive no file credit. All114 unaffected saved outputs are byte-identical, while P12, P25 and P26 have fresh package observations. Current policy ran180 tests with two platform skips and reviews are clean. The source215 build-only rehearsal38696969789 passed27 jobs with publication jobs intentionally skipped. It authenticated12 wheels, two sdists and12 CLI archives, followed by156 installed priority checks across Python3.9/3.12 and four typing/stub checks.
+
+**Hash harness.** All49 accepted product outputs unchanged. No corpus score or baseline is stitched from different candidates.
+
+**Notes for future sessions.** The actual corpus and rehearsal producers remain source215. Earlier installed104/native8/full778/854 and original app witnesses keep their b3b or historical identities, with complete source-body, mode and artifact bridges to current unchanged consumers. The source215 archive bytes are separately retained before cache reuse. Skills PR37 remains an external upstream follow-up under the approved post-publication closure decision. Final reviewed-source full gate and clean sprint review remain due. Normal close, exact-main release verification, publication and acceptance-aware contributor reconciliation remain separate pending gates. Original failed attempts and producer identities remain unchanged.
+
+**Evidence references.** `.claude/reviews/F-X227-source-pass-1.md`. Relevant source/artifact bridge b7890b384a31ad34d6e00107607ebf2dfe17176628666eec8b069edecc1e31a8 retains actual producer identities.
