@@ -7836,3 +7836,13 @@ Supply exact source-qualified HarfBuzz14.4.0 to every native consumer, retain th
 **Spec**: HLD04 package preservation, HLD06 shape tree and preservation, HLD10 WASM facade, HLD15 pinned WASM runtime.
 
 Replace private inline list-style storage and avoid accumulated parser temporaries so the real PowerPoint WASM constructor and graph round-trip work within the existing1MiB stack. Preserve all public APIs and field types, XML namespace/opaque ownership, schema order, parser limits, deterministic outputs and versions. Prove the exact Node24.11.1 genuine Base failure and unchanged-test GREEN, a real populated caller, native getter/mutator/clone/serialization behavior, both WASM graphs and affected verified archives. No stack increase, new product file/module/dependency, new asset or public surface.
+
+
+### F-X226, Release superseded relationships after checked PowerPoint XML edits
+
+**Size**: M
+**Depends on**: F-X211b, F-X215, F-X216
+**Test gate**: regression
+**Spec**: HLD04 checked PowerPoint XML transactions and targeted graph cleanup, HLD06 opaque preservation, HLD10 chart and owner authority.
+
+Release only superseded known-role relationships owned by a checked XML edit after proving the complete actual owner no longer references them. Prune only targets made newly unreachable by this operation, preserving shared chart/workbook graphs, opaque references and unrelated producer orphans. Preserve debug save validation and atomic publication. Reproduce the original chart alias failure, then prove debug and optimized public behavior, exact sibling graph preservation and unchanged deterministic outputs. No new API, product file, dependency or contributor intake.

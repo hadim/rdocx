@@ -2483,18 +2483,19 @@ Final integrated verification, sprint review and closure remain pending.
 
 #### Sprint S91.1, Release runtime and CI repairs
 
-**Goal**: Repair only the three concrete release blockers exposed by main CI38662802341, then requalify the prepared Word0.16.1 and shared/PowerPoint0.14.1 families. Preserve S91's main merge and annotated tag. Contributor intake stays frozen at40 issues and30 PRs, with264/281 excluded and open.
+**Goal**: Repair only the concrete release blockers exposed by main CI38662802341, then requalify the prepared Word0.16.1 and shared/PowerPoint0.14.1 families. Preserve S91's main merge and annotated tag. Contributor intake stays frozen at40 issues and30 PRs, with264/281 excluded and open.
 
 | F-ID | Title | Size |
 |------|-------|------|
 | F-X224 | Repair hosted release tool and stack routing | M |
 | F-X225 | Keep DrawingML text-style parsing within the default WASM stack | M |
+| F-X226 | Release superseded relationships after checked PowerPoint XML edits | M |
 
-The two stories implement in parallel with separate worktrees. F-X224 owns existing CI and release-policy carriers plus native-only independent-tool preparation. F-X225 owns private DrawingML text parser storage and existing parser/WASM regressions. No new product module, dependency, asset, public API, feature or accepted input is added. ROOT owns integration, fresh paired artifacts and the final gate union. All49 accepted hashes stay unchanged.
+The three stories implement in parallel with separate worktrees. F-X224 owns existing CI and release-policy carriers plus native-only independent-tool preparation. F-X225 owns private DrawingML text parser storage and existing parser/WASM regressions. F-X226 owns targeted checked-owner relationship cleanup and existing native/Python chart regressions. No new product module, dependency, asset, public API, feature or accepted input is added. ROOT owns integration, fresh paired artifacts and the final gate union. All49 accepted hashes stay unchanged.
 
-S91 is merged and tagged at eb79c31155d8e38f9f7f0c6d3b2753c0b66ea83e. Its exact-source build-only rehearsal38659673259 passed. The subsequent primary CI identified missing native HarfBuzz preparation, a missing native animation stack setting and default-WASM parser stack exhaustion. Original failures remain retained. Publication and the70 release-bound humanized comments wait for the corrected exact main merge, complete source-qualified package and installed verification, clean review, hosted rehearsal and verified registries. Existing publisher roles and current registry/tag facts remain mandatory. The user's standing publication authorization remains scoped to these two prepared families.
+S91 is merged and tagged at eb79c31155d8e38f9f7f0c6d3b2753c0b66ea83e. Its exact-source build-only rehearsal38659673259 passed. The subsequent primary CI identified missing native HarfBuzz preparation, a missing native animation stack setting and default-WASM parser stack exhaustion. Its full PowerPoint binding suite additionally exposed superseded chart relationships after checked XML replacement, which F-X226 repairs without weakening save validation. Original failures remain retained. Publication and the70 release-bound humanized comments wait for the corrected exact main merge, complete source-qualified package and installed verification, clean review, hosted rehearsal and verified registries. Existing publisher roles and current registry/tag facts remain mandatory. The user's standing publication authorization remains scoped to these two prepared families.
 
-**Gate**: Both corrective regressions and the existing unmodified deciding cases pass, with zero independent review findings. The complete integrated gate, actual native/installed oracle riders, all selected primary CI jobs and both-family exact-SHA build-only rehearsal pass before normal close. Final release runs its read-only gate on the new exact main merge. No larger WASM stack, skipped required case, manufactured evidence or moved tag is allowed. Bibliography, navigation, standalone authoring and the existing followups remain in S92.
+**Gate**: All corrective regressions and the existing unmodified deciding cases pass, with zero independent review findings. The complete integrated gate, actual native/installed oracle riders, all selected primary CI jobs and both-family exact-SHA build-only rehearsal pass before normal close. Final release runs its read-only gate on the new exact main merge. No larger WASM stack, skipped required case, manufactured evidence or moved tag is allowed. Bibliography, navigation, standalone authoring and the existing followups remain in S92.
 
 #### Sprint S92, Bibliography and navigation carryovers, templates and forms
 
