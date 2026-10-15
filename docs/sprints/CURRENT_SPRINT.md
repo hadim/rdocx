@@ -17,7 +17,7 @@
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X228 | Qualify faster CI without weakening gates | M | pending | - |
+| F-X228 | Qualify faster CI without weakening gates | M | in-progress | codex |
 | F-X178 | Clearable direct run formatting setters | S | pending | - |
 | F-X231 | Preserve PowerPoint HTML import whitespace | M | pending | - |
 | F-X229 | Repair comparison reconstruction correctness | L | pending | - |

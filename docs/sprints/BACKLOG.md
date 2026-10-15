@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 250 | 233 | 0 | 13 |
-| **Total** | **581** | **507** | **0** | **70** |
+| X, Cross-cutting | 250 | 233 | 1 | 12 |
+| **Total** | **581** | **507** | **1** | **69** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -796,7 +796,7 @@ HLD14 contract before adopting contributor changes.
 | F-X225 | Keep DrawingML text-style parsing within the default WASM stack | S91.1 | M | done |
 | F-X226 | Release superseded relationships after checked PowerPoint XML edits | S91.1 | M | done |
 | F-X227 | Execute the unchanged first-draft compatibility corpus in owner CI | S91.1 | L | done |
-| F-X228 | Qualify faster CI without weakening gates | S92 | M | pending |
+| F-X228 | Qualify faster CI without weakening gates | S92 | M | in-progress |
 | F-X229 | Repair comparison reconstruction correctness | S92 | L | pending |
 | F-X230 | Group comparison changes for readable revisions | S92 | M | pending |
 | F-X231 | Preserve PowerPoint HTML import whitespace | S92 | M | pending |
