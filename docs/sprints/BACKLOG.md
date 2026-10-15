@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 239 | 229 | 1 | 5 |
-| **Total** | **564** | **503** | **1** | **56** |
+| X, Cross-cutting | 239 | 229 | 2 | 4 |
+| **Total** | **564** | **503** | **2** | **55** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -787,5 +787,5 @@ HLD14 contract before adopting contributor changes.
 | F-X222 | Restore linear Word story range inventory and empty owners | S91 | M | done |
 | F-X223 | Qualify native Word embedded multi-face interoperability | S92 | M | pending |
 | F-X224 | Repair hosted release tool and stack routing | S91.1 | M | in-progress |
-| F-X225 | Keep DrawingML text-style parsing within the default WASM stack | S91.1 | M | pending |
+| F-X225 | Keep DrawingML text-style parsing within the default WASM stack | S91.1 | M | in-progress |
 <!-- AUTOGEN:backlog-MX END -->
