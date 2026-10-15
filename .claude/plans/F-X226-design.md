@@ -1,6 +1,6 @@
 # F-X226, Release superseded relationships after checked PowerPoint XML edits
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91.1
 **Size**: M
 **Depends on**: F-X211b, F-X215, F-X216
@@ -74,12 +74,18 @@ All49 accepted outputs remain unchanged. The defining intentional delta is limit
 
 ## Implementation checklist
 
-- [ ] Preserve the original hosted failure and reproduce the public debug trigger.
-- [ ] Implement only targeted candidate cleanup in the existing checked-owner transaction.
-- [ ] Prove shared, opaque, external and producer-orphan preservation with atomic refusal.
-- [ ] Pass debug and optimized public chart controls, focused native tests and scoped gate.
-- [ ] Obtain a zero-finding independent microscope and update HLD04.
+- [x] Preserve the original hosted failure and reproduce the public debug trigger.
+- [x] Implement only targeted candidate cleanup in the existing checked-owner transaction.
+- [x] Prove shared, opaque, external and producer-orphan preservation with atomic refusal.
+- [x] Pass debug and optimized public chart controls, focused native tests and scoped gate.
+- [x] Obtain a zero-finding independent microscope and update HLD04.
 
 ## Open questions
 
 None. Intake remains frozen. Discussions264 and281 stay open. S92 bibliography, authoring and navigation remain deferred. No publication or remote closure is authorized by a test pass alone.
+
+## Completion evidence
+
+Scoped completion uses /private/tmp/S91.1-F-X226-implementation-1/final-scoped-evidence.json, SHA256 98f1edf48f91f1b1a6313e79f823dd4d9f2bb91b77e98a362e93e31b2dbc9770. Actual Base native and original public debug triggers fail with the required dangling relationship. Corrected native controls pass, the unchanged six public chart controls pass in both debug and optimized wheels, and current normal native coverage is177 unit passes plus392 integration passes through the explicit two-oracle setup successor. Original corpus/cache and registry setup failures remain retained. Strict Clippy, both WASM checks, policy159 passes plus2 platform skips, README examples, actual verified affected archive and hash49 qualify their stated source scopes. Independent source and numeric metadata reviews report zero defects and zero smells.
+
+The catalog change is only the observed rpptx tuple/date. ROOT owns final combined F-X225 and F-X226 archive reconciliation and full integrated gates. No sibling parser correction, sprint totals, main merge, tag, publication or remote closure is claimed here.
