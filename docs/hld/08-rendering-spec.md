@@ -2332,6 +2332,18 @@ lower only to shared text, line, path, and group primitives. Visible unsupported
 content emits one stable source-path diagnostic, while the untouched typed tree
 continues to own its retained XML.
 
+Fonts with an OpenType MATH table supply the actual math axis, fraction rule
+and independent numerator/denominator clearances, script shifts and sizes,
+italic corrections, radical gaps and prepared vertical glyph variants. Private
+font reads honor the selected face index. Display frames measure actual glyph
+ink with MathLeading and retain RadicalExtraAscender above radical ink.
+Integral side limits attach independently rather than accumulating widths.
+First and second script sizes are relative to the root style size, with size
+and optical alternate depth saturated at the second level. A radical degree
+uses the second level. Covered mathematical italic glyphs and ssty alternates
+change paint while the stored logical text remains intact. Missing MATH data
+uses the bounded historical fallback. No external process participates in layout.
+
 `InlineItem::Group` and `LineItem::Group` carry `baseline: Option<f64>`.
 Finite values are normalized to the group height before line conversion. The
 line breaker contributes the normalized value as ascent and the remaining

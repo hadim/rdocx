@@ -197,6 +197,19 @@ The gate runs `--from=latex --to=html --math-method=mathml` and
 both directions. This fixture does not replace the checksum-pinned Linux 3.10
 installer or its historical evidence.
 
+Native equation qualification separately pins Microsoft Word16.113.2
+build16.113.26092012 and Poppler26.09.0. The existing OfficeMath manifest binds
+actual application identity, tool bytes, source recipes, native PDF and normal
+save/reopen evidence. Authentic Word-bundled Cambria and Cambria Math remain
+external caller-font inputs through the existing deterministic render API.
+They are neither installed nor redistributed, and bundled Caladea defaults
+remain unchanged. Historical Word16.104 build16.104.25121423 and Poppler26.01.0
+controls retain their identities and results. Production math reads the existing
+resolved ttf-parser0.25.1 dependency directly from rdocx-layout, with no new
+resolved package, public font API or external executable. Both WASM graphs,
+denied-warning rustdoc, verified local-patched workspace publication dry runs,
+actual affected archive inventories and the10MiB ceiling cover this direct edge.
+
 ODP conversion adds no external production tool and reuses the workspace
 `zip`, `quick-xml`, and `oxml-media` dependencies. LibreOffice 26.2.5.2 remains
 an explicit ignored acceptance gate that runs with an isolated user profile.

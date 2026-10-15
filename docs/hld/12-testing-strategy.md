@@ -1552,6 +1552,21 @@ rendered-group perturbation proves the geometry and raster path is
 mutation-sensitive. The source DOCX digest and tool identities live in the
 text manifest, while both PDF outputs remain untracked.
 
+The same OfficeMath harness separately qualifies the exact Issue365 formula
+and five single-construct controls against Word16.113.2 build16.113.26092012
+and Poppler26.09.0. Explicit paragraph and math spacing defaults bind source
+geometry. Source digests, native PDFs, native normal save/reopen, authentic
+Word-bundled Cambria/Cambria Math caller bytes and tool hashes are pinned in
+its existing manifest. Absolute aggregate and six exact-expression PDF bounds,
+widths and150DPI ink bounds retain1.0point tolerance, with complete-page
+64by64 luminance blocks retaining0.99SSIM. A rendered1.01point group translation
+is rejected by the composite gate. Signed native residuals can cancel that
+shift for one control, so rejection is not claimed for every case or for SSIM
+alone. Constructed font tables distinguish root-relative first/second script
+sizes, deep saturation, degree depth and optical alternates. The original
+Caladea-request fallback mismatch and implicit-spacing sources remain separate
+diagnostics, preserving all historical sources, identities and outcomes.
+
 The general native field construction gate reopens explicit simple and complex
 fields with identical instruction semantics and ordered cached content. Tests
 construct inputs in code and cover recursive argument and switch operands,
