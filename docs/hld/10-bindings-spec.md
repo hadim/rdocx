@@ -2544,6 +2544,14 @@ comparison carries the edited bytes in a distinct media part and owner
 relationship. The drawing run receives a tracked replacement. Acceptance
 resolves the edited relationship and bytes, while rejection retains the
 original relationship and bytes. Unrelated package parts remain unchanged.
+Chart-only and chart-plus-text comparison use the same tracked drawing
+replacement boundary. Complete chart graph identity includes workbook-only edits,
+retained sidecars and shared topology. Edited chart resources receive collision-safe
+relationships and part names, with one shared physical destination per edited
+source resource across owner stories. Saved and reopened accept-all and reject-all
+select their corresponding chart caches and embedded workbooks through the actual
+drawing relationships. Part-name stability is not part of the comparison contract.
+No Rust, Python, CLI or WASM signature changes.
 When a matched paragraph changes a comment range, hyperlink, inline control,
 or preserved child boundary, comparison tracks a complete paragraph deletion
 and insertion if its bookmarks remain in place. The rebuilt TOC entry

@@ -36,6 +36,17 @@ The workbook is what "Edit Data" opens. PowerPoint will render a chart whose
 workbook is missing, but the file is malformed and editing is broken. This is
 why the minimal SpreadsheetML writer is not optional.
 
+Word comparison identifies a chart by its complete owned resource graph,
+including the embedded workbook, retained sidecars, content types and relationship
+topology. A changed chart receives tracked drawing replacement and a distinct
+collision-safe package graph. Repeated drawings sharing one edited resource retain
+one shared destination. Accepting revisions selects the edited chart and workbook,
+while rejecting selects the original. These identities follow the surviving
+drawing relationships rather than conventional chart filenames. Unused original
+parts remain preserved. Chart graph discovery and copying share checked depth,
+aggregate part and payload-plus-relationship byte limits. External target metadata
+is preserved without fetching its target.
+
 ## `oxml-sml`, deliberately minimal
 
 A bounded chart-workbook writer and formula-owned cell merger, never a general

@@ -1,6 +1,6 @@
 # F-X245, Preserve chart data changes in Word comparison
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S93
 **Size**: L
 **Depends on**: F-X229, F-X230
@@ -47,6 +47,20 @@ remain equal. Shared source targets, colliding names/ids and original-versus-edi
 relationships must remain independently reachable until selected resolution.
 Retain existing picture comparison, revision grouping and resource limits.
 No new public API, module, file, trait, generic, feature or dependency is proposed.
+The existing README.md rdocx archive measurement row and numeric
+ARCHIVE_MEASUREMENTS tuple in scripts/readme_doctests.py are remeasured to satisfy
+repository inventory policy. The 64 byte compression tolerance and 10 MiB ceiling
+remain unchanged. This mandatory existing-carrier clarification is approved by
+the sprint orchestrator.
+
+The authenticated script's north() observer reads the fixed
+word/charts/chart1.xml member rather than the chart drawn by the resolved owner.
+Retain and report its unmodified output separately, including the unchanged
+control. A separate explicitly corrected observer follows the surviving drawing
+relationship without changing any source cases, expected chart values or text.
+Comparison preserves collision-safe graph ownership and unrelated retained parts.
+It does not promise canonical chart part names or remove unused original parts.
+This observer clarification was approved by the sprint orchestrator.
 
 Qualify native comparison and a fresh installed Word Python wheel. Independently
 inspect both reopened resolutions using ZIP/XML and workbook cells rather than
@@ -62,17 +76,22 @@ failure. Coordinate Word facade/test entrypoints serially with F-X232/F-X246.
 ## Test plan
 
 The **test gate** is **regression**. Existing comparison.rs test module,
-integration_test.rs and Python test_core.py carry new controls.
+`crates/rdocx-py/tests/test_python_docx_parity.py` carry new controls.
+The existing comparison unit module carries native package regressions so shared
+integration and core Python carriers remain with their parallel feature lease.
 
 | Category | Test | Asserts |
 |---|---|---|
 | regression | `fx245_chart_data_changes_resolve_both_versions` | Exact chart-only word/run cases produce revisions and reopened accept/reject reproduce edited/original chart and workbook |
 | regression | `fx245_chart_and_adjacent_text_changes_compare_together` | Supplied mixed case reconstructs both complete sources |
 | regression | `fx245_unchanged_chart_does_not_create_a_revision` | Supplied unchanged control remains unchanged |
-| regression | `fx245_workbook_only_and_shared_chart_changes_remain_owned` | Closure-sensitive detection, shared-target isolation, collision remapping and opaque sidecar bytes survive resolution |
+| regression | `fx245_workbook_only_changes_remain_owned` | Workbook-only edits remain visible to comparison and resolve both exact workbook payloads |
+| regression | `fx245_shared_chart_cycles_and_opaque_sidecars_survive_collision_remapping` | Actual selected drawings retain shared targets, exact sidecars, cycles and external metadata with one bounded resource copy |
+| regression | `fx245_distinct_chart_roots_share_an_aggregate_resource_limit` | Distinct individually valid roots share one atomic operation-wide part and byte budget |
+| regression | `fx245_existing_fragment_copy_keeps_distinct_case_alias_destinations` | Existing rich-fragment allocation semantics retain both distinct preallocated alias destinations |
 | regression | `fx245_invalid_chart_closure_refuses_atomically` | Invalid relationships, missing parts and limit failures preserve both inputs and publish no partial redline |
 | round-trip | independent package inspection | Both saved/reopened resolutions have exact expected ChartML caches, worksheet values, content types and qualified target graph |
-| integration | exact script with fresh installed Python | Public entrypoints reproduce native outcomes and consumed save/reopen evidence |
+| integration | `test_fx245_exact_issue382_script_and_independent_package_graph` | Exact original probe is retained separately from the corrected relationship observer. Every original expected value and text is checked with independently followed ZIP/XML/workbook graph ownership |
 
 Run focused native/binding checks, existing image/grouping/postcondition matrices,
 scoped verification and independent zero-finding microscope.
@@ -100,11 +119,11 @@ explicit source-built controls. Any unrelated rendering delta blocks completion.
 
 ## Implementation checklist
 
-- [ ] Capture exact input, claim and establish Base failures.
-- [ ] Implement closure identity and collision-safe carried graph ownership.
-- [ ] Qualify both granularities, mixed/unchanged cases and atomic refusal.
-- [ ] Independently inspect reopened packages and installed Python outcomes.
-- [ ] Pass scoped verify, microscope and prepared handoff.
+- [x] Capture exact input, claim and establish Base failures.
+- [x] Implement closure identity and collision-safe carried graph ownership.
+- [x] Qualify both granularities, mixed/unchanged cases and atomic refusal.
+- [x] Independently inspect reopened packages and installed Python outcomes.
+- [x] Pass scoped verify, microscope and prepared handoff.
 
 ## Open questions
 

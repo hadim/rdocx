@@ -1102,6 +1102,19 @@ reconstruction controls remain active.
 A bounded unit matrix checks coverage, deterministic output and retained segment
 identity without timing thresholds or an additional alignment algorithm.
 
+Chart comparison regressions cover chart-only Word and Run granularity, adjacent
+text edits and an unchanged-chart control. Saved and reopened resolutions follow
+the surviving drawing relationships and independently check exact ChartML,
+embedded workbook bytes and worksheet cells. Workbook-only edits, repeated drawn
+roots, collision-safe names, opaque sidecars, cyclic and external edges, invalid
+closures and aggregate limits retain their own controls. The sorted DFS depth
+negative includes shortcut edges so shortest-path discovery cannot mask the reused
+copier's actual recursion depth. Existing rich-fragment callers retain distinct
+preallocated destinations for case-alias sources. The exact Issue382 script is
+executed unchanged and its fixed chart1.xml observer output is recorded separately
+from a corrected relationship observer with every original case and expectation
+retained. Installed-wheel ZIP/XML inspection supplements native reconstruction.
+
 The source-built external differential pins Microsoft Word 16.104 build
 16.104.25121423 and locale `en-US`. Its 24 normalized records cover every
 supported story, move, field owner, and property revision, and calibrated
