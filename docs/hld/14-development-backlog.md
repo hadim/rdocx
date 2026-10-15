@@ -8142,3 +8142,30 @@ native Office renders in deterministic font mode. Attribute intentional hash
 and raster deltas to this story. During design, explicitly decide the related
 Python legend visibility, position and overlay request for both families and
 record any residual before claiming full issue closure.
+
+### F-X247, Preserve the common LaTeX inputs reported in Issue365
+
+**Size**: L
+**Depends on**: F-X234, F-X235
+**Test gate**: differential
+
+Complete the finite 73 input conversion matrix in
+[Issue365's follow-up](https://github.com/tensorbee/rdocx/issues/365#issuecomment-6200740130).
+Preserve its authenticated original script, all 73 distinct input rows and their
+order. Cover the named Greek and mathematical symbols, relations, operators,
+arrows, upright functions, operatorname/mathrm/text, binom, dfrac/tfrac and
+spacing without losing atom/script ownership or meaningful text. Design any
+forced fraction style, text whitespace or unsupported representation distinction
+explicitly before implementation. This is a bounded extension, not unrestricted
+TeX support, and does not reopen the completed S93 exact-formula contract.
+
+Retain original output separately from a corrected observer whose only script
+change makes the unconditional FAIL summary depend on actual losses. Require
+zero unexpected diagnostics and independently inspected correct normalized
+structure for all 73 inputs. Execute actual pinned Pandoc forward/reverse
+qualification and native/render comparisons where new paint semantics require
+it. Preserve existing bounds, schema order, opaque source, deterministic fonts,
+historical oracle identities and applicable geometry/raster thresholds.
+Qualify native and fresh installed Python save/reopen, real semantic mutation
+failures and applicable publication, binding, WASM and hash riders. Issue365
+remains open until this broader acceptance has evidence on main.

@@ -2,7 +2,7 @@
 
 **Milestone**: M24, X, rendering and remaining issue repairs.
 
-**Goal**: Finish the remaining issue acceptance with independent rendering and conversion evidence. Qualify legal revision rendering, diagnose paragraph borders, preserve supported LaTeX structure, qualify equation layout, and measure public setter inlining before changing policy. Also preserve chart-data revisions and render chart legends outside the plot when requested. Seven stories total 21 to 26 developer-days of estimated effort.
+**Goal**: Finish the remaining issue acceptance with independent rendering and conversion evidence. Qualify legal revision rendering, diagnose paragraph borders, preserve supported LaTeX structure, qualify equation layout, and measure public setter inlining before changing policy. Also preserve chart-data revisions and render chart legends outside the plot when requested. Seven stories total 21 to 27 developer-days of estimated effort.
 
 ## Spec references
 
@@ -17,13 +17,13 @@
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X232 | Render legal revisions and qualify checked XML repros | L | in-progress | codex |
-| F-X233 | Repair paragraph border geometry | M | in-progress | codex |
+| F-X232 | Render legal revisions and qualify checked XML repros | L | done | - |
+| F-X233 | Repair paragraph border geometry | M | done | - |
 | F-X234 | Preserve supported LaTeX conversion structure | M | done | - |
-| F-X235 | Qualify equation layout against native Word | L | in-progress | codex |
-| F-X236 | Measure public setter inlining before changing policy | S | in-progress | codex |
-| F-X245 | Preserve chart data changes in Word comparison | L | in-progress | codex |
-| F-X246 | Honor chart legend position and overlay during rendering | L | in-progress | codex |
+| F-X235 | Qualify equation layout against native Word | L | done | - |
+| F-X236 | Measure public setter inlining before changing policy | S | done | - |
+| F-X245 | Preserve chart data changes in Word comparison | L | done | - |
+| F-X246 | Honor chart legend position and overlay during rendering | L | done | - |
 
 ## Sequencing note
 
