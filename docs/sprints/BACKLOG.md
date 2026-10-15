@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 258 | 234 | 5 | 15 |
-| **Total** | **589** | **508** | **5** | **72** |
+| X, Cross-cutting | 258 | 239 | 0 | 15 |
+| **Total** | **589** | **513** | **0** | **72** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -742,7 +742,7 @@ HLD14 contract before adopting contributor changes.
 | F-X175 | Refresh CLI archive evidence after release hardening | S87 | S | done |
 | F-X176 | Repair unified release inventory and respin PowerPoint | S88 | M | done |
 | F-X177 | Accept unified fontdb source features | S89 | S | done |
-| F-X178 | Clearable direct run formatting setters | S92 | S | in-progress |
+| F-X178 | Clearable direct run formatting setters | S92 | S | done |
 | F-X179 | Correct multi-paragraph comment threads from PR 271 | S90 | S | done |
 | F-X180 | Correct cell nil and none border precedence | S90 | S | done |
 | F-X181 | Ignore page and column breaks inside table cells | S90 | S | done |
@@ -796,16 +796,16 @@ HLD14 contract before adopting contributor changes.
 | F-X225 | Keep DrawingML text-style parsing within the default WASM stack | S91.1 | M | done |
 | F-X226 | Release superseded relationships after checked PowerPoint XML edits | S91.1 | M | done |
 | F-X227 | Execute the unchanged first-draft compatibility corpus in owner CI | S91.1 | L | done |
-| F-X228 | Qualify faster CI without weakening gates | S92 | M | in-progress |
+| F-X228 | Qualify faster CI without weakening gates | S92 | M | done |
 | F-X229 | Repair comparison reconstruction correctness | S92 | L | done |
-| F-X230 | Group comparison changes for readable revisions | S92 | M | in-progress |
-| F-X231 | Preserve PowerPoint HTML import whitespace | S92 | M | in-progress |
+| F-X230 | Group comparison changes for readable revisions | S92 | M | done |
+| F-X231 | Preserve PowerPoint HTML import whitespace | S92 | M | done |
 | F-X232 | Render legal revisions and qualify checked XML repros | S93 | L | pending |
 | F-X233 | Repair paragraph border geometry | S93 | M | pending |
 | F-X234 | Preserve supported LaTeX conversion structure | S93 | M | pending |
 | F-X235 | Qualify equation layout against native Word | S93 | L | pending |
 | F-X236 | Measure public setter inlining before changing policy | S93 | S | pending |
-| F-X237 | Restore linear Python table owner inventory | S92 | L | in-progress |
+| F-X237 | Restore linear Python table owner inventory | S92 | L | done |
 | F-X238 | Restore python-docx Word names from the first-draft corpus | S94 | L | pending |
 | F-X239 | python-pptx notes names and refusal of silent zero values | S94 | M | pending |
 | F-X240 | Python and CLI signing and signature verification | S94 | M | pending |

@@ -1,6 +1,6 @@
 # F-X228, Qualify faster CI without weakening gates
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S92
 **Size**: M
 **Depends on**: none
@@ -160,7 +160,7 @@ delta blocks completion.
 - [x] Use the authorized source availability checkpoint for actual hosted CI.
 - [x] Bind successful required jobs and measured durations to reviewed source.
 - [x] Update exactly the two named HLD files.
-- [ ] Complete the normal lifecycle after actual external CI acceptance.
+- [x] Complete the normal lifecycle after actual external CI acceptance.
 
 ## Open questions
 

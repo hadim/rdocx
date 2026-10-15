@@ -1050,3 +1050,13 @@ work moves to S95 and S97 through S100. The conditional Excel programme moves
 to S101 through S110, and Issue281's F-184 decision is at S101. The active S92
 wave and S93 plan are unchanged. No completion, velocity or release is
 recorded by planning.
+
+| F-X178 | S92 | S | 1 | not recorded | 2026-10-15 | Approved repair contract, scoped regression and preservation gates, clean independent feature/integration review, final integrated native and installed risk riders, verified22 archives and49 unchanged hashes. Actual evidence retains source epochs and user-accepted F-X237 fill tradeoff |
+
+| F-X228 | S92 | M | 2 to 3 | not recorded | 2026-10-15 | Approved repair contract, scoped regression and preservation gates, clean independent feature/integration review, final integrated native and installed risk riders, verified22 archives and49 unchanged hashes. Actual evidence retains source epochs and user-accepted F-X237 fill tradeoff |
+
+| F-X230 | S92 | M | 2 to 3 | not recorded | 2026-10-15 | Approved repair contract, scoped regression and preservation gates, clean independent feature/integration review, final integrated native and installed risk riders, verified22 archives and49 unchanged hashes. Actual evidence retains source epochs and user-accepted F-X237 fill tradeoff |
+
+| F-X231 | S92 | M | 2 to 3 | not recorded | 2026-10-15 | Approved repair contract, scoped regression and preservation gates, clean independent feature/integration review, final integrated native and installed risk riders, verified22 archives and49 unchanged hashes. Actual evidence retains source epochs and user-accepted F-X237 fill tradeoff |
+
+| F-X237 | S92 | L | 4 | not recorded | 2026-10-15 | Approved repair contract, scoped regression and preservation gates, clean independent feature/integration review, final integrated native and installed risk riders, verified22 archives and49 unchanged hashes. Actual evidence retains source epochs and user-accepted F-X237 fill tradeoff |

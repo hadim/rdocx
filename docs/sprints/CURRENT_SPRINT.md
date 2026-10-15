@@ -17,12 +17,12 @@
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X228 | Qualify faster CI without weakening gates | M | in-progress | codex |
-| F-X178 | Clearable direct run formatting setters | S | in-progress | codex |
-| F-X231 | Preserve PowerPoint HTML import whitespace | M | in-progress | codex |
+| F-X228 | Qualify faster CI without weakening gates | M | done | - |
+| F-X178 | Clearable direct run formatting setters | S | done | - |
+| F-X231 | Preserve PowerPoint HTML import whitespace | M | done | - |
 | F-X229 | Repair comparison reconstruction correctness | L | done | - |
-| F-X230 | Group comparison changes for readable revisions | M | in-progress | codex |
-| F-X237 | Restore linear Python table owner inventory | L | in-progress | codex |
+| F-X230 | Group comparison changes for readable revisions | M | done | - |
+| F-X237 | Restore linear Python table owner inventory | L | done | - |
 
 ## Sequencing note
 
@@ -47,7 +47,7 @@ Issue378 was explicitly added during execution on2026-10-15. F-X237 restores lin
 - Prove explicit set/clear and save/reopen behavior for Issue364, including absent-property and existing explicit-false controls.
 - Prove accept-all and reject-all reconstruction for Issues368 through371, preserving properties, relationships, tables, stories and opaque XML. Prove Issue372 grouping respects fields, comments, bookmarks, hyperlinks and formatting boundaries.
 - Prove PR359's remaining PowerPoint HTML whitespace cases through applicable public entrypoints and save/reopen, retaining diagnostics and existing semantic export acceptance.
-- Prove Issue378 linear cell inventory and route matching, same-host small-factor timing acceptance, physical owner and stale-generation preservation, atomic refusal and full fresh Word Python acceptance.
+- Prove Issue378 linear cell inventory and route matching, same-host open/edit timing acceptance and the explicitly accepted measured fill tradeoff, physical owner and stale-generation preservation, atomic refusal and full fresh Word Python acceptance.
 - Pass the integrated full verification and sprint review, including applicable installed bindings and native/oracle controls. Attribute every intentional deterministic hash or raster delta separately and retain unchanged controls.
 - Close issues and contribution PRs only against their full criteria and required publication evidence. Only /close-sprint merges to main, and only /release publishes an approved reviewed SHA. Discussions264,281 and377 remain open.
 
