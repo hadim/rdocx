@@ -39,6 +39,14 @@ Extend product scope only to the existing private `resolve_master_records` funct
 
 The whole-file write lease is serialized with F-X226, whose unrelated graph repair also uses this existing file. F-X226 froze its source at the defining pre-fix regression while F-X225 owns this extension. Return the lease after the bounded patch is sealed. ROOT records this as a second-wave shared-file extension, reviews integration against both plans and refuses an automatic semantic conflict resolution. Other disjoint validation can continue in parallel.
 
+### Approved private master-style parser extension
+
+After the ordered resolver loop removes the iterator frames, the unchanged original Node case still fails while parsing master styles. `/private/tmp/F-X225-master-loop-diagnostic/current-frame-facts.json` measures388896 bytes for private `CT_MasterTextStyles::from_fragment`,74608 for style capture,184368 for root child capture and137216 for the now sequential resolver. Retain `master-loop-original-trap-10.log` as a failed attempt. The earlier list-body frame has already fallen from193024 to29696 bytes, so further speculative list-body changes are not justified by this failure.
+
+Extend scope only to private master-style construction in existing `crates/rpptx-oxml/src/slide_parts.rs`. Its private `from_fragment` returns `Result<Box<Self>>` directly into the already boxed private root field. Stage its three list-style parse values as `[Option<Box<CT_TextListStyle>>; 3]`, then move them into the same three public native value fields when constructing the boxed result. Update only the existing private capture parameter and stored-box call site. Preserve public master/list-style fields and signatures, namespace scopes, raw attributes/children, required-style and duplicate errors, schema order and serialized bytes.
+
+The unchanged default-stack Node case still decides success. Add affected `rpptx-oxml` native tests, strict Clippy, existing master-style namespace/order/preservation controls and verified archive measurements to the scoped union. No stack allowance, public heap-field conversion, new parsing module or unrelated parser rewrite is approved. This existing source file has no F-X226 writer overlap.
+
 **Semver impact**: none. This changes private representation and parser storage, with no public signature, source-literal field type or behavior change. No version bump belongs to this story.
 
 ## Rejected alternatives
