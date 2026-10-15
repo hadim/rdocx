@@ -181,6 +181,15 @@ payload. The installer skips without materializing only the archive's exact
 other unsupported member type. Pandoc and texmath are absent from every
 published crate and production dependency graph.
 
+The exact Issue365 conversion fixture has a separate live Pandoc 3.11 gate,
+`fx234_issue365_matches_actual_pinned_pandoc_3_11`. Its macOS executable identity
+is `pandoc 3.11`, with SHA-256
+`23908d6bc347072befa2bfe312f2c1c44a7c9c2e9e60bb5d41069245454b3236`.
+The gate runs `--from=latex --to=html --math-method=mathml` and
+`--from=html --to=latex`, comparing complete normalized OfficeMath trees in
+both directions. This fixture does not replace the checksum-pinned Linux 3.10
+installer or its historical evidence.
+
 ODP conversion adds no external production tool and reuses the workspace
 `zip`, `quick-xml`, and `oxml-media` dependencies. LibreOffice 26.2.5.2 remains
 an explicit ignored acceptance gate that runs with an isolated user profile.

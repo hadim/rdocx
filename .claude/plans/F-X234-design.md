@@ -1,6 +1,6 @@
 # F-X234, Preserve supported LaTeX conversion structure
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S93
 **Size**: M
 **Depends on**: none
@@ -41,7 +41,9 @@ explicitly rather than silently deleting arbitrary operators. Keep the current
 integral, fraction, radical and script model and supported n-ary scope rules.
 Do not extend display-limit policy unless an independently demonstrated mismatch
 requires an approved revision. Meaningful run properties must survive both export
-and import. Keep every input, node, text, diagnostic and parser-depth cap.
+and import. Keep every input, node, text, diagnostic and parser-depth cap. Ordinary TeX
+characters are single atoms before run normalization, so adjacent unscripted
+characters cannot absorb the base of a following script.
 
 Preserve the historical Pandoc3.10 oracle and results. Add a separately identified
 exact-formula live case pinned to actual Pandoc3.11. Record binary identity,
@@ -86,6 +88,12 @@ until this prerequisite is completed through the scoped prefix checkpoint.
 - External oracle: exact Pandoc3.11 identity and separately retained3.10 history.
 - Layout-facing output: bundled deterministic fonts for any rendered comparison.
   Conversion changes do not authorize equation-layout tuning here.
+- Existing package-footprint policy requires the measured `rdocx` row in
+  `README.md` and numeric `ARCHIVE_MEASUREMENTS` in
+  `scripts/readme_doctests.py` to match this source inventory. Update only the
+  affected measured row, preserving the existing 64-byte compression tolerance
+  and 10 MiB ceiling. This is acceptance evidence in existing carriers, not a
+  changed archive policy.
 
 ## Hash harness
 
@@ -96,11 +104,12 @@ New source-built regression fixtures are separate from the historical baseline.
 
 ## Implementation checklist
 
-- [ ] Approve sprint designs, claim and establish actual Base failure.
-- [ ] Implement bounded symbols, upright function and meaningful spacing.
-- [ ] Qualify normalized round trips, losses, caps and live pinned oracle.
-- [ ] Pass scoped verification and independent zero-finding microscope.
-- [ ] Prepare and integrate through prerequisite completion before F-X235.
+- [x] Approve sprint designs, claim and establish actual Base failure.
+- [x] Implement bounded symbols, upright function and meaningful spacing.
+- [x] Qualify normalized round trips, losses, caps and live pinned oracle.
+- [x] Pass scoped verification and independent zero-finding microscope.
+- [x] Prepare the validated feature-local handoff for the integrator dependency
+  checkpoint before F-X235. Integration remains the orchestrator operation.
 
 ## Open questions
 

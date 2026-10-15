@@ -2936,6 +2936,20 @@ cover the cases that matter now.
   post-script followed by a run, its insertion of explicit n-ary `\limits`,
   and its removal of explicit delimiter scope are asserted as intentional
   divergences.
+- `fx234_issue365_preserves_symbols_limits_and_thin_space` compares the exact
+  reported formula against an independently authored normalized tree, including
+  integral bounds, pi, upright lim, arrow, infinity, explicit thin spacing,
+  fraction, radical and attached scripts. A related mass-formula control proves
+  pi squared and a cubed retain their separate bases. Conversion and public DOCX
+  save/reopen controls compare normalized supported structure while separately
+  retaining an opaque XML sibling byte for byte. Unsupported spacing, variant,
+  width, function-marker context and resource caps have focused controls.
+- `fx234_issue365_matches_actual_pinned_pandoc_3_11` independently pins Pandoc
+  3.11 for this exact formula in both directions. Its expected tree retains
+  upright lim and meaningful spacing. The display and semantics wrappers and
+  explicit n-ary limits remain diagnosed, while the exact supported invisible
+  function-application marker normalizes to its implicit typed equivalent.
+  The historical 3.10 gate and evidence identity remain separate.
 
 Agile encryption has a source-encoded Microsoft Word 16.104 oracle package so
 the regression gate does not depend on an opaque binary fixture. The gate opens
