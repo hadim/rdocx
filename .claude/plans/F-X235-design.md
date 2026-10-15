@@ -1,0 +1,104 @@
+# F-X235, Qualify equation layout against native Word
+
+**Status**: approved
+**Sprint**: S93
+**Size**: L
+**Depends on**: F-X234
+
+## Problem
+
+The fraction rule shares the group baseline while the denominator begins above
+it (`crates/rdocx-layout/src/math.rs:518`,558). This can paint the rule through
+denominator ink. Issue365 also requires independent qualification of integral
+limits, scripts, radicals, glyph coverage and baseline alignment after its exact
+formula is correctly converted by F-X234.
+
+## Spec reference
+
+- `docs/hld/14-development-backlog.md`, "F-X235, Qualify equation layout against native Word".
+- `docs/hld/08-rendering-spec.md`, "Word OfficeMath layout".
+- `docs/hld/12-testing-strategy.md`, "Test taxonomy", OfficeMath layout gate and its1.0point,150DPI,0.99SSIM contract.
+- `docs/hld/15-build-and-toolchain.md`, "Deterministic rendering" and "Toolchain pinning".
+
+## Approach
+
+Design approval occurs during the all-sprint design phase. Implementation cannot start
+until F-X234 is completed through the dependency-prefix checkpoint. Reuse the
+existing MeasuredMath, FontManager and shared backend primitives. Position the
+fraction rule around the math axis and derive numerator clearance, denominator
+clearance and group ascent/descent independently. Measure actual glyph ink and
+surrounding baseline rather than tuning constants against a screenshot.
+
+Qualify layout_nary, limits, radicals and script sizing for the exact formula
+and independent single-construct controls. Retain every existing supported
+expression family and bounded layout behavior. Production invokes no external
+executable. No new module, public API, dependency or product file is proposed.
+
+Extend existing `scripts/officemath_oracle_harness.py` and its text manifest
+with a separately identified new fixture. Preserve historical Word16.104 build
+16.104.25121423, Poppler26.01.0 and their original source digests and outcomes.
+New actual producer pins are Word16.113.2 build16.113.26092012 and Poppler26.09.0,
+subject to authenticating the exact binaries at execution. Capture source DOCX,
+native PDF, normal save/reopen and deterministic product PDF independently.
+Retain untracked binary evidence and tracked text provenance in existing carriers.
+
+## Rejected alternatives
+
+- Self-recorded product pixels as the independent oracle.
+- Relaxed geometry or raster thresholds and replacement of historical pins.
+- Fixing conversion losses within this dependent layout story.
+
+## Test plan
+
+The **test gate** is **differential**. Reuse existing math.rs tests and oracle
+harness rather than adding another integration binary.
+
+| Category | Test | Asserts |
+|---|---|---|
+| regression | `fx235_fraction_rule_clears_both_ink_boxes` | Simple and nested fractions do not overlap rule and denominator ink, with correct surrounding baseline |
+| differential | exact-formula native Word fixture | Integral limits, fractions, radicals, scripts, tokens and glyphs meet per-expression and aggregate1.0point geometry tolerance |
+| differential | pinned150DPI native raster | Existing64by64 luminance blocks meet0.99SSIM, preserving unchanged thresholds |
+| regression | rendered1.01point mutation control | Actual geometry and raster comparison reject a perturbed result |
+| round-trip | exact-formula document save/reopen | Supported typed structure and opaque source survive layout and native opening |
+
+Run focused layout checks/tests, all thirteen historical expression-family
+controls and original source/manifest identities, current pinned native export,
+scoped verification and independent zero-finding microscope. Fresh historical
+Word exports are not required. Missing evidence is recorded honestly and never
+reported as an executed pass. The new fixture requires actual current native export.
+
+## HLD impact
+
+- `docs/hld/08-rendering-spec.md`
+- `docs/hld/12-testing-strategy.md`
+- `docs/hld/15-build-and-toolchain.md`
+
+## Risk routing
+
+- Layout/pagination/shaping: deterministic bundled-font construction for every
+  comparison and baseline. Attribute intentional equation geometry separately.
+- External oracle: bind actual Word and Poppler identities, source digest,
+  exact commands, geometry, raster and negative control to the current result.
+- Units: retain truncating constructors. This changes math placement, not unit
+  conversion policy. State exact harness deltas before accepting a baseline.
+
+## Hash harness
+
+Equation-bearing product outputs may intentionally change due to corrected math
+geometry. Enumerate affected entries and independent expected geometry before
+any reviewed recording. Unrelated entries must remain unchanged. Historical
+native raster evidence is retained and never overwritten by product output.
+
+## Implementation checklist
+
+- [ ] Complete F-X234 and claim the dependent isolated worktree.
+- [ ] Reproduce actual ink overlap and capture pinned native evidence.
+- [ ] Correct and independently qualify math geometry and glyph coverage.
+- [ ] Review exact output deltas, preserved histories and mutation controls.
+- [ ] Pass scoped verification, microscope and structured preparation.
+
+## Open questions
+
+No unresolved product question. F-X234 is pending, so implementation cannot
+start until that story is completed. New actual native producer pins are
+separate evidence identities, preserving every historical threshold and result.
