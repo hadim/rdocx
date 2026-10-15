@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 250 | 234 | 3 | 9 |
-| **Total** | **581** | **508** | **3** | **66** |
+| X, Cross-cutting | 250 | 234 | 4 | 8 |
+| **Total** | **581** | **508** | **4** | **65** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -798,7 +798,7 @@ HLD14 contract before adopting contributor changes.
 | F-X227 | Execute the unchanged first-draft compatibility corpus in owner CI | S91.1 | L | done |
 | F-X228 | Qualify faster CI without weakening gates | S92 | M | in-progress |
 | F-X229 | Repair comparison reconstruction correctness | S92 | L | done |
-| F-X230 | Group comparison changes for readable revisions | S92 | M | pending |
+| F-X230 | Group comparison changes for readable revisions | S92 | M | in-progress |
 | F-X231 | Preserve PowerPoint HTML import whitespace | S92 | M | in-progress |
 | F-X232 | Render legal revisions and qualify checked XML repros | S93 | L | pending |
 | F-X233 | Repair paragraph border geometry | S93 | M | pending |

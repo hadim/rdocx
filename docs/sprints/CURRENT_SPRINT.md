@@ -21,7 +21,7 @@
 | F-X178 | Clearable direct run formatting setters | S | in-progress | codex |
 | F-X231 | Preserve PowerPoint HTML import whitespace | M | in-progress | codex |
 | F-X229 | Repair comparison reconstruction correctness | L | done | - |
-| F-X230 | Group comparison changes for readable revisions | M | pending | - |
+| F-X230 | Group comparison changes for readable revisions | M | in-progress | codex |
 
 ## Sequencing note
 
