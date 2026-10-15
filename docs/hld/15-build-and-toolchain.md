@@ -691,22 +691,21 @@ main merges and sprint tags.
 The manual `wheels.yml` build-only preflight runs at the final reviewed sprint
 SHA after the sprint push and before sprint close. Its exact selected artifacts
 and metadata are validated, installed and tested in Python 3.9 and 3.12.
-Wheel smoke runs the documented presentation examples on native and musllinux
-runners. The SHA-bound Issue 158 viewer fixture requires the separately pinned
-LibreOffice oracle and is excluded from bare wheel runners. The musllinux
-container also excludes the Issue 217 complete deck chain because its CLI
-validation subprocess needs Cargo, which is absent from that wheel-only
-container. Native wheel and pinned CI runs exercise that chain. The Windows
-`rpptx` CLI runs on an eight MiB thread stack so the complete deck validation
-does not overflow the default main-thread stack. The `rdocx` CLI uses the same
-Windows stack for complete document comparison. The geometry comparison uses
-explicit equal-length checks that work on Python 3.9. Typing and stub checks
-run under Python 3.12. Word wheel smoke runs its documented core, formatting,
-shared, and python-docx parity cases on native and musllinux runners. It
-excludes the Issue 253 PDF text oracle, which requires Poppler 26.01.0 and
-remains in the separately pinned CI suite. The musllinux container also
-excludes the Issue 158 complete Word workflow because its CLI subprocess
-needs Cargo. Native wheel and pinned CI runs exercise that chain. The same
+Bare native and musllinux wheel runners execute one exact positive inventory
+of78 installed priority and compatibility cases, partitioned into37 Word and41
+PowerPoint nodes. Both paths pass the family list as structured pytest
+arguments. Missing or renamed nodes fail collection, and policy checks reject
+missing, additional or duplicate inventory entries. Metadata, native imports
+and fresh Alpine installation remain mandatory. These hosts do not prepare
+the external font, Poppler, LibreOffice or CLI acceptance environment.
+The equipped Python CI retains both full suites, including all104 font cases
+and the separate eight-owner native SVG gate. The complete Issue158 Word and
+Issue217 PowerPoint CLI chains remain in that equipped environment. The
+Windows `rpptx` CLI runs on an eight MiB thread stack so complete deck
+validation does not overflow the default main-thread stack. The `rdocx` CLI
+uses the same Windows stack for complete document comparison. Geometry
+comparisons use explicit equal-length checks that work on Python3.9. Strict
+typing and stub checks run separately under Python3.12. The same
 version carriers and source are then checked
 at the main release boundary. Earlier published `py-*` tags and PyPI versions
 remain historical records. New releases use the two unified family tags.
@@ -915,11 +914,11 @@ optimized-size gates remain local.
 product of `rdocx` and `rpptx` with manylinux_2_28 x86_64 and aarch64,
 musllinux_1_2 x86_64, macOS x86_64 and arm64, and Windows x86_64. A second
 two-package job builds the source distributions. Native cells install wheels
-into fresh environments and run the compatible pytest, exact mypy, and
-stubtest gates. Each musllinux cell performs a fresh Alpine install and runs
-the applicable package parity suite.
-The Poppler-versioned binding render gate stays in its pinned environment
-rather than running on generic wheel hosts.
+into fresh environments and run the exact positive family priority and
+compatibility inventory, followed by exact mypy and stubtest gates. Each
+musllinux cell performs a fresh Alpine install and runs the same family
+inventory. Full binding suites and external-tool acceptance run in equipped
+CI, retaining their mandatory font, native and rendering controls.
 
 **A pull-request Python bindings job.** It runs on macOS 26 with one matrix row
 for each Python package. Every row creates an isolated Python 3.12.9 environment,

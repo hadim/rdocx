@@ -2134,14 +2134,15 @@ review, package checks and exact-SHA publication approval remain required.
 
 #### Sprint S91, Contribution repairs
 
-**Local delivery, 2026-10-15**: all29 top-level stories and four delivery
-children are complete. The final local full gate passes, including778 Word
+**Local checkpoint, 2026-10-15**: all29 top-level stories and four delivery
+children are complete. A release-workflow amendment qualifies the exact37
+Word and41 PowerPoint bare-wheel priority checks after the prior local review. The final local full gate passes, including778 Word
 and854 PowerPoint Python cases,104 font cases within those suites, the
 separate native-eight check,49 matching hashes,22 verified archives, README
 and supply-chain checks. The unchanged100-script report qualifies95 correct
 files, all42 hard gates,51 native clauses and24 documentation examples. Its
 five documented non-successes remain in the denominator. Historical missing
-oracle cases are uncredited. The final clean sprint review, hosted build
+oracle cases are uncredited. The final integrated successor review, hosted build
 rehearsal, main merge, publication of both families and humanized issue/PR
 reconciliation retain their separate gates. Discussion264/281 stay open.
 The S92 carryovers remain deferred. AS_BUILT records the actual evidence.

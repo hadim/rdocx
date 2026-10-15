@@ -2978,6 +2978,69 @@ class SprintWorkflowTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(AssertionError):
                 self.assert_wasm_pr_job_contract(mutated)
 
+    def assert_wheel_priority_routes(self, job: str) -> dict[str, list[str]]:
+        environment = self.yaml_block(job, "    env:")
+        marker = "      WHEEL_TEST_NODES: >-\n"
+        self.assertEqual(environment.count(marker), 1)
+        inventory = json.loads(textwrap.dedent(environment.split(marker, 1)[1]))
+        self.assertEqual(set(inventory), {"rdocx", "rpptx"})
+        for family, count in (("rdocx", 37), ("rpptx", 41)):
+            nodes = inventory[family]
+            self.assertEqual(len(nodes), count)
+            self.assertEqual(len(set(nodes)), count)
+            self.assertTrue(all(node.startswith(f"crates/{family}-py/tests/") for node in nodes))
+        identity = hashlib.sha256(json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        self.assertEqual(identity, "28abec50e648f84c3072d224c947d81bc1cb2d9cc1766cccd61022046a3fa2b8")
+        expected = ('import json\nimport os\nimport subprocess\nimport sys\n\n'
+                    'nodes = json.loads(os.environ["WHEEL_TEST_NODES"])[os.environ["PACKAGE_DISTRIBUTION"]]\n'
+                    'subprocess.run([sys.executable, "-m", "pytest", *nodes], check=True)')
+        native = self.yaml_step(job, "Install and test native wheel")
+        musl = self.yaml_step(job, "Install and test musllinux wheel")
+        for step in (native, musl):
+            start = step.index("          import json\n")
+            end = step.index("\n          PY", start)
+            self.assertEqual(textwrap.dedent(step[start:end]), expected)
+            self.assertEqual(step.count('subprocess.run([sys.executable, "-m", "pytest", *nodes], check=True)'), 1)
+            self.assertNotIn("-k ", step)
+            self.assertNotIn('"$venv_python" -m pytest', step)
+        self.assertIn('PACKAGE_DISTRIBUTION="${{ matrix.package.distribution }}" "$venv_python" - <<\'PY\'', self.yaml_run_lines(native))
+        self.assertIn('-e WHEEL_TEST_NODES \\', self.yaml_run_lines(musl))
+        self.assertIn('"$venv_python" - << "PY"', self.yaml_run_lines(musl))
+        self.assertIn("sh -euxc '", self.yaml_run_lines(musl))
+        return inventory
+
+    def test_wheel_priority_routes_preserve_exact_membership_and_both_consumers(self) -> None:
+        import sys
+        ci = (workflow.REPO / ".github/workflows/wheels.yml").read_text()
+        job = self.yaml_block(ci, "  build-wheels:")
+        inventory = self.assert_wheel_priority_routes(job)
+        native = self.yaml_step(job, "Install and test native wheel")
+        start = native.index("          import json\n")
+        end = native.index("\n          PY", start)
+        consumer = textwrap.dedent(native[start:end])
+        for family in inventory:
+            with patch.dict(os.environ, {"WHEEL_TEST_NODES": json.dumps(inventory), "PACKAGE_DISTRIBUTION": family}), patch("subprocess.run") as run:
+                exec(compile(consumer, "wheels.yml installed priority consumer", "exec"), {})
+                run.assert_called_once_with([sys.executable, "-m", "pytest", *inventory[family]], check=True)
+        changed = {}
+        for name, mutate in (("missing", lambda nodes: nodes.pop()),
+                             ("extra", lambda nodes: nodes.append("crates/rdocx-py/tests/test_core.py::unreviewed")),
+                             ("duplicate", lambda nodes: nodes.__setitem__(0, nodes[1]))):
+            value = json.loads(json.dumps(inventory))
+            mutate(value["rdocx"])
+            old = self.yaml_block(job, "    env:")
+            replacement = '    env:\n      WHEEL_TEST_NODES: >-\n' + ''.join('        ' + line + '\n' for line in json.dumps(value, indent=2).splitlines())
+            changed[name] = job.replace(old, replacement, 1)
+        changed["musl-env-missing"] = job.replace('            -e WHEEL_TEST_NODES \\\n', '', 1)
+        changed["native-ignores-inventory"] = job.replace('PACKAGE_DISTRIBUTION="${{ matrix.package.distribution }}" "$venv_python" - <<\'PY\'', '"$venv_python" -c "pass" #', 1)
+        changed["musl-env-commented"] = job.replace('            -e WHEEL_TEST_NODES', '            # -e WHEEL_TEST_NODES', 1)
+        changed["musl-consumer-commented"] = job.replace('              "$venv_python" - << "PY"', '              # "$venv_python" - << "PY"', 1)
+        changed["both-ignore-failure"] = job.replace('"pytest", *nodes], check=True)', '"pytest", *nodes], check=False)')
+        for name, value in changed.items():
+            self.assertNotEqual(job, value, name)
+            with self.subTest(mutation=name), self.assertRaises((AssertionError, ValueError)):
+                self.assert_wheel_priority_routes(value)
+
     def assert_wheels_workflow_contract(self, workflow_bytes: bytes) -> None:
         wheels = workflow_bytes.decode("utf-8", errors="strict")
         self.assertIn('tags: ["v*", "rpptx-v*"]', wheels)
@@ -3033,12 +3096,7 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn("Install and test native wheel", wheel_build)
         self.assertIn("Install and test musllinux wheel", wheel_build)
         self.assertIn("Validate installed typing surface", wheel_build)
-        self.assertEqual(wheel_build.count('-k "not test_issue_158_deck_fixture_acceptance"'), 1)
-        self.assertEqual(wheel_build.count('-k "not test_issue_158_deck_fixture_acceptance and not test_issue_217_complete_deck_chain"'), 1)
-        self.assertIn("The SHA-bound Issue 158 viewer oracle runs in pinned CI", wheel_build)
-        self.assertEqual(wheel_build.count('-k "not test_issue_253_pdf_text_view"'), 1)
-        self.assertEqual(wheel_build.count('-k "not test_issue_253_pdf_text_view and not test_issue_158_complete_word_workflow"'), 1)
-        self.assertIn("The Issue 253 PDF text oracle requires pinned Poppler 26.01.0 in CI", wheel_build)
+        self.assert_wheel_priority_routes(wheel_build)
         self.assertIn("needs: build-cli-assets", cli_review)
         self.assertIn("expected_members = {executable, \"README.md\", \"LICENSE\"}", cli_review)
         self.assertIn("needs: [cli-assets, build-wheels, build-sdists]", aggregate)

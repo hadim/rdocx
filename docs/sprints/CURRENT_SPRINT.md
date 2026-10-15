@@ -6,9 +6,10 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 completes twenty-nine top-level stories and four delivery children,
-with33 completed delivery records. Intake remains frozen at40 included issues
-and30 PRs. Reviewed local release preparation is complete. Hosted rehearsal,
+S91 has twenty-nine completed top-level stories and four delivery children.
+The release-workflow amendment qualifies the exact37 Word and41 PowerPoint
+bare-wheel priority checks. Intake remains frozen at40 included issues
+and30 PRs. Final integrated review, hosted rehearsal,
 sprint closure, both publications and remote acceptance reconciliation retain
 their separate gates.
 
