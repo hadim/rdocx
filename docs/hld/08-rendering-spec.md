@@ -1838,6 +1838,25 @@ breaks its later tracks to the first one's measure. Word's column balancing at
 a continuous section break is not implemented, and both are named follow-ups in
 `docs/hld/14-development-backlog.md`.
 
+Paragraph frames retain `w:sz` eighth-point stroke widths. A double border
+occupies three stroke widths. Each edge measures its `w:space` clearance to
+the inner band, and horizontal paragraph bounds include a1.5point allowance
+before side clearance. Corresponding double bands meet at corners, with
+horizontal edges owning corner paint. Top and bottom bands consume paragraph
+flow through the existing line metrics, including fit, keep, split, table and
+note measurements. Glyph and highlight geometry uses the content band below
+the top padding. Wrap reservations use that same content origin on every
+re-break and restore frame padding once. Page-border geometry stays separate.
+
+Adjacent identical frames with matching indents and no between edge form one
+outer frame. Transient layout clones remove the facing bands while retained
+cache blocks preserve complete borders. Ordinary paragraph spacing keeps its
+maximum or compatibility-additive policy. Private group metadata bridges the
+vertical sides across the priced gap in body, cell, header, footer and note
+paths. Split frames draw the top on the first fragment, verticals on every
+fragment and the bottom on the last. Group bridges do not cross page starts.
+Stored source and opaque border properties remain unchanged by rendering.
+
 `w:pgBorders` draws through the shared border-edge renderer. With
 `w:offsetFrom="text"` the rectangle is the margin box and each edge's
 `w:space` pushes it outward, which is what that renderer already does. With

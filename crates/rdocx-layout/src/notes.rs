@@ -102,6 +102,7 @@ struct NoteEntry {
 
 #[derive(Debug, Clone)]
 pub(crate) struct NoteRenderParagraph {
+    pub border_gap_before: f64,
     pub block: ParagraphBlock,
     pub direction: TextDirection,
     pub lines: std::ops::Range<usize>,
@@ -282,11 +283,43 @@ impl NoteRegistry {
                             lines.extend(block.lines.iter().cloned());
                             let last = lines.len();
                             render_paragraphs.push(NoteRenderParagraph {
+                                border_gap_before: 0.0,
                                 block,
                                 direction,
                                 lines: first..last,
                             });
                         }
+                    }
+
+                    // Group normalization happens after the complete story is laid out,
+                    // leaving cached/source paragraphs and ordinary note paths intact.
+                    let groups = crate::block::paragraph_border_groups(
+                        &render_paragraphs
+                            .iter()
+                            .map(|paragraph| Some(&paragraph.block))
+                            .collect::<Vec<_>>(),
+                    );
+                    for index in 0..render_paragraphs.len() {
+                        let (top, bottom) = groups[index];
+                        let gap = if top {
+                            let previous = &render_paragraphs[index - 1].block;
+                            let current = &render_paragraphs[index].block;
+                            if input.do_not_use_html_paragraph_auto_spacing {
+                                previous.space_after + current.space_before
+                            } else {
+                                previous.space_after.max(current.space_before)
+                            }
+                        } else {
+                            0.0
+                        };
+                        let paragraph = &mut render_paragraphs[index];
+                        paragraph.block.remove_group_border_edges(top, bottom);
+                        paragraph.border_gap_before = gap;
+                        if let Some(first) = paragraph.block.lines.first_mut() {
+                            first.height += gap;
+                            first.ascent += gap;
+                        }
+                        lines[paragraph.lines.clone()].clone_from_slice(&paragraph.block.lines);
                     }
 
                     let marker_text = if special.is_some() {

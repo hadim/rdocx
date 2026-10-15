@@ -2998,7 +2998,7 @@ struct HeaderFooterCacheKey {
 #[derive(Clone)]
 struct HeaderFooterVariantContent {
     blocks: Vec<ParagraphBlock>,
-    directions: Vec<TextDirection>,
+    directions: Vec<(TextDirection, f64)>,
     watermark: Option<GroupElement>,
 }
 
@@ -4070,6 +4070,7 @@ impl Engine {
                                 paragraph.heading_level = Some(level);
                                 paragraph.heading_text = Some(heading_text);
                                 Some(SharedLayoutBlock::Owned {
+                                    border_group_before: false,
                                     block: Box::new(LayoutBlock::Paragraph(paragraph)),
                                     reflow_direction: semantics.reflow_direction,
                                     body_index: None,
@@ -4111,6 +4112,7 @@ impl Engine {
                             .map_or((None, None), |(content, semantics)| {
                                 (Some(content), Some(semantics))
                             });
+                        block::collapse_shared_border_groups(&mut current_blocks);
                         sections.push(paginator::SharedSection {
                             continuous: sect_pr.section_type
                                 == Some(rdocx_oxml::shared::ST_SectionType::Continuous),
@@ -4199,6 +4201,7 @@ impl Engine {
             .map_or((None, None), |(content, semantics)| {
                 (Some(content), Some(semantics))
             });
+        block::collapse_shared_border_groups(&mut current_blocks);
         sections.push(paginator::SharedSection {
             continuous: final_sect_pr.section_type
                 == Some(rdocx_oxml::shared::ST_SectionType::Continuous),
@@ -5196,6 +5199,7 @@ impl Engine {
                 doc_grid,
             )?;
             return Ok(SharedLayoutBlock::Owned {
+                border_group_before: false,
                 block: Box::new(LayoutBlock::Paragraph(block)),
                 reflow_direction,
                 body_index: None,
@@ -5223,6 +5227,7 @@ impl Engine {
             return Ok(SharedLayoutBlock::Paragraph {
                 block: Arc::clone(&entry.block),
                 semantics: ParagraphSemantics {
+                    border_group_before: false,
                     source_node,
                     structure_id: None,
                     reflow_direction: entry.reflow_direction,
@@ -5276,6 +5281,7 @@ impl Engine {
             return Ok(SharedLayoutBlock::Paragraph {
                 block,
                 semantics: ParagraphSemantics {
+                    border_group_before: false,
                     source_node,
                     structure_id: None,
                     reflow_direction,
@@ -5286,6 +5292,7 @@ impl Engine {
 
         rebind_paragraph_source(&mut block, source_node)?;
         Ok(SharedLayoutBlock::Owned {
+            border_group_before: false,
             block: Box::new(LayoutBlock::Paragraph(block)),
             reflow_direction,
             body_index: None,
@@ -6068,6 +6075,7 @@ fn table_semantics(
                                     table::CellBlock::Paragraph(_),
                                     CellBlockSemantics::Paragraph(retained),
                                 ) => CellBlockSemantics::Paragraph(ParagraphSemantics {
+                                    border_group_before: false,
                                     source_node: sources
                                         .and_then(|sources| sources.id(story, &source_path)),
                                     structure_id: None,
@@ -7210,7 +7218,7 @@ fn header_footer_cache_entry_bytes(
     let direction_bytes = content
         .directions
         .capacity()
-        .saturating_mul(std::mem::size_of::<TextDirection>());
+        .saturating_mul(std::mem::size_of::<(TextDirection, f64)>());
     let diagnostic_bytes = diagnostics
         .capacity()
         .saturating_mul(std::mem::size_of::<Diagnostic>())
@@ -12036,7 +12044,7 @@ fn layout_header_footer_variant_uncached(
                     registry.bind_text_boxes(&mut block, source)?;
                 }
                 blocks.push(block);
-                directions.push(direction);
+                directions.push((direction, 0.0));
             }
             MainStoryLayoutItem::Table(table, path) => {
                 let (table, semantics) = table::layout_table_with_provenance(
@@ -12055,10 +12063,24 @@ fn layout_header_footer_variant_uncached(
                 )?;
                 let rows =
                     paginator::story_table_rows(&table, &semantics, &geometry, part_media.media());
-                directions.extend(std::iter::repeat_n(TextDirection::Auto, rows.len()));
+                directions.extend(std::iter::repeat_n((TextDirection::Auto, 0.0), rows.len()));
                 blocks.extend(rows);
             }
         }
+    }
+    let groups = block::paragraph_border_groups(&blocks.iter().map(Some).collect::<Vec<_>>());
+    for index in 0..blocks.len() {
+        let (top, bottom) = groups[index];
+        if top {
+            directions[index].1 = if input.do_not_use_html_paragraph_auto_spacing {
+                blocks[index - 1].space_after + blocks[index].space_before
+            } else {
+                blocks[index - 1]
+                    .space_after
+                    .max(blocks[index].space_before)
+            };
+        }
+        blocks[index].remove_group_border_edges(top, bottom);
     }
     Ok(HeaderFooterVariantContent {
         blocks,
@@ -18609,7 +18631,7 @@ mod tests {
         .expect("header content exists");
         assert_eq!(
             semantics.first_header_directions,
-            [TextDirection::RightToLeft],
+            [(TextDirection::RightToLeft, 0.0)],
             "the production header cache container retains its resolved paragraph base"
         );
         let mut header_engine = Engine::new_deterministic().expect("bundled fonts load");

@@ -1237,6 +1237,28 @@ and visual inspection. The Word 16.112.4 structure record is reviewed
 statically when GUI automation is unavailable. No sample opts into the new
 options, so all 49 hash entries remain unchanged.
 
+Paragraph-border controls distinguish inferred15point sz120 input from raw
+sz15 input and retain the missing-original limitation. Normally opened frozen
+controls exported by actual Word16.113.2 build16.113.26092012 qualify width,
+clearance, corner bounds, outer groups and first-top/last-bottom split topology.
+The independent component bounds are0.36points for stroke thickness and
+0.60points for frame positions and flow extents. Poppler26.01.0 rasterizes
+inspection crops. Native receipts bind input and output digests. A foreign
+opaque property fixture refused by Word remains separate from the minimal
+normally opened size controls. Dashed pattern and glyph-contour parity are
+not claimed, and existing raster thresholds remain unchanged.
+
+Focused controls cover repeated wrap reservations, short drawings crossing
+only the border-shifted first text band, empty and keep chains, cache neighbor
+changes and cold/warm equality. Nonzero maximum and additive group-spacing
+cases reach body, table, header, footer and note paint, with continuous sides
+and no bridge above a new page. Semantic mutations of frame bands, horizontal
+allowance, split topology, group normalization, group bridging and wrap-origin
+accounting must fail their matching assertions. A genuine Base comparison
+removes only paragraph borders from an invoice, retains table borders and
+requires byte-identical deterministic PDF and PNG output. Intentional sample
+baseline changes require exact entry attribution to paragraph-border owners.
+
 The M24 section page-semantics gate is
 `section_page_semantics_match_pinned_libreoffice_render`. It source-builds one
 document carrying two columns with a rule, a page border, line numbering and
@@ -1635,9 +1657,11 @@ the first differing sample precisely. Reviewed updates use `--update --reason
 <text>`, and an empty reason is rejected.
 
 The gate deliberately compares pixels rather than PDF bytes. The reviewed
-Poppler 26.01.0 baseline includes the intended paragraph-spacing, cell-margin,
-and horizontal-table-border layout for `contract`, `invoice`, and `quote`.
-The other four samples remain exact. This is a baseline, not a tolerance, so
+Poppler 26.01.0 baseline includes paragraph-spacing, cell-margin,
+horizontal-table-border and paragraph-frame geometry and owned flow. The
+paragraph-frame record changes `contract`, `invoice`, `proposal` and `quote`
+with unchanged dimensions. The other three page-one buffers remain exact.
+This is a baseline, not a tolerance, so
 check mode still requires exact equality for all seven buffers. The regression
 proof runs `--check
 --inject-one-pixel <sample>`, copies that generated PNG to a temporary

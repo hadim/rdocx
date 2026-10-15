@@ -242,12 +242,13 @@ pub struct HeaderFooterContent {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct HeaderFooterSemantics {
-    pub header_directions: Vec<oxml_layout::TextDirection>,
-    pub footer_directions: Vec<oxml_layout::TextDirection>,
-    pub first_header_directions: Vec<oxml_layout::TextDirection>,
-    pub first_footer_directions: Vec<oxml_layout::TextDirection>,
-    pub even_header_directions: Vec<oxml_layout::TextDirection>,
-    pub even_footer_directions: Vec<oxml_layout::TextDirection>,
+    // Each private entry carries direction and the priced interior frame gap.
+    pub header_directions: Vec<(oxml_layout::TextDirection, f64)>,
+    pub footer_directions: Vec<(oxml_layout::TextDirection, f64)>,
+    pub first_header_directions: Vec<(oxml_layout::TextDirection, f64)>,
+    pub first_footer_directions: Vec<(oxml_layout::TextDirection, f64)>,
+    pub even_header_directions: Vec<(oxml_layout::TextDirection, f64)>,
+    pub even_footer_directions: Vec<(oxml_layout::TextDirection, f64)>,
 }
 
 /// A section with its blocks, geometry, and header/footer content.
@@ -1196,11 +1197,17 @@ fn split_simple_table_row(
                 unreachable!("checked paragraph blocks above")
             };
             first_paragraph.lines.truncate(lines);
+            if let Some(borders) = &mut first_paragraph.borders {
+                borders.bottom = None;
+            }
             first_paragraph.space_after = 0.0;
             let CellBlock::Paragraph(rest_paragraph) = &mut rest_cell.blocks[0] else {
                 unreachable!("checked paragraph blocks above")
             };
             rest_paragraph.lines.drain(..lines);
+            if let Some(borders) = &mut rest_paragraph.borders {
+                borders.top = None;
+            }
             rest_paragraph.space_before = 0.0;
             rest_paragraph.content_offset_top = 0.0;
         }
@@ -2585,7 +2592,13 @@ impl<'a> Pager<'a> {
                 }
             });
             if !footer_blocks.is_empty() {
-                let footer_height: f64 = footer_blocks.iter().map(|b| b.content_height()).sum();
+                let footer_height: f64 = footer_blocks
+                    .iter()
+                    .map(|b| b.content_height())
+                    .sum::<f64>()
+                    + footer_directions.map_or(0.0, |values| {
+                        values.iter().map(|value| value.1).sum::<f64>()
+                    });
                 let footer_y = self.page_geometry.page_height
                     - self.page_geometry.footer_distance
                     - footer_height;
@@ -2994,16 +3007,36 @@ fn draw_note(
         let local_start = start - paragraph.lines.start;
         let local_end = end - paragraph.lines.start;
         let lines = &paragraph.block.lines[local_start..local_end];
+        let gap = if local_start == 0 {
+            paragraph.border_gap_before
+        } else {
+            0.0
+        };
+        let mut content_lines;
+        let painted_lines = if gap > 0.0 {
+            content_lines = lines.to_vec();
+            content_lines[0].height -= gap;
+            content_lines[0].ascent -= gap;
+            &content_lines
+        } else {
+            lines
+        };
         render_paragraph_lines(
-            lines,
+            painted_lines,
             ParagraphView {
+                border_group_before: false,
                 block: &paragraph.block,
                 semantics: None,
                 reflow_direction: paragraph.direction,
                 reflow_allowed: false,
             },
             &note_geometry,
-            cursor_y,
+            cursor_y + gap,
+            (
+                local_start == 0,
+                local_end == paragraph.block.lines.len(),
+                if start > selected.start { gap } else { 0.0 },
+            ),
             elements,
             &empty_media,
         );
@@ -3496,6 +3529,7 @@ fn render_shape_text(
         render_paragraph_lines(
             &para.lines,
             ParagraphView {
+                border_group_before: false,
                 block: para,
                 semantics: None,
                 reflow_direction: oxml_layout::TextDirection::Auto,
@@ -3503,6 +3537,7 @@ fn render_shape_text(
             },
             geometry,
             y,
+            (true, true, 0.0),
             &mut local,
             media,
         );
@@ -3619,6 +3654,22 @@ fn reflow_around_wraps(
     }
 
     let mut lines = para.lines.clone();
+    let (top_band, bottom_band) = para.borders.as_ref().map_or((0.0, 0.0), |borders| {
+        (
+            crate::block::paragraph_border_padding(borders.top.as_ref()),
+            crate::block::paragraph_border_padding(borders.bottom.as_ref()),
+        )
+    });
+    // Every reservation pass sees content lines at the same painted origin.
+    // Fresh line-breaker output has no border bands. Strip the original bands
+    // before the first pass and restore them once after the final re-break.
+    if let Some(first) = lines.first_mut() {
+        first.height -= top_band;
+        first.ascent -= top_band;
+    }
+    if let Some(last) = lines.last_mut() {
+        last.height -= bottom_band;
+    }
     let mut offset_top = 0.0;
 
     // Two passes. The first reserves against the paragraph as laid out, the
@@ -3655,7 +3706,7 @@ fn reflow_around_wraps(
                 continue;
             }
 
-            let mut line_top = geometry.margin_top + para_top + next_offset_top;
+            let mut line_top = geometry.margin_top + para_top + next_offset_top + top_band;
             for (index, line) in lines.iter().enumerate() {
                 let line_bottom = line_top + line.height;
                 if line_bottom > wrap.keep_out_top() && line_top < wrap.keep_out_bottom() {
@@ -3719,6 +3770,7 @@ fn reflow_around_wraps(
     let mut adjusted = para.clone();
     adjusted.lines = lines;
     adjusted.content_offset_top = offset_top;
+    adjusted.add_border_padding();
     Some(adjusted)
 }
 
@@ -3753,6 +3805,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
             .flatten()
     };
     let para = reflowed.as_ref().map_or(para, |block| ParagraphView {
+        border_group_before: para.border_group_before,
         block,
         semantics: para.semantics,
         reflow_direction: para.reflow_direction,
@@ -3864,7 +3917,13 @@ fn paginate_paragraph<B: LayoutBlockLike>(
         }
     }
 
-    // Render the paragraph
+    // Render the paragraph. The ordinary collapsed spacing remains outside
+    // line metrics, but the grouped sides must bridge that priced gap.
+    let border_gap = if para.border_group_before && pager.cursor_y > 0.0 {
+        pager.previous_space_after + pager.space_before(para.space_before)
+    } else {
+        0.0
+    };
     pager.cursor_y += pager.space_before(para.space_before);
 
     if let Some(body_index) = body_index {
@@ -3889,22 +3948,6 @@ fn paginate_paragraph<B: LayoutBlockLike>(
         });
     }
 
-    // Render paragraph borders
-    if let Some(ref borders) = para.borders {
-        let border_x = pager.geometry.margin_left + para.indent_left;
-        let border_y = pager.geometry.margin_top + pager.cursor_y;
-        let border_w = pager.geometry.content_width() - para.indent_left - para.indent_right;
-        let border_h = para.content_height();
-        render_border_edges(
-            borders,
-            border_x,
-            border_y,
-            border_w,
-            border_h,
-            &mut pager.elements,
-        );
-    }
-
     // Anchored drawings resolve against the paragraph's position, so place
     // them now that the page and the cursor are settled.
     pager.place_anchored(&para.anchored, pager.cursor_y, para.indent_left, block_idx);
@@ -3914,6 +3957,7 @@ fn paginate_paragraph<B: LayoutBlockLike>(
         para,
         &pager.geometry,
         pager.cursor_y,
+        (true, true, border_gap),
         &mut pager.elements,
         pager.media,
     );
@@ -4010,7 +4054,12 @@ fn render_para_split(
     pager: &mut Pager,
     block_idx: usize,
 ) {
-    // Render lines before split on current page
+    // Render lines before split on current page.
+    let border_gap = if para.border_group_before && pager.cursor_y > 0.0 {
+        pager.previous_space_after + space_before
+    } else {
+        0.0
+    };
     pager.cursor_y += space_before;
     // A split paragraph anchors its drawings to where it starts.
     pager.place_anchored(&para.anchored, pager.cursor_y, para.indent_left, block_idx);
@@ -4019,6 +4068,7 @@ fn render_para_split(
         para,
         &pager.geometry,
         pager.cursor_y,
+        (true, false, border_gap),
         &mut pager.elements,
         pager.media,
     );
@@ -4092,7 +4142,10 @@ fn render_para_split(
             lines: remaining_lines.to_vec(),
             space_before: 0.0,
             space_after: para.space_after,
-            borders: para.borders.clone(),
+            borders: para.borders.clone().map(|mut borders| {
+                borders.top = None;
+                borders
+            }),
             shading: para.shading,
             indent_left: para.indent_left,
             indent_right: para.indent_right,
@@ -4112,6 +4165,7 @@ fn render_para_split(
         };
         render_para_split(
             ParagraphView {
+                border_group_before: para.border_group_before,
                 block: &temp_para,
                 semantics: para.semantics,
                 reflow_direction: para.reflow_direction,
@@ -4141,6 +4195,7 @@ fn render_para_split(
         para,
         &pager.geometry,
         0.0,
+        (false, true, 0.0),
         &mut pager.elements,
         pager.media,
     );
@@ -4249,6 +4304,7 @@ fn render_paragraph_lines(
     para: ParagraphView<'_>,
     geometry: &PageGeometry,
     start_y: f64,
+    fragment: (bool, bool, f64),
     elements: &mut Vec<PositionedElement>,
     media: &HashMap<MediaId, ImageData>,
 ) {
@@ -4256,7 +4312,52 @@ fn render_paragraph_lines(
     // A drawing this paragraph must clear rather than flow beside pushes its
     // first line down. `content_height` already counts the same offset.
     let mut y = start_y + para.content_offset_top;
-    for line in lines {
+    let (top_padding, bottom_padding) = para.borders.as_ref().map_or((0.0, 0.0), |borders| {
+        (
+            if fragment.0 {
+                crate::block::paragraph_border_padding(borders.top.as_ref())
+            } else {
+                0.0
+            },
+            if fragment.1 {
+                crate::block::paragraph_border_padding(borders.bottom.as_ref())
+            } else {
+                0.0
+            },
+        )
+    });
+    if let Some(borders) = &para.borders {
+        render_paragraph_border_edges(
+            borders,
+            Rect {
+                x: geometry.margin_left + para.indent_left,
+                y: geometry.margin_top + y + top_padding,
+                width: geometry.content_width() - para.indent_left - para.indent_right,
+                height: lines.iter().map(|line| line.height).sum::<f64>()
+                    - top_padding
+                    - bottom_padding,
+            },
+            fragment,
+            elements,
+        );
+    }
+    for (index, framed_line) in lines.iter().enumerate() {
+        let top = if index == 0 { top_padding } else { 0.0 };
+        let bottom = if index + 1 == lines.len() {
+            bottom_padding
+        } else {
+            0.0
+        };
+        let mut content_line;
+        let line = if top != 0.0 || bottom != 0.0 {
+            content_line = framed_line.clone();
+            content_line.height -= top + bottom;
+            content_line.ascent -= top;
+            &content_line
+        } else {
+            framed_line
+        };
+        y += top;
         let mut text_provenance = Vec::new();
         let mut tab_provenance = Vec::new();
         let conditional_hyphens = para
@@ -5197,7 +5298,7 @@ fn render_change_bar_at(
 /// Render header/footer blocks.
 fn render_hf_blocks(
     blocks: &[ParagraphBlock],
-    directions: Option<&[oxml_layout::TextDirection]>,
+    directions: Option<&[(oxml_layout::TextDirection, f64)]>,
     geometry: &PageGeometry,
     start_y: f64,
     page_number: usize,
@@ -5211,6 +5312,10 @@ fn render_hf_blocks(
     let (elements, behind, front) = layers;
     let mut y = start_y - geometry.margin_top; // Convert to relative
     for (index, para) in blocks.iter().enumerate() {
+        let border_gap = directions
+            .and_then(|values| values.get(index))
+            .map_or(0.0, |value| value.1);
+        y += border_gap;
         place_cell_anchored(
             &para.anchored,
             geometry,
@@ -5224,16 +5329,18 @@ fn render_hf_blocks(
         render_paragraph_lines(
             &para.lines,
             ParagraphView {
+                border_group_before: false,
                 block: para,
                 semantics: None,
                 reflow_direction: directions
                     .and_then(|directions| directions.get(index))
-                    .copied()
+                    .map(|value| value.0)
                     .unwrap_or(oxml_layout::TextDirection::Auto),
                 reflow_allowed: true,
             },
             geometry,
             y,
+            (true, true, border_gap),
             elements,
             media,
         );
@@ -5457,6 +5564,8 @@ fn render_table_row(
                     render_paragraph_lines(
                         &paragraph.lines,
                         ParagraphView {
+                            border_group_before: semantics
+                                .is_some_and(|value| value.border_group_before),
                             block: paragraph,
                             semantics,
                             reflow_direction: semantics
@@ -5467,6 +5576,22 @@ fn render_table_row(
                         },
                         &cell_geometry,
                         content_y,
+                        (
+                            true,
+                            true,
+                            if block_index > 0
+                                && semantics.is_some_and(|value| value.border_group_before)
+                            {
+                                match &cell.blocks[block_index - 1] {
+                                    crate::table::CellBlock::Paragraph(previous) => {
+                                        previous.space_after + paragraph.space_before
+                                    }
+                                    crate::table::CellBlock::Table(_) => 0.0,
+                                }
+                            } else {
+                                0.0
+                            },
+                        ),
                         elements,
                         media,
                     );
@@ -5784,6 +5909,97 @@ fn render_cell_borders(
             color,
             dash_pattern,
         });
+    }
+}
+
+/// Paragraph frames measure space to the inside edge and join corresponding
+/// single or double bands. Page borders keep their separate existing geometry.
+fn render_paragraph_border_edges(
+    borders: &CT_PBdr,
+    rect: Rect,
+    fragment: (bool, bool, f64),
+    elements: &mut Vec<PositionedElement>,
+) {
+    let top = fragment.0.then_some(borders.top.as_ref()).flatten();
+    let bottom = fragment.1.then_some(borders.bottom.as_ref()).flatten();
+    let left = borders.left.as_ref();
+    let right = borders.right.as_ref();
+    let band = crate::block::paragraph_border_width;
+    let padding = crate::block::paragraph_border_padding;
+    let outer_left = rect.x - 1.5 - padding(left);
+    let outer_right = rect.x + rect.width + 1.5 + padding(right);
+    let outer_top = rect.y - padding(top) - if top.is_none() { fragment.2 } else { 0.0 };
+    let outer_bottom = rect.y + rect.height + padding(bottom);
+    let inner_inset = |edge: Option<&CT_BorderEdge>, layer: usize| {
+        if layer == 1 && edge.is_some_and(|edge| edge.val == ST_Border::Double) {
+            band(edge) * 2.0 / 3.0
+        } else {
+            0.0
+        }
+    };
+    // Horizontal bands own the corner paint, as in the independent Word frame.
+    for (edge, horizontal, trailing) in [
+        (left, false, false),
+        (right, false, true),
+        (top, true, false),
+        (bottom, true, true),
+    ] {
+        let full_width = band(edge);
+        let Some(edge) = edge.filter(|_| full_width > 0.0) else {
+            continue;
+        };
+        let double = edge.val == ST_Border::Double;
+        let width = if double { full_width / 3.0 } else { full_width };
+        let color = edge
+            .color
+            .as_ref()
+            .filter(|color| color.as_str() != "auto")
+            .map(|color| Color::from_hex(color))
+            .unwrap_or(Color::BLACK);
+        let dash_pattern = border_dash_pattern(edge.val, width);
+        for layer in 0..if double { 2 } else { 1 } {
+            let offset = width / 2.0 + layer as f64 * width * 2.0;
+            let (start, end) = if horizontal {
+                let y = if trailing {
+                    outer_bottom - offset
+                } else {
+                    outer_top + offset
+                };
+                (
+                    Point {
+                        x: outer_left + inner_inset(left, layer),
+                        y,
+                    },
+                    Point {
+                        x: outer_right - inner_inset(right, layer),
+                        y,
+                    },
+                )
+            } else {
+                let x = if trailing {
+                    outer_right - offset
+                } else {
+                    outer_left + offset
+                };
+                (
+                    Point {
+                        x,
+                        y: outer_top + inner_inset(top, layer),
+                    },
+                    Point {
+                        x,
+                        y: outer_bottom - inner_inset(bottom, layer),
+                    },
+                )
+            };
+            elements.push(PositionedElement::Line {
+                start,
+                end,
+                width,
+                color,
+                dash_pattern,
+            });
+        }
     }
 }
 
@@ -6257,6 +6473,7 @@ mod tests {
         render_paragraph_lines(
             &paragraph.lines,
             ParagraphView {
+                border_group_before: false,
                 block: &paragraph,
                 semantics: None,
                 reflow_direction: TextDirection::RightToLeft,
@@ -6264,6 +6481,7 @@ mod tests {
             },
             &PageGeometry::default(),
             0.0,
+            (true, true, 0.0),
             &mut elements,
             &HashMap::new(),
         );
@@ -6348,6 +6566,7 @@ mod tests {
         render_paragraph_lines(
             &paragraph.lines,
             ParagraphView {
+                border_group_before: false,
                 block: &paragraph,
                 semantics: None,
                 reflow_direction: TextDirection::RightToLeft,
@@ -6355,6 +6574,7 @@ mod tests {
             },
             &PageGeometry::default(),
             0.0,
+            (true, true, 0.0),
             &mut elements,
             &HashMap::new(),
         );
@@ -6438,6 +6658,7 @@ mod tests {
                 paragraph_mark: None,
             }));
             let semantics = ParagraphSemantics {
+                border_group_before: false,
                 source_node: Some(source_node),
                 structure_id: None,
                 reflow_direction: TextDirection::RightToLeft,
@@ -6446,6 +6667,7 @@ mod tests {
             render_paragraph_lines(
                 &paragraph.lines,
                 ParagraphView {
+                    border_group_before: false,
                     block: &paragraph,
                     semantics: Some(&semantics),
                     reflow_direction: TextDirection::RightToLeft,
@@ -6453,6 +6675,7 @@ mod tests {
                 },
                 &PageGeometry::default(),
                 0.0,
+                (true, true, 0.0),
                 &mut elements,
                 &HashMap::new(),
             );
@@ -6498,6 +6721,7 @@ mod tests {
             let mut paragraph = make_para(1, 12.0);
             paragraph.lines[0].items = vec![LineItem::Text(marker)];
             let semantics = ParagraphSemantics {
+                border_group_before: false,
                 source_node: Some(rebound),
                 structure_id: None,
                 reflow_direction: direction,
@@ -6506,6 +6730,7 @@ mod tests {
             render_paragraph_lines(
                 &paragraph.lines,
                 ParagraphView {
+                    border_group_before: false,
                     block: &paragraph,
                     semantics: Some(&semantics),
                     reflow_direction: direction,
@@ -6513,6 +6738,7 @@ mod tests {
                 },
                 &PageGeometry::default(),
                 0.0,
+                (true, true, 0.0),
                 &mut elements,
                 &HashMap::new(),
             );
@@ -6760,6 +6986,7 @@ mod tests {
             paragraph_mark: None,
         }));
         let semantics = ParagraphSemantics {
+            border_group_before: false,
             source_node: Some(rebound),
             structure_id: None,
             reflow_direction: TextDirection::RightToLeft,
@@ -6768,6 +6995,7 @@ mod tests {
         render_paragraph_lines(
             &paragraph.lines,
             ParagraphView {
+                border_group_before: false,
                 block: &paragraph,
                 semantics: Some(&semantics),
                 reflow_direction: TextDirection::RightToLeft,
@@ -6775,6 +7003,7 @@ mod tests {
             },
             &PageGeometry::default(),
             0.0,
+            (true, true, 0.0),
             &mut elements,
             &HashMap::new(),
         );
@@ -6897,6 +7126,7 @@ mod tests {
             render_paragraph_lines(
                 &paragraph.lines,
                 ParagraphView {
+                    border_group_before: false,
                     block: &paragraph,
                     semantics: None,
                     reflow_direction: TextDirection::RightToLeft,
@@ -6904,6 +7134,7 @@ mod tests {
                 },
                 &PageGeometry::default(),
                 0.0,
+                (true, true, 0.0),
                 &mut elements,
                 &HashMap::new(),
             );
@@ -7010,6 +7241,7 @@ mod tests {
         render_paragraph_lines(
             &paragraph.lines,
             ParagraphView {
+                border_group_before: false,
                 block: &paragraph,
                 semantics: None,
                 reflow_direction: TextDirection::RightToLeft,
@@ -7017,6 +7249,7 @@ mod tests {
             },
             &PageGeometry::default(),
             0.0,
+            (true, true, 0.0),
             &mut elements,
             &HashMap::new(),
         );
@@ -7111,6 +7344,7 @@ mod tests {
         render_paragraph_lines(
             &paragraph.lines,
             ParagraphView {
+                border_group_before: false,
                 block: &paragraph,
                 semantics: None,
                 reflow_direction: TextDirection::RightToLeft,
@@ -7118,6 +7352,7 @@ mod tests {
             },
             &PageGeometry::default(),
             0.0,
+            (true, true, 0.0),
             &mut elements,
             &HashMap::new(),
         );
@@ -7169,6 +7404,7 @@ mod tests {
         render_paragraph_lines(
             &paragraph.lines,
             ParagraphView {
+                border_group_before: false,
                 block: &paragraph,
                 semantics: None,
                 reflow_direction: TextDirection::Auto,
@@ -7176,6 +7412,7 @@ mod tests {
             },
             &PageGeometry::default(),
             0.0,
+            (true, true, 0.0),
             &mut elements,
             &media,
         );
@@ -8387,6 +8624,779 @@ mod tests {
             4,
             "none leaves the inside edges to the table"
         );
+    }
+
+    fn fx233_input(body: &str) -> crate::input::LayoutInput {
+        let xml = format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{body}</w:body></w:document>"#
+        );
+        crate::input::LayoutInput {
+            sequence_snapshot: None,
+            revision_view: crate::input::RevisionView::Accepted,
+            revision_style: crate::input::RevisionStyle::Plain,
+            automatic_hyphenation: false,
+            mirror_margins: false,
+            gutter_at_top: false,
+            do_not_use_html_paragraph_auto_spacing: false,
+            default_tab_stop: None,
+            clamp_tabs_past_margin: false,
+            legacy_table_positioning: false,
+            modern_footnote_layout: false,
+            footnote_layout_like_word8: false,
+            math_properties: None,
+            note_defaults: [None, None],
+            document: rdocx_oxml::CT_Document::from_xml(xml.as_bytes()).unwrap(),
+            styles: rdocx_oxml::styles::CT_Styles::new_default(),
+            numbering: None,
+            story_part_names: Default::default(),
+            story_bodies: Default::default(),
+            headers: HashMap::new(),
+            footers: HashMap::new(),
+            images: HashMap::new(),
+            charts: HashMap::new(),
+            chart_theme: oxml_drawing::theme::CT_OfficeStyleSheet::office_default(),
+            chart_color_map: oxml_drawing::color::ColorMap::default(),
+            core_properties: None,
+            hyperlink_urls: HashMap::new(),
+            footnotes: None,
+            endnotes: None,
+            theme: None,
+            fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn fx233_spaced_groups_bridge_body_cell_header_footer_and_note_once() {
+        fn pair(prefix: &str, after: u32, before: u32) -> String {
+            let paragraph = |suffix, before, after| {
+                format!(
+                    r#"<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="24" w:space="8"/><w:left w:val="single" w:sz="24" w:space="8"/><w:bottom w:val="single" w:sz="24" w:space="8"/><w:right w:val="single" w:sz="24" w:space="8"/></w:pBdr><w:spacing w:before="{before}" w:after="{after}" w:line="400" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="40"/></w:rPr><w:t>{prefix}{suffix}</w:t></w:r></w:p>"#
+                )
+            };
+            paragraph("FIRST", 0, after * 20) + &paragraph("SECOND", before * 20, 0)
+        }
+        fn collect<'a>(elements: &'a [PositionedElement], all: &mut Vec<&'a PositionedElement>) {
+            for element in elements {
+                match element {
+                    PositionedElement::MarkedContent { children, .. } => collect(children, all),
+                    PositionedElement::Group(group) => collect(&group.children, all),
+                    _ => all.push(element),
+                }
+            }
+        }
+        let mut engine = crate::engine::Engine::new_deterministic().unwrap();
+        for (after, before, additive) in
+            [(8, 12, false), (12, 8, false), (0, 0, false), (8, 12, true)]
+        {
+            let body = format!(
+                r#"{}<w:tbl><w:tblPr><w:tblW w:w="9360" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="9360"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="9360" w:type="dxa"/></w:tcPr>{}</w:tc></w:tr></w:tbl><w:p><w:r><w:footnoteReference w:id="1"/></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="H"/><w:footerReference w:type="default" r:id="F"/></w:sectPr>"#,
+                pair("BODY", after, before),
+                pair("CELL", after, before)
+            );
+            let mut input = fx233_input(&body);
+            input.do_not_use_html_paragraph_auto_spacing = additive;
+            for (id, is_header, prefix) in [("H", true, "HEADER"), ("F", false, "FOOTER")] {
+                let tag = if is_header { "hdr" } else { "ftr" };
+                let xml = format!(
+                    r#"<w:{tag} xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{}</w:{tag}>"#,
+                    pair(prefix, after, before)
+                );
+                let part = rdocx_oxml::header_footer::CT_HdrFtr::from_xml(xml.as_bytes()).unwrap();
+                if is_header {
+                    input.headers.insert(id.into(), part);
+                } else {
+                    input.footers.insert(id.into(), part);
+                }
+            }
+            let note = format!(
+                r#"<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:footnote w:id="1">{}</w:footnote></w:footnotes>"#,
+                pair("NOTE", after, before)
+            );
+            input.footnotes =
+                Some(rdocx_oxml::footnotes::CT_Footnotes::from_xml(note.as_bytes()).unwrap());
+            for _ in 0..2 {
+                let layout = engine.layout(&input).unwrap();
+                let cold = crate::engine::Engine::new_deterministic()
+                    .unwrap()
+                    .layout(&input)
+                    .unwrap();
+                assert_eq!(format!("{:?}", layout.pages), format!("{:?}", cold.pages));
+                let mut elements = Vec::new();
+                collect(&layout.pages[0].elements, &mut elements);
+                let gap = if additive {
+                    after + before
+                } else {
+                    after.max(before)
+                } as f64;
+                for prefix in ["BODY", "CELL", "HEADER", "FOOTER", "NOTE"] {
+                    let origin = |suffix| {
+                        elements
+                            .iter()
+                            .find_map(|element| match element {
+                                PositionedElement::Text(run)
+                                    if run.text == format!("{prefix}{suffix}") =>
+                                {
+                                    Some(run.origin)
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| panic!("missing {prefix}{suffix}"))
+                    };
+                    let first = origin("FIRST");
+                    let second = origin("SECOND");
+                    assert!(
+                        (second.y - first.y - 20.0 - gap).abs() < 0.001,
+                        "{prefix} prices spacing once: {first:?} {second:?}"
+                    );
+                    if gap > 0.0 {
+                        // Exact 20pt lines put the bridge after FIRST's remaining
+                        // descent and before SECOND's ascent, independent of contour.
+                        let bridge_y = first.y + (20.0 - 15.4) + gap / 2.0;
+                        let covering = elements.iter().filter(|element| matches!(element,
+                            PositionedElement::Line { start, end, width, .. }
+                            if *width == 3.0 && start.x == end.x && start.y.min(end.y) <= bridge_y && start.y.max(end.y) >= bridge_y
+                                && (start.x - first.x).abs() < 500.0
+                        )).count();
+                        assert!(
+                            covering >= 2,
+                            "{prefix} has continuous sides across {gap}pt spacing at {bridge_y}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fx233_real_cache_transitions_cover_empty_keep_cell_header_and_note_frames() {
+        let frame = |label: &str, enabled: bool| {
+            format!(
+                r#"<w:p><w:pPr>{}<w:spacing w:before="0" w:after="0" w:line="400" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Calibri"/><w:sz w:val="40"/></w:rPr><w:t>{label}</w:t></w:r></w:p>"#,
+                if enabled {
+                    r#"<w:pBdr><w:top w:val="single" w:sz="24" w:space="8"/><w:left w:val="single" w:sz="24" w:space="8"/><w:bottom w:val="single" w:sz="24" w:space="8"/><w:right w:val="single" w:sz="24" w:space="8"/></w:pBdr>"#
+                } else {
+                    ""
+                }
+            )
+        };
+        fn border_lines(elements: &[PositionedElement]) -> usize {
+            elements
+                .iter()
+                .map(|element| match element {
+                    PositionedElement::Line { width, .. } => usize::from(*width == 3.0),
+                    PositionedElement::MarkedContent { children, .. } => border_lines(children),
+                    PositionedElement::Group(group) => border_lines(&group.children),
+                    _ => 0,
+                })
+                .sum()
+        }
+        let mut engine = crate::engine::Engine::new_deterministic().unwrap();
+        for enabled in [true, false, true] {
+            let body = format!(
+                r#"{}{}<w:tbl><w:tblPr><w:tblW w:w="9360" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="9360"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="9360" w:type="dxa"/><w:tcMar><w:left w:w="360" w:type="dxa"/><w:right w:w="360" w:type="dxa"/></w:tcMar></w:tcPr>{}</w:tc></w:tr></w:tbl><w:p><w:r><w:footnoteReference w:id="1"/></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rIdHeader"/></w:sectPr>"#,
+                frame("FIRST", enabled),
+                frame("SECOND", enabled),
+                frame("CELL", enabled)
+            );
+            let mut input = fx233_input(&body);
+            let note_xml = format!(
+                r#"<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:footnote w:id="1">{}</w:footnote></w:footnotes>"#,
+                frame("NOTE", enabled)
+            );
+            input.footnotes =
+                Some(rdocx_oxml::footnotes::CT_Footnotes::from_xml(note_xml.as_bytes()).unwrap());
+            let header_xml = format!(
+                r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{}</w:hdr>"#,
+                frame("HEADER", enabled)
+            );
+            input.headers.insert(
+                "rIdHeader".into(),
+                rdocx_oxml::header_footer::CT_HdrFtr::from_xml(header_xml.as_bytes()).unwrap(),
+            );
+            for _ in 0..2 {
+                let warm = engine.layout(&input).unwrap();
+                let cold = crate::engine::Engine::new_deterministic()
+                    .unwrap()
+                    .layout(&input)
+                    .unwrap();
+                assert_eq!(
+                    format!("{:?}", warm.pages),
+                    format!("{:?}", cold.pages),
+                    "real retained cache versus cold frames"
+                );
+                assert_eq!(
+                    warm.pages
+                        .iter()
+                        .map(|page| border_lines(&page.elements))
+                        .sum::<usize>(),
+                    if enabled { 18 } else { 0 },
+                    "grouped body, header, cell and note all paint their owned edges"
+                );
+            }
+        }
+        let mut empty = fx233_bordered_paragraph(1, ST_Border::Single, 24, 8);
+        empty.keep_next = true;
+        let fm = FontManager::new_deterministic().unwrap();
+        let blocks = vec![
+            LayoutBlock::Paragraph(make_para(1, 580.0)),
+            LayoutBlock::Paragraph(empty),
+            LayoutBlock::Paragraph(make_para(1, 40.0)),
+        ];
+        let (pages, _) = paginate(
+            &blocks,
+            PageGeometry::default(),
+            None,
+            false,
+            &fm,
+            &empty_media(),
+            &NoteRegistry::default(),
+        );
+        assert_eq!(
+            pages.len(),
+            2,
+            "empty framed paragraph and next line move as a priced keep chain"
+        );
+        assert!(
+            pages[0].elements.is_empty(),
+            "first page has no invented empty border"
+        );
+        assert!(
+            pages[1]
+                .elements
+                .iter()
+                .any(|element| matches!(element,PositionedElement::Line {width,..} if *width==3.0))
+        );
+    }
+
+    fn fx233_bordered_paragraph(
+        lines: usize,
+        style: ST_Border,
+        size: u32,
+        space: u32,
+    ) -> ParagraphBlock {
+        let mut paragraph = make_para(lines, 20.0);
+        let edge = |color: &str| {
+            let mut edge = CT_BorderEdge::new(style);
+            edge.sz = Some(size);
+            edge.space = Some(space);
+            edge.color = Some(color.to_owned());
+            edge
+        };
+        paragraph.borders = Some(CT_PBdr {
+            top: Some(edge("000000")),
+            left: Some(edge("00FF00")),
+            bottom: Some(edge("0000FF")),
+            right: Some(edge("00FFFF")),
+            ..Default::default()
+        });
+        paragraph.add_border_padding();
+        paragraph
+    }
+
+    #[test]
+    fn fx233_word_frame_metrics_cover_space_width_double_and_indent() {
+        // Independently exported Word geometry-controls pages 1,2,3,4,7.
+        // Native .24pt quantization is bounded before implementation.
+        for (style, size, space, indent, native) in [
+            (ST_Border::Single, 24, 0, 0.0, [67.68, 84.0, 544.32, 109.92]),
+            (ST_Border::Single, 24, 8, 0.0, [59.76, 84.24, 552.24, 126.0]),
+            (ST_Border::Single, 48, 8, 0.0, [56.64, 84.0, 555.36, 132.0]),
+            (ST_Border::Double, 24, 8, 0.0, [54.0, 84.48, 558.0, 137.76]),
+            (
+                ST_Border::Single,
+                24,
+                8,
+                36.0,
+                [95.76, 84.24, 534.24, 126.0],
+            ),
+        ] {
+            let paragraph = fx233_bordered_paragraph(1, style, size, space);
+            let borders = paragraph.borders.as_ref().unwrap();
+            let top = crate::block::paragraph_border_padding(borders.top.as_ref());
+            let mut elements = Vec::new();
+            render_paragraph_border_edges(
+                borders,
+                Rect {
+                    x: 72.0 + indent,
+                    y: 84.0 + top,
+                    width: if indent == 0.0 { 468.0 } else { 414.0 },
+                    height: 20.0,
+                },
+                (true, true, 0.0),
+                &mut elements,
+            );
+            let mut outside = [
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ];
+            for element in &elements {
+                let PositionedElement::Line {
+                    start, end, width, ..
+                } = element
+                else {
+                    panic!("border primitive")
+                };
+                let horizontal = start.y == end.y;
+                outside[0] =
+                    outside[0].min(start.x.min(end.x) - if horizontal { 0.0 } else { width / 2.0 });
+                outside[1] =
+                    outside[1].min(start.y.min(end.y) - if horizontal { width / 2.0 } else { 0.0 });
+                outside[2] =
+                    outside[2].max(start.x.max(end.x) + if horizontal { 0.0 } else { width / 2.0 });
+                outside[3] =
+                    outside[3].max(start.y.max(end.y) + if horizontal { width / 2.0 } else { 0.0 });
+                let expected = if style == ST_Border::Double {
+                    2.88
+                } else if size == 48 {
+                    6.0
+                } else {
+                    2.88
+                };
+                assert!(
+                    (width - expected).abs() <= 0.36,
+                    "native stroke {width} vs {expected}"
+                );
+            }
+            for (actual, expected) in outside.into_iter().zip(native) {
+                assert!(
+                    (actual - expected).abs() <= 0.60,
+                    "native frame {outside:?} vs {native:?}"
+                );
+            }
+            assert_eq!(paragraph.content_height(), outside[3] - outside[1]);
+        }
+    }
+
+    #[test]
+    fn fx233_border_groups_preserve_cache_blocks_and_price_one_outer_frame() {
+        use std::sync::Arc;
+        let cached = Arc::new(fx233_bordered_paragraph(1, ST_Border::Single, 24, 8));
+        let shared = |block: Arc<ParagraphBlock>| SharedLayoutBlock::Paragraph {
+            block,
+            semantics: crate::block::ParagraphSemantics {
+                border_group_before: false,
+                source_node: None,
+                structure_id: None,
+                reflow_direction: TextDirection::Auto,
+            },
+            body_index: None,
+        };
+        let mut blocks = vec![shared(cached.clone()), shared(cached.clone())];
+        crate::block::collapse_shared_border_groups(&mut blocks);
+        assert_eq!(
+            cached.content_height(),
+            42.0,
+            "cached source frame stays complete"
+        );
+        let first = blocks[0].paragraph().unwrap();
+        let second = blocks[1].paragraph().unwrap();
+        assert_eq!(first.content_height() + second.content_height(), 62.0);
+        assert!(first.borders.as_ref().unwrap().bottom.is_none());
+        assert!(second.borders.as_ref().unwrap().top.is_none());
+        // A new neighbour/style or break uses the original cache input again.
+        let mut other = fx233_bordered_paragraph(1, ST_Border::Single, 48, 8);
+        other.page_break_before = true;
+        let mut changed = vec![shared(cached.clone()), shared(Arc::new(other))];
+        crate::block::collapse_shared_border_groups(&mut changed);
+        assert_eq!(changed[0].paragraph().unwrap().content_height(), 42.0);
+        assert!(
+            changed[0]
+                .paragraph()
+                .unwrap()
+                .borders
+                .as_ref()
+                .unwrap()
+                .bottom
+                .is_some()
+        );
+        let mut warm = vec![shared(cached.clone()), shared(cached.clone())];
+        crate::block::collapse_shared_border_groups(&mut warm);
+        assert_eq!(format!("{blocks:?}"), format!("{warm:?}"));
+    }
+
+    #[test]
+    fn fx233_group_bridge_stops_at_new_page() {
+        let owned = |paragraph| SharedLayoutBlock::Owned {
+            block: Box::new(LayoutBlock::Paragraph(paragraph)),
+            reflow_direction: TextDirection::Auto,
+            border_group_before: false,
+            body_index: None,
+        };
+        let mut first = fx233_bordered_paragraph(1, ST_Border::Single, 24, 8);
+        first.space_after = 12.0;
+        let mut second = first.clone();
+        second.space_before = 8.0;
+        second.space_after = 0.0;
+        let mut blocks = vec![owned(make_para(1, 580.0)), owned(first), owned(second)];
+        crate::block::collapse_shared_border_groups(&mut blocks);
+        let (pages, _) = paginate_with_media(
+            &blocks,
+            PageGeometry::default(),
+            None,
+            None,
+            false,
+            &FontManager::new_deterministic().unwrap(),
+            &HashMap::new(),
+            &NoteRegistry::default(),
+            1,
+            1,
+        );
+        assert_eq!(pages.len(), 2);
+        let sides = pages[1]
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Line {
+                    start, end, width, ..
+                } if *width == 3.0 && start.x == end.x => {
+                    Some((start.y.min(end.y), start.y.max(end.y)))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(sides.len(), 2);
+        assert!(
+            sides
+                .iter()
+                .all(|(top, bottom)| *top == 72.0 && *bottom == 103.0),
+            "no bridge or prior spacing crosses the page boundary: {sides:?}"
+        );
+    }
+
+    #[test]
+    fn fx233_split_frames_keep_first_top_last_bottom_and_all_verticals() {
+        let fm = FontManager::new_deterministic().unwrap();
+        let blocks = vec![
+            LayoutBlock::Paragraph(make_para(1, 12.0)),
+            LayoutBlock::Paragraph(fx233_bordered_paragraph(70, ST_Border::Single, 24, 8)),
+        ];
+        let (pages, _) = paginate(
+            &blocks,
+            PageGeometry::default(),
+            None,
+            false,
+            &fm,
+            &empty_media(),
+            &NoteRegistry::default(),
+        );
+        assert_eq!(pages.len(), 3);
+        for (page_index, page) in pages.iter().enumerate() {
+            let lines = page
+                .elements
+                .iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Line {
+                        start, end, color, ..
+                    } => Some((start, end, color)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                lines
+                    .iter()
+                    .filter(|(start, end, _)| start.x == end.x)
+                    .count(),
+                2,
+                "every fragment has vertical edges"
+            );
+            assert_eq!(
+                lines
+                    .iter()
+                    .filter(|(_, _, color)| **color == Color::BLACK)
+                    .count(),
+                usize::from(page_index == 0)
+            );
+            assert_eq!(
+                lines
+                    .iter()
+                    .filter(|(_, _, color)| **color == Color::from_hex("0000FF"))
+                    .count(),
+                usize::from(page_index == 2)
+            );
+            for (start, end, _) in lines {
+                assert!(
+                    start.y >= 72.0 && end.y <= 720.0,
+                    "fragment clipped {start:?} {end:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fx233_short_wrap_reserves_the_actual_first_text_band_on_every_pass() {
+        let mut fm = FontManager::new_deterministic().unwrap();
+        let mut segment = directional_test_segment("Wrapped text", TextDirection::Auto, None, None);
+        segment.font_id = fm.resolve_font(Some("Calibri"), false, false).unwrap();
+        let items = vec![oxml_layout::InlineItem::Text(segment)];
+        let params = oxml_layout::LineBreakParams {
+            available_width: 468.0,
+            line_spacing: oxml_layout::LineSpacing::Exact(20.0),
+            ..Default::default()
+        };
+        let mut paragraph = fx233_bordered_paragraph(1, ST_Border::Single, 24, 8);
+        paragraph.lines = break_into_lines(&items, &params, &fm).unwrap();
+        paragraph.add_border_padding();
+        paragraph.reflow = Some(Box::new(crate::block::ParagraphReflow {
+            items,
+            params,
+            grid_line_pitch_pt: None,
+            paragraph_mark: None,
+        }));
+        let wrap = PlacedWrap {
+            // Below the unpadded20pt extent, inside the actual83..103pt
+            // text band after the11pt top frame band.
+            rect: Rect {
+                x: 72.0,
+                y: 93.0,
+                width: 30.0,
+                height: 4.0,
+            },
+            wrap: WrapType::Square,
+            dist_top: 0.0,
+            dist_bottom: 0.0,
+            dist_left: 0.0,
+            dist_right: 0.0,
+        };
+        let geometry = PageGeometry::default();
+        let adjusted = reflow_around_wraps(
+            &paragraph,
+            TextDirection::Auto,
+            std::slice::from_ref(&wrap),
+            0.0,
+            &geometry,
+            &fm,
+        )
+        .expect("short drawing intersects the padded first content band");
+        assert_eq!(
+            adjusted.lines[0].indent_left, 30.0,
+            "first-line reservation survives both passes"
+        );
+        let repeated = reflow_around_wraps(
+            &adjusted,
+            TextDirection::Auto,
+            std::slice::from_ref(&wrap),
+            0.0,
+            &geometry,
+            &fm,
+        )
+        .unwrap();
+        assert_eq!(
+            format!("{:?}", adjusted.lines),
+            format!("{:?}", repeated.lines)
+        );
+        let mut elements = Vec::new();
+        render_paragraph_lines(
+            &adjusted.lines,
+            ParagraphView {
+                block: &adjusted,
+                border_group_before: false,
+                semantics: None,
+                reflow_direction: TextDirection::Auto,
+                reflow_allowed: false,
+            },
+            &geometry,
+            0.0,
+            (true, true, 0.0),
+            &mut elements,
+            &HashMap::new(),
+        );
+        assert!(
+            elements
+                .iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Text(run) => Some(run.origin.x),
+                    _ => None,
+                })
+                .all(|x| x >= wrap.rect.x + wrap.rect.width),
+            "text clears the drawing horizontally"
+        );
+        paragraph.remove_group_border_edges(true, true);
+        assert!(
+            reflow_around_wraps(
+                &paragraph,
+                TextDirection::Auto,
+                &[wrap],
+                0.0,
+                &geometry,
+                &fm
+            )
+            .is_none(),
+            "unbordered first line does not intersect this drawing"
+        );
+    }
+
+    #[test]
+    fn fx233_wrap_reflow_reapplies_border_bands_once() {
+        let mut fm = FontManager::new_deterministic().unwrap();
+        let mut segment = directional_test_segment("Wrapped text", TextDirection::Auto, None, None);
+        segment.font_id = fm.resolve_font(Some("Calibri"), false, false).unwrap();
+        let items = vec![oxml_layout::InlineItem::Text(segment)];
+        let params = oxml_layout::LineBreakParams {
+            available_width: 468.0,
+            ..Default::default()
+        };
+        let fresh_lines = break_into_lines(&items, &params, &fm).unwrap();
+        let mut paragraph = fx233_bordered_paragraph(1, ST_Border::Single, 24, 8);
+        paragraph.lines = fresh_lines;
+        paragraph.add_border_padding();
+        paragraph.reflow = Some(Box::new(crate::block::ParagraphReflow {
+            items,
+            params,
+            grid_line_pitch_pt: None,
+            paragraph_mark: None,
+        }));
+        let wrap = PlacedWrap {
+            rect: Rect {
+                x: 72.0,
+                y: 72.0,
+                width: 30.0,
+                height: 80.0,
+            },
+            wrap: WrapType::Square,
+            dist_top: 0.0,
+            dist_bottom: 0.0,
+            dist_left: 0.0,
+            dist_right: 0.0,
+        };
+        let adjusted = reflow_around_wraps(
+            &paragraph,
+            TextDirection::Auto,
+            std::slice::from_ref(&wrap),
+            0.0,
+            &PageGeometry::default(),
+            &fm,
+        )
+        .unwrap();
+        let repeated = reflow_around_wraps(
+            &adjusted,
+            TextDirection::Auto,
+            &[wrap],
+            0.0,
+            &PageGeometry::default(),
+            &fm,
+        )
+        .unwrap();
+        assert_eq!(
+            format!("{:?}", adjusted.lines),
+            format!("{:?}", repeated.lines),
+            "fresh re-break never stacks existing frame bands"
+        );
+        let mut unframed = adjusted.clone();
+        unframed.remove_group_border_edges(true, true);
+        assert_eq!(adjusted.content_height() - unframed.content_height(), 22.0);
+        assert_eq!(adjusted.lines[0].ascent - unframed.lines[0].ascent, 11.0);
+    }
+
+    #[test]
+    fn fx233_frame_bands_preserve_glyph_highlight_and_note_line_geometry() {
+        let mut paragraph = fx233_bordered_paragraph(1, ST_Border::Single, 24, 8);
+        let mut segment = directional_test_segment("X", TextDirection::Auto, None, None);
+        segment.highlight = Some(Color::from_hex("FFFF00"));
+        paragraph.lines[0].items = vec![LineItem::Text(segment)];
+        let mut elements = Vec::new();
+        render_paragraph_lines(
+            &paragraph.lines,
+            ParagraphView {
+                border_group_before: false,
+                block: &paragraph,
+                semantics: None,
+                reflow_direction: TextDirection::Auto,
+                reflow_allowed: false,
+            },
+            &PageGeometry::default(),
+            0.0,
+            (true, true, 0.0),
+            &mut elements,
+            &HashMap::new(),
+        );
+        let highlight = elements
+            .iter()
+            .find_map(|element| match element {
+                PositionedElement::FilledRect { rect, color }
+                    if *color == Color::from_hex("FFFF00") =>
+                {
+                    Some(rect)
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(highlight.y, 83.0);
+        assert_eq!(highlight.height, 20.0);
+        let glyph = elements
+            .iter()
+            .find_map(|element| match element {
+                PositionedElement::Text(run) => Some(run),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(glyph.origin.y, 83.0 + 20.0 * 0.77);
+        // Notes flatten these same lines, preserving both frame bands once.
+        assert_eq!(
+            paragraph.lines.iter().map(|line| line.height).sum::<f64>(),
+            42.0
+        );
+        assert_eq!(paragraph.lines[0].ascent, 20.0 * 0.77 + 11.0);
+    }
+
+    #[test]
+    fn fx233_fifteen_point_border_has_correct_paint_geometry() {
+        let mut edge = CT_BorderEdge::new(ST_Border::Dashed);
+        edge.sz = Some(120);
+        edge.space = Some(8);
+        let borders = CT_PBdr {
+            top: Some(edge),
+            ..CT_PBdr::default()
+        };
+        let mut elements = Vec::new();
+        render_paragraph_border_edges(
+            &borders,
+            Rect {
+                x: 72.0,
+                y: 72.0,
+                width: 200.0,
+                height: 48.0,
+            },
+            (true, true, 0.0),
+            &mut elements,
+        );
+        let PositionedElement::Line { start, width, .. } = elements[0] else {
+            panic!("expected a top border line");
+        };
+        assert_eq!(width, 15.0, "sz120 is fifteen points");
+        assert_eq!(
+            start.y + width / 2.0,
+            64.0,
+            "space measures clear distance to the inner border edge"
+        );
+    }
+
+    #[test]
+    fn fx233_raw_fifteen_border_size_keeps_eighth_point_units() {
+        let mut edge = CT_BorderEdge::new(ST_Border::Dashed);
+        edge.sz = Some(15);
+        let borders = CT_PBdr {
+            top: Some(edge),
+            ..CT_PBdr::default()
+        };
+        let mut elements = Vec::new();
+        render_paragraph_border_edges(
+            &borders,
+            Rect {
+                x: 72.0,
+                y: 72.0,
+                width: 200.0,
+                height: 48.0,
+            },
+            (true, true, 0.0),
+            &mut elements,
+        );
+        let PositionedElement::Line { width, .. } = elements[0] else {
+            panic!("expected a top border line");
+        };
+        assert_eq!(width, 1.875, "raw sz15 retains eighth-point units");
     }
 
     #[test]
