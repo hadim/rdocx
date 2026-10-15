@@ -176,3 +176,14 @@ No blocking product question. Assumptions for consolidated approval: empty
 whole-paragraph hyperlinks and unsupported simple fields retain explicit atomic
 refusal. Gap pairing remains deterministic within the existing resource contract.
 No new production file is needed. F-X203 is done in `BACKLOG.md`.
+
+## Package gate maintenance
+
+The mandatory repository policy rederives package size claims from the actual
+source archive, including packaged tests. After implementation, use the existing
+README measurement mechanism to update only changed package rows and their
+scripts/readme_doctests.py tuples and dates from actual local patched archives.
+Keep compression tolerance and10MiB bounds unchanged. This is required evidence
+maintenance, not a behavioral or performance claim. README.md and
+scripts/readme_doctests.py are exclusive integration resources. Reconcile them
+against exact combined source and independently review any measured changes.

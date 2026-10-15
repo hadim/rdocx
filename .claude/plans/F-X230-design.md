@@ -153,3 +153,14 @@ No blocking product question. For consolidated approval, assume strict word-coun
 anchor folding, whitespace folding within owner boundaries and11 revisions for
 the exact reported sentence. Run granularity stays unchanged. F-X229 remains an
 implementation dependency even when this plan is approved during sprint design.
+
+## Package gate maintenance
+
+The mandatory repository policy rederives package size claims from the actual
+source archive, including packaged tests. After implementation, use the existing
+README measurement mechanism to update only changed package rows and their
+scripts/readme_doctests.py tuples and dates from actual local patched archives.
+Keep compression tolerance and10MiB bounds unchanged. This is required evidence
+maintenance, not a behavioral or performance claim. README.md and
+scripts/readme_doctests.py are exclusive integration resources. Reconcile them
+against exact combined source and independently review any measured changes.
