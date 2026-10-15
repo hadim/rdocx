@@ -60,6 +60,14 @@ correct-file or required native/render qualification. Preserve all42 hard
 and51 native conditions, independently requalifying changed input/output
 facts and authenticating any unchanged-byte evidence that is reused.
 
+Worker preparation qualifies the source and scoped local controls for ROOT
+integration. Actual owner100 execution and its42/51 qualification at the
+reviewed integrated source remain delivery gates. ROOT may publish the reviewed
+sprint branch after local gates and independent source review so that the
+approved one-job CI can access that source. This is an explicit integration
+checkpoint ordering exception, not main merge, tagging, publication or feature
+completion. F-X227 stays in progress until actual CI acceptance passes.
+
 The existing-file implementation carriers are:
 
 - `.github/workflows/ci.yml`: the owner-only manual job, reviewed source
@@ -160,12 +168,22 @@ All49 accepted outputs remain unchanged. No baseline update is authorized.
 
 - [x] Resolve user approval for fixture revision and the one-job runner proposal.
 - [x] Approve this design and concrete existing-file implementation carriers.
-- [ ] Qualify new native input identities without rewriting old evidence.
-- [ ] Implement actual100 CI execution and per-area reporting.
-- [ ] Prove owner admission, finite cleanup and no resource upload.
+- [x] Qualify new native input identities without rewriting old evidence.
+- [x] Implement actual100 CI execution and per-area reporting.
+- [x] Prove the local owner admission, finite cleanup and no resource upload controls.
 - [ ] Preserve full hosted debug assertions while qualifying any opt2 change.
-- [ ] Pass scoped gates and a zero-finding independent microscope.
+- [x] Pass local scoped checks and a zero-finding independent microscope.
 - [ ] Qualify the final integrated result before release and remote closure.
+
+## Source availability checkpoint
+
+Local implementation and checks are prepared for reviewed batch integration.
+The actual owner job, all42 hard gates and51 native clauses at the reviewed
+remote source remain pending. The hosted debug profile retains assertions and
+overflow checks, while its actual hosted qualification remains pending too.
+The plan remains approved and the feature remains in-progress. This checkpoint
+does not claim complete scoped acceptance or permit a worker push, delivery
+ledger update, main merge, tag or publication.
 
 ## Open questions
 
@@ -174,5 +192,7 @@ separately qualified native input revision and one-job local CI runner
 proposal. Implementation may proceed. Registration and launch remain
 conditional on the reviewed admission or isolation boundary actually passing
 qualification. Approval does not turn failed canaries into passing evidence.
-The separate Issue360 external delivery decision is pending and does not
-change this corpus contract. PyPI authentication has been restored.
+Issue360 is approved for closure after publication, with its upstream
+follow-up recorded. This does not change the corpus contract. PyPI ownership
+and the two trusted publishers have been verified after authentication was
+restored.

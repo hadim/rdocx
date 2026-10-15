@@ -929,7 +929,10 @@ CI, retaining their mandatory font, native and rendering controls.
 for each Python package. Every row creates an isolated Python 3.12.9 environment,
 installs exact maturin, pytest, and package-oracle versions, builds the current
 extension with `maturin develop --locked`, and runs the package's complete
-pytest directory. Before pytest, the existing Word rendering test carrier
+pytest directory. Job-local dev optimization is2, with debug assertions and
+overflow checks explicitly enabled. It retains the debug profile and all
+existing assertions. No measured speedup follows merely from that setting.
+Before pytest, the existing Word rendering test carrier
 prepares independent inputs for either family without importing either product.
 Pillow12.3.0 and Meson1.9.1 are explicit test and build tools. A SHA-pinned
 HarfBuzz14.4.0 source build shapes and subsets the licensed bundled Thai400/700
@@ -954,6 +957,26 @@ permissions are repository content read, and only the detector adds pull-request
 metadata read. No job grants an OIDC token. Checkout v6.0.2, setup-python
 v6.2.0, rust-cache v2.9.1, and the selected stable rust-toolchain revision use
 reviewed full commit SHAs and exact input maps.
+
+**An admitted owner-only compatibility job.** Manual dispatch selects a reviewed
+source SHA and one task-owned ephemeral macOS ARM64 runner. Both actor fields
+must name the owner. Existing public jobs and their gates remain mandatory.
+The private job has one literal shell step and no action, service, container,
+publication or credential API. Its pre-Worker admission layer checks the exact
+server identity and script before the official Worker can prepare any action.
+A bounded credential-redacted proposal and exact same-frame owner admission
+precede launch. This is a narrow trusted-job admission boundary, not a host
+filesystem sandbox. Runner registration waits for independent review and
+owned negative controls. The runner is removed after its one job.
+
+The existing sprint workflow script authenticates the frozen100 executable
+closure, a separately admitted two-input native revision, clean Git identity,
+the unchanged compiled provider graph and both installed distributions. A
+finite process group runs each unchanged specimen once. The job retains all
+saved files locally and waits for independent current-attempt qualification.
+Only bounded counts and source/run identities enter its summary. No Office
+font, media, saved document or captured specimen output is uploaded. A pending
+native fact cannot produce a final correct-file metric.
 
 **One checksum-pinned Poppler installer.**
 `scripts/install_pinned_poppler.py` downloads the official 26.01.0 source
