@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 240 | 229 | 2 | 5 |
-| **Total** | **565** | **503** | **2** | **56** |
+| X, Cross-cutting | 240 | 229 | 3 | 4 |
+| **Total** | **565** | **503** | **3** | **55** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -788,5 +788,5 @@ HLD14 contract before adopting contributor changes.
 | F-X223 | Qualify native Word embedded multi-face interoperability | S92 | M | pending |
 | F-X224 | Repair hosted release tool and stack routing | S91.1 | M | in-progress |
 | F-X225 | Keep DrawingML text-style parsing within the default WASM stack | S91.1 | M | in-progress |
-| F-X226 | Release superseded relationships after checked PowerPoint XML edits | S91.1 | M | pending |
+| F-X226 | Release superseded relationships after checked PowerPoint XML edits | S91.1 | M | in-progress |
 <!-- AUTOGEN:backlog-MX END -->
