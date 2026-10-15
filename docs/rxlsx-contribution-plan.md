@@ -31,7 +31,7 @@ including reuse behind a consistent facade. Record why this implementation is
 worth maintaining. Amend the existing non-goal to permit a separate rxlsx
 family while keeping oxml-sml limited to chart workbooks.
 
-Do not mark F-184 or S99 done merely because this document exists.
+Do not mark F-184 or S101 done merely because this document exists.
 
 ## 2. First-cut design and reusable groundwork
 
@@ -110,14 +110,15 @@ contracts. Their large-workbook gates require measured memory evidence.
 ## 3. Parallel streams and responsibilities
 
 The canonical roadmap retains S91.1 publication, S92 and S93 repairs,
-S94 throughS97 Word feature work and the S98 external Word benchmark. The
-conditional Excel programme starts at S99. An independent contributor stream
+S94 Python/CLI parity, S95 Word features, S96 fillable PDF forms,
+S97 throughS99 Word features and the S100 external Word benchmark. The
+conditional Excel programme starts at S101. An independent contributor stream
 remains a workflow proposal until the extensions below are implemented.
 Both use separate branches and checkouts. Sprint numbers do not dictate merge
 order, but story dependencies remain mandatory.
 
 Keep one canonical set of record paths. On `sprint/s91`, CURRENT_SPRINT describes
-S91. On `sprint/s99`, the same path describes S99. Neither stream creates an
+S91. On `sprint/s101`, the same path describes S101. Neither stream creates an
 alternate tracker. Each branch is internally consistent, although the other
 stream's unpublished progress may not yet appear there.
 
@@ -185,7 +186,7 @@ keep their own context.
 
 Only `/close-sprint` merges into main. Serialize sprint closes. The next closing
 branch incorporates the latest main, reconciles shared changes and re-establishes
-its integrated verification and sprint review. S99 may close before S91 if its
+its integrated verification and sprint review. S101 may close before S91 if its
 dependencies and acceptance gates pass. Shared baseline updates are exclusive.
 
 ## 5. Proposed Excel story and sprint realignment
@@ -202,16 +203,16 @@ allocates no additional IDs and does not supersede SPRINT_PLAN.md.
 
 | Sprint | Canonical planned delivery |
 |---|---|
-| S99 | F-184 go/no-go, F-204 corpus, F-185 workbook and worksheet core |
-| S100 | F-186 strings/styles/formats, F-189 formula parser, F-205 tables and structured references |
-| S101 | F-206 advanced worksheet objects |
-| S102 | F-187 reader and F-188 writer, including their full streaming contracts |
-| S103 | F-190 calculation, F-191 charts, F-192 validation and conditional formatting |
-| S104 | F-193 pivots, F-207 recalculation, F-208 slicers and Data Model boundary |
-| S105 | F-209 Power Query package and bounded M language |
-| S106 | F-210 Power Query execution and allowed connectors |
-| S107 | F-211 Office Scripts surface and F-212 sandboxed execution |
-| S108 | F-194 rendering and F-195 distribution and advanced lifecycle gate |
+| S101 | F-184 go/no-go, F-204 corpus, F-185 workbook and worksheet core |
+| S102 | F-186 strings/styles/formats, F-189 formula parser, F-205 tables and structured references |
+| S103 | F-206 advanced worksheet objects |
+| S104 | F-187 reader and F-188 writer, including their full streaming contracts |
+| S105 | F-190 calculation, F-191 charts, F-192 validation and conditional formatting |
+| S106 | F-193 pivots, F-207 recalculation, F-208 slicers and Data Model boundary |
+| S107 | F-209 Power Query package and bounded M language |
+| S108 | F-210 Power Query execution and allowed connectors |
+| S109 | F-211 Office Scripts surface and F-212 sandboxed execution |
+| S110 | F-194 rendering and F-195 distribution and advanced lifecycle gate |
 
 Split F-187/F-188 into initial read/write capability and genuine streaming work.
 Split F-190, F-194 and F-195 into early bounded capability and later completeness.
@@ -271,9 +272,9 @@ Issue 281 open while its programme discussion remains outstanding.
 
 ## 7. Validation and next actions
 
-Use meaningful workflow tests for simultaneous S91/S99 contexts, remote claims
+Use meaningful workflow tests for simultaneous S91/S101 contexts, remote claims
 and handoffs, duplicate IDs, contributor story additions, completed-status
-preservation, ledger conflicts, S99 closing before S91, and evidence becoming
+preservation, ledger conflicts, S101 closing before S91, and evidence becoming
 stale after source changes. Confirm one stream cannot mutate or delete the
 other stream's active worker state.
 
