@@ -18914,30 +18914,28 @@ fn resolve_master_records(
     presentation_part: &str,
     presentation: &CT_Presentation,
 ) -> Result<Vec<MasterRecord>> {
-    presentation
-        .slide_master_ids
-        .iter()
-        .map(|entry| {
-            let relationship = package
-                .get_part_rels(presentation_part)
-                .and_then(|rels| rels.get_by_id(&entry.relationship_id))
-                .ok_or_else(|| Error::MissingRelationship {
-                    source_part: presentation_part.to_owned(),
-                    relationship_id: entry.relationship_id.clone(),
-                })?;
-            require_relationship_type(presentation_part, relationship, rel_types::SLIDE_MASTER)?;
-            reject_external(presentation_part, relationship)?;
-            let part_name = OpcPackage::resolve_rel_target(presentation_part, &relationship.target);
-            let master = CT_SlideMaster::from_xml(required_part(package, &part_name)?)
-                .map_err(|error| error.to_string());
-            Ok(MasterRecord {
-                id: entry.id,
-                part_name,
-                master,
-                dirty: false,
-            })
-        })
-        .collect()
+    let mut masters = Vec::with_capacity(presentation.slide_master_ids.len());
+    for entry in &presentation.slide_master_ids {
+        let relationship = package
+            .get_part_rels(presentation_part)
+            .and_then(|rels| rels.get_by_id(&entry.relationship_id))
+            .ok_or_else(|| Error::MissingRelationship {
+                source_part: presentation_part.to_owned(),
+                relationship_id: entry.relationship_id.clone(),
+            })?;
+        require_relationship_type(presentation_part, relationship, rel_types::SLIDE_MASTER)?;
+        reject_external(presentation_part, relationship)?;
+        let part_name = OpcPackage::resolve_rel_target(presentation_part, &relationship.target);
+        let master = CT_SlideMaster::from_xml(required_part(package, &part_name)?)
+            .map_err(|error| error.to_string());
+        masters.push(MasterRecord {
+            id: entry.id,
+            part_name,
+            master,
+            dirty: false,
+        });
+    }
+    Ok(masters)
 }
 
 fn resolve_layouts(

@@ -1,6 +1,6 @@
 # F-X225, Keep DrawingML text-style parsing within the default WASM stack
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91.1
 **Size**: M
 **Depends on**: F-X214, F-X221
@@ -94,12 +94,12 @@ All49 outputs are expected unchanged. Any output delta blocks completion pending
 ## Implementation checklist
 
 - [x] ROOT registers the story and approves this plan before claim.
-- [ ] Retain the genuine default1MiB Base failure and immutable source/tool receipts.
-- [ ] Implement only private storage and necessary private parser-temporary changes.
-- [ ] Pass the original pinned default-stack Node regression and real populated caller test.
-- [ ] Prove public caller compatibility, mutation semantics, opaque XML and child order.
-- [ ] Pass affected native/WASM/scoped package and hash gates.
-- [ ] Obtain zero-finding independent microscope and update only listed HLD mechanisms.
+- [x] Retain the genuine default1MiB Base failure and immutable source/tool receipts.
+- [x] Implement only private storage and necessary private parser-temporary changes.
+- [x] Pass the original pinned default-stack Node regression and real populated caller test.
+- [x] Prove public caller compatibility, mutation semantics, opaque XML and child order.
+- [x] Pass affected native/WASM/scoped package and hash gates.
+- [x] Obtain zero-finding independent microscope and update only listed HLD mechanisms.
 
 ## Open questions
 
