@@ -2279,6 +2279,17 @@ sources on a TOC boundary paragraph concatenate only accepted runs outside the
 owned old-result range, so the displayed title and generated bookmark cover
 the same post-end content.
 
+## Shared chart legend geometry
+
+Word and Presentation chart groups consume the same measured legend layout.
+Right, left, top, bottom and top-right positions reserve exterior plot space
+when overlay is false. Overlay true retains the full plot and intentionally
+allows overlap. Hidden or absent legends reserve no space. Shaped advances,
+font-relative keys and row spacing determine the bounds before marks and axes
+are laid out. Horizontal legends wrap within chart width. The renderer refuses
+unbounded or insufficient layouts rather than painting labels outside the
+chart. All backends consume the resulting group without separate legend logic.
+
 ## Word chart pagination
 
 The Word layout input owns document-scoped parsed chart targets, the effective

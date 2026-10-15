@@ -146,6 +146,26 @@ precede publication. Invalid or retired owners, invalid data and exact no-op
 leave bytes and captured authority unchanged. The Python data objects do not
 add WASM or CLI chart entrypoints.
 
+Word `chart_legend(paragraph)` returns a dictionary with `visible`, `position`
+and `overlay`. `set_chart_legend(paragraph, *, visible=None, position=None,
+overlay=None)` edits a live same-document direct-body Paragraph with exactly
+one supported qualified chart drawing. Opaque ancestry cannot grant authority.
+PowerPoint's existing live Chart exposes writable `has_legend`,
+`legend_position` and `legend_overlay`, including grouped chart owners. Positions
+are `r`, `l`, `t`, `b` and `tr`. Boolean inputs require actual bool values.
+Missing settings read as right and false. Hiding discards the entire legend
+subtree and settings. Position or overlay alone never makes a hidden legend
+visible or stores hidden settings. Showing creates default or explicitly
+combined settings. Repeated effective values preserve exact bytes and held
+owner authority. These additive APIs reuse native `LegendPosition` and
+`LegendSettings` re-exports without new WASM or CLI surfaces.
+
+Legend mutation prepares binding publication before committing the native
+candidate. Shared chart parts are isolated without copying or rewriting the
+workbook. Only the selected qualified Word relationship attribute is retargeted,
+including when an opaque marker shares its old relationship. Unknown, stale,
+foreign, related-story and ambiguous Word owners refuse atomically.
+
 A Chart view captures its frame XML-child authority. Checked Shape XML
 replacement retires old Chart views while retaining the proven Shape owner.
 Fresh chart lookup resolves the current owned graph. Data-only replacement

@@ -703,11 +703,25 @@ annotations. Individual
 `c:dLbl` delete, visibility, number-format, position, and separator overrides
 are projected privately by logical index from their namespace-resolved raw
 subtrees. Those subtrees remain byte-preserved as the only serialization source.
-A present legend shell emits one resolved series-colour swatch and shaped
-series name per row in the upper-right of the plot. Bars, line and radar
-strokes, pie and doughnut wedges, areas, scatter and line markers, and legend
-swatches all consume the same resolved series colour. Unsupported legend
-placement children remain preserved and do not change this default layout.
+A present legend projects namespace-owned `legendPos` and `overlay` scalars.
+Missing position means right and a missing overlay child means false. Supported
+positions are right, left, top, bottom and top-right. Real shaped series names
+and colour keys are measured before plot selection. Exterior non-overlay bands
+reserve the required width or height, while overlay legends keep the full plot.
+Top and bottom entries wrap within the available width. Excessive labels or
+insufficient chart bounds return a contextual error instead of clipping text.
+Absent legends reserve no band. Bars, lines, wedges, areas, markers and legend
+swatches consume the same resolved series colour.
+
+`LegendPosition` and `LegendSettings` are shared native values. Source-preserving
+legend getters and setters validate the XML document, resolve actual inherited
+namespace bindings and reject duplicate or malformed owned scalars atomically.
+Foreign lookalikes, attributes and unedited children remain opaque. Effective
+no-ops return original bytes. Edited scalar children follow schema order.
+Hiding removes the complete owned legend and its settings. Position or overlay
+edits while absent are no-ops, while showing creates the requested settings
+with right and false defaults. Unsupported legend layout payloads remain
+preserved without changing this bounded automatic placement.
 
 Package assembly resolves chart relationships in separate slide, layout and
 master scopes and parses internal targets as `CT_ChartSpace`. The resolver

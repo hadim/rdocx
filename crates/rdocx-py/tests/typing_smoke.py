@@ -531,6 +531,8 @@ def fx215_chart_typing() -> None:
     document = Document()
     paragraph = document.add_chart(XL_CHART_TYPE.LINE, data, Inches(4), Inches(2))
     assert_type(paragraph, Paragraph)
+    assert_type(document.chart_legend(paragraph), dict[str, bool | str])
+    document.set_chart_legend(paragraph, visible=True, position="b", overlay=False)
 
 
 def fx211a_checked_word_element_types(document: Document) -> None:

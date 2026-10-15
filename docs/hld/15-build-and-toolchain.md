@@ -1265,3 +1265,16 @@ styles remain recorded. Own-renderer baselines continue to use deterministic
 font mode and true face selection. External downstream guidance remains a
 reviewed proposal until separately submitted, and integrated sprint gates
 remain independent of isolated feature qualifications.
+
+
+Chart legend native controls pin Microsoft Word16.113.2
+build16.113.26092012 and PowerPoint16.113.4 build16.113.26100421, with
+source/output hashes and application export receipts. PowerPoint uses local
+PDF export with Best for printing. Poppler26.01.0 supplies150DPI raster and
+text extraction. Separate font-matched legend controls use the identical
+native bundled Aptos font bytes, SHA256
+`95980114fcfd42f2f9c446dae429b70582bf2f03097d68433ea9e7d85a49da0b`,
+through the existing deterministic caller-font route. No font installation is
+required. Original font mismatches and empty-legend native overlay remain
+recorded. Component paint qualification does not establish whole-chart or
+outer-frame equivalence, and deterministic shared baselines remain unchanged.

@@ -6980,3 +6980,200 @@ def test_fx232_issue373_svg_namespace_ancestor_retains_the_picture_reference(whe
     with pytest.raises(rdocx.RdocxError):
         reopened.paragraphs[0].replace_xml(replacement.replace(declaration, ""))
     assert reopened.to_bytes() == before
+
+
+def test_fx246_word_legend_controls_live_owner_defaults_and_atomicity():
+    import rdocx
+    data = rdocx.CategoryChartData()
+    data.categories = ["Q1", "Q2"]
+    data.add_series("North", [12, 14])
+    data.add_series("South", [9, 11])
+    document = rdocx.Document()
+    paragraph = document.add_chart(51, data, rdocx.Inches(6), rdocx.Inches(2.6))
+    expected = {"visible": True, "position": "r", "overlay": False}
+    assert document.chart_legend(paragraph) == expected
+    before = document.to_bytes()
+    document.set_chart_legend(paragraph)
+    document.set_chart_legend(paragraph, visible=True, position="r", overlay=False)
+    assert document.to_bytes() == before
+    assert paragraph.xml
+    for position in ("r", "l", "t", "b", "tr"):
+        paragraph = document.paragraphs[0]
+        document.set_chart_legend(paragraph, position=position, overlay=True)
+        assert document.chart_legend(document.paragraphs[0]) == dict(expected, position=position, overlay=True)
+    paragraph = document.paragraphs[0]
+    document.set_chart_legend(paragraph, visible=False)
+    paragraph = document.paragraphs[0]
+    before = document.to_bytes()
+    document.set_chart_legend(paragraph, position="l", overlay=True)
+    assert document.to_bytes() == before
+    assert document.chart_legend(paragraph) == dict(expected, visible=False)
+    document.set_chart_legend(paragraph, visible=True, position="b", overlay=True)
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.chart_legend(reopened.paragraphs[0]) == dict(expected, position="b", overlay=True)
+    paragraph = document.paragraphs[0]
+    before = document.to_bytes()
+    for kwargs, error in (({"visible": 1}, TypeError), ({"overlay": "yes"}, TypeError), ({"position": "bad"}, ValueError), ({"position": 1}, TypeError)):
+        with pytest.raises(error):
+            document.set_chart_legend(paragraph, **kwargs)
+        assert document.to_bytes() == before
+    foreign = rdocx.Document()
+    foreign_paragraph = foreign.add_chart(51, data, rdocx.Inches(6), rdocx.Inches(2))
+    with pytest.raises(ValueError):
+        document.set_chart_legend(foreign_paragraph, visible=False)
+    assert document.to_bytes() == before
+    plain = document.add_paragraph("no chart")
+    before = document.to_bytes()
+    with pytest.raises(Exception):
+        document.set_chart_legend(plain, visible=True)
+    assert document.to_bytes() == before
+
+
+def test_fx246_word_legend_refuses_retired_related_and_ambiguous_owners():
+    import re
+    import rdocx
+    data = rdocx.CategoryChartData()
+    data.categories = ["A"]
+    data.add_series("North", [7])
+    document = rdocx.Document()
+    paragraph = document.add_chart(51, data, rdocx.Inches(4), rdocx.Inches(2))
+    # One-series authoring retains its existing absent legend default.
+    assert document.chart_legend(paragraph) == {"visible": False, "position": "r", "overlay": False}
+    retired = paragraph
+    assert document.remove_content(document.find_content_index(retired))
+    before = document.to_bytes()
+    with pytest.raises(rdocx.StaleElementError):
+        document.set_chart_legend(retired, visible=True)
+    assert document.to_bytes() == before
+    cell = document.add_table(1, 1).cell(0, 0).paragraphs[0]
+    header = document.section(0).header.add_paragraph("header witness")
+    for owner in (cell, header):
+        before = document.to_bytes()
+        with pytest.raises(ValueError, match="direct body"):
+            document.set_chart_legend(owner, visible=True)
+        assert document.to_bytes() == before
+    paragraph = document.add_chart(51, data, rdocx.Inches(4), rdocx.Inches(2))
+    xml = paragraph.xml
+    drawing = re.search(r"<w:r>.*?</w:r>", xml, re.S).group(0)
+    drawing = re.sub(r'(wp:docPr\s+id=")[0-9]+', r'\g<1>999', drawing, count=1)
+    paragraph.replace_xml(xml.replace("</w:p>", drawing + "</w:p>"))
+    paragraph = document.paragraphs[-1]
+    before = document.to_bytes()
+    with pytest.raises(Exception, match="exactly one"):
+        document.set_chart_legend(paragraph, visible=True)
+    assert document.to_bytes() == before
+
+
+@pytest.mark.parametrize("with_owned", (False, True))
+def test_fx246_word_opaque_ancestors_never_grant_chart_authority(with_owned):
+    import copy
+    import io
+    import zipfile
+    import xml.etree.ElementTree as ET
+    import rdocx
+    data = rdocx.CategoryChartData()
+    data.categories = ["A"]
+    data.add_series("North", [7])
+    document = rdocx.Document()
+    document.add_chart(51, data, rdocx.Inches(4), rdocx.Inches(2))
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as package:
+        parts = {name: package.read(name) for name in package.namelist()}
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    wp = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
+    tree = ET.fromstring(parts["word/document.xml"])
+    run = tree.find(".//" + w + "r")
+    drawing = run.find(w + "drawing")
+    opaque = ET.Element("{urn:fx246:opaque}holder")
+    if with_owned:
+        extra = copy.deepcopy(drawing)
+        for node in extra.iter(wp + "docPr"):
+            node.set("id", "999")
+        opaque.append(extra)
+    else:
+        run.remove(drawing)
+        opaque.append(drawing)
+    run.append(opaque)
+    parts["word/document.xml"] = ET.tostring(tree)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as package:
+        for name, body in parts.items():
+            package.writestr(name, body)
+    document = rdocx.Document.from_bytes(buffer.getvalue())
+    paragraph = document.paragraphs[0]
+    before = document.to_bytes()
+    opaque_before = ET.tostring(ET.fromstring(paragraph.xml).find(".//{urn:fx246:opaque}holder"))
+    if with_owned:
+        document.set_chart_legend(paragraph, visible=True, position="b")
+        assert document.chart_legend(document.paragraphs[0])["position"] == "b"
+        assert ET.tostring(ET.fromstring(document.paragraphs[0].xml).find(".//{urn:fx246:opaque}holder")) == opaque_before
+    else:
+        for operation in (lambda: document.chart_legend(paragraph), lambda: document.set_chart_legend(paragraph, visible=True)):
+            with pytest.raises(Exception, match="exactly one"):
+                operation()
+            assert document.to_bytes() == before
+
+
+def test_fx246_word_shared_chart_retargets_only_selected_owned_attribute():
+    import copy
+    import io
+    import zipfile
+    import xml.etree.ElementTree as ET
+    import rdocx
+    data = rdocx.CategoryChartData()
+    data.categories = ["A"]
+    data.add_series("North", [7])
+    document = rdocx.Document()
+    document.add_chart(51, data, rdocx.Inches(4), rdocx.Inches(2))
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as package:
+        parts = {name: package.read(name) for name in package.namelist()}
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    c = "{http://schemas.openxmlformats.org/drawingml/2006/chart}"
+    r = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    wp = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
+    tree = ET.fromstring(parts["word/document.xml"])
+    body = tree.find(w + "body")
+    paragraph = body.find(w + "p")
+    relationship = paragraph.find(".//" + c + "chart").get(r + "id")
+    other = copy.deepcopy(paragraph)
+    for node in other.iter(wp + "docPr"):
+        node.set("id", "999")
+    body.insert(1, other)
+    ET.SubElement(paragraph, "{urn:fx246:foreign}chart", {r + "id": relationship, "marker": "untouched"})
+    parts["word/document.xml"] = ET.tostring(tree)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as package:
+        for name, value in parts.items():
+            package.writestr(name, value)
+    document = rdocx.Document.from_bytes(buffer.getvalue())
+    document.set_chart_legend(document.paragraphs[0], visible=True, position="b")
+    current = ET.fromstring(document.paragraphs[0].xml)
+    assert current.find("{urn:fx246:foreign}chart").get(r + "id") == relationship
+    assert current.find(".//" + c + "chart").get(r + "id") != relationship
+    assert document.chart_legend(document.paragraphs[1])["visible"] is False
+    assert document.chart_legend(document.paragraphs[0])["position"] == "b"
+
+
+@pytest.mark.parametrize("trailer", (b"NOT_XML_DOCUMENT_CONTENT", b"<![CDATA[tail]]>", b"&amp;"))
+def test_fx246_word_malformed_chart_document_is_refused_atomically(trailer):
+    import io
+    import zipfile
+    import rdocx
+    data = rdocx.CategoryChartData()
+    data.categories = ["A"]
+    data.add_series("North", [7])
+    document = rdocx.Document()
+    document.add_chart(51, data, rdocx.Inches(4), rdocx.Inches(2))
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as source, zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
+        for info in source.infolist():
+            value = source.read(info.filename)
+            if info.filename.startswith("word/charts/chart") and info.filename.endswith(".xml"):
+                value += trailer
+            target.writestr(info, value)
+    document = rdocx.Document.from_bytes(buffer.getvalue())
+    paragraph = document.paragraphs[0]
+    before = document.to_bytes()
+    for operation in (lambda: document.chart_legend(paragraph), lambda: document.set_chart_legend(paragraph, visible=True)):
+        with pytest.raises(Exception):
+            operation()
+        assert document.to_bytes() == before and paragraph.xml

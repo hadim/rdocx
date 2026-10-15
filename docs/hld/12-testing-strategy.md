@@ -4256,6 +4256,35 @@ membership, strict mypy and complete stubtest. Native Word/PowerPoint opens,
 PowerPoint Edit Data, normal save/reopen and deterministic value-specific
 renders remain separate required acceptance, including stale-value negatives.
 
+## Chart legend qualification
+
+The exact default, bottom and left Issue383 packages remain frozen in both
+formats. Deterministic renders must differ by position. Shared tests cover all
+five positions, overlay, absent state, wrapped long labels and bounded refusal.
+Installed APIs cover ownership, exact no-op bytes, hidden-state behavior,
+source-preserved namespace lookalikes, malformed document refusal and shared
+chart isolation without workbook changes. Negative controls use the actual
+prior renderer and prior installed wheels, including opaque Word ancestors and
+foreign relationship owners.
+
+Independent Word and PowerPoint exports retain source and output hashes and
+producer receipts. Geometry uses a1point bound and paint uses150DPI with the
+existing0.99 block-luminance SSIM threshold. Original font mismatches remain
+explicit diagnostics. Separate controls request9point Aptos and pass the actual
+native font bytes through the existing deterministic caller-font route. Their
+translation-only80by120pixel legend component crops contain every key and label
+plus at least2.5points of padding. Absolute key, label and adjacent right plot
+edge bounds are checked separately. This qualifies legend components, not an
+outer chart frame or whole-chart raster. Original100pixel failed crops remain
+retained because Word's unrelated outer frame enters that region. The old
+renderer also fails the corrected component observer.
+
+Native Word's empty legend shell overlays the plot, unlike the explicit
+product missing-overlay default false. This original discrepancy stays
+recorded. Explicit right/false controls qualify non-overlay placement alongside
+bottom and left controls. Shared49hash entries and seven page-one pixel buffers
+remain unchanged because those samples carry bitmap chart images.
+
 ## Presentation semantic export qualification
 
 HTML and Markdown qualification starts from genuine valid source decks and

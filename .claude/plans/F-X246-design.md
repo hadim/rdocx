@@ -1,6 +1,6 @@
 # F-X246, Honor chart legend position and overlay during rendering
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S93
 **Size**: L
 **Depends on**: none
@@ -111,6 +111,26 @@ contract where equivalent fonts permit it. A proved native/product font mismatch
 must be diagnosed and recorded, never hidden by threshold relaxation. Include
 a negative control moving the legend into the plot so actual overlap checks fail.
 
+Native qualification retains the original empty-legend Word overlap as a
+recorded disagreement with the approved product default false. Explicit
+right/overlay=false controls independently qualify exterior placement. Original
+Word Aptos and PowerPoint Calibri mismatches remain diagnostic. Separate9point
+Aptos controls use actual native bundled font bytes through the existing
+caller-font route. After independent inspection, the approved legend paint
+observer uses80by120pixels at150DPI, translation only, with the unchanged0.99
+threshold. Every key and label plus at least2.5points of padding must fit. The
+original100pixel failures remain retained because they include Word's unrelated
+outer chart frame. Absolute key, label and adjacent right plot edge comparisons
+retain the1point bound. This is legend component qualification, not whole-chart
+or outer-frame equivalence. Actual prior-renderer outputs must fail the same
+component observer.
+
+Affected published inventories use the existing root README rdocx row,
+oxml-chart and rpptx README rows, and matching numeric/date catalog entries in
+scripts/readme_doctests.py. Measure genuine archives under the unchanged64byte
+compression allowance, exact member bytes/count and10MiB ceiling. No new
+measurement carrier is introduced.
+
 Run changed-crate tests/checks/clippy, current installed packages, strict typing
 and stubs, both WASM graphs, publication dry-runs/size, scoped verification and
 independent zero-finding microscope.
@@ -148,12 +168,12 @@ Hidden/absent legends and unrelated outputs remain unchanged.
 
 ## Implementation checklist
 
-- [ ] Capture exact source, claim and establish both-format Base failures.
-- [ ] Implement preserved legend properties and measured shared geometry.
-- [ ] Implement both approved native/Python surfaces with atomic ownership.
-- [ ] Qualify exact repro, full position/overlay matrix and independent native paint.
-- [ ] Review output deltas and pass all riders, scoped verify and microscope.
-- [ ] Prepare structured handoff with no worker push or sprint ledger edits.
+- [x] Capture exact source, claim and establish both-format Base failures.
+- [x] Implement preserved legend properties and measured shared geometry.
+- [x] Implement both approved native/Python surfaces with atomic ownership.
+- [x] Qualify exact repro, full position/overlay matrix and independent native paint.
+- [x] Review output deltas and pass all riders, scoped verify and microscope.
+- [x] Prepare structured handoff with no worker push or sprint ledger edits.
 
 ## Open questions
 

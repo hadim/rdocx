@@ -7936,6 +7936,88 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
+    /// Effective legend properties of the live direct-body chart paragraph.
+    fn chart_legend(
+        slf: Py<Self>,
+        py: Python<'_>,
+        paragraph: PyRef<'_, PyParagraph>,
+    ) -> PyResult<Py<PyDict>> {
+        if !paragraph.belongs_to(py, &slf) {
+            return Err(PyValueError::new_err(
+                "paragraph belongs to a different document",
+            ));
+        }
+        let ParagraphLocation::Body(index) = paragraph.validate(py)? else {
+            return Err(PyValueError::new_err(
+                "chart legend requires a direct body paragraph",
+            ));
+        };
+        let settings = slf
+            .borrow(py)
+            .inner
+            .chart_legend(index)
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        let result = PyDict::new(py);
+        result.set_item("visible", settings.visible)?;
+        result.set_item("position", settings.position.as_str())?;
+        result.set_item("overlay", settings.overlay)?;
+        Ok(result.unbind())
+    }
+
+    /// None leaves a property unchanged. Hidden legends discard their settings.
+    #[pyo3(signature=(paragraph, *, visible=None, position=None, overlay=None))]
+    fn set_chart_legend(
+        slf: Py<Self>,
+        py: Python<'_>,
+        paragraph: PyRef<'_, PyParagraph>,
+        visible: Option<&Bound<'_, PyAny>>,
+        position: Option<&str>,
+        overlay: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let checked_bool = |value: Option<&Bound<'_, PyAny>>| -> PyResult<Option<bool>> {
+            value
+                .map(|v| {
+                    if !v.is_instance_of::<PyBool>() {
+                        return Err(PyTypeError::new_err(
+                            "legend visibility and overlay require bool",
+                        ));
+                    }
+                    v.extract()
+                })
+                .transpose()
+        };
+        let visible = checked_bool(visible)?;
+        let overlay = checked_bool(overlay)?;
+        let position = position
+            .map(rdocx::LegendPosition::parse)
+            .transpose()
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        if !paragraph.belongs_to(py, &slf) {
+            return Err(PyValueError::new_err(
+                "paragraph belongs to a different document",
+            ));
+        }
+        let ParagraphLocation::Body(index) = paragraph.validate(py)? else {
+            return Err(PyValueError::new_err(
+                "chart legend requires a direct body paragraph",
+            ));
+        };
+        let location = ParagraphLocation::Body(index)
+            .native(&slf.borrow(py).inner)
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        let mut document = slf.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
+            .set_chart_legend(index, visible, position, overlay)
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        document.publish_owner_candidate(
+            py,
+            candidate,
+            "Document.set_chart_legend",
+            WordPublication::ElementXml(WordOwnerLocation::Paragraph(location)),
+        )
+    }
+
     #[pyo3(signature = (chart_type, chart_data, width, height, *, after=None))]
     fn add_chart(
         slf: Py<Self>,
