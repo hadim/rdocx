@@ -2641,9 +2641,12 @@ paths. The existing methods keep their accepted default. Python `to_pdf`,
 default. Any other value raises `ValueError`. CLI `convert` for PDF and image
 formats and `render` take `--revision-view accepted` or
 `--revision-view tracked`, with `accepted` as the default. An unknown value is
-a usage error. The PDF, PNG, SVG and selected-page Python render methods,
-including their diagnostic counterparts, accept keyword-only
-`revision_style="plain"` or `"legal"`. CLI `convert` and `render` accept
+a usage error. Python `to_pdf`, `render_page_to_png`, `render_all_pages` and
+`render_pages`, including their diagnostic counterparts, accept keyword-only
+`revision_style="plain"` or `"legal"`. SVG selected through `render_pages`
+uses those revision options. The dedicated `render_page_to_svg` method accepts
+neither revision operand and uses the accepted view with plain style.
+CLI `convert` and `render` accept
 `--revision-style plain|legal`. Unknown styles and legal style with accepted
 view fail before output or cached layout is returned. Existing positional
 Python arguments and caller font inputs retain their meaning.
