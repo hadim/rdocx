@@ -7818,3 +7818,21 @@ Resolve Issue362 and assess PR363 at immutable0b9a3cccc1b31bac7ec4108c923faa176b
 **Test gate**: differential
 
 Investigate native Word use of distinct embedded regular, bold, italic and bold-italic faces for an uninstalled family against the documented MS-OE376 one-font-per-name boundary. Preserve F-X220 API and renderer contracts. Require exact prepared font glyph and metric proof before and after native save and normal reopen, absent host installation, fresh family/key controls and recorded native normalization. A workaround must preserve document semantics and source ownership. Do not claim synthetic bold is genuine bold or rewrite family names without an approved design. The user deferred this interoperability work to S92 on 2026-10-13. It does not gate S91 closure.
+
+
+### F-X224, Repair hosted release tool and stack routing
+
+**Size**: M
+**Depends on**: F-X221
+**Test gate**: regression
+
+Supply exact source-qualified HarfBuzz14.4.0 to every native consumer, retain the approved eight MiB native animation-test stack and accept exactly one annotated integer or single-fraction sprint tag at current main. Preserve all existing source, oracle, metadata, package, full-suite and publication checks. Requalify the still-unpublished Word0.16.1 and shared/PowerPoint0.14.1 families after the private parser repair, with actual clean-source builds, installed tests, complete hosted CI and exact-SHA build-only rehearsal. Do not move existing tags, reopen contributor intake or treat historical execution as current changed-source evidence.
+
+### F-X225, Keep DrawingML text-style parsing within the default WASM stack
+
+**Size**: M
+**Depends on**: F-X214, F-X221
+**Test gate**: regression
+**Spec**: HLD04 package preservation, HLD06 shape tree and preservation, HLD10 WASM facade, HLD15 pinned WASM runtime.
+
+Replace private inline list-style storage and avoid accumulated parser temporaries so the real PowerPoint WASM constructor and graph round-trip work within the existing1MiB stack. Preserve all public APIs and field types, XML namespace/opaque ownership, schema order, parser limits, deterministic outputs and versions. Prove the exact Node24.11.1 genuine Base failure and unchanged-test GREEN, a real populated caller, native getter/mutator/clone/serialization behavior, both WASM graphs and affected verified archives. No stack increase, new product file/module/dependency, new asset or public surface.
