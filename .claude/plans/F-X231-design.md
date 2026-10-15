@@ -1,6 +1,6 @@
 # F-X231, Preserve PowerPoint HTML import whitespace
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S92
 **Size**: M
 **Depends on**: F-X217
@@ -64,7 +64,7 @@ and the existing HTML-to-DOCX CLI. Retain applicable supported Markdown
 source-owner and code-space controls. These are regression controls, not a
 second importer. Keep native Word tests inside the existing html.rs unit module
 to avoid F-X178's integration_test.rs lease in wave1. Source-built fixtures and
-tests use existing carriers only. No new product file, dependency or API.
+tests use existing carriers only. No new product file, dependency or API. The measured package policy gate also requires updating only the actual archive tuples/date in existing scripts/readme_doctests.py and the corresponding rdocx, rdocx-cli and rpptx README rows. This metadata step holds the shared measurement lease after F-X178 releases it. The integrator remeasures the combined source.
 
 ## Rejected alternatives
 
@@ -82,7 +82,7 @@ The **test gate** is **regression**, verbatim from F-X231.
 |---|---|---|
 | regression | `html_import_keeps_the_space_around_an_emphasised_span_outside_it` | Reuse donor exact text and underline, strike, bold and italic facts, plain inter-span spaces and spaces inside emphasis |
 | regression | `html_import_collapses_spaces_on_both_sides_of_a_span_edge_into_one` | Reuse donor repeated-edge, nested-span, whitespace-only span, link and NBSP cases with first-source ownership |
-| regression | `fx231_nbsp_only_content_is_not_discarded` | Positioned and flow NBSP-only text and table cells survive, repeated NBSP and adjacent ASCII spaces stay exact |
+| regression | `fx231_nbsp_only_content_is_not_discarded` | Positioned NBSP-only text and supported table cells survive, unsupported flow NBSP produces the established implicit-layout diagnostic, repeated NBSP and adjacent ASCII spaces stay exact |
 | regression | `fx231_pending_space_preserves_full_properties_and_link_owner` | Font, colour, marks and hyperlink relationship targets remain with their source, including whitespace-only intermediate spans |
 | regression | `fx231_whitespace_boundaries_reset_between_paragraphs_and_breaks` | Leading/trailing ASCII whitespace, empty paragraphs and explicit breaks cannot leak pending state |
 | integration | `fx231_native_html_entrypoints_save_reopen_exact_runs` | Both native constructors match explicit source-authored run expectations before and after bytes/path save/reopen in shapes and cells |
@@ -93,8 +93,7 @@ The **test gate** is **regression**, verbatim from F-X231.
 | integration | `fx231_cli_word_html_whitespace_roundtrip` | Existing Word HTML CLI produces exact run/link/NBSP facts and unchanged diagnostics |
 
 Native PPT tests use existing `crates/rpptx/tests/integration.rs`. Native Word
-tests use existing `crates/rdocx/src/html.rs` test module. Python tests use the
-existing test_core.py carriers. CLI tests use its existing integration carrier.
+tests use existing `crates/rdocx/src/html.rs` test module. Python tests use existing Word test_core.py and PPT test_documented_examples.py carriers. CLI tests use its existing integration carrier.
 Do not filter whitespace-only runs from assertions or compare only joined text.
 Check actual reopened OOXML and hyperlink relationship targets independently.
 
@@ -146,15 +145,15 @@ evidence before recording.
 
 ## Implementation checklist
 
-- [ ] Capture exact donor head, relevant hunks and contribution attribution.
-- [ ] Establish native/installed entrypoint inventory, PPT RED and Word controls.
-- [ ] Port necessary PPT source-owner collapse behavior only.
-- [ ] Reproduce and narrowly repair NBSP visibility losses.
-- [ ] Assert complete formatting, links and text through save/reopen.
-- [ ] Qualify equivalent Word behavior once through existing public surfaces.
-- [ ] Verify diagnostics, limits, opaque extensions and template preservation.
-- [ ] Run focused checks, microscope, scoped verification and unchanged hash gate.
-- [ ] Update listed HLD section and complete through the sprint workflow.
+- [x] Capture exact donor head, relevant hunks and contribution attribution.
+- [x] Establish native/installed entrypoint inventory, PPT RED and Word controls.
+- [x] Port necessary PPT source-owner collapse behavior only.
+- [x] Reproduce and narrowly repair NBSP visibility losses.
+- [x] Assert complete formatting, links and text through save/reopen.
+- [x] Qualify equivalent Word behavior once through existing public surfaces.
+- [x] Verify diagnostics, limits, opaque extensions and template preservation.
+- [x] Run focused checks, microscope, scoped verification and unchanged hash gate.
+- [x] Update listed HLD section and complete through the sprint workflow.
 
 ## Open questions
 
@@ -162,3 +161,64 @@ No material unanswered question. Installed PPT acceptance uses its existing
 PPTX read/save APIs, while actual HTML import remains native Rust only.
 NBSP-only supported content is part of NBSP preservation after a real Base
 reproduction. No new file or dependency is proposed.
+
+
+## Completion evidence
+
+Advanced PR359 at e974ea2240691c0de581efa172ba8c88a77c054b contributes
+only the attributed PowerPoint whitespace algorithm and exact donor regression
+cases. Base controls failed the reported PPT partitions and NBSP preservation,
+while equivalent Word controls passed without Word production changes.
+
+Independent all-aspects pass2 and supplementary measured-carrier pass3 report
+zero defects and zero smells. Scoped verification passes: PPT177 unit and399
+integration tests, Word626 unit,379 integration and2396 regression tests, CLI3
+unit and88 integration tests, all default doctests, all five changed-crate
+all-target/all-feature clippy checks, formatting, prose and adapter policy.
+The repository policy module passes180 tests with2 existing intentional skips.
+The deterministic hash harness retains all49 entries. The broad Word regression
+binary required577 seconds, dominated by existing field and layout stress tests.
+
+Final fresh source wheels pass the two exact installed story nodes. The ordinary
+PPT node also passes with no supplied native input. Its independently constructed
+read/save control and the actual native HTML input gate retain separate evidence
+scopes. Source, wheel, import-path, native-input and review identities are captured
+in /private/tmp/F-X231-final-provenance.json. Actual feature-local crate archives
+are authenticated in /private/tmp/F-X231-archive-final-receipt.json. All are below
+10MiB and retain the unchanged64-byte compression policy. The integrator must
+remeasure the combined source rather than adopting either worker's numbers.
+
+Native baseline tools were pinned to LibreOffice26.2.5.2, Poppler26.01.0 and
+python-pptx1.0.2. Original stack, corpus, tool-path and sandbox failures remain
+in separate logs with their passing equipped successors. Those failed attempts
+are not acceptance evidence. The parent-owned inherited roadmap assertion
+correction matches canonical commit64d1b50f and is separate from this feature's
+product behavior. No baseline, public API, dependency or new product file changes.
+
+## Canonical integration reconciliation
+
+Integration onto F-X178 commit22b8862a preserves both feature contracts. Product
+and HLD hunks merged without semantic conflict. Shared README.md and
+scripts/readme_doctests.py archive values conflicted, so no worker value was
+selected as authoritative. Existing measurement logic rebuilt actual combined
+packages and regenerated the three affected rows and constants.
+
+| Package | Declared compressed | Normalized member bytes | Members | Actual after carrier |
+|---|---|---|---|---|
+| rdocx | 3704806 | 51792424 | 37 | 3704806 |
+| rdocx-cli | 98001 | 452334 | 8 | 98000 |
+| rpptx | 721618 | 3861412 | 16 | 721618 |
+
+Both before-carrier and after-carrier archives are retained under
+`/private/tmp/S92-integration-preflight`. Actual after-carrier member bytes
+and counts are exact, with compressed differences within the unchanged64-byte
+allowance. All three remain below10MiB. No tolerance, assertion or performance
+claim changed. This metadata remeasurement does not replace verified
+publication dry runs. Receipt F-X231-combined-archive-receipt.json SHA-256:
+`d345306e1d23118f3f788d43312291d85fbec7b2c923290dff6c30c3180cd6f4`.
+Independent reconciliation pass1 reports zero defects, smells and nitpicks.
+Focused canonical checks pass two donor cases, five Presentation controls, two
+Word controls and one CLI control, with zero failures or ignored tests. Logs
+and their hashes are retained in F-X231-canonical-focused-receipt.json SHA-256
+`798c759a1f00bee586e8135fdb4c8ba5dfdc580afc55dbf010531028b2d2b7dc`.
+Final full integrated verification remains due.

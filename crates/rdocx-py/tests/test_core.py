@@ -6655,3 +6655,34 @@ def test_preserved_control_paragraphs_keep_checked_source_and_ordinary_reads(pro
     with pytest.raises(rdocx.StaleElementError, match="Document.add_paragraph"):
         _ = run.text
     assert [paragraph.text for paragraph in document.paragraphs] == ["outside", "updated", "later"]
+
+
+def test_fx231_installed_word_html_whitespace_entrypoints(tmp_path):
+    import rdocx
+    import xml.etree.ElementTree as ET
+
+    html = '<p>a <b>b </b> c&nbsp;&nbsp;d</p><p><a href="https://example.test/">x </a><i> </i> y</p>'
+    source = tmp_path / "source.html"
+    source.write_text(html, encoding="utf-8")
+    inserted = rdocx.Document()
+    anchor = inserted.add_paragraph("anchor")
+    assert inserted.insert_html(html, after=anchor) == ()
+    created, diagnostics = rdocx.Document.from_html(html)
+    opened, opened_diagnostics = rdocx.Document.open_html(source)
+    assert diagnostics == opened_diagnostics == ()
+    for document in (created, opened, inserted):
+        output = tmp_path / "saved.docx"
+        document.save(output)
+        reopened = rdocx.Document(output)
+        with zipfile.ZipFile(io.BytesIO(reopened.to_bytes())) as archive:
+            root = ET.fromstring(archive.read("word/document.xml"))
+            relations = ET.fromstring(archive.read("word/_rels/document.xml.rels"))
+        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        paragraphs = root.findall("./w:body/w:p", ns)[-2:]
+        first = [("".join(run.itertext()), run.find("w:rPr/w:b", ns) is not None) for run in paragraphs[0].findall("w:r", ns)]
+        assert first == [("a ", False), ("b ", True), ("c\u00a0\u00a0d", False)]
+        link = paragraphs[1].find("w:hyperlink", ns)
+        assert "".join(link.itertext()) == "x "
+        relation_id = link.attrib["{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"]
+        assert next(item.attrib["Target"] for item in relations if item.attrib["Id"] == relation_id) == "https://example.test/"
+        assert "".join(paragraphs[1].itertext()) == "x y"

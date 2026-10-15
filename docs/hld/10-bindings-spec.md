@@ -1786,6 +1786,15 @@ editable presentation only after save, reopen, and validation. Python, WASM,
 and CLI surfaces gain no presentation HTML import entry point and retain their
 existing import methods and errors.
 
+Presentation HTML text collapses ASCII whitespace across inline boundaries.
+The retained space keeps the formatting and hyperlink ownership of the first
+source text in that whitespace sequence. Leading and trailing paragraph spaces
+are trimmed, and explicit breaks reset pending whitespace. Nonbreaking spaces
+and other non-ASCII spacing characters remain literal text, including supported
+positioned NBSP-only content and table cells. Unpositioned content still receives
+the explicit unsupported implicit-layout diagnostic.
+
+
 Native Rust callers can import PDF pages through
 `Presentation::from_pdf_bytes`, `from_pdf_bytes_with_limits`, and `open_pdf`.
 The additive pre-1.0 surface exposes concrete `PdfImportMode`,
