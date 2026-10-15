@@ -19568,3 +19568,25 @@ The exact22-package locally patched publication dry run passes without uploading
 **Notes for future sessions.** The measured frame reductions are implementation evidence, not a portable ABI size promise. Actual producers remain the recorded worker and b3b integrated sources. Final reviewed-source full gate and clean sprint review remain due. Normal close, exact-main release verification, publication and acceptance-aware contributor reconciliation remain separate pending gates. Original failed attempts and producer identities remain unchanged.
 
 **Evidence references.** `.claude/reviews/F-X225-metadata-pass-2.md`. Relevant source/artifact bridge b7890b384a31ad34d6e00107607ebf2dfe17176628666eec8b069edecc1e31a8 retains actual producer identities.
+
+### F-X226, Release superseded relationships after checked PowerPoint XML edits
+
+**Sprint.** S91.1
+**Completed.** 2026-10-15, scoped completion
+**Size.** M, estimated2 days, actual not recorded
+
+**What was built.** Checked XML replacement releases only known-role relationships owned by the original selected fragment and absent from the complete updated physical owner. Candidate pruning removes newly unreachable chart and workbook descendants while retaining shared targets, opaque references and producer orphans.
+
+**Non-obvious choices.** The existing debug save assertion and relationship validator remain enabled. Cleanup occurs in the cloned transaction before publication and preserves exact no-op and atomic refusal behavior.
+
+**Deviations from the design plan.** None.
+
+**Spec sections touched.** Exactly HLD04 checked PowerPoint XML transactions and targeted graph cleanup.
+
+**Tests.** The genuine Base native and original public debug triggers fail. The unchanged six public chart controls pass with both debug and optimized bindings. Native controls retain sibling, group, opaque and external references, shared targets, unrelated orphans, no-op bytes and atomic refusal. Scoped native suites, both WASM checks, strict Clippy, affected verified archive, hash49 and policy159 passes with two platform skips qualify their recorded sources. Independent source and metadata reviews are clean.
+
+**Hash harness.** All49 product outputs unchanged. The labelled behavioral repair is targeted owned-graph cleanup, not a rendering baseline change.
+
+**Notes for future sessions.** Actual debug and optimized results retain their separate artifacts. No optimized pass substitutes for debug validation. Final reviewed-source full gate and clean sprint review remain due. Normal close, exact-main release verification, publication and acceptance-aware contributor reconciliation remain separate pending gates. Original failed attempts and producer identities remain unchanged.
+
+**Evidence references.** `.claude/reviews/F-X226-metadata-pass-2.md`. Relevant source/artifact bridge b7890b384a31ad34d6e00107607ebf2dfe17176628666eec8b069edecc1e31a8 retains actual producer identities.

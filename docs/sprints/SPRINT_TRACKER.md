@@ -1003,3 +1003,5 @@ Issues264 and281 remain excluded and open.
 | F-X224 | S91.1 | M | 2 | not recorded | 2026-10-15 | Pinned native HB/animation and fractional-tag routing, independently reviewed three-value F210 external raster propagation. Corrected hosted receiptad03f29ef28fe9a5174cdb7cb30a8811c4cb25fa237eac4df1b8a0d63d388792. Final sprint/main/release gates remain due |
 
 | F-X225 | S91.1 | M | 2 | not recorded | 2026-10-15 | Private parser storage preserves public/XML contracts and passes original plus populated default1MiB Node callers. Scoped native/WASM/archive/hash/policy and independent reviews qualified |
+
+| F-X226 | S91.1 | M | 2 | not recorded | 2026-10-15 | Targeted checked-owner relationship retirement preserves shared/opaque graphs, debug validation and atomicity. Actual debug and optimized public regression plus scoped gates qualified |
