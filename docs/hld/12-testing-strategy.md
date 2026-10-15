@@ -4113,7 +4113,7 @@ variant and do not replace the genuine PowerPoint paired-face positive.
 
 Native application normalization remains separate from the library's exact
 unrelated-edit preservation controls. Known absent historical movie and PNG
-oracles remain unqualified under their S92 disposition. Original failed
+oracles remain unqualified under their S94 disposition. Original failed
 commands and distinct successful successors retain their actual membership.
 
 Chart authoring controls exercise installed bar/line creation in both families,

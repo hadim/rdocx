@@ -1,14 +1,16 @@
 # F-283, Complete numbering-aware navigation fields
 
 **Status**: approved
-**Sprint**: S92
+**Sprint**: S94
 **Size**: L
 **Depends on**: F-248, F-279 through F-282, F-X200
 
 ## Scheduling
 
 The user first carried this unfinished story from S90 to S91, then parked it
-at S92 so S91 can focus on frozen issue and PR repairs. No implementation is delivered by that scheduling change.
+at S92 so S91 can focus on frozen issue and PR repairs. The repair sprint
+insertion moves its prospective target to S94. Neither scheduling change
+delivers implementation.
 Reuse the existing approved design and saved evidence after its prerequisites
 complete, with fresh evidence for the final source.
 

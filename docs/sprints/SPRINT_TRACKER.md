@@ -1013,3 +1013,22 @@ Issues264 and281 remain excluded and open.
 | F-X226 | S91.1 | M | 2 | not recorded | 2026-10-15 | Targeted checked-owner relationship retirement preserves shared/opaque graphs, debug validation and atomicity. Actual debug and optimized public regression plus scoped gates qualified |
 
 | F-X227 | S91.1 | L | 4 | not recorded | 2026-10-15 | Actual ownerCI38702668217 qualifies95/100,42hard51native24docs and5no-credit with safe one-job cleanup. Exact source215 rehearsal artifacts and installed156/typing4 qualify their recorded source. Final gates/publication pending |
+
+## External benchmark sprint insertion, 2026-10-15
+
+Insert S96 before the conditional spreadsheet programme. F-313 through F-318
+answer Issue 377 with six pending stories estimated at 21 developer-days. The
+previous S96 through S105 spreadsheet roadmap shifts to S97 through S106.
+Issue281 remains open for F-184, now at S97. Historical delivered rows and
+earlier replan records remain unchanged. No completion, velocity or release is
+recorded by planning.
+
+## Repair sprint insertion, 2026-10-15
+
+Plan S92 and S93 for the contribution and issue-repair wave, with nine new
+pending F-IDs F-X228 throughF-X236 and existing F-X178. Shift the previous
+S92 throughS106 future roadmap by two. Preserve the separately added external
+Word benchmark sprint and F-313 throughF-318 at S98, before Excel starts at
+S99. The roadmap now ends at S108. S91.1 scope and release preparation remain
+unchanged. Historical sprint IDs, tags and delivered rows are unchanged.
+Issues264,281 and377 remain open. This records planning, not delivery.
