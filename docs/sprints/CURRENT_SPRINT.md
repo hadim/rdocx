@@ -22,7 +22,7 @@
 | F-X234 | Preserve supported LaTeX conversion structure | M | in-progress | codex |
 | F-X235 | Qualify equation layout against native Word | L | pending | - |
 | F-X236 | Measure public setter inlining before changing policy | S | pending | - |
-| F-X245 | Preserve chart data changes in Word comparison | L | pending | - |
+| F-X245 | Preserve chart data changes in Word comparison | L | in-progress | codex |
 | F-X246 | Honor chart legend position and overlay during rendering | L | pending | - |
 
 ## Sequencing note
