@@ -818,7 +818,11 @@ unresolved-symbol link failure that is easy to misdiagnose as something else.
 **The golden-PNG gate in the test job.** After the full workspace suite, the
 same Ubuntu 24.04 job runs `python3 scripts/golden_png_harness.py --check` with
 the Poppler 26.01.0 installation already on `PATH`. The step is unconditional
-and propagates a decoded-pixel mismatch as a CI failure.
+and propagates a decoded-pixel mismatch as a CI failure. The external raster
+manifest is distinct from the product hash manifest. An approved bundled-font
+behavior change must propagate its measured affected samples to both under
+the exclusive baseline lease, with attributed review. Unrelated samples,
+dimensions, DPI and exact comparison remain unchanged.
 
 **The Pandoc texmath gate in the test job.** The Ubuntu 24.04 runner installs
 the exact SHA-256-pinned Pandoc 3.10 archive, verifies the executable identity,

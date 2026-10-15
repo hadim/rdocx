@@ -1,6 +1,6 @@
 # F-X224, Repair hosted release tool and stack routing
 
-**Status**: completed
+**Status**: approved
 **Sprint**: S91.1
 **Size**: M
 **Depends on**: F-X221
@@ -166,7 +166,34 @@ S91 and its s91 tag remain immutable completed history. This is S91.1 only, with
 
 ## Hash harness
 
-All49 accepted outputs remain unchanged. No baseline update is authorized.
+All49 accepted product hashes remain unchanged. The separate external PDF
+raster manifest has one narrowly attributed correction for the already
+approved F-X210 behavior. Current source215 retains exactly the reviewed
+F-X210 PDF bytes. Its Georgia requests resolve to approved Gelasio instead
+of Caladea. The labelled behavior commit7363ce342ee07897ded52cc422db34492738931a
+updated12 product hashes but omitted these three external raster values.
+
+Recompute only these decoded RGBA expectations in
+`scripts/golden_pixel_manifest.json` with the original deterministic generator
+and pinned Poppler26.01.0 at150DPI:
+
+- contract: `06421718e6dbad9c622c8f7cfdc474e76620f32045dd46b06d678130a2d5b478`.
+- proposal: `08ec5c7046b024447f9ebad03ff49823361a30e61f99e9a5436bb8ff6fe63945`.
+- report: `8e1f83d71ad0e1a2aa58ba0d257a31be42049892918fbf69dcf11c4097d5f49b`.
+
+All seven dimensions1275x1650, the four unrelated sample hashes, exact
+comparison, DPI and rasterizer version remain unchanged. Local actual
+FreeType2.14.3 and hosted2.13.2 produce these same three RGBA digests, so no
+FreeType change is justified. This repairs propagation of the existing
+approved output delta. It introduces no product, font, layout or oracle
+algorithm change. The original failed CI run remains a failure.
+
+The existing F-X210 design's Hash harness section and its PR319 incremental
+golden-pixel refresh explicitly require this attributed measured recomputation.
+Do not copy contributor expectations. Root's exclusive baseline lease uses
+actual current producer bytes, the retained original12-key review and current
+independent raster observations. Require an independent zero-finding review,
+actual seven-sample check, one-pixel rejection and actual hosted acceptance.
 
 ## Implementation checklist
 
@@ -175,6 +202,9 @@ All49 accepted outputs remain unchanged. No baseline update is authorized.
 - [x] Execute the actual integer/fractional tag guard and deciding negative controls.
 - [x] Pass scoped regression, policy and actual native controls without reducing binding104/native-eight.
 - [x] Obtain a zero-finding microscope and update the listed HLD mechanism.
+- [x] Recompute and independently review the three omitted F-X210 external raster expectations.
+- [x] Pass original seven-sample exact comparison and one-pixel rejection.
+- [ ] Qualify actual hosted acceptance after the attributed raster correction.
 
 - Native Test log: `/private/tmp/S91-main-CI-38662802341-readonly/Test-failed-job.log`, SHA256 e87dd5909a3c80c76043e9fbe54098acbf96d60337431418742663f299dfa7b6. The same missing exact hb-subset consumer fails after the performance and authoring gates pass.
 
@@ -193,3 +223,22 @@ remain mandatory at the integrated source.
 - Hash harness: `/private/tmp/F-X224-hash49.log`,49 unchanged.
 - Format, prose and generated adapters: actual exit0. No Rust production or published package source changed, so no changed-crate compile or Clippy gate is added beyond the original native controls.
 - Independent whole-source review and test-only follow-up: `.claude/reviews/F-X224-all-pass-1.md` and `.claude/reviews/F-X224-all-pass-2.md`, zero defects, smells and nitpicks.
+
+## Golden raster correction evidence
+
+Primary CI38696954013 passed the actual full Rust, binding, MSRV, animation
+and fidelity consumers but failed the separate golden-PNG comparison for
+contract, proposal and report. It remains failed. The retained original
+F-X210 reviewed PDF bytes and old/new Caladea/Gelasio inventories identify
+the omitted baseline propagation, independently reproduced on macOS and Linux.
+
+- `/private/tmp/S91.1-primary-golden-failure-38696954013/F210-causal-diagnosis-successor.json`, SHAe8a16487d8cec498731b1242e3fdd80461c19fd7aa39f4933621438ed62b0c74.
+- `/private/tmp/S91.1-golden-PNG-current215-diagnosis-1/diagnosis-and-minimal-proposal.json`, SHA297b944d109738715caafc8e41864f1b58456b89ef13c89ed819c284e62e0a05.
+- The reviewed original F-X210 twelve-key delta is recorded in `.claude/reviews/F-X210-hash-delta-pass-25.md`. Native metric compatibility is not inferred from raster baseline adoption.
+
+Local correction qualification: original updater, seven-sample check,
+one-pixel rejection and four self-tests pass, receipt1904a52c085166e37eda2e4c1c60ddbb71686aee609c86545661214c6ab3fcaa.
+Bounded independent `.claude/reviews/F-X224-golden-pass-3.md` is clean.
+The existing operative CI golden-gate mutation control passes. Prose has
+zero violations,26 generated adapters match, and diff checks pass. Actual
+hosted acceptance and ordinary completion remain pending.
