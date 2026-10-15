@@ -5,7 +5,7 @@
 **Size**: L
 **Depends on**: F-X193, F-X194, F-X195, F-X196, F-X197, F-X198, F-X199, F-X200, F-X201, F-X202, F-X203, F-X204, F-X205, F-X206, F-X207, F-X208, F-X209, F-X210, F-X211, F-X212, F-X213, F-X214, F-X215, F-X216, F-X217, F-X218, F-X220, F-X222
 **Test gate**: release regression
-**Implementation**: local preparation, full verification and the bare-wheel routing amendment are qualified. Final integrated successor review, hosted rehearsal, closure and publication retain their separate gates.
+**Implementation**: local preparation, full verification and the bare-wheel routing amendment are qualified. Final integrated successor review is clean. Hosted rehearsal, closure and publication retain their separate gates.
 
 ## Problem
 
@@ -98,7 +98,7 @@ All49 deterministic outputs must remain unchanged by version preparation. Preser
 
 - [x] Route native and musl bare-wheel checks through the authenticated existing78-node priority inventory, with exact selector controls and actual bare-environment acceptance.
 
-- [ ] Final integrated full verification and clean sprint review at the current SHA.
+- [x] Final integrated full verification and clean sprint review at the current SHA.
 - [ ] Actual build-only hosted rehearsal at that exact reviewed pushed source.
 - [ ] Close-preflight and close-sprint exact main merge provenance.
 - [ ] Separate /release final approval and verified publication for each family.
@@ -124,4 +124,4 @@ edges. Frozen compatibility bodies and retained release artifacts are unchanged.
 
 Binding CI prepares independent licensed-font and synthetic-axis controls from source before pytest. Pinned HarfBuzz14.4.0, authenticated Poppler and the physical compiler with an isolated dependency closure qualify the reference renderer. The104 cases,0.99 paint thresholds, complete Python suites and separate ROOT native-eight gate retain their acceptance. The current full gate passes with unchanged production bytes from the genuine paired-wheel build. Final sprint review, hosted rehearsal, close and publication retain their separate post-integration gates.
 
-The bare-wheel amendment uses the existing37 Word and41 PowerPoint priority/compatibility node IDs. Native and musl jobs pass exact argument arrays without shell splitting. Complete-directory Python,104 font and native-eight acceptance remain in the equipped gates. No missing oracle becomes a skip, and no runtime acceptance is removed. Original clean reviewpass2 remains historical. The changed release workflow has a clean independent working review and actual bare78 acceptance. Its final integrated successor review and hosted rehearsal remain required before closure.
+The bare-wheel amendment uses the existing37 Word and41 PowerPoint priority/compatibility node IDs. Native and musl jobs pass exact argument arrays without shell splitting. Complete-directory Python,104 font and native-eight acceptance remain in the equipped gates. No missing oracle becomes a skip, and no runtime acceptance is removed. Original clean reviewpass2 remains historical. The changed release workflow has a clean independent working review and actual bare78 acceptance. Its final integrated successor review is clean. Actual hosted rehearsal remains required before closure.
