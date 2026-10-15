@@ -290,3 +290,13 @@ existing ignored case,73 paragraph cases, one table case and one hyperlink
 resolution case. All49 hash entries match. The focused receipt and logs remain
 in the same evidence directory. Final full verification and sprint review
 remain due after F-X230 integration.
+
+
+## Dependency-prefix completion
+
+The canonical prerequisite is completed after the validated handoff, clean
+independent integration review and focused actual combined-source checks. Its
+scoped worker verification, exact source preservation and regression gate remain
+valid on this prefix. Full workspace verification, final current-source riders
+and sprint review are still due after F-X230, and are not supplied by this
+checkpoint. The shared ledger records scoped acceptance only.

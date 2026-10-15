@@ -1032,3 +1032,6 @@ Word benchmark sprint and F-313 throughF-318 at S98, before Excel starts at
 S99. The roadmap now ends at S108. S91.1 scope and release preparation remain
 unchanged. Historical sprint IDs, tags and delivered rows are unchanged.
 Issues264,281 and377 remain open. This records planning, not delivery.
+
+
+| F-X229 | S92 | L | 4 | not recorded | 2026-10-15 | Correctness-only PR374 subset repairs hyperlink, empty paragraph, table-adjacent and trailing deletion reconstruction. Scoped worker gates and canonical focused reconciliation qualify dependency-prefix completion. Final sprint gate remains due |

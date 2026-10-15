@@ -19612,3 +19612,53 @@ The exact22-package locally patched publication dry run passes without uploading
 **Notes for future sessions.** The actual corpus and rehearsal producers remain source215. Earlier installed104/native8/full778/854 and original app witnesses keep their b3b or historical identities, with complete source-body, mode and artifact bridges to current unchanged consumers. The source215 archive bytes are separately retained before cache reuse. Skills PR37 remains an external upstream follow-up under the approved post-publication closure decision. Final reviewed-source full gate and clean sprint review remain due. Normal close, exact-main release verification, publication and acceptance-aware contributor reconciliation remain separate pending gates. Original failed attempts and producer identities remain unchanged.
 
 **Evidence references.** `.claude/reviews/F-X227-source-pass-1.md`. Relevant source/artifact bridge b7890b384a31ad34d6e00107607ebf2dfe17176628666eec8b069edecc1e31a8 retains actual producer identities.
+
+
+### F-X229, Repair comparison reconstruction correctness
+
+**Sprint.** S92
+**Completed.** 2026-10-15
+**Size.** L, estimated4 days, actual not recorded
+
+**What was built.** Whole-paragraph hyperlinks retain their owning shells while
+revision wrappers track their content. Empty paragraph properties, table-adjacent
+paragraph marks, deterministic mixed-owner pairing and trailing deletion chains
+now reconstruct both document sides through save and reopen. Issues368 through371
+are covered by independent properties, relationships and structural assertions.
+
+**Non-obvious choices.** Reuse Hadrien Mary's PR374 correctness commits ca8372f8,
+64b68611,4c509c27,313ae8f5 and f8ba1a3b separately from its grouping subset.
+Foreign expanded names, raw gaps and opaque children retain exact bytes. Captured
+nested Word hyperlinks refuse atomically with a statically bounded paragraph
+plus one direct hyperlink wrapper, preserving the unsupported boundary.
+
+**Deviations from the design plan.** No product scope expansion. Independent
+review found and then verified the bounded-owner refusal repair. Actual combined
+source archive measurements replace isolated worker metadata without changing
+the64-byte allowance or10MiB limit.
+
+**Spec sections touched.** Architecture comparison and revision resolution in
+03-architecture.md, native Word comparison ownership in10-bindings-spec.md, and
+comparison regression, preservation and terminal paragraph coverage in
+12-testing-strategy.md.
+
+**Tests.** Genuine Base failures establish the regression gate. Final equipped
+scoped worker suite passes625 unit,379 integration,2409 regression and2 doctests.
+Worker policy180 passes with2 existing skips. Canonical policy passes182 tests
+with2 existing skips after explicit1.97.1 compiler and rustdoc selection and
+independently reviewed build-only target isolation. Earlier root-cache stalls
+and incompatible-cache attempts remain uncredited. Independent microscope pass2 and
+canonical integration pass1 are clean. Canonical comparison, paragraph, table
+and hyperlink reconstruction filters pass on the actual combined prefix.
+All existing parser preservation, refusal and owner controls remain present.
+
+**Hash harness.** Unchanged, all49 entries. Intentional correctness XML changes
+are attributed to this feature, separately from F-X230 grouping.
+
+**Notes for future sessions.** This is the scoped dependency-prefix checkpoint
+that permits F-X230 to start. Final integrated full verification and sprint
+review remain due. Actual combined rdocx metadata declares3714005 compressed
+bytes,51847828 normalized member bytes and37 members. The actual archive
+compresses to3714006 bytes. Receipt SHA-256 is
+9817499112aa3eeeb3ae292338c83eaea6e0078260bd20c2a50fd22dabc72495.
+Metadata no-verify packaging is not publication verification.
