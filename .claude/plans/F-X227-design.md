@@ -171,19 +171,33 @@ All49 accepted outputs remain unchanged. No baseline update is authorized.
 - [x] Qualify new native input identities without rewriting old evidence.
 - [x] Implement actual100 CI execution and per-area reporting.
 - [x] Prove the local owner admission, finite cleanup and no resource upload controls.
-- [ ] Preserve full hosted debug assertions while qualifying any opt2 change.
+- [x] Preserve full hosted debug assertions while qualifying any opt2 change.
 - [x] Pass local scoped checks and a zero-finding independent microscope.
 - [ ] Qualify the final integrated result before release and remote closure.
 
 ## Source availability checkpoint
 
-Local implementation and checks are prepared for reviewed batch integration.
-The actual owner job, all42 hard gates and51 native clauses at the reviewed
-remote source remain pending. The hosted debug profile retains assertions and
-overflow checks, while its actual hosted qualification remains pending too.
-The plan remains approved and the feature remains in-progress. This checkpoint
-does not claim complete scoped acceptance or permit a worker push, delivery
-ledger update, main merge, tag or publication.
+Reviewed source215715b3b733307832202147243738f5b7b6279d is available
+on the canonical sprint ref. Actual owner CI38702668217 and its aggregate
+gate passed. Its unchanged100 first attempts, authenticated source and
+paired providers,114 byte-identical outputs, three fresh revised-input
+packages and separate ROOT admissions yield95 qualified files, all42 hard
+gates and51 native clauses, five no-credit cases and no unexpected failure.
+The successful one-job runner was removed. Three preceding refused
+assignments ran no corpus cases and remain retained as failures.
+
+The current primary hosted run has passed both full Python suites and both
+fidelity jobs. Its Rust and MSRV consumers passed, while the enclosing Test job failed
+on three stale golden-PNG expectations from the already approved F-X210
+font change. F-X224 owns that attributed correction and actual hosted
+acceptance. Final integrated verification and sprint review remain pending.
+Hosted debug assertions and overflow checks remain enabled. The plan stays approved and the feature stays in-progress
+until these remaining gates pass. This checkpoint does not claim completion,
+main merge, tagging or publication.
+
+- Actual owner CI receipt: `/private/tmp/S91.1-F-X227-owner-ci/actual-CI38702668217-success/receipt.json`, SHA364fc8df596ac143943de2d33ac0dc30933c273621ba2692fbad60b7091e1140.
+- ROOT qualification decision: `/private/tmp/S91.1-F227-qualification-routing-preparation-1/root-CI38702668217-adoption-1/root-decision.json`, SHA7a2c28c8f82e0f88f567d384177484ee4c4cde374a0f92725af3a830ded364df.
+- Actual execution/source/attempt identities and historical native provenance remain distinct in the admitted packet. No historical score is relabeled as this CI run.
 
 ## Open questions
 
