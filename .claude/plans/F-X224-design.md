@@ -1,6 +1,6 @@
 # F-X224, Repair hosted release tool and stack routing
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91.1
 **Size**: M
 **Depends on**: F-X221
@@ -204,7 +204,7 @@ actual seven-sample check, one-pixel rejection and actual hosted acceptance.
 - [x] Obtain a zero-finding microscope and update the listed HLD mechanism.
 - [x] Recompute and independently review the three omitted F-X210 external raster expectations.
 - [x] Pass original seven-sample exact comparison and one-pixel rejection.
-- [ ] Qualify actual hosted acceptance after the attributed raster correction.
+- [x] Qualify actual hosted acceptance after the attributed raster correction.
 
 - Native Test log: `/private/tmp/S91-main-CI-38662802341-readonly/Test-failed-job.log`, SHA256 e87dd5909a3c80c76043e9fbe54098acbf96d60337431418742663f299dfa7b6. The same missing exact hb-subset consumer fails after the performance and authoring gates pass.
 
@@ -241,4 +241,7 @@ one-pixel rejection and four self-tests pass, receipt1904a52c085166e37eda2e4c1c6
 Bounded independent `.claude/reviews/F-X224-golden-pass-3.md` is clean.
 The existing operative CI golden-gate mutation control passes. Prose has
 zero violations,26 generated adapters match, and diff checks pass. Actual
-hosted acceptance and ordinary completion remain pending.
+hosted acceptance passed in CI38708235000 at6d7c7da729e0ecb34252e821341f22844e37a9fd.
+Terminal receipt `/private/tmp/S91.1-primary-corrected-raster-acceptance-1/terminal-receipt.json`, SHAad03f29ef28fe9a5174cdb7cb30a8811c4cb25fa237eac4df1b8a0d63d388792.
+Ordinary completion records its scoped evidence. Final reviewed-commit full
+verification, sprint review and exact-main publication gates remain due.

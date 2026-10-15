@@ -19524,3 +19524,25 @@ The exact22-package locally patched publication dry run passes without uploading
 
 
 **Release workflow amendment.** A check before hosted dispatch found that bare-wheel jobs selected mandatory oracle-dependent cases without preparing their inputs. Both native and musllinux jobs now consume the exact existing37 Word and41 PowerPoint priority/compatibility node IDs from one positive inventory, SHA28abec50, using structured argv with explicit Docker environment transport. Full equipped acceptance is retained. Genuine bare Python3.9 collection and runtime pass all78 with source and installed guards stable, receiptb82fbb3a under `/private/tmp/S91-F-X221-wheel-routing-amendment-1`. Full policy records159 passes and two existing skips. After policy-only assertion strengthening, all four affected controls pass. Custodydc9a68fc retains both source versions without relabelling the original full invocation. Independent working review8beaaa24 is clean. Shell syntax is checked, with actual Docker and other hosted targets still awaiting rehearsal. No product, rendering, dependency or wheel payload bytes change. The earlier clean sprint reviewpass2 remains historical and the changed workflow receives the final integrated successor review.
+
+### F-X224, Repair hosted release tool and stack routing
+
+**Sprint.** S91.1
+**Completed.** 2026-10-15, scoped completion
+**Size.** M, estimated2 days, actual not recorded
+
+**What was built.** Native Test and MSRV consumers prepare source-qualified HarfBuzz14.4.0 before use. Both deterministic animation commands retain the approved8MiB native budget. Release preflight accepts exactly one annotated integer or single-fraction sprint tag at current main, preserving all family and publication guards.
+
+**Non-obvious choices.** The native-only branch reuses the independent source producer without requiring installed bindings, Rust reference compilation or generated font inputs. A later hosted failure exposed three external raster expectations omitted from the already approved F-X210 Georgia-to-Gelasio delta.
+
+**Deviations from the design plan.** The separately reviewed golden correction changes only contract, proposal and report decoded RGBA expectations and attribution. Four unrelated rasters, dimensions, DPI, Poppler version and exact comparison remain unchanged.
+
+**Spec sections touched.** Exactly HLD15, native tool preparation, CI stack routing and release provenance.
+
+**Tests.** Original native SVG controls pass under current Rust and1.93, the original animation golden passes, and executable tag positives and negatives plus policy mutation controls qualify the guard. The source-only native producer and all scoped checks retain actual receipts. Local seven-sample raster comparison and one-pixel rejection pass. Corrected primary CI38708235000: SUCCESS at 6d7c7da729e0ecb34252e821341f22844e37a9fd, receipt ad03f29ef28fe9a5174cdb7cb30a8811c4cb25fa237eac4df1b8a0d63d388792.
+
+**Hash harness.** All49 accepted product hashes remain unchanged. Exactly three external Poppler raster hashes propagate the existing reviewed F-X210 behavior whose original12 product hashes changed. No new product output delta is introduced.
+
+**Notes for future sessions.** Process trigger: a new workflow needed actual external CI before completion, while ordinary ordering withheld its source until completion. Separate process commit5cb79e0623ec000d76d2b1725b35eb5734ae1587 introduced the reviewed sprint-ref availability checkpoint. Features stayed approved and in-progress with external gates pending. It permitted no worker push, force push, main merge, tag or publication. Final reviewed-source full gate and clean sprint review remain due. Normal close, exact-main release verification, publication and acceptance-aware contributor reconciliation remain separate pending gates. Original failed attempts and producer identities remain unchanged.
+
+**Evidence references.** `.claude/reviews/F-X224-golden-pass-3.md`. Relevant source/artifact bridge b7890b384a31ad34d6e00107607ebf2dfe17176628666eec8b069edecc1e31a8 retains actual producer identities.
