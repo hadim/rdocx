@@ -16,32 +16,32 @@ regenerated, never hand-edited.
 
 | Milestone | F-IDs | Done | In Progress | Pending |
 |-----------|-------|------|-------------|---------|
-| M1, Preparation and safety net | 12 | 12 | 0 | 0 |
-| M2, Shared infrastructure extraction | 10 | 10 | 0 | 0 |
-| M3, Media | 6 | 6 | 0 | 0 |
-| M4, Layout primitives | 8 | 8 | 0 | 0 |
-| M5, PDF backend | 9 | 9 | 0 | 0 |
-| M6, Shared publication and rdocx cutover | 6 | 6 | 0 | 0 |
-| M7, DrawingML | 19 | 19 | 0 | 0 |
-| M8, PresentationML | 14 | 14 | 0 | 0 |
-| M9, Inheritance resolver | 8 | 8 | 0 | 0 |
-| M10, Renderer | 20 | 20 | 0 | 0 |
-| M11, Write API | 12 | 12 | 0 | 0 |
-| M12, Charts | 12 | 12 | 0 | 0 |
-| M13, Bindings and tooling | 18 | 18 | 0 | 0 |
-| M14, Word collaboration layer | 9 | 9 | 0 | 0 |
-| M15, Charts beyond PowerPoint | 4 | 4 | 0 | 0 |
-| M16, Document automation | 10 | 10 | 0 | 0 |
-| M17, Security and compliance | 7 | 7 | 0 | 0 |
-| M18, Format breadth | 8 | 8 | 0 | 0 |
-| M19, Advanced spreadsheets | 21 | 0 | 0 | 21 |
-| M20, Fidelity at scale | 13 | 7 | 0 | 6 |
-| M21, Presentation depth | 15 | 15 | 0 | 0 |
-| M22, Word depth | 12 | 12 | 0 | 0 |
-| M23, From-scratch business documents | 24 | 24 | 0 | 0 |
-| M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 260 | 239 | 0 | 17 |
-| **Total** | **591** | **513** | **0** | **74** |
+| M1, Preparation and safety net | 13 | 12 | 0 | 0 |
+| M2, Shared infrastructure extraction | 11 | 10 | 0 | 0 |
+| M3, Media | 7 | 6 | 0 | 0 |
+| M4, Layout primitives | 9 | 8 | 0 | 0 |
+| M5, PDF backend | 10 | 9 | 0 | 0 |
+| M6, Shared publication and rdocx cutover | 7 | 6 | 0 | 0 |
+| M7, DrawingML | 20 | 19 | 0 | 0 |
+| M8, PresentationML | 15 | 14 | 0 | 0 |
+| M9, Inheritance resolver | 9 | 8 | 0 | 0 |
+| M10, Renderer | 21 | 20 | 0 | 0 |
+| M11, Write API | 13 | 12 | 0 | 0 |
+| M12, Charts | 13 | 12 | 0 | 0 |
+| M13, Bindings and tooling | 19 | 18 | 0 | 0 |
+| M14, Word collaboration layer | 10 | 9 | 0 | 0 |
+| M15, Charts beyond PowerPoint | 5 | 4 | 0 | 0 |
+| M16, Document automation | 11 | 10 | 0 | 0 |
+| M17, Security and compliance | 8 | 7 | 0 | 0 |
+| M18, Format breadth | 9 | 8 | 0 | 0 |
+| M19, Advanced spreadsheets | 22 | 0 | 0 | 21 |
+| M20, Fidelity at scale | 14 | 7 | 0 | 6 |
+| M21, Presentation depth | 16 | 15 | 0 | 0 |
+| M22, Word depth | 13 | 12 | 0 | 0 |
+| M23, From-scratch business documents | 25 | 24 | 0 | 0 |
+| M24, Modern DOCX authoring completeness | 55 | 24 | 0 | 30 |
+| X, Cross-cutting | 261 | 239 | 1 | 16 |
+| **Total** | **616** | **513** | **1** | **73** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -800,7 +800,7 @@ HLD14 contract before adopting contributor changes.
 | F-X229 | Repair comparison reconstruction correctness | S92 | L | done |
 | F-X230 | Group comparison changes for readable revisions | S92 | M | done |
 | F-X231 | Preserve PowerPoint HTML import whitespace | S92 | M | done |
-| F-X232 | Render legal revisions and qualify checked XML repros | S93 | L | pending |
+| F-X232 | Render legal revisions and qualify checked XML repros | S93 | L | in-progress |
 | F-X233 | Repair paragraph border geometry | S93 | M | pending |
 | F-X234 | Preserve supported LaTeX conversion structure | S93 | M | pending |
 | F-X235 | Qualify equation layout against native Word | S93 | L | pending |

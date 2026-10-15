@@ -17,7 +17,7 @@
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X232 | Render legal revisions and qualify checked XML repros | L | pending | - |
+| F-X232 | Render legal revisions and qualify checked XML repros | L | in-progress | codex |
 | F-X233 | Repair paragraph border geometry | M | pending | - |
 | F-X234 | Preserve supported LaTeX conversion structure | M | pending | - |
 | F-X235 | Qualify equation layout against native Word | L | pending | - |
