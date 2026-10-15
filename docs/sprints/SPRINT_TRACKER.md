@@ -1035,3 +1035,8 @@ Issues264,281 and377 remain open. This records planning, not delivery.
 
 
 | F-X229 | S92 | L | 4 | not recorded | 2026-10-15 | Correctness-only PR374 subset repairs hyperlink, empty paragraph, table-adjacent and trailing deletion reconstruction. Scoped worker gates and canonical focused reconciliation qualify dependency-prefix completion. Final sprint gate remains due |
+
+
+## Issue378 execution intake, 2026-10-15
+
+Add pending F-X237, size L estimated4 developer-days, to S92 at the user's explicit request. The six-story sprint estimate is now15 to18 developer-days. This records scope intake only, with no completion or velocity credit. All original repair acceptance remains intact.

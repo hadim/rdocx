@@ -8005,3 +8005,20 @@ Resolve the layout half of Issue365 after conversion completion. Qualify integra
 **Test gate**: regression
 
 Resolve Issue367 through a real cross-crate non-LTO consumer benchmark and compiler evidence. Apply selective public-setter inline annotations only where measured benefit justifies them, or record an evidence-based disposition explaining no change. Preserve semantics, public API and resource bounds. Do not introduce a blanket inline policy or assert an unmeasured performance problem.
+
+
+### F-X237, Restore linear Python table owner inventory
+
+**Size**: L
+**Depends on**: none
+**Test gate**: regression
+
+Resolve Issue378's v0.16.1 Python table open and edit regression. Batch qualified
+physical cell inventory and index revision-route reconciliation without changing
+owner authority, stale-handle causes, merged or nested cell identity, opaque
+source preservation or atomic publication. Opening and one edit must perform
+linear work in source cells and owner inventory. Qualify60,120 and240 cells and
+the exact40-by6 fill with deterministic work counts and authenticated same-host
+release0.16.0 timing comparison. Preserve no-table controls and full fresh Word
+Python acceptance. A small additive hidden native batch API may serve the
+existing cross-crate registry consumer. No new Python surface is required.

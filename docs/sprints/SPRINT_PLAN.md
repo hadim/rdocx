@@ -2520,7 +2520,7 @@ worktree is separate from this frozen publication source.
 #### Sprint S92, Contribution and issue repairs
 
 **Goal**: resolve the new contribution and issue repairs without expanding the
-frozen S91.1 publication scope. Five stories total 11 to 14 developer-days.
+frozen S91.1 publication scope. Six stories total 15 to 18 developer-days after the explicit Issue378 intake.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -2529,6 +2529,7 @@ frozen S91.1 publication scope. Five stories total 11 to 14 developer-days.
 | F-X229 | Repair comparison reconstruction correctness | L |
 | F-X230 | Group comparison changes for readable revisions | M |
 | F-X231 | Preserve PowerPoint HTML import whitespace | M |
+| F-X237 | Restore linear Python table owner inventory | L |
 
 Integrate F-X228 from PR376 first, with actual current-head CI evidence.
 F-X178 resolves Issue364 using the existing story, implementing only the
@@ -2544,6 +2545,8 @@ correctness precedes grouping. Lease shared native sources and integration
 test entrypoints explicitly. Rebase or extract minimal contributor commits
 against the published S91.1 result. Resolve conflicts manually against both
 contracts. Do not merge stacked donor branches wholesale or duplicate fixes.
+
+Issue378 was explicitly added during execution on2026-10-15. F-X237 repairs the Python table-owner inventory and revision-route performance regression with exact preservation and same-host timing gates. It is independent of comparison grouping and shares only measured package carriers at integration. Issue316 receives no additional implementation scope here.
 
 #### Sprint S93, Rendering and remaining issue repairs
 
@@ -3396,3 +3399,8 @@ release preparation F-X221 unfinished. Bibliography, navigation and standalone
 authoring remain in S92. Intake stays frozen40 issues/30 PRs, with discussions
 264 and281 excluded and open. Final full verification, focused appearance
 riders, sprint review and authorized publication/closure remain due.
+
+
+## Issue378 execution intake, 2026-10-15
+
+The user adds F-X237 to S92 for the reported Python0.16.1 table-cell performance regression. The original five repair contracts remain intact. Qualify linear open and single-edit work, the exact40-by6 fill and authenticated same-host release0.16.0 timing while preserving checked physical-owner and revision semantics. This intake does not alter the historical frozen contribution or compatibility corpora.
