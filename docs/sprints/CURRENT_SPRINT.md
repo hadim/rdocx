@@ -16,7 +16,7 @@
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X224 | Repair hosted release tool and stack routing | M | pending | - |
+| F-X224 | Repair hosted release tool and stack routing | M | in-progress | codex |
 | F-X225 | Keep DrawingML text-style parsing within the default WASM stack | M | pending | - |
 
 ## Sequencing note
