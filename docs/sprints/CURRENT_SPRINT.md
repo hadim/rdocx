@@ -49,8 +49,10 @@ qualification before registration or launch. Primary hosted CI and exact-source 
 rehearsal remain due for the final corrective source. Issue360's external
 skill PR37 remains open. Its owner reviewed it and asked to combine its
 merge with a package pin update after our release is available. The
-delivery-boundary question remains pending. No
-release or contributed-record closure is claimed.
+user approved closing Issue360 after publication, counting the reviewed
+submission as delivery and retaining upstream merge as an external
+follow-up. Fresh PyPI management checks confirm both package owners and
+trusted publishers. No release or contributed-record closure is claimed.
 
 ## Definition of done for this sprint
 

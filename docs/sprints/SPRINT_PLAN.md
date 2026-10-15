@@ -2513,8 +2513,11 @@ criterion was replaced by synthetic report-contract tests without an
 acceptance amendment. F-X227 is an approved repair of that existing scope. The user approved the
 separate native input revision and one-job runner proposal. Admission
 qualification remains required before registration or launch. The
-original100 bodies/support and historical95/100 remain unchanged. Issue360's
-upstream documentation acceptance is a separate pending delivery decision.
+original100 bodies/support and historical95/100 remain unchanged. The user
+approved Issue360 closure after publication, with the reviewed documentation
+submission counted as delivery and upstream merge recorded as an external
+follow-up. Both PyPI projects' owner and trusted-publisher settings have been
+read in the restored authenticated session.
 
 #### Sprint S92, Bibliography and navigation carryovers, templates and forms
 
