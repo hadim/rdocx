@@ -3890,6 +3890,20 @@ prepared publication. The five Word element objects return namespace-complete
 str and replace_xml(str) returns None through the concrete checked native
 operation.
 
+Complete Word owner snapshots use the native hidden
+`Document.story_owner_snapshots` provider across the existing crate boundary.
+Its four owned families retain full story items, physical cells, paragraph XML
+and hyperlink information with the same validation as the separate providers.
+One operation shares source, owner and item qualification without caching
+across revisions. Each cell tuple contains the checked enclosing table, physical row and
+cell coordinates and source-qualified cell identity. Nested tables and controls
+participate in the same correspondence traversal. Python exposes no additional
+method. Registry construction and candidate revision reconciliation perform
+bounded work per current physical owner. Indexed matching preserves the existing
+pairwise body-slot, projection, parent and run-path rules and first-match order,
+including hyperlink index shifts after removal. A scalar cell lookup retains
+its separate checked compatibility contract.
+
 Section margin aliases use the canonical EMU length interface and truncating
 Twips conversion. Header/footer paragraph append preserves the selected held
 Section and independent physical header aliases, while retiring unsafe

@@ -9,6 +9,19 @@ physical paragraph, table, cell, section and captured hyperlink owners.
 Supported publication retains only proven surviving owners. Regular runs keep
 the conservative document epoch, while frozen Story and StoryItem captures
 also retain snapshot-inventory authority.
+Word owner inventories share source, owner and item qualification across full
+item, cell, paragraph XML and hyperlink projections in one operation. They
+materialize each source once and pair qualified physical owners with one traversal of each parsed outer table and its nested models.
+Physical coordinates retain row and cell vectors rather than logical grid
+columns. Candidate revision matching indexes current owner routes and retains
+all admissible parent matches until descendant matching completes. Body-slot
+and projection fallback classes remain distinct because their pairwise match
+relation is not transitive. Earliest matching old ownership determines retained
+scopes. No historical owner registry or persistent source cache is introduced.
+Namespace scans retain a frame per element and copy inherited maps only when
+the element declares a namespace. Attribute validation and scope restoration
+retain their checked source semantics.
+
 Presentation bindings capture concrete slide, shape, table-grid and text-owner
 scopes, then locate retained physical owners in their current source graph.
 Manual native snapshot constructors remain unbound and visible snapshot

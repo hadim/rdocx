@@ -4034,8 +4034,15 @@ separate required gates.
 
 Complete source inventories compare the prior successful algorithm across body,
 cells, controls, text boxes, headers, notes, comments and namespace aliases.
-Counters require one materialization and owner scan per physical source, batched
-namespace discovery and one evaluator paragraph listing. Empty qualified owners
+Counters require one materialization and owner scan per physical source, one
+item scan per owner, bounded namespace discovery including prefix scans and one
+evaluator paragraph listing. Full combined item, physical cell, paragraph XML
+and hyperlink payloads match their separate providers. Complete registry
+outcomes also preserve invalid source and relationship refusal.
+Namespace frame copies count declaration-bearing elements. Exact old-helper
+differentials cover inherited versus target context, Start/End/Empty events,
+shadowing and restoration, default/prefix undeclaration, duplicate and empty
+requests, malformed attributes, early return and incomplete XML. Empty qualified owners
 have positive listing, no-op update, save/reopen and installed Python/CLI
 controls. Foreign ownership and invalid excerpt offsets have refusal controls.
 
@@ -4227,6 +4234,30 @@ no-op revision preservation. Native conversion checks use pinned tools and
 private headless profiles. Ignored tests and collection-only observations do
 not supply acceptance evidence. This scoped qualification does not replace
 the final immutable100 measurement or the integrated sprint gate.
+
+Table-owner performance controls count actual source builds, owner and namespace
+scans, parsed model table/cell visits and indexed revision candidates. Complete
+inventories at60,120,240 cells materialize each source once and traverse each
+physical modeled table and cell once. Generated route uniqueness bounds retained
+old parent candidates, while small duplicate and mixed body-slot controls compare
+exact first matches with the legacy pairwise predicate. Merged, omitted, nested,
+controlled and related-story cells retain physical ownership through save and
+reopen. Ordinary edits, stale descendants, first retirement causes, opaque
+payload and late allocation refusal remain independent correctness gates.
+
+Installed release timing controls warm up once, then retain five open/edit and
+three fill samples at60,120,240 cells. The40-by6 cell fill is mandatory. The
+same-host authenticated0.16.0 baseline uses the same interpreter and hardware.
+Median limits are max(three times baseline,10ms) for open and
+max(three times baseline,30ms) for one edit. Fill retains its raw samples and
+max(three times baseline,500ms) comparison as diagnostic evidence alongside
+explicit acceptance of the measured result. No replacement factor or general
+future slack is implied. Deterministic work counts establish scaling
+independently of timing. No-table and unrelated-paragraph controls,
+raw samples and source, wheel, native library and compiler provenance accompany
+the measurements. A separate fresh debug-guarded opt-level2 wheel executes the
+complete Word Python suite with its existing runtime and font prerequisites.
+Release timing does not replace guarded correctness acceptance.
 
 ## Integrated Python compatibility qualification
 

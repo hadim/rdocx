@@ -1,6 +1,6 @@
 # F-X237, Restore linear Python table owner inventory
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S92
 **Size**: L
 **Depends on**: none
@@ -36,12 +36,23 @@ One additive hidden public native API serves an existing cross-crate consumer:
 
 ```rust
 #[doc(hidden)]
-pub fn story_table_cell_snapshots(
-    &self,
-) -> Result<Vec<(ContentLocation, usize, usize, StoryId)>>;
+pub fn story_owner_snapshots(&self) -> Result<(
+    Vec<StoryItemSnapshot>,
+    Vec<(ContentLocation, usize, usize, StoryId)>,
+    Vec<(ContentLocation, Vec<u8>)>,
+    Vec<(ContentLocation, LinkInfo)>,
+)>;
 ```
 
-Each tuple binds an actual physical table, physical row and cell coordinates,
+The four owned families retain the existing full item, cell, paragraph XML and
+hyperlink payloads and their admission checks. Share one operation-local source,
+owner and item qualification across all four families. The existing published
+providers remain differential oracles. The originally proposed unpublished
+cell-only API becomes a private helper, leaving one additive cross-crate API.
+No persistent cache or validation shortcut is permitted. Compare complete
+registry success and refusal outcomes, including invalid source and relationship
+fixtures. This root-approved clarification follows the actual first candidate
+timing failure and bounded component profile. Each cell tuple binds an actual physical table, physical row and cell coordinates,
 and checked source cell identity. Materialize and qualify each physical source
 once. Match source-ordered owner spans against one physical modeled traversal,
 including nested tables and interleaved controls. Parse each outer modeled
@@ -51,10 +62,25 @@ descendant cells for each ancestor table. Count all such production work.
 Visit each physical table and cell once. Do not filter all owners anew per table, restart
 `nth_cell_in_table`, infer physical identity from logical grid columns, or return
 before complete correspondence and namespace/fingerprint validation. Preserve
-existing refusal boundaries and source admission depth limits. Keep the scalar
-provider as a small-fixture equivalence oracle, without using it per production
-result. The binding consumes the batch while retaining its current table/cell,
+existing refusal boundaries and source admission depth limits. The scalar provider is also on Python cell capture and must use the same
+one-pass physical walker, preserving its checked compatibility contract. Retain
+the exact original scalar algorithm under cfg(test) as a small-fixture
+equivalence oracle, without using it per production result. Count actual scalar
+cell/counting work as well as the batch traversal on the public edit path. This
+is the root-approved residual-hotspot clarification. The binding consumes the batch while retaining its current table/cell,
 paragraph, run, hyperlink and section order and actual parent joins.
+
+Namespace discovery retains its exact current target-boundary semantics while
+copying an inherited map only for declaration-bearing frames. Keep a boolean
+stack for all Start/End frames and a map stack for changed scopes. The existing
+attribute decoder runs at the same locations. The batched helper captures
+inherited context before target declarations and preserves its early return,
+while the scalar helper includes target declarations. Empty events retain their
+existing distinct validation behavior. Test-only original helpers prove exact
+scope/error equivalence across aliases, defaults, rebinding, undeclaration,
+duplicate requests and malformed input. Count actual frame copies before and
+after on60/120/240-cell sources. This root-approved native-only clarification
+follows remaining actual fill failure, without a table-binding shortcut.
 
 Replace the nested old-owner search with an ephemeral physical-route index.
 Do not treat `same_inventory_route` as an equivalence relation. Its branch
@@ -110,8 +136,12 @@ actual Base RED before implementation. Existing test files are the only carriers
 
 | Category | Test | Asserts |
 |---|---|---|
-| unit | `fx237_table_cell_snapshots_scan_each_source_and_visit_each_cell_once` | Actual source/owner/namespace counters and new test-only table/cell visit counters prove one source materialization and qualified scan per physical source and one table/cell traversal at60,120,240 cells, multiple tables and nested tables. No toy implementation or timing-only complexity claim. |
+| unit | `fx237_table_cell_snapshots_scan_each_source_and_visit_each_cell_once` | Actual source/owner/item/namespace and prefix-namespace-byte counters plus test-only table/cell visit counters prove one source materialization and qualified scan per physical source and one table/cell traversal at60,120,240 cells, multiple tables and nested tables. No toy implementation or timing-only complexity claim. |
 | regression | `fx237_batched_cell_routes_equal_checked_single_cell_routes` | Every batched result equals the existing checked scalar route on small body, control, header/footer, note, comment and text-box fixtures. Include alias/foreign prefixes, merges, omitted cells, nested tables, row/cell controls, empty owners and correspondence refusal. |
+| unit | `fx237_namespace_scope_frames_only_copy_declarations` | Actual namespace frame copies scale with declaration-bearing frames rather than all XML elements at60/120/240 cells. Real predecessor RED is153copies at60cells against a bound of2. |
+| regression | `fx237_namespace_scope_boundaries_match_legacy` | Both original namespace helpers remain test-only oracles for every Start/Empty boundary, duplicate/empty/missing requests, nested shadow/restore, default and prefix undeclaration, malformed attributes/XML and distinct inherited versus target scope semantics. |
+| regression | `fx237_combined_inventory_keeps_projection_and_relationship_refusals` | Full four-family payloads equal the separate native projections, including source admission and dangling relationship refusal. |
+| regression | `fx237_combined_registry_matches_legacy_success_and_refusal` | Complete old Python owner registry and combined registry have identical ordered successful results and exact refusal diagnostics on independently authored raw packages. |
 | unit | `fx237_indexed_routes_match_legacy_first_match` | Compare production index choices with the test-only original matcher for all publication variants, shifted hyperlinks, duplicate routes, mixed body Some/None and parent-cell/non-cell classes, unsupported body paths and unequal ancestry. Earliest match remains exact. |
 | unit | `fx237_revision_route_work_is_linear` | Actual generated inventories satisfy uniqueness, at most two parent probes, one old-entry indexing pass and one new-entry pass. Scale60,120,240 cells and repeated equal-looking tables. Account for admitted route depth and retain arbitrary small duplicate correctness controls. |
 | regression | `test_fx237_table_owner_inventory_preserves_physical_routes_and_generations` | Held same-cell/table/unrelated paragraph handles, nested and identical-looking siblings, physical merges and omitted cells, related stories, ordinary text and replace_text preserve current survival/stale causes through repeated edits and save/reopen. |
@@ -130,8 +160,22 @@ compiler/profile, wheel/native identities, OS/CPU and interpreter. Warm up once,
 then five open/edit trials and three fill trials per60,120,240 cells. Retain all
 samples and medians, with seed generation excluded from open/edit timing.
 Include no-table and unrelated-paragraph-replace_text controls. Candidate
-medians must satisfy open <= max(3 * baseline,0.010s), single edit <=
-max(3 * baseline,0.030s), and fill <= max(3 * baseline,0.500s) at every size.
+medians must satisfy open <= max(3 * baseline,0.010s) and single edit <=
+max(3 * baseline,0.030s) at every size. Fill retains the former
+max(3 * baseline,0.500s) comparison as diagnostic data, with the explicit
+user-accepted measured exception below. It is not a hard assertion and no
+replacement multiplier or blanket future slack is authorized.
+The user explicitly accepts the actual namespace candidate fill120.925389s and
+fill2403.304061s as an immaterial tradeoff against former limits.822680s and
+2.681826s. The original 3x failures remain failures in the preserved
+`/private/tmp/F-X237-namespace-candidate-timings.json` and log, with authenticated
+baseline `/private/tmp/F-X237-v0160-namespace-comparison-timings.json`. This
+steering overrides only the hard fill bound. Do not report an old-gate PASS,
+relax open/edit, invent a future cap or hide a material new regression.
+Linear work counts, exact content, preservation, atomicity, fresh complete Word
+qualification, all scoped riders and independent review remain mandatory.
+Stop further performance optimization and qualify this production.
+
 The exact240-cell fill is required. Deterministic work counts are the asymptotic
 gate, not a flaky ratio alone. Authenticate one actual broken Base reproduction
 and its work counts. Do not repeat three expensive broken240 fills without a
@@ -188,13 +232,13 @@ No font or rendering baseline changes are authorized.
 
 ## Implementation checklist
 
-- [ ] Establish canonical intake, approved plan and isolated claim.
-- [ ] Record actual Base RED, work counts and broken timing reproduction.
-- [ ] Implement complete batched physical correspondence.
-- [ ] Prove exact bounded route matching and first-match compatibility.
-- [ ] Pass preservation, generations, atomic refusal and installed timing gates.
-- [ ] Pass fresh complete Word Python suite and all scoped risk riders.
-- [ ] Pass independent microscope and prepare a validating handoff without push.
+- [x] Establish canonical intake, approved plan and isolated claim.
+- [x] Record actual Base RED, work counts and broken timing reproduction.
+- [x] Implement complete batched physical correspondence.
+- [x] Prove exact bounded route matching and first-match compatibility.
+- [x] Pass preservation, generations, atomic refusal and installed timing gates.
+- [x] Pass fresh complete Word Python suite and all scoped risk riders.
+- [x] Pass independent microscope and prepare a validating handoff without push.
 
 ## Open questions
 
