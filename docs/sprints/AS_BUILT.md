@@ -19546,3 +19546,25 @@ The exact22-package locally patched publication dry run passes without uploading
 **Notes for future sessions.** Process trigger: a new workflow needed actual external CI before completion, while ordinary ordering withheld its source until completion. Separate process commit5cb79e0623ec000d76d2b1725b35eb5734ae1587 introduced the reviewed sprint-ref availability checkpoint. Features stayed approved and in-progress with external gates pending. It permitted no worker push, force push, main merge, tag or publication. Final reviewed-source full gate and clean sprint review remain due. Normal close, exact-main release verification, publication and acceptance-aware contributor reconciliation remain separate pending gates. Original failed attempts and producer identities remain unchanged.
 
 **Evidence references.** `.claude/reviews/F-X224-golden-pass-3.md`. Relevant source/artifact bridge b7890b384a31ad34d6e00107607ebf2dfe17176628666eec8b069edecc1e31a8 retains actual producer identities.
+
+### F-X225, Keep DrawingML text-style parsing within the default WASM stack
+
+**Sprint.** S91.1
+**Completed.** 2026-10-15, scoped completion
+**Size.** M, estimated2 days, actual not recorded
+
+**What was built.** Private list-style ownership and parser return storage, ordered master-record resolution and boxed master-style staging remove the measured parser peaks from the real PowerPoint WASM caller.
+
+**Non-obvious choices.** Public fields and signatures remain unchanged. Extensions followed genuine failures of the unchanged Node caller and were serialized with the unrelated shared-file owner. No stack flag, linker allowance or artificial padding enters accepted controls.
+
+**Deviations from the design plan.** Two approved bounded extensions cover the measured master resolver and private master-style parser temporaries. Original default-stack failures and unsuccessful partial repairs remain failed.
+
+**Spec sections touched.** Exactly HLD06 shape-tree ownership and HLD10 WASM facade default-stack operation.
+
+**Tests.** Pinned Node24.11.1 executes the original real facade and populated caller within the ordinary1048576-byte WASM stack. Native parse, clone, getter, mutation and serialization controls preserve opaque XML, namespaces, schema order and public source compatibility. Affected native/WASM/render checks, strict Clippy, MSRV, rustdoc, hash49, verified three archives and the source-qualified19-package bridge pass. Independent source and metadata reviews are clean. Scoped policy ran161 tests with two existing platform skips.
+
+**Hash harness.** All49 product outputs unchanged. No baseline update.
+
+**Notes for future sessions.** The measured frame reductions are implementation evidence, not a portable ABI size promise. Actual producers remain the recorded worker and b3b integrated sources. Final reviewed-source full gate and clean sprint review remain due. Normal close, exact-main release verification, publication and acceptance-aware contributor reconciliation remain separate pending gates. Original failed attempts and producer identities remain unchanged.
+
+**Evidence references.** `.claude/reviews/F-X225-metadata-pass-2.md`. Relevant source/artifact bridge b7890b384a31ad34d6e00107607ebf2dfe17176628666eec8b069edecc1e31a8 retains actual producer identities.

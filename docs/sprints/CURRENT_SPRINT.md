@@ -17,7 +17,7 @@
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-X224 | Repair hosted release tool and stack routing | M | done | - |
-| F-X225 | Keep DrawingML text-style parsing within the default WASM stack | M | in-progress | codex |
+| F-X225 | Keep DrawingML text-style parsing within the default WASM stack | M | done | - |
 | F-X226 | Release superseded relationships after checked PowerPoint XML edits | M | in-progress | codex |
 | F-X227 | Execute the unchanged first-draft compatibility corpus in owner CI | L | in-progress | codex |
 
