@@ -8107,3 +8107,38 @@ Close Issue381. A marked control becomes an empty `/Sig` field, and the option
 reaches Rust, Python and `rdocx convert`. Output without the option is byte
 identical to before. Signing the PDF in the library stays out of scope. The
 manual Acrobat Reader and Preview fill and sign check is recorded as evidence.
+
+### F-X245, Preserve chart data changes in Word comparison
+
+**Size**: L
+**Depends on**: F-X229, F-X230
+**Test gate**: regression
+
+Resolve [Issue382](https://github.com/tensorbee/rdocx/issues/382). Detect a
+chart-data-only edit at both word and run granularity and record a revision.
+A chart-data edit combined with adjacent text changes must also compare
+successfully. After saving and reopening the redline, accept-all reproduces
+the edited chart part, embedded workbook and text, while reject-all reproduces
+the original. Run the exact supplied script, retain its unchanged-chart control
+and independently inspect package relationships, chart caches and workbook
+values. Preserve existing picture comparison, revision grouping, opaque XML
+and atomic refusal guarantees. Qualify native and installed Python entrypoints.
+
+### F-X246, Honor chart legend position and overlay during rendering
+
+**Size**: L
+**Depends on**: none
+**Test gate**: differential
+
+Resolve [Issue383](https://github.com/tensorbee/rdocx/issues/383) across Word
+and PowerPoint chart rendering. Honor `c:legendPos` right, left, top, bottom
+and top-right, defaulting to right when absent. When `c:overlay` is absent or
+false, reserve space outside the plot so legend entries do not cover bars.
+Qualify true overlay, absent legends and hidden-legend controls without losing
+unmodelled chart XML or schema order. The exact supplied default, bottom and
+left repros must produce distinct renders in both formats with no legend/plot
+overlap. Compare independently measured plot and legend geometry and pinned
+native Office renders in deterministic font mode. Attribute intentional hash
+and raster deltas to this story. During design, explicitly decide the related
+Python legend visibility, position and overlay request for both families and
+record any residual before claiming full issue closure.

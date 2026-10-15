@@ -2551,7 +2551,8 @@ Issue378 was explicitly added during execution on2026-10-15. F-X237 repairs the 
 #### Sprint S93, Rendering and remaining issue repairs
 
 **Goal**: finish the remaining issue acceptance with independent rendering and
-conversion evidence. Five stories total 13 to 16 developer-days.
+conversion evidence, preserve chart-data revisions and repair chart legend
+placement. Seven stories total 21 to 26 developer-days.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -2560,6 +2561,8 @@ conversion evidence. Five stories total 13 to 16 developer-days.
 | F-X234 | Preserve supported LaTeX conversion structure | M |
 | F-X235 | Qualify equation layout against native Word | L |
 | F-X236 | Measure public setter inlining before changing policy | S |
+| F-X245 | Preserve chart data changes in Word comparison | L |
+| F-X246 | Honor chart legend position and overlay during rendering | L |
 
 F-X232 assesses PR375 for Issue373. Reuse delivered namespace and checked-XML
 providers, then qualify the exact header/footer repros. Legal revision colours
@@ -2573,8 +2576,8 @@ Legal revision and border painting share paginator resources and integrate
 serially. Conversion completion precedes equation layout acceptance. Only one
 story may own the deterministic baseline in each wave. Expected product and
 independent raster changes require separate attribution and review. These
-estimates are developer effort, not elapsed-time promises. Split an expanded
-contract into a later sprint instead of weakening gates or enlarging this wave.
+estimates are developer effort, not elapsed-time promises. Split any further expanded
+contract rather than weakening its gates.
 
 ##### Repair intake, coverage and closure gates
 
@@ -2653,6 +2656,34 @@ collaboration from S95 to S97, drawings from S96 to S98 and the M24 end gate
 from S97 to S99. The benchmark sprint moves from S98 to S100 with F-313
 through F-318 intact. The conditional Excel programme moves from S99 through
 S108 to S101 through S110, and Issue281's go/no-go is F-184 at S101.
+
+##### Issue382 and Issue383 intake, 2026-10-15
+
+The user requested that new work without a current or future sprint owner join
+S93. A live GitHub check found 12 open issues and one open PR. The only
+unassigned reports are [Issue382](https://github.com/tensorbee/rdocx/issues/382)
+and [Issue383](https://github.com/tensorbee/rdocx/issues/383), with no follow-up
+comments at intake. Both are now included as pending L stories. The existing
+five S93 contracts and all future sprint assignments remain in place.
+
+| Issue | Acceptance owner | Required evidence |
+|---|---|---|
+| Issue382 | F-X245 | Chart-only changes at word and run granularity, chart-plus-text changes and unchanged-chart controls. Save/reopen, accept-all and reject-all reproduce the correct chart parts, embedded workbook and surrounding text |
+| Issue383 | F-X246 | Word and PowerPoint default, bottom and left renders differ with no legend/plot overlap for absent or false overlay. Qualify right, left, top, bottom and top-right positions, true overlay and hidden legends against independent native evidence |
+
+F-X245 follows completed F-X229 and F-X230 and preserves their reconstruction
+and grouping controls. F-X246 leases shared chart model and rendering carriers
+across both formats. Keep baseline ownership exclusive and attribute chart
+raster changes separately from revision, paragraph and equation changes.
+Design both stories before implementation. The expanded seven-story wave is
+estimated at 21 to 26 developer-days, not an elapsed-time promise.
+
+PR375 is already owned by F-X232. Issues365,366,367 and373 are already in S93.
+Issues379,380 and381 retain S94 and S96 owners. Issue281 retains the F-184
+spreadsheet decision at S101, Issue377 retains S100 benchmark work, and
+Issue264 remains an open requirements discussion with its delivered F-X170
+subset and existing broader style contracts. No duplicate story or automatic
+closure is created for these records.
 
 #### Sprint S94, Python and CLI parity
 
