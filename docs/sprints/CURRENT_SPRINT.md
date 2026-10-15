@@ -31,7 +31,7 @@ Rows are listed in dependency order, not F-ID order.
 
 F-X232 assesses PR375 for Issue373 after completed F-X201, F-X211a and F-X211d. Reuse checked-XML and namespace providers and qualify the exact header/footer repros. Decide compatibility for proposed public rendering types during design. Legal revision and border painting share paginator resources and integrate serially.
 
-F-X233 first reproduces Issue366's exact border input and independently distinguishes width, clearance, clipping and joins. F-X234 resolves Issue365's conversion half before F-X235 qualifies equation layout against an independently pinned native Word producer. F-X236 measures a real cross-crate, non-LTO setter consumer before selecting annotations or documenting no change.
+F-X233 uses the user-approved inferred15point and raw15 controls because Issue366's original input is unavailable. It independently distinguishes width, clearance, clipping and joins while retaining that reproduction limit. F-X234 resolves Issue365's conversion half before F-X235 qualifies equation layout against an independently pinned native Word producer. F-X236 measures a real cross-crate, non-LTO setter consumer before selecting annotations or documenting no change.
 
 F-X245 resolves Issue382 after completed F-X229 and F-X230, preserving chart parts and embedded workbooks in accept-all and reject-all reconstruction. F-X246 resolves Issue383 across Word and PowerPoint, including default legend placement, explicit positions and overlay. Coordinate shared chart resources and attribute chart raster changes separately.
 
@@ -41,7 +41,7 @@ Design every story before implementation. Lease shared sources and test entrypoi
 
 - Complete all seven story contracts through design, implementation, independent zero-defect and zero-smell microscope, scoped verification and integrated full verification.
 - Prove Issue373 legal revision colours and double underline without changing stored formatting, with cache identity, native/CLI/Python parity, checked-owner repros and independent native paint evidence.
-- Prove Issue366's diagnosed border repair with save/reopen, independently measured geometry and native paint. Preserve raster thresholds.
+- Prove Issue366's diagnosed border repair with save/reopen, independently measured geometry and native paint on the approved inferred inputs. Preserve raster thresholds and the missing-original limitation.
 - Prove Issue365's exact supplied formula conversion with normalized OfficeMath structure, meaningful symbols/spacing, explicit loss diagnostics and bounded parsing, then qualify layout under the existing one-point geometry and declared 150DPI SSIM contract.
 - Resolve Issue367 with cross-crate non-LTO measurements and compiler evidence. Preserve semantics and avoid an unmeasured blanket inline policy.
 - Use deterministic font mode for baselines. Attribute every intentional product or independent raster delta to its approved story and retain preservation, schema ordering and resource bounds.

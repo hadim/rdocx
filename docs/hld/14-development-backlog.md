@@ -7977,7 +7977,7 @@ Resolve Issue373 from PR375 uncovered slices. Add legal revision colouring and i
 **Depends on**: none
 **Test gate**: regression
 
-Resolve Issue366 by first reproducing its exact border input, including the stated 15tp value. Inspect saved w:sz and w:space and independently measure cropped geometry and paint. Existing size conversion already divides by eight, so distinguish width from clearance, clipping and joins before selecting a fix. Require save/reopen and independent native comparison. Never loosen raster thresholds to hide a delta.
+Qualify Issue366's paragraph borders using the original input when available. When it is unavailable, use the user-approved inferred15point sz120 and raw15 sz15 controls, retain the missing-original limitation and do not claim exact-original reproduction. Inspect saved w:sz and w:space and independently measure cropped geometry and paint. Existing size conversion already divides by eight, so distinguish width from clearance, clipping and joins before selecting a fix. Require save/reopen and independent native comparison. Never loosen raster thresholds to hide a delta.
 
 
 ### F-X234, Preserve supported LaTeX conversion structure

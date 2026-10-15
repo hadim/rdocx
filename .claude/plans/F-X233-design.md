@@ -126,6 +126,7 @@ prevents claiming exact-original reproduction even when candidate gates pass.
 
 - `docs/hld/08-rendering-spec.md`
 - `docs/hld/12-testing-strategy.md`
+- `docs/hld/14-development-backlog.md`, F-X233 acceptance wording for the user-approved inferred inputs when original source is unavailable.
 
 ## Risk routing
 
