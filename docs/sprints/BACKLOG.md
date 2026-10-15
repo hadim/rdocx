@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 250 | 233 | 1 | 12 |
-| **Total** | **581** | **507** | **1** | **69** |
+| X, Cross-cutting | 250 | 233 | 2 | 11 |
+| **Total** | **581** | **507** | **2** | **68** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -742,7 +742,7 @@ HLD14 contract before adopting contributor changes.
 | F-X175 | Refresh CLI archive evidence after release hardening | S87 | S | done |
 | F-X176 | Repair unified release inventory and respin PowerPoint | S88 | M | done |
 | F-X177 | Accept unified fontdb source features | S89 | S | done |
-| F-X178 | Clearable direct run formatting setters | S92 | S | pending |
+| F-X178 | Clearable direct run formatting setters | S92 | S | in-progress |
 | F-X179 | Correct multi-paragraph comment threads from PR 271 | S90 | S | done |
 | F-X180 | Correct cell nil and none border precedence | S90 | S | done |
 | F-X181 | Ignore page and column breaks inside table cells | S90 | S | done |
