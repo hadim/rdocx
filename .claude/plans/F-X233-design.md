@@ -42,10 +42,12 @@ native paint, record that outcome and the missing-original limitation rather
 than inventing a conversion fix.
 
 No new public surface, module, dependency, product file or raster threshold is
-proposed. Tests use existing paginator source modules and Word integration
-entrypoints. Native evidence records actual current Word build and Poppler
-identity independently from the historical pins. Coordinate paginator ownership
-serially with F-X232.
+proposed. Tests use the existing paginator.rs unit module and a scratch public facade
+save/reopen consumer. No facade dev-dependency is added to the layout crate.
+The Word integration entrypoint remains exclusively with F-X246 in the parallel
+wave. Native evidence records actual current Word build and Poppler identity
+independently from historical pins. Start after F-X232 source integration.
+F-X233 alone holds the shared hash and pixel baseline lease in this wave.
 
 ## Rejected alternatives
 
