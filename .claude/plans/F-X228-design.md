@@ -157,8 +157,8 @@ delta blocks completion.
 - [x] Preserve all binding, native-tool, animation and owner-dispatch controls.
 - [x] Complete deterministic dev/release output and timing comparison.
 - [x] Pass local scoped verification and independent zero-finding microscope.
-- [ ] Use the authorized source availability checkpoint for actual hosted CI.
-- [ ] Bind successful required jobs and measured durations to reviewed source.
+- [x] Use the authorized source availability checkpoint for actual hosted CI.
+- [x] Bind successful required jobs and measured durations to reviewed source.
 - [x] Update exactly the two named HLD files.
 - [ ] Complete the normal lifecycle after actual external CI acceptance.
 
@@ -222,7 +222,53 @@ Prior sandbox/offline attempts remain failed or interrupted in progress notes.
 The one-line roadmap expectation correction mirrors the parent-owned S92
 opening scaffold fix and preserves exact-set and one-placement coverage.
 
-Local checks pass. Actual Test, MSRV, both Python bindings, both fidelity
-jobs, all other selected required jobs and CI gate remain pending at the
-reviewed remote canonical sprint SHA. The owner-only corpus must stay skipped.
-The plan stays approved and the feature stays in progress.
+Local checks and actual hosted prefix acceptance pass. The plan stays approved
+and the feature stays in progress until normal integrated completion records.
+This hosted result qualifies its exact source, not later integrated changes.
+
+## Actual hosted acceptance
+
+[Run38755615219](https://github.com/tensorbee/rdocx/actions/runs/38755615219)
+completed successfully at exact reviewed source
+`638cf3e4d8580fd45195f065531328f4891cabd1`, ordinary workflow_dispatch,
+with owner_compatibility=false. All18 required jobs succeeded. CI gate
+`116522544812` succeeded. Owner corpus `116493120658` was skipped. All9
+change filters selected their jobs and17 actual checkout logs print the
+reviewed SHA. ROOT independently authenticated the terminal server result.
+
+Test and MSRV each record6465 passed,0 failed and71 ignored in their complete
+workspace command. Full Python suites record778 Word and854 PowerPoint passes.
+Native job environments retain optimization1 with explicit debug assertions
+and overflow checks. Binding jobs retain optimization2 with those checks.
+Ignored cases and the skipped private owner job receive no new credit.
+
+All fidelity artifact members are byte-identical to primary main predecessor
+run38722351979 at80117123. Presentation covers50 decks and421 slides with0
+dropped shapes. Its12.59percent diagnostic trend coverage is unchanged and its
+trend target remains false. Word broader trend remains0percent while its
+mandatory multiscript gate passes5/5. Configured gate success does not claim
+either broader trend target was met.
+
+| Job | Current job ID | Main predecessor seconds | Current seconds |
+|---|---|---|---|
+| Test | 116493270159 | 4281 | 3417 |
+| MSRV1.93 | 116493269978 | 2678 | 1888 |
+| Presentation fidelity | 116493270203 | 2459 | 1594 |
+| Python bindings rdocx | 116493269887 | 2570 | 1620 |
+| Python bindings rpptx | 116493270035 | 1548 | 1190 |
+
+The compared sources have identical product crates and Cargo inputs. Workflow
+event, runner instances, cache restoration and queues differ. These are actual
+observed durations, not isolated causal speedups or donor timing claims.
+
+Raw metadata, full logs, checkout proofs, matching-step timings, cache records
+and artifacts remain under `/private/tmp/S92-F-X228-hosted-38755615219`.
+Authenticated acceptance SHA-256:
+`31071cb1dab5779d17b0016a116e537ac21da2043bfeeb5594793b92198a66d1`.
+Terminal receipt SHA-256:
+`f16776b03457be4661fbffb3c2de86d4e7eefbd84a260ebccefcfb6d8e7b79f5`.
+Timing comparison SHA-256:
+`1f40d0f866801327f28ca0f82ce255d2bc015e8c62599b9b95807da750b1047d`.
+Evidence index SHA-256:
+`17a6abb7dda04ff295e3d9957da018eb758565aafa071c0d773b25b4f1b8d746`.
+Final integrated S92 full verification and sprint review remain due.
