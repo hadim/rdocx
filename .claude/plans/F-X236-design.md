@@ -1,6 +1,6 @@
 # F-X236, Measure public setter inlining before changing policy
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S93
 **Size**: S
 **Depends on**: none
@@ -9,7 +9,7 @@
 
 [Issue367](https://github.com/tensorbee/rdocx/issues/367) proposes public setter
 inline annotations to improve downstream compilation without LTO. The workspace
-release profile enables fat LTO (`Cargo.toml:176`), so a workspace release timing
+release profile enables fat LTO (`Cargo.toml:147`), so a workspace release timing
 alone cannot answer that question. Run setters delegate to optional setters and
 initialize properties (`crates/rdocx/src/run.rs:540`,545), while paragraph-mark
 setters directly assign fields (`crates/rdocx/src/paragraph.rs:698`,703).
@@ -59,7 +59,7 @@ The **test gate** is **regression**.
 
 | Category | Test | Asserts |
 |---|---|---|
-| regression | existing run/paragraph tests plus `fx236_setter_annotation_preserves_optional_formatting` if annotations survive | True, false, None, fresh properties and pre-existing unrelated properties remain identical through save/reopen |
+| regression | existing run/paragraph tests and independently inspected external semantic consumer | True, false, None, genuinely fresh absent properties and pre-existing unrelated colour remain exact through save/reopen |
 | integration | temporary external public consumer | Actual separate crate, no LTO, consumed output and inspected baseline/candidate assembly |
 | regression | paired setter measurement | All samples, medians, variation, code size and realistic control support selective annotation or explicit no-change disposition |
 
@@ -77,7 +77,10 @@ independent zero-finding microscope before completion.
 - Published public setters: signatures and semantics stay unchanged. If source
   annotations change, run verified publication dry-run and actual archive size
   assertions for affected crates, preserving the existing10MiB ceiling and
-  archive measurement policy. Evidence-only disposition does not add an API.
+  archive measurement policy. Required measured numeric updates may touch the
+  existing README.md footprint row and scripts/readme_doctests.py catalog, with
+  an exclusive metadata lease and unchanged64byte tolerance. Evidence-only
+  disposition does not add an API.
 - External compiler comparison: pin the actual compiler, consumer source,
   flags and CPU. No external oracle becomes a production dependency.
 
@@ -87,11 +90,11 @@ Expected unchanged, all49 entries. An unexplained delta blocks completion.
 
 ## Implementation checklist
 
-- [ ] Approve the complete sprint designs and claim an isolated worktree.
-- [ ] Authenticate baseline external consumer, compiler evidence and timings.
-- [ ] Measure a selective candidate and decide from the complete evidence.
-- [ ] Prove semantics, scoped verification, packaging if applicable and microscope.
-- [ ] Prepare handoff without writing sprint totals or pushing a worker.
+- [x] Approve the complete sprint designs and claim an isolated worktree.
+- [x] Authenticate baseline external consumer, compiler evidence and timings.
+- [x] Measure a selective candidate and decide from the complete evidence.
+- [x] Prove semantics, scoped verification, packaging if applicable and microscope.
+- [x] Prepare handoff without writing sprint totals or pushing a worker.
 
 ## Open questions
 

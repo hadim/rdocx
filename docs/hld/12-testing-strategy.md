@@ -1400,6 +1400,18 @@ The median of each build's per-edit medians must be no worse than 1.25 times
 the immutable v0.11.1 release and at most 0.75 times pinned commit `0582da0`.
 Wall-clock thresholds do not run in the normal unit-test pass.
 
+Public setter qualification uses a separate native consumer with explicit
+non-LTO optimization. Archived baseline and selective candidate executables run
+in alternating order with retained raw samples, compiler/profile/source identity,
+assembly and executable sizes. Initialized setters, actual first-use owner paths
+and a consumed authoring loop remain separate observations. Independent ZIP/XML
+inspection checks bold, italic, complex-script twins, sizes and unrelated colour
+through save/reopen on fresh and initialized runs. Clearing fresh absent values
+must leave the run-property element absent. A microbenchmark improvement does not
+establish an end-to-end authoring improvement, and already-inlined paragraph-mark
+controls do not justify extra annotations. Existing native regression suites
+remain the semantic gate alongside this focused qualification.
+
 The incremental-layout scale gate builds 1,000 one-page paragraphs through the
 public deterministic bundled-fallback facade, edits paragraph 500, and compares
 the warm result with a fresh layout. It requires exactly 1,000 pages, at most

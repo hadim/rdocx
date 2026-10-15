@@ -17,6 +17,13 @@ MSRV stays declared separately as `rust-version = "1.93"` in
 two answer different questions: the toolchain file says what this repository is
 developed with, `rust-version` says what it is guaranteed to compile with.
 
+Public setter inlining is selective. The native Word Run bold, italic and size
+setters and their optional-value implementations carry inline annotations for
+separate downstream consumers. Qualification uses an external crate with
+opt-level3, LTO disabled and one codegen unit, with assembly inspection and
+paired archived executables. Paragraph-mark setters already inline under that
+consumer profile. There is no blanket annotation or end-to-end speed guarantee.
+
 ## Deterministic rendering
 
 Normal `oxml-layout` construction may load system fonts. System fonts differ
