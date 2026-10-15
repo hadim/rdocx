@@ -19767,3 +19767,24 @@ Metadata no-verify packaging is not publication verification.
 **Hash harness.** All49 outputs unchanged. Intentional comparison XML and new clear operations retain their separate story attribution. No rendering baseline change.
 
 **Notes for future sessions.** Full verification ran at9cdd7980223527400a25a0ed2efa231d0713079a after the user-authorized future planning update. Fresh installed riders ran at f86f1cb7a76bd9f3425c2135d2a00bf9b711fa54, with unchanged compiled/runtime consumers across approved planning docs and the exact roadmap-assertion update. The original f86 package attempt was interrupted and remains failed. Exact commands and hashes are retained in /private/tmp/S92-integrated-full-2/receipt.json, /private/tmp/S92-final-word-1/receipt.json and /private/tmp/S92-final-ppt-story-1/receipt.json. Final current-HEAD full verification and clean sprint review remain closure requirements, with exact results recorded in the S92 run state. Historical hosted acceptance remains source638 and actual profile rendering remains epochb271, with authenticated unchanged producer closure. Only /close-sprint may merge/tag, and publication remains separate.
+
+
+### F-X234, Preserve supported LaTeX conversion structure
+
+**Sprint.** S93
+**Completed.** 2026-10-15
+**Size.** M, estimated 2 to 3 days, actual not recorded
+
+**What was built.** The exact Issue365 formula preserves pi, upright lim, arrows, infinity, integral bounds and meaningful thin spacing across bounded LaTeX, MathML and OfficeMath conversion. Ordinary TeX atoms retain their own script bases, including pi squared and a cubed. Supported structure survives public document save/reopen with opaque XML unchanged.
+
+**Non-obvious choices.** Normalize the invisible function marker only after an exact upright lim token. Unsupported spacing and token properties retain explicit loss diagnostics. The live Pandoc3.11 oracle is separately pinned, preserving the historical3.10 identity and outcome. No layout tuning, dependency, public type or product file was added.
+
+**Deviations from the design plan.** None. The package footprint observation was remeasured under the unchanged policy.
+
+**Spec sections touched.** 04-opc-and-packaging.md, bounded conversion boundary. 12-testing-strategy.md, conversion qualification. 15-build-and-toolchain.md, separately pinned Pandoc producer.
+
+**Tests.** fx234_issue365_preserves_symbols_limits_and_thin_space and the script, round-trip, unsupported-input and cap controls pass. Actual pinned Pandoc3.11 forward/reverse qualification passes. Scoped native640unit/380integration/2418regression/2doctest, policy182with2expected skips, check, clippy, formatting, prose and adapter gates pass. Independent source and metadata reviews report zero defects and zero smells. Focused canonical prefix tests pass with byte-identical reviewed math source.
+
+**Hash harness.** All49 worker outputs unchanged. No rendering baseline change. Final integrated sprint hash verification remains due.
+
+**Notes for future sessions.** This is a dependency-prefix checkpoint, completing conversion before F-X235 can start. It does not supply the final full workspace gate or sprint review. Worker branch work/f-x234-codex is retained. Exact scoped evidence and producer hashes remain in the plan and reviews, with transient logs under /private/tmp/fx234-*. Final integration and delivery ledger SHAs are recorded in the S93 run state.

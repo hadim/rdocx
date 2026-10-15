@@ -1068,3 +1068,5 @@ recorded by planning.
 | F-X231 | S92 | M | 2 to 3 | not recorded | 2026-10-15 | Approved repair contract, scoped regression and preservation gates, clean independent feature/integration review, final integrated native and installed risk riders, verified22 archives and49 unchanged hashes. Actual evidence retains source epochs and user-accepted F-X237 fill tradeoff |
 
 | F-X237 | S92 | L | 4 | not recorded | 2026-10-15 | Approved repair contract, scoped regression and preservation gates, clean independent feature/integration review, final integrated native and installed risk riders, verified22 archives and49 unchanged hashes. Actual evidence retains source epochs and user-accepted F-X237 fill tradeoff |
+
+| F-X234 | S93 | M | 2 to 3 | not recorded | 2026-10-15 | Scoped native640/380/2418/2, policy182with2expected skips, pinned Pandoc3.11, clean independent reviews and focused prefix integration pass. Worker49hashes unchanged. Final full sprint gate and review remain due |
