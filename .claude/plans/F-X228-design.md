@@ -147,19 +147,20 @@ delta blocks completion.
 
 ## Implementation checklist
 
-- [ ] Refresh PR376 head, patch, comments and checks before extraction.
-- [ ] Retain contributor attribution and separate donor provenance from acceptance.
-- [ ] Add job-local optimization1 and explicit debug/overflow safety.
-- [ ] Switch the existing corpus command to release.
-- [ ] Narrow presentation routes to the authenticated existing closure.
-- [ ] Route the imported golden PNG helper.
-- [ ] Add regressions and weakening mutations in existing carriers.
-- [ ] Preserve all binding, native-tool, animation and owner-dispatch controls.
-- [ ] Complete deterministic dev/release output and timing comparison.
-- [ ] Pass local scoped verification and independent zero-finding microscope.
+- [x] Refresh PR376 head, patch, comments and checks before extraction.
+- [x] Retain contributor attribution and separate donor provenance from acceptance.
+- [x] Add job-local optimization1 and explicit debug/overflow safety.
+- [x] Switch the existing corpus command to release.
+- [x] Narrow presentation routes to the authenticated existing closure.
+- [x] Route the imported golden PNG helper.
+- [x] Add regressions and weakening mutations in existing carriers.
+- [x] Preserve all binding, native-tool, animation and owner-dispatch controls.
+- [x] Complete deterministic dev/release output and timing comparison.
+- [x] Pass local scoped verification and independent zero-finding microscope.
 - [ ] Use the authorized source availability checkpoint for actual hosted CI.
 - [ ] Bind successful required jobs and measured durations to reviewed source.
-- [ ] Update exactly the two named HLD files and complete the normal lifecycle.
+- [x] Update exactly the two named HLD files.
+- [ ] Complete the normal lifecycle after actual external CI acceptance.
 
 ## Open questions
 
@@ -180,3 +181,48 @@ remote sprint SHA and source_ref to refs/heads/sprint/s92. Required owner-only
 runner_label and config_sha inputs use unused-public-hosted-ci sentinels.
 The owner corpus must remain skipped. No PR exists for sprint/s92 at design time.
 Authenticate the actual checkout SHA, selected jobs and aggregate result.
+
+## Local source availability evidence
+
+Independent review `.claude/reviews/F-X228-all-pass-1.md` reports0 defects,
+0 smells and0 nitpicks. All ordinary scoped checks passed: formatting,
+prose,26 generated adapters, the unchanged49-entry hash harness and the full
+policy module,182 tests in130.566s with180 passes and two platform skips.
+Harness self-tests passed eight cases with two existing corpus-evidence-only
+skips. Those skips grant no corpus or external acceptance credit.
+
+The independently inspected bounded four-process profile driver executed all
+50 pinned decks and421 source slides with the actual worker-built dev and
+release examples. Every PNG and the canonically assembled render manifest
+are byte-identical. Each per-deck row, slide count, output and zero-drop field
+was checked. All166 tracked renderer inputs and all50 corpus hashes were
+verified before and after. The example creates an independent package and
+render context for each deck, so bounded per-deck scheduling changes no
+cross-deck state or coverage. The earlier interrupted sequential attempt is
+retained as partial and uncredited.
+
+Evidence directory:
+`/private/tmp/S92-F-X228-profile-parallel-evidence`.
+Receipt SHA-256:
+`6b6f4d7ccdcd56d3bcafed037eedd52825ff5b1d927f3aff2990ca8670363ae5`.
+Driver SHA-256:
+`de5de6c67a8b0ff02ac09c7ea9c7887305780f486c123b5637bf34fb36ad66de`.
+Both render manifests SHA-256:
+`34f0c7913bf69c49d9ac32d7396cd945e62310a7b6ae8b5e6630cc469396575f`.
+Actual build commands, toolchain identities, binary hashes, per-deck commands,
+per-profile PNGs and logs are retained there. Diagnostic parallel wall times
+were568.141s dev and6.802s release. Concurrent workloads and cache conditions
+prevent an isolated or hosted speedup claim from these observations.
+
+The full policy log is `/private/tmp/S92-F-X228-policy-final.log`, SHA-256
+`ea9f20512a2dd08a8a0ee15554733abf2218545b756e12e684dc0871c0f5c3b0`.
+The hash log is `/private/tmp/S92-F-X228-hash.log`, SHA-256
+`88f62f8bfd75b45c4c881173a5f4c7d842165e422faf1f1ae9857262363ed52f`.
+Prior sandbox/offline attempts remain failed or interrupted in progress notes.
+The one-line roadmap expectation correction mirrors the parent-owned S92
+opening scaffold fix and preserves exact-set and one-placement coverage.
+
+Local checks pass. Actual Test, MSRV, both Python bindings, both fidelity
+jobs, all other selected required jobs and CI gate remain pending at the
+reviewed remote canonical sprint SHA. The owner-only corpus must stay skipped.
+The plan stays approved and the feature stays in progress.
