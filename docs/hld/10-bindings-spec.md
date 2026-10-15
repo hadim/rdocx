@@ -234,6 +234,13 @@ doc.save_pdf("out.pdf")                        # documented as an rdocx extensio
 
 ## Python Word formatting and checked list publication
 
+Native `Run::set_width_scale_value` accepts `Option<u32>` percent and
+`Run::set_position_value` accepts `Option<i32>` signed half-points. Some writes
+an explicit direct property, including zero. None removes only that property
+and leaves an absent `w:rPr` absent. Existing width-scale and position setters
+and builders retain their signatures and delegate to these nullable forms.
+The Python Font surface retains its existing properties.
+
 `Font` exposes optional superscript, subscript, small_caps, all_caps,
 double_strike, hidden and rtl. Superscript and subscript share one direct
 `w:vertAlign` source. True selects that mode, false clears only its own active
