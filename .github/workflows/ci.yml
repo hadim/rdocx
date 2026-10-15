@@ -152,8 +152,23 @@ jobs:
           sudo apt-get install --yes --no-install-recommends \
             cmake g++ ninja-build pkg-config \
             libfontconfig1-dev libfreetype-dev libjpeg-turbo8-dev \
-            libpng-dev libtiff-dev libopenjp2-7-dev liblcms2-dev zlib1g-dev
+            libpng-dev libtiff-dev libopenjp2-7-dev liblcms2-dev zlib1g-dev \
+            libcairo2-dev libglib2.0-dev
           python3 scripts/install_pinned_poppler.py
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12.9"
+      - name: Prepare independent native font tools
+        shell: bash
+        run: |
+          native_venv="${RUNNER_TEMP}/native-font-tools-venv"
+          python3 -m venv "$native_venv"
+          "$native_venv/bin/python" -m pip install pytest==9.1.1 meson==1.9.1
+          export PATH="$native_venv/bin:$PATH"
+          "$native_venv/bin/python" -I -B crates/rdocx-py/tests/test_rendering_threads.py \
+            --prepare-fx195-inputs "${RUNNER_TEMP}/native-font-tools" \
+            --native-tools-only
       - name: Install pinned LibreOffice 26.2.5.2
         run: python3 scripts/install_pinned_libreoffice.py
       - name: Install pinned Pandoc 3.10
@@ -203,6 +218,8 @@ jobs:
           cargo test --workspace --all-features
           --exclude rdocx-py --exclude rpptx-py
       - name: Run deterministic animation golden
+        env:
+          RUST_MIN_STACK: "8388608"
         run: >-
           cargo test --locked -p rpptx --test integration
           animated_gif_and_motion_jpeg_avi_match_the_reviewed_two_machine_manifest
@@ -464,6 +481,8 @@ jobs:
       - name: Fetch pinned presentation corpus
         run: python3 scripts/fetch_pptx_corpus.py
       - name: Run deterministic animation golden
+        env:
+          RUST_MIN_STACK: "8388608"
         run: >-
           cargo test --locked -p rpptx --test integration
           animated_gif_and_motion_jpeg_avi_match_the_reviewed_two_machine_manifest
@@ -675,8 +694,23 @@ jobs:
           sudo apt-get install --yes --no-install-recommends \
             cmake g++ ninja-build pkg-config \
             libfontconfig1-dev libfreetype-dev libjpeg-turbo8-dev \
-            libpng-dev libtiff-dev libopenjp2-7-dev liblcms2-dev zlib1g-dev
+            libpng-dev libtiff-dev libopenjp2-7-dev liblcms2-dev zlib1g-dev \
+            libcairo2-dev libglib2.0-dev
           python3 scripts/install_pinned_poppler.py
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12.9"
+      - name: Prepare independent native font tools
+        shell: bash
+        run: |
+          native_venv="${RUNNER_TEMP}/native-font-tools-venv"
+          python3 -m venv "$native_venv"
+          "$native_venv/bin/python" -m pip install pytest==9.1.1 meson==1.9.1
+          export PATH="$native_venv/bin:$PATH"
+          "$native_venv/bin/python" -I -B crates/rdocx-py/tests/test_rendering_threads.py \
+            --prepare-fx195-inputs "${RUNNER_TEMP}/native-font-tools" \
+            --native-tools-only
       - name: Install pinned LibreOffice 26.2.5.2
         run: python3 scripts/install_pinned_libreoffice.py
       - name: Fetch pinned presentation corpus

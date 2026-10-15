@@ -1,6 +1,6 @@
 # F-X224, Repair hosted release tool and stack routing
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91.1
 **Size**: M
 **Depends on**: F-X221
@@ -170,10 +170,26 @@ All49 accepted outputs remain unchanged. No baseline update is authorized.
 
 ## Implementation checklist
 
-- [ ] Reuse the exact source-qualified native-only HB producer before both native consumers.
-- [ ] Route the approved native stack to both original animation commands.
-- [ ] Execute the actual integer/fractional tag guard and deciding negative controls.
-- [ ] Pass scoped regression, policy and actual native controls without reducing binding104/native-eight.
-- [ ] Obtain a zero-finding microscope and update the listed HLD mechanism.
+- [x] Reuse the exact source-qualified native-only HB producer before both native consumers.
+- [x] Route the approved native stack to both original animation commands.
+- [x] Execute the actual integer/fractional tag guard and deciding negative controls.
+- [x] Pass scoped regression, policy and actual native controls without reducing binding104/native-eight.
+- [x] Obtain a zero-finding microscope and update the listed HLD mechanism.
 
 - Native Test log: `/private/tmp/S91-main-CI-38662802341-readonly/Test-failed-job.log`, SHA256 e87dd5909a3c80c76043e9fbe54098acbf96d60337431418742663f299dfa7b6. The same missing exact hb-subset consumer fails after the performance and authoring gates pass.
+
+## Scoped qualification
+
+Local worker preparation is complete. The integrated full gate, binding104,
+native-eight, primary hosted CI, clean main review and publication conditions
+remain mandatory at the integrated source.
+
+- Defining regression: `/private/tmp/F-X224-defining-red.log`, actual missing native setup and fractional tag refusal before implementation.
+- Native-only producer: `/private/tmp/F-X224-native-tools-actual-1/receipt.json`, actual five successful commands, original archive and three14.4.0 binaries, no product bindings and stable source guards.
+- Original SVG control: `/private/tmp/F-X224-native-svg-current.log` and `/private/tmp/F-X224-native-svg-msrv.log`, one pass each under current Rust and1.93.0.
+- Original animation golden: `/private/tmp/F-X224-animation-golden.log`, one pass with the same manifest and8MiB.
+- Policy: `/private/tmp/F-X224-policy-full-successor-2.log`,164 tests, zero failures, two existing skips. The first failed attempt remains `/private/tmp/F-X224-policy-full-1.log`. Its network/archive readiness and inherited mutation-target/count failures were corrected without relaxing a gate.
+- Source-qualified retained22 package archives: `/private/tmp/F-X224-current22-materialization.json`.
+- Hash harness: `/private/tmp/F-X224-hash49.log`,49 unchanged.
+- Format, prose and generated adapters: actual exit0. No Rust production or published package source changed, so no changed-crate compile or Clippy gate is added beyond the original native controls.
+- Independent whole-source review and test-only follow-up: `.claude/reviews/F-X224-all-pass-1.md` and `.claude/reviews/F-X224-all-pass-2.md`, zero defects, smells and nitpicks.

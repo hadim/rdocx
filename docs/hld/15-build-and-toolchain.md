@@ -757,6 +757,11 @@ Both Python `pyproject.toml` versions and their Rust binding crate versions are
 exact release carriers. The Python preflight checks all four values instead of
 rewriting them during the release ceremony.
 
+Closed sprint release guards accept one annotated integer or fractional sprint
+tag, such as `s91` or `s91.1`, at the exact current `origin/main` SHA. The shape
+is `^s[0-9]+(\.[0-9]+)?$`. Exactly-one, annotated-object and main-SHA checks
+remain mandatory before publication archive validation.
+
 ## CI job matrix
 
 Listed in `12-testing-strategy.md`. The matrix carries these
@@ -970,8 +975,18 @@ itself.
 uses only its runner-temporary uv cache, fetches and verifies both pinned
 corpora, and runs the broad workspace suite with `RUST_MIN_STACK=8388608`. The
 pin makes the python-pptx oracle executable available on a clean Ubuntu host.
-The stack budget is scoped to these two corpus-heavy jobs and does not alter
-product runtime behavior.
+Both native jobs prepare HarfBuzz14.4.0 before their font consumers through
+`--native-tools-only` in the existing Word rendering test carrier. The exact
+source archive, bounded extraction, actual three-tool build, binary identities
+and tracked source guards use the same producer as full binding preparation.
+The early return requires no installed binding, font fixtures or current Rust
+compiler. Separate native environments pin pytest9.1.1 and Meson1.9.1.
+The authenticated utility directory is exported through `GITHUB_PATH`.
+Full binding preparation and its104 and native-eight controls remain mandatory.
+
+The Test and Presentation fidelity deterministic animation commands also use
+`RUST_MIN_STACK=8388608`. This is a native test-thread budget and does not alter
+product runtime behavior or the separate WASM runtime.
 
 The same two clean Ubuntu 24.04 jobs plus the Presentation and Word fidelity
 jobs install

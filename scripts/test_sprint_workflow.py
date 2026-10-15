@@ -1021,7 +1021,7 @@ class SprintWorkflowTests(unittest.TestCase):
             self.assert_no_success_short_circuit(self.operative_lines(test_step))
             self.assertLess(job.index(setup), job.index(test_step))
             self.assertNotIn("continue-on-error", setup + test_step)
-        self.assertEqual(self.yaml_mapping_key_count(ci, "RUST_MIN_STACK"), 2)
+        self.assertEqual(self.yaml_mapping_key_count(ci, "RUST_MIN_STACK"), 4)
 
     def assert_python_pr_job_contract(self, ci: str) -> None:
         triggers = self.yaml_block(ci, "on:")
@@ -2361,9 +2361,9 @@ class SprintWorkflowTests(unittest.TestCase):
             "cancel-other-package-on-failure": ci.replace(
                 "fail-fast: false", "fail-fast: true", 1
             ),
-            "unversioned-pytest": ci.replace("pytest==9.1.1", "pytest", 1),
-            "wrong-python-version": ci.replace(
-                'python-version: "3.12.9"', 'python-version: "3.13"', 1
+            "unversioned-pytest": mutate_job("pytest==9.1.1", "pytest"),
+            "wrong-python-version": mutate_job(
+                'python-version: "3.12.9"', 'python-version: "3.13"'
             ),
             "wrong-rdocx-oracle": ci.replace(
                 "python-docx==1.2.0", "python-docx==1.1.2", 1
@@ -2456,29 +2456,25 @@ class SprintWorkflowTests(unittest.TestCase):
                 "          workspaces: crates/rdocx-py\n",
                 1,
             ),
-            "wrong-setup-python-sha": ci.replace(
+            "wrong-setup-python-sha": mutate_job(
                 "a309ff8b426b58ec0e2a45f0f869d46889d02405",
                 "0000000000000000000000000000000000000000",
-                1,
             ),
-            "wrong-setup-python-sha-with-required-comment": ci.replace(
+            "wrong-setup-python-sha-with-required-comment": mutate_job(
                 "actions/setup-python@"
                 "a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0",
                 "actions/setup-python@"
                 "0000000000000000000000000000000000000000 "
                 "# v6.2.0 a309ff8b426b58ec0e2a45f0f869d46889d02405",
-                1,
             ),
-            "setup-python-extra-input": ci.replace(
+            "setup-python-extra-input": mutate_job(
                 '          python-version: "3.12.9"\n',
                 '          python-version: "3.12.9"\n'
                 '          architecture: "x64"\n',
-                1,
             ),
-            "setup-python-comment-smuggled-version": ci.replace(
+            "setup-python-comment-smuggled-version": mutate_job(
                 '          python-version: "3.12.9"\n',
                 '          python-version: "3.13" # python-version: "3.12.9"\n',
-                1,
             ),
             "missing-rpptx-exclusion": ci.replace(
                 "--exclude rdocx-py --exclude rpptx-py",
@@ -3041,6 +3037,106 @@ class SprintWorkflowTests(unittest.TestCase):
             with self.subTest(mutation=name), self.assertRaises((AssertionError, ValueError)):
                 self.assert_wheel_priority_routes(value)
 
+    def assert_native_font_tool_routes(self, ci: str) -> None:
+        for name in ("test", "msrv"):
+            job = self.yaml_block(ci, f"  {name}:")
+            setup = self.yaml_step(job, "Prepare independent native font tools")
+            self.assertEqual(self.yaml_direct_lines(setup, 8), ("shell: bash", "run: |"))
+            self.assertEqual(self.yaml_run_lines(setup), (
+                'native_venv="${RUNNER_TEMP}/native-font-tools-venv"',
+                'python3 -m venv "$native_venv"',
+                '"$native_venv/bin/python" -m pip install pytest==9.1.1 meson==1.9.1',
+                'export PATH="$native_venv/bin:$PATH"',
+                '\"$native_venv/bin/python\" -I -B crates/rdocx-py/tests/test_rendering_threads.py \\',
+                '--prepare-fx195-inputs "${RUNNER_TEMP}/native-font-tools" \\',
+                '--native-tools-only',
+            ))
+            self.assert_no_success_short_circuit(self.yaml_run_lines(setup))
+            self.assertLess(job.index("Prepare independent native font tools"), job.index("Run full workspace suite"))
+            self.assertIn("libcairo2-dev libglib2.0-dev", self.yaml_step(job, "Install pinned Poppler 26.01.0"))
+            python = self.yaml_step(job, "Set up Python 3.12")
+            self.assertIn('python-version: "3.12.9"', python)
+            self.assertIn('actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405', python)
+        for name in ("test", "presentation-fidelity"):
+            step = self.yaml_step(self.yaml_block(ci, f"  {name}:"), "Run deterministic animation golden")
+            self.assertEqual(self.yaml_direct_lines(self.yaml_block(step, "        env:"), 10), ('RUST_MIN_STACK: "8388608"',))
+            self.assertIn("animated_gif_and_motion_jpeg_avi_match_the_reviewed_two_machine_manifest", step)
+            self.assert_no_success_short_circuit(self.operative_lines(step))
+
+    def test_native_font_tools_and_animation_stack_routes(self) -> None:
+        ci = (workflow.REPO / ".github/workflows/ci.yml").read_text()
+        self.assert_native_font_tool_routes(ci)
+        job = self.yaml_block(ci, "  msrv:")
+        step = self.yaml_step(job, "Prepare independent native font tools")
+        mutations = {
+            "missing": ci.replace(step, ""),
+            "commented": ci.replace('--native-tools-only', '# --native-tools-only', 1),
+            "swallowed": ci.replace('--native-tools-only', '--native-tools-only || true', 1),
+            "wrong-version": ci.replace('meson==1.9.1', 'meson==1.9.0', 1),
+            "late": ci.replace(step, "").replace(job.replace(step, ""), job.replace(step, "") + step),
+            "missing-stack": ci.replace('          RUST_MIN_STACK: "8388608"\n', '', 2),
+        }
+        for name, value in mutations.items():
+            self.assertNotEqual(ci, value, name)
+            with self.subTest(mutation=name), self.assertRaises((AssertionError, ValueError)):
+                self.assert_native_font_tool_routes(value)
+
+    def test_native_font_tool_preparation_keeps_source_and_full_mode_contract(self) -> None:
+        import ast
+        path = workflow.REPO / "crates/rdocx-py/tests/test_rendering_threads.py"
+        source = path.read_text()
+        function = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef) and node.name == "_fx195_prepare_inputs")
+        branch = next(node for node in function.body if isinstance(node, ast.If) and ast.unparse(node.test) == "native_tools_only")
+        body = ast.get_source_segment(source, branch)
+        self.assertIn("assert source_guard() == before", body)
+        self.assertIn("assert all(digest(p) == sha for p, sha in tool_guards.items())", body)
+        self.assertIn("GITHUB_PATH", body)
+        self.assertIn("'actual-independent-native-tools-prepared'", body)
+        self.assertIsInstance(branch.body[-1], ast.Return)
+        self.assertLess(branch.lineno, source[:source.index("    fonts = root / 'crates/oxml-layout/fonts'", source.index('def _fx195_prepare_inputs'))].count('\n') + 1)
+        self.assertIn("2357ed966c6ced7bfa720b0640c0231065af01158fbea215093ffa15aed44371", source)
+        self.assertIn("assert identities[name] == name + ' (HarfBuzz) 14.4.0'", source)
+        self.assertIn("'actual-independent-inputs-prepared'", source)
+        self.assertIn("'actual_transitive_abi_qualified': True", source)
+        self.assertIn("'rustc_verbose_version': compiler_version", source)
+
+    def test_closed_main_sprint_tag_guard_executes_actual_shell(self) -> None:
+        wheels = (workflow.REPO / ".github/workflows/wheels.yml").read_text()
+        step = self.yaml_step(self.yaml_block(wheels, "  release-assets:"), "Verify tag points to the closed main merge")
+        shell = '\n'.join(self.yaml_run_lines(step))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            remote = root / "remote.git"
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+            repo = root / "repo"
+            subprocess.run(["git", "clone", str(remote), str(repo)], check=True, capture_output=True)
+            def git(*args):
+                return subprocess.check_output(["git", "-C", str(repo), *args], stderr=subprocess.DEVNULL).decode().strip()
+            git("config", "user.name", "Guard test")
+            git("config", "user.email", "guard@example.invalid")
+            git("checkout", "-b", "main")
+            git("commit", "--allow-empty", "-m", "first")
+            head = git("rev-parse", "HEAD")
+            git("push", "origin", "main")
+            cases = (("s91", True, True), ("s91.1", True, True), ("", True, False),
+                     ("S91.1", True, False), ("s91.1x", True, False),
+                     ("s91.1.2", True, False), ("s91", False, False),
+                     ("duplicate", True, False), ("wrong-main", True, False))
+            for name, annotated, expected in cases:
+                for tag in git("tag").splitlines():
+                    git("tag", "-d", tag)
+                tags = ("s91", "s91.1") if name == "duplicate" else ("s91.1",) if name == "wrong-main" else (name,) if name else ()
+                for tag in tags:
+                    git("tag", "-a", tag, "-m", "closed") if annotated else git("tag", tag)
+                sha = head
+                if name == "wrong-main":
+                    git("commit", "--allow-empty", "-m", "not main")
+                    sha = git("rev-parse", "HEAD")
+                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", shell], cwd=repo,
+                                        env={**os.environ, "GITHUB_SHA": sha}, capture_output=True)
+                with self.subTest(case=name, annotated=annotated):
+                    self.assertEqual(result.returncode == 0, expected, result.stderr.decode())
+
     def assert_wheels_workflow_contract(self, workflow_bytes: bytes) -> None:
         wheels = workflow_bytes.decode("utf-8", errors="strict")
         self.assertIn('tags: ["v*", "rpptx-v*"]', wheels)
@@ -3104,7 +3200,10 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertIn('[[ "${GITHUB_SHA}" == "${main_sha}" ]]', aggregate)
         self.assertIn('git tag --points-at "${GITHUB_SHA}" --list \'s[0-9]*\'', aggregate)
         self.assertIn('git cat-file -t "refs/tags/${sprint_tags}"', aggregate)
-        self.assertIn('[[ "${sprint_tags}" =~ ^s[0-9]+$ ]]', aggregate)
+        self.assertIn('[[ "${sprint_tags}" =~ ^s[0-9]+(\\.[0-9]+)?$ ]]', aggregate)
+        self.assertIn("sed '/^$/d' | wc -l | tr -d ' '", aggregate)
+        self.assertIn('\" == 1 ]]', aggregate)
+        self.assertIn('[[ "$(git cat-file -t "refs/tags/${sprint_tags}")" == tag ]]', aggregate)
         self.assertLess(aggregate.index("Verify tag points to the closed main merge"), aggregate.index("Verify publication archives"))
         self.assertIn('unified-release-family "${{ github.ref_name }}"', aggregate)
         self.assertIn("Verify selected package inventory", aggregate)
@@ -3165,6 +3264,8 @@ class SprintWorkflowTests(unittest.TestCase):
             "missing-main-sha-check": ('[[ "${GITHUB_SHA}" == "${main_sha}" ]]', 'true'),
             "missing-sprint-tag-check": ('git tag --points-at "${GITHUB_SHA}" --list \'s[0-9]*\'', 'echo s86'),
             "sprint-tag-not-annotated": ('git cat-file -t "refs/tags/${sprint_tags}"', 'echo tag'),
+            "missing-sprint-count": ('| wc -l | tr -d \' \'', '| echo 1 #'),
+            "missing-annotation-comparison": ('\" == tag ]]', '\" == commit ]]'),
             "missing-package-inventory": (
                 'validate_release_package_inventory(', 'print('
             ),
