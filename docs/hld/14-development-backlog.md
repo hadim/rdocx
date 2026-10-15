@@ -50,14 +50,14 @@ contracts require integrated gates at each sprint boundary.
 M23 closes the five-document from-scratch business-document boundary. M24 then
 classifies and closes the broader modern DOCX authoring surface before M19 may
 begin. The spreadsheet programme remains a business decision and proceeds only
-if F-184 confirms a material gap in the Rust ecosystem at S99.
+if F-184 confirms a material gap in the Rust ecosystem at S101.
 
 The stopping and compression choices are:
 
 - **Stop after M23.** S73 can generate the five private reference documents
   from `Document::new()` through public modeled APIs, with no base template,
   raw OOXML, or LibreOffice field-update pass.
-- **Stop after M24.** S97 provides the complete modern DOCX authoring boundary.
+- **Stop after M24.** S99 provides the complete modern DOCX authoring boundary.
   Every in-scope feature is authorable, readable, mutable, round-trip safe,
   rendered where applicable, and classified across the public bindings.
 - **Archive M19 at its decision gate.** F-184 may still find that the advanced
@@ -1604,7 +1604,7 @@ decision lands.
 OPC, DrawingML, the chart engine, the layout engine and the PDF backend all
 exist and are format-neutral, which lowers the cost of a third family. That is
 not sufficient reason to build one. F-184 must reassess the Rust ecosystem when
-S99 begins. M19 proceeds only if no credible maintained crate provides the
+S101 begins. M19 proceeds only if no credible maintained crate provides the
 combined lifecycle required here: open an existing advanced workbook, preserve
 what is not executed, edit typed features, recalculate formulas and local
 pivots, refresh a declared Power Query subset, automate it through an Office
@@ -1626,7 +1626,7 @@ render to PDF.
 
 ### F-184, Advanced spreadsheet go or no-go (S)
 The go or no-go decision record. Reassess the maintained Rust spreadsheet
-ecosystem at S99, state whether the combined lifecycle gap still exists, and
+ecosystem at S101, state whether the combined lifecycle gap still exists, and
 archive M19 if it does not. If it does, amend `02-scope-and-non-goals.md`, define
 the boundary between `oxml-sml` as chart support and `rxlsx` as a library, and
 publish the preserve, model, and execute classification for every advanced
@@ -1639,7 +1639,7 @@ CLI/Python workflow with rendering. Compare integration, installation,
 maintenance and release costs, including reuse behind a consistent facade.
 Evaluate the utility and limits of a reader/editor stage before calculation
 and pivots, retaining formula and pivot state with explicit stale-result
-diagnostics when edits cannot be recalculated. The existing S108 distribution
+diagnostics when edits cannot be recalculated. The existing S110 distribution
 boundary remains until a separate reviewed roadmap decision changes it.
 
 The reporter's [follow-up](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6063901190)
@@ -1926,7 +1926,7 @@ element after a round trip.
 byte-identical, and an `isLgl` raw child stays before `suff` after parse and
 write.
 
-### External Word benchmark, S98
+### External Word benchmark, S100
 
 Issue 377 reports that `neurotic_docx_bench` scores `rdocx convert` against
 pinned Microsoft Word PDF exports. Its 2026-10-14 cohort ranks rdocx 0.16.0
@@ -2331,7 +2331,7 @@ documents only as anonymous, non-identifying capability families. The audit
 found no duplicate scope, missing owner, dangling dependency, dependency cycle,
 or scheduling conflict in F-243 through F-310. Their boundaries, sizes, and
 dependencies remain authoritative. The current plan places them in S71 through
-S75, S86, S89 through S91, and S94 through S97.
+S75, S86, S89 through S91, S95, and S97 through S99.
 **Capability matrix owner**: `docs/hld/02-scope-and-non-goals.md`, "Modern DOCX
 capability matrix".
 **Test gate**: regression. Every in-scope matrix row has evidence, an owner
@@ -6699,7 +6699,7 @@ before sprint close.
 
 ### F-X192, Complete the remaining Word bibliography catalogue (L)
 
-Complete the Word bibliography work deferred from S90 and now carried to S94
+Complete the Word bibliography work deferred from S90 and now carried to S95
 by the user. F-282 delivers the native source-authoring foundation and its measured
 formatter subset. This story owns the full pinned Word catalogue result
 contract, without claiming the existing subset establishes complete parity.
@@ -7879,7 +7879,7 @@ Resolve Issue362 and assess PR363 at immutable0b9a3cccc1b31bac7ec4108c923faa176b
 **Depends on**: F-X220
 **Test gate**: differential
 
-Investigate native Word use of distinct embedded regular, bold, italic and bold-italic faces for an uninstalled family against the documented MS-OE376 one-font-per-name boundary. Preserve F-X220 API and renderer contracts. Require exact prepared font glyph and metric proof before and after native save and normal reopen, absent host installation, fresh family/key controls and recorded native normalization. A workaround must preserve document semantics and source ownership. Do not claim synthetic bold is genuine bold or rewrite family names without an approved design. This interoperability work is planned for S94 under the 2026-10-13 deferral. It does not gate S91 closure.
+Investigate native Word use of distinct embedded regular, bold, italic and bold-italic faces for an uninstalled family against the documented MS-OE376 one-font-per-name boundary. Preserve F-X220 API and renderer contracts. Require exact prepared font glyph and metric proof before and after native save and normal reopen, absent host installation, fresh family/key controls and recorded native normalization. A workaround must preserve document semantics and source ownership. Do not claim synthetic bold is genuine bold or rewrite family names without an approved design. This interoperability work is planned for S95 under the 2026-10-13 deferral. It does not gate S91 closure.
 
 ### F-X224, Repair hosted release tool and stack routing
 
@@ -8022,3 +8022,88 @@ the exact40-by6 fill with deterministic work counts and authenticated same-host
 release0.16.0 timing comparison. Preserve no-table controls and full fresh Word
 Python acceptance. A small additive hidden native batch API may serve the
 existing cross-crate registry consumer. No new Python surface is required.
+
+### F-X238, Restore python-docx Word names from the first-draft corpus
+
+**Size**: L
+**Depends on**: none
+**Test gate**: regression
+
+Resolve the Word half of Issue379. Every Word name the issue lists, including
+`Document.add_section`, works as in python-docx 1.2.0 or fails with an error
+that names the supported rdocx alternative. The three divergence scripts fail
+with a message naming the supported way. The PR333 corpus runner at
+`193819ca` runs each listed script unchanged and reports the results
+separately from the F-X211 corpus. Wrap existing native behaviour. New document
+semantics require a separate design.
+
+### F-X239, python-pptx notes names and refusal of silent zero values
+
+**Size**: M
+**Depends on**: none
+**Test gate**: regression
+
+Resolve the PowerPoint half of Issue379 and its unit follow-up. Add
+`Slide.has_notes_slide`, `notes_slide.notes_text_frame` and the
+`MSO_THEME_COLOR_INDEX` alias. The five assignments that now save zero raise
+before they change the document, and each message names the unit to use.
+
+### F-X240, Python and CLI signing and signature verification
+
+**Size**: M
+**Depends on**: none
+**Test gate**: regression
+
+Resolve the signing half of Issue380. Python `sign` and `verify_signatures`
+for documents and presentations, accepting DER and PEM keys and certificates,
+and matching `sign` and `verify-signatures` CLI commands with a non-zero exit
+for an invalid or partial signature. Published wheels and CLI builds enable
+`digital-signatures` only after dependency, licence and size gates pass. A
+test changes one signed part and sees verification name it.
+
+### F-X241, Python and CLI form reading and filling
+
+**Size**: M
+**Depends on**: none
+**Test gate**: regression
+
+Resolve the form half of Issue380. Python content control and legacy form
+field reading and filling by tag, alias or name, and `rdocx fill --values`.
+A template with plain text, checkbox, drop-down and date controls plus a
+legacy text field reads back its filled values after save and reopen through
+both Python and the CLI.
+
+### F-X242, Form control geometry and AcroForm field model
+
+**Size**: L
+**Depends on**: none
+**Test gate**: regression
+
+First of three Issue381 stories. Layout reports the page rectangle of every
+content control and legacy form field. Each maps to an AcroForm text, button
+or choice field with a unique name from its tag, alias or legacy name, a
+tooltip from its alias or help text, and its current value without
+placeholder text. No PDF output changes in this story.
+
+### F-X243, Field appearance streams, full-font resources and conformance
+
+**Size**: L
+**Depends on**: F-X242
+**Test gate**: differential
+
+Write the F-X242 fields into the PDF behind an opt-in option. Every widget has
+an appearance stream, the field font in `/DR` covers typed input beyond the
+page subset, and tagged output places widgets under `/Form` structure
+elements. `qpdf --json` lists the expected names, types, values and
+rectangles, and the PDF/A and PDF/UA checks still pass with the option on.
+
+### F-X244, Signature field, bindings and CLI option
+
+**Size**: M
+**Depends on**: F-X243
+**Test gate**: regression
+
+Close Issue381. A marked control becomes an empty `/Sig` field, and the option
+reaches Rust, Python and `rdocx convert`. Output without the option is byte
+identical to before. Signing the PDF in the library stays out of scope. The
+manual Acrobat Reader and Preview fill and sign check is recorded as evidence.

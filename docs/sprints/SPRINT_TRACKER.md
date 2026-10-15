@@ -1040,3 +1040,13 @@ Issues264,281 and377 remain open. This records planning, not delivery.
 ## Issue378 execution intake, 2026-10-15
 
 Add pending F-X237, size L estimated4 developer-days, to S92 at the user's explicit request. The six-story sprint estimate is now15 to18 developer-days. This records scope intake only, with no completion or velocity credit. All original repair acceptance remains intact.
+
+## Issue379 through Issue381 sprint insertion, 2026-10-15
+
+Insert S94, Python and CLI parity, for Issues379 and380 as F-X238 through
+F-X241, about 12 developer-days. Insert S96, Fillable PDF forms, for Issue381
+as F-X242 through F-X244, about 13 developer-days. Planned S94 through S98
+work moves to S95 and S97 through S100. The conditional Excel programme moves
+to S101 through S110, and Issue281's F-184 decision is at S101. The active S92
+wave and S93 plan are unchanged. No completion, velocity or release is
+recorded by planning.
