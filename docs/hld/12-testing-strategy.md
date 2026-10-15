@@ -1252,7 +1252,10 @@ Focused controls cover repeated wrap reservations, short drawings crossing
 only the border-shifted first text band, empty and keep chains, cache neighbor
 changes and cold/warm equality. Nonzero maximum and additive group-spacing
 cases reach body, table, header, footer and note paint, with continuous sides
-and no bridge above a new page. Semantic mutations of frame bands, horizontal
+and no bridge above a new page. Cacheable typed direct and nested table cells
+retain their grouping metadata through source rebinding. Actual cache-hit
+counts and full page geometry must match a fresh engine, including provenance
+after insertion before the table. Semantic mutations of frame bands, horizontal
 allowance, split topology, group normalization, group bridging and wrap-origin
 accounting must fail their matching assertions. A genuine Base comparison
 removes only paragraph borders from an invoice, retains table borders and

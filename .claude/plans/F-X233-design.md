@@ -115,6 +115,7 @@ The **test gate** is **regression**.
 | regression | `fx233_fifteen_point_border_has_correct_paint_geometry` | Saved sz120, space, measured stroke width, clearance, extents and joins agree with independently measured geometry |
 | regression | `fx233_raw_fifteen_border_size_keeps_eighth_point_units` | Distinct sz15 control preserves1.875point interpretation and makes unit differences explicit |
 | regression | border fragment/corner controls | Adjacent, indented, asymmetric and split paragraphs do not clip or detach the selected border edges |
+| regression | `cached_table_border_groups_keep_continuous_sides_across_paragraph_spacing` | Actual table-cache hits retain complete cold/warm paint and provenance for typed direct and nested bordered cells with nonzero paragraph spacing |
 | round-trip | saved border input inspection | Size, space, style and opaque siblings survive reopen without source changes from rendering |
 | differential | inferred input native paint comparisons | Pinned native raster and geometry qualify the diagnosed repair under unchanged thresholds, with interpretation limitation retained |
 
@@ -135,6 +136,9 @@ prevents claiming exact-original reproduction even when candidate gates pass.
 - Units: preserve truncating constructors and eighth-point size semantics.
 - External oracle: pin actual native producer, source XML, output digests,
   rasterizer and DPI. Preserve every existing tolerance.
+- Package inventory: remeasure the existing layout README and matching numeric
+  and date catalog entries after the cache regression adds packaged source.
+  Preserve exact member totals, the64byte compressed allowance and10MiB ceiling.
 
 ## Hash harness
 

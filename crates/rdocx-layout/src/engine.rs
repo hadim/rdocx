@@ -6075,7 +6075,7 @@ fn table_semantics(
                                     table::CellBlock::Paragraph(_),
                                     CellBlockSemantics::Paragraph(retained),
                                 ) => CellBlockSemantics::Paragraph(ParagraphSemantics {
-                                    border_group_before: false,
+                                    border_group_before: retained.border_group_before,
                                     source_node: sources
                                         .and_then(|sources| sources.id(story, &source_path)),
                                     structure_id: None,
@@ -18834,6 +18834,87 @@ mod tests {
         assert_layout_results_equal(&warm_delete, &cold_delete);
         assert_layout_results_equal(&original, &warm_delete);
         assert_eq!(engine.paragraph_cache_counts(), (4, 3));
+    }
+
+    #[test]
+    fn cached_table_border_groups_keep_continuous_sides_across_paragraph_spacing() {
+        use rdocx_oxml::borders::CT_BorderEdge;
+        use rdocx_oxml::shared::ST_Border;
+        use rdocx_oxml::units::Twips;
+
+        fn bordered_paragraph(text: &str, before: i32, after: i32) -> CT_P {
+            let mut edge = CT_BorderEdge::new(ST_Border::Single);
+            edge.sz = Some(24);
+            edge.space = Some(8);
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(text);
+            paragraph.properties = Some(CT_PPr {
+                space_before: Some(Twips(before)),
+                space_after: Some(Twips(after)),
+                borders: Some(Box::new(CT_PBdr {
+                    top: Some(edge.clone()),
+                    bottom: Some(edge.clone()),
+                    left: Some(edge.clone()),
+                    right: Some(edge),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            });
+            paragraph
+        }
+
+        for nested in [false, true] {
+            for provenance in [false, true] {
+                let mut bordered = safe_table("replaced");
+                bordered.rows[0].cells[0].content = vec![
+                    CellContent::Paragraph(bordered_paragraph("first", 0, 160)),
+                    CellContent::Paragraph(bordered_paragraph("second", 240, 0)),
+                ];
+                let table = if nested {
+                    let mut outer = safe_table("outer");
+                    outer.rows[0].cells[0]
+                        .content
+                        .push(CellContent::Table(bordered));
+                    outer
+                } else {
+                    bordered
+                };
+                let mut input = make_input_with_text("before table");
+                assert!(table_is_cache_safe(&table, &input.styles));
+                input.document.body.content.push(BodyContent::Table(table));
+                let mut engine = Engine::new_deterministic().expect("bundled fonts load");
+                if provenance {
+                    engine.layout_with_provenance(&input).unwrap();
+                } else {
+                    engine.layout(&input).unwrap();
+                }
+                assert_eq!(engine.table_cache_counts(), (0, 1));
+
+                let mut inserted = CT_P::new();
+                inserted.add_run("inserted before table");
+                input
+                    .document
+                    .body
+                    .content
+                    .insert(0, BodyContent::Paragraph(inserted));
+                for expected_hits in 1..=2 {
+                    let mut fresh = Engine::new_deterministic().expect("bundled fonts load");
+                    let (warm, cold) = if provenance {
+                        let (warm, warm_sources) = engine.layout_with_provenance(&input).unwrap();
+                        let (cold, cold_sources) = fresh.layout_with_provenance(&input).unwrap();
+                        assert_eq!(warm_sources, cold_sources);
+                        (warm, cold)
+                    } else {
+                        (
+                            engine.layout(&input).unwrap(),
+                            fresh.layout(&input).unwrap(),
+                        )
+                    };
+                    assert_eq!(engine.table_cache_counts(), (expected_hits, 1));
+                    assert_layout_results_equal(&warm, &cold);
+                }
+            }
+        }
     }
 
     #[test]
