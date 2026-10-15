@@ -7846,3 +7846,21 @@ Replace private inline list-style storage and avoid accumulated parser temporari
 **Spec**: HLD04 checked PowerPoint XML transactions and targeted graph cleanup, HLD06 opaque preservation, HLD10 chart and owner authority.
 
 Release only superseded known-role relationships owned by a checked XML edit after proving the complete actual owner no longer references them. Prune only targets made newly unreachable by this operation, preserving shared chart/workbook graphs, opaque references and unrelated producer orphans. Preserve debug save validation and atomic publication. Reproduce the original chart alias failure, then prove debug and optimized public behavior, exact sibling graph preservation and unchanged deterministic outputs. No new API, product file, dependency or contributor intake.
+
+### F-X227, Execute the unchanged first-draft compatibility corpus in owner CI
+
+**Size**: L
+**Depends on**: F-X211, F-X221
+**Test gate**: regression
+**Spec**: HLD10 Python compatibility, HLD12 actual corpus qualification and CI, HLD15 pinned owner CI execution.
+
+Deliver the original Issue316 and PR333 corpus-in-CI criterion, also included
+by Issue314. Run all100 unchanged scripts with actual per-area correct-file
+rates and complete source/artifact/input custody. Keep the17/7 documentation
+subset, historical95/100, fixed denominator and five approved no-credit
+non-successes distinct from new execution. Two missing native inputs need an
+explicitly approved, independently qualified revision before use. A one-job
+owner CI route must preserve private Office resources, require explicit
+runner authority and demonstrate task-scoped admission or isolation. Retain
+full hosted binding suites and debug save assertions. No new production API,
+dependency, product file, font substitute or reopened contributor intake.

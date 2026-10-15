@@ -2483,19 +2483,38 @@ Final integrated verification, sprint review and closure remain pending.
 
 #### Sprint S91.1, Release runtime and CI repairs
 
-**Goal**: Repair only the concrete release blockers exposed by main CI38662802341, then requalify the prepared Word0.16.1 and shared/PowerPoint0.14.1 families. Preserve S91's main merge and annotated tag. Contributor intake stays frozen at40 issues and30 PRs, with264/281 excluded and open.
+The S91 progress notes above are historical. S91 delivered29 of39
+top-level planned stories and four child deliveries,33 completed entries,
+with ten top-level carryovers retained in S92. The immutable main merge and
+s91 tag are eb79c31155d8e38f9f7f0c6d3b2753c0b66ea83e. Release publication
+and contributed-record reconciliation remain pending corrective S91.1.
+
+**Goal**: Repair the release blockers exposed by main CI38662802341 and the original corpus-in-CI acceptance gap, then requalify the prepared Word0.16.1 and shared/PowerPoint0.14.1 families. Preserve S91's main merge and annotated tag. Contributor intake stays frozen at40 issues and30 PRs, with264/281 excluded and open.
 
 | F-ID | Title | Size |
 |------|-------|------|
 | F-X224 | Repair hosted release tool and stack routing | M |
 | F-X225 | Keep DrawingML text-style parsing within the default WASM stack | M |
 | F-X226 | Release superseded relationships after checked PowerPoint XML edits | M |
+| F-X227 | Execute the unchanged first-draft compatibility corpus in owner CI | L |
 
-The three stories implement in parallel with separate worktrees. F-X224 owns existing CI and release-policy carriers plus native-only independent-tool preparation. F-X225 owns private DrawingML text parser storage and existing parser/WASM regressions. F-X226 owns targeted checked-owner relationship cleanup and existing native/Python chart regressions. No new product module, dependency, asset, public API, feature or accepted input is added. ROOT owns integration, fresh paired artifacts and the final gate union. All49 accepted hashes stay unchanged.
+F-X224 through F-X226 implemented in parallel with separate worktrees. F-X224 owns existing CI and release-policy carriers plus native-only independent-tool preparation. F-X225 owns private DrawingML text parser storage and existing parser/WASM regressions. F-X226 owns targeted checked-owner relationship cleanup and existing native/Python chart regressions. Those three repairs add no new product module, dependency, asset, public API, feature or accepted input. F-X227 is approved for implementation with a separate native-input revision and one-job runner proposal. Actual runner admission must pass before registration or launch. ROOT owns integration, fresh paired artifacts and the final gate union. All49 accepted hashes stay unchanged.
 
 S91 is merged and tagged at eb79c31155d8e38f9f7f0c6d3b2753c0b66ea83e. Its exact-source build-only rehearsal38659673259 passed. The subsequent primary CI identified missing native HarfBuzz preparation, a missing native animation stack setting and default-WASM parser stack exhaustion. Its full PowerPoint binding suite additionally exposed superseded chart relationships after checked XML replacement, which F-X226 repairs without weakening save validation. Original failures remain retained. Publication and the70 release-bound humanized comments wait for the corrected exact main merge, complete source-qualified package and installed verification, clean review, hosted rehearsal and verified registries. Existing publisher roles and current registry/tag facts remain mandatory. The user's standing publication authorization remains scoped to these two prepared families.
 
 **Gate**: All corrective regressions and the existing unmodified deciding cases pass, with zero independent review findings. The complete integrated gate, actual native/installed oracle riders, all selected primary CI jobs and both-family exact-SHA build-only rehearsal pass before normal close. Final release runs its read-only gate on the new exact main merge. No larger WASM stack, skipped required case, manufactured evidence or moved tag is allowed. Bibliography, navigation, standalone authoring and the existing followups remain in S92.
+
+Current local verification atb3b2163482ae42f68a66594ab2064481bd7b406b passes
+the integrated Rust6463, Python778/854, font104/native-eight, Node2/2/3,
+policy164 with two platform skips,22 verified archives, documentation and
+supply-chain gates. This does not claim a final hosted pass or publication.
+The closure audit found the original Issue316/PR333 actual corpus-in-CI
+criterion was replaced by synthetic report-contract tests without an
+acceptance amendment. F-X227 is an approved repair of that existing scope. The user approved the
+separate native input revision and one-job runner proposal. Admission
+qualification remains required before registration or launch. The
+original100 bodies/support and historical95/100 remain unchanged. Issue360's
+upstream documentation acceptance is a separate pending delivery decision.
 
 #### Sprint S92, Bibliography and navigation carryovers, templates and forms
 
