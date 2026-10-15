@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 241 | 229 | 3 | 5 |
-| **Total** | **566** | **503** | **3** | **56** |
+| X, Cross-cutting | 241 | 229 | 4 | 4 |
+| **Total** | **566** | **503** | **4** | **55** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -789,5 +789,5 @@ HLD14 contract before adopting contributor changes.
 | F-X224 | Repair hosted release tool and stack routing | S91.1 | M | in-progress |
 | F-X225 | Keep DrawingML text-style parsing within the default WASM stack | S91.1 | M | in-progress |
 | F-X226 | Release superseded relationships after checked PowerPoint XML edits | S91.1 | M | in-progress |
-| F-X227 | Execute the unchanged first-draft compatibility corpus in owner CI | S91.1 | L | pending |
+| F-X227 | Execute the unchanged first-draft compatibility corpus in owner CI | S91.1 | L | in-progress |
 <!-- AUTOGEN:backlog-MX END -->
