@@ -2723,7 +2723,7 @@ Issue384 and Issue385 repairs and the eleven existing carryovers.
 #### Sprint S95, New validation, form and rendering repairs
 
 **Goal**: prioritize the new Issue384 and Issue385 repairs after S94 closes.
-Five medium repairs and one large release preparation story total 14 to 20 developer-days. S95 does not close the whole Issue385
+The user explicitly includes Issue386 in active S95. Seven medium repairs, one large repair and one large release preparation story total 22 to 31 developer-days. S95 does not close the whole Issue385
 union, whose remaining authoring and PowerPoint admission work is in S95.11.
 
 | F-ID | Title | Size |
@@ -2735,30 +2735,30 @@ union, whose remaining authoring and PowerPoint admission work is in S95.11.
 | F-X253 | Honor imported chart types and hidden master shapes | M |
 | F-X255 | Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases | L |
 
-F-X255 follows the completed five repairs through a scoped dependency-prefix checkpoint and prepares both Rust and Python patch families in the user-selected0.16.x and0.14.x lines. Actual hosted build-only artifacts, final integrated full verification and independent sprint review precede close. Separate `/release` approval at the reviewed main merge SHA owns publication. Later sprint boundaries remain unchanged.
+F-X255 follows all eight completed repairs through scoped dependency-prefix
+checkpoints and prepares both Rust and Python patch families in the selected
+0.16.x and0.14.x lines. Its existing dirty worker and intermediate evidence are
+preserved while the three newly included stories complete. Revise its stale
+design and reconcile the preserved changes after those dependencies pass.
+Actual hosted build-only artifacts, final integrated full verification and
+independent sprint review precede close. Separate `/release` approval at the
+reviewed main merge SHA owns publication.
 
-#### Sprint S95.1, New Word unit and Python compatibility repairs
+The former S95.1 intake boundary is absorbed into active S95 at the user's
+explicit request. This expands S95 to nine stories rather than deferring the
+new repairs. The original four-story carryover group remains in S95.11.
 
-**Goal**: prioritize the newly reported Issue386 numeric admission and remaining
-Word/PowerPoint names without duplicating already qualified refusal routes.
-Three stories total 8 to 11 developer-days. The old S95.1 group moves intact to
-S95.11, immediately after this boundary and before S95.2. This explicit capacity
-split follows the user's preference for new repairs. S95.2 through S95.4 remain
-unchanged. S95 release preparation does not depend on these new repairs.
-
-| F-ID | Title | Size |
+| Additional S95 F-ID | Title | Size |
 |------|-------|------|
 | F-X256 | Refuse ambiguous Word numeric units and preserve line spacing | M |
 | F-X257 | Complete remaining Word names and legacy dropdown diagnostics | L |
 | F-X258 | Complete remaining PowerPoint names color and language contracts | M |
 
-Design the bare-number/typed-length and enum/string compatibility choices before
-implementation. Preserve the exact Issue386 body and qualify its rows through
-independent outcomes, rather than counting its self-catching script as a pass.
-The default list-style and one-dimension picture refusals are already qualified
-alternatives, not new completion credit. Issue386 stays open until its complete
-accepted union passes. Its reported Python3.14 environment is separate from
-the release Python3.9/3.12 qualification.
+Design bare-number/typed-length and enum/string compatibility choices before
+implementation. Preserve the exact Issue386 body and qualify individual rows
+through independent outcomes. Its self-catching script is not a passing gate.
+Existing list-style and picture refusals receive no duplicate credit. The
+reported Python3.14 environment is separate from release qualification.
 
 #### Sprint S95.11, Remaining everyday APIs and native interoperability
 
@@ -2870,7 +2870,7 @@ or hide the original strict-run outcomes when claiming repaired behavior.
 | 385, PowerPoint values accepted silently | F-X254 | Refuse wrong save format, out-of-range size, both flips on table/chart frames and unavailable style |
 | 385, PowerPoint raw XML | F-X254 | Four invalid owner mutations refuse atomically and validation diagnoses malformed imported inputs |
 | 385, master shapes in renders | F-X253 | PDF, PNG, convert and render omit hidden master shapes with native evidence and sensitive logo controls |
-| [386](https://github.com/tensorbee/rdocx/issues/386), new Word unit and compatibility groups | F-X256, F-X257, F-X258 in S95.1 | Exact new numeric/name/color/language and legacy diagnostic rows, with compatible behavior or actionable atomic refusal, separate from qualified list-style and picture alternatives |
+| [386](https://github.com/tensorbee/rdocx/issues/386), new Word unit and compatibility groups | F-X256, F-X257, F-X258 in S95 | Exact new numeric/name/color/language and legacy diagnostic rows, with compatible behavior or actionable atomic refusal, separate from qualified list-style and picture alternatives |
 | 385, replace --map | F-X254 | Each zero-match pair without expect refuses without output, preserve explicit expect0 |
 | 385, CLI font existing-output wording | F-X251 Word, F-X254 PowerPoint | Both stop recommending unavailable --force, preserve no-overwrite |
 | 385, CLI absent font removal | F-X254 | rpptx font remove exits nonzero and publishes no pretend removal |

@@ -1,9 +1,18 @@
 # F-X255, Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases
 
-**Status**: approved
+**Status**: draft
 **Sprint**: S95
 **Size**: L
-**Depends on**: F-X221, F-X248, F-X249, F-X251, F-X252, F-X253
+**Depends on**: F-X221, F-X248, F-X249, F-X251, F-X252, F-X253, F-X256, F-X257, F-X258
+
+## Rescope checkpoint
+
+The user expanded active S95 with F-X256, F-X257 and F-X258 after this
+preparation began. This prior design is stale and parked in draft. Preserve
+the dirty worker and intermediate receipts. No implementation, handoff or
+source availability push resumes until those dependencies complete and this
+plan is revised and approved against the expanded integrated source. The
+remaining text records the prior contract and must be reconciled then.
 
 ## Problem
 

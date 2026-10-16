@@ -2,11 +2,11 @@
 
 **Milestone**: M24, X, validation, typed form and rendering repairs.
 
-**Goal**: Prioritize the new Issue384 and Issue385 validation, typed form, refusal and PowerPoint rendering repairs after S94 closes. Complete the five bounded contracts below, preserving source ownership and existing valid operations. Five medium repairs and one large release preparation story total 14 to 20 developer-days of estimated effort. Prepare Word0.16.2 and shared/PowerPoint0.14.2 Rust and Python packages after the five repairs complete. S95 does not close the whole Issue385 union or M24's final stability boundary.
+**Goal**: Prioritize the new Issue384 and Issue385 validation, typed form, refusal and PowerPoint rendering repairs after S94 closes. Complete the five bounded contracts below, preserving source ownership and existing valid operations. The user explicitly expands S95 to include Issue386's three new repair stories. Seven medium repairs, one large repair and one large release preparation story total 22 to 31 developer-days of estimated effort. Prepare Word0.16.2 and shared/PowerPoint0.14.2 Rust and Python packages after all eight repairs complete. S95 does not close the whole Issue385 union or M24's final stability boundary.
 
 ## Spec references
 
-- `docs/hld/14-development-backlog.md`, F-X248, F-X249, F-X251, F-X252, F-X253 and F-X255 define the five repair contracts and release preparation, existing provider dependencies, issue ownership and scope limits.
+- `docs/hld/14-development-backlog.md`, F-X248, F-X249, F-X251, F-X252, F-X253, F-X255, F-X256, F-X257 and F-X258 define the eight repair contracts and release preparation, existing provider dependencies, issue ownership and scope limits.
 - `docs/hld/03-architecture.md`, Owned publication and causal paths requires candidate staging, allocation before commit, physical owner proof and exact no-op or refusal preservation.
 - `docs/hld/04-opc-and-packaging.md`, Checked Word operation source ownership governs qualified SDT values, opaque XML, source namespace scope, physical replacement owners, relationship checks, schema order and parser limits.
 - `docs/hld/06-presentationml-model.md`, The shape tree distinguishes slide, layout and master content, retained source, compatibility choices and the physical graph used for visibility.
@@ -28,10 +28,13 @@
 | F-X252 | Refuse newly invalid Word raw XML atomically | M | done | |
 | F-X253 | Honor imported chart types and hidden master shapes | M | done | |
 | F-X255 | Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases | L | in-progress | codex |
+| F-X256 | Refuse ambiguous Word numeric units and preserve line spacing | M | pending | |
+| F-X257 | Complete remaining Word names and legacy dropdown diagnostics | L | pending | |
+| F-X258 | Complete remaining PowerPoint names color and language contracts | M | pending | |
 
 ## Sequencing note
 
-F-X255 follows completed F-X221 and all five S95 repairs. Use a scoped dependency-prefix completion checkpoint before its design and claim. Release preparation owns version carriers and notes exclusively. Its actual hosted build-only acceptance may use the reviewed source availability checkpoint. Full integrated verification and sprint review remain due after release preparation. Publication follows close under `/release`, with separate approval at the exact reviewed main SHA.
+F-X255 follows completed F-X221 and all eight S95 repairs. Its existing dirty worker is parked, with intermediate evidence preserved, while F-X256, F-X257 and F-X258 complete. Its prior approved plan is stale and returns to draft pending those dependencies. Revise and approve it after the new scoped dependency-prefix completion checkpoints, then reconcile its preserved work against the integrated source. Release preparation owns version carriers and notes exclusively. Its actual hosted build-only acceptance may use the reviewed source availability checkpoint. Full integrated verification and sprint review remain due after release preparation. Publication follows close under `/release`, with separate approval at the exact reviewed main SHA.
 
 Rows follow the adopted plan and existing provider dependencies. F-X248 depends on F-X196, F-X211a and F-X222. F-X249 consumes F-X241. F-X251 consumes F-X201, F-X220 and F-X238. F-X252 consumes F-X211a. F-X253 consumes F-X209 and F-X215. Verify those completed providers at opening. Scheduling does not add dependency edges between these five stories.
 
@@ -41,11 +44,11 @@ F-X253 may run beside a Word story only after the actual approved plans establis
 
 Design the finite compatibility decisions before implementation. Acquire the pinned reporter fixtures, independent Word-produced typed controls, authoritative paragraph grammar and inherited MC scope evidence, and actual PowerPoint/LibreOffice logo controls. Resolve date formats, dropdown ambiguity, language and path admission, font-name validity and edited-XML depth as bounded evidence-backed design choices. This does not imply a full locale, IANA, schema, forms or generic XML framework, or new user approvals for ordinary evidence acquisition.
 
-Keep worker artifacts and installed environments isolated. A blocked worker must checkpoint and release overlapping resources before independent work uses them. The integrator owns delivery totals, consolidated archive measurements and final gates. Estimates describe developer effort, not promised elapsed time. Open S95.1 and later boundaries sequentially through their own workflow.
+Keep worker artifacts and installed environments isolated. A blocked worker must checkpoint and release overlapping resources before independent work uses them. The integrator owns delivery totals, consolidated archive measurements and final gates. Estimates describe developer effort, not promised elapsed time. Open S95.11 and later boundaries sequentially through their own workflow.
 
 ## Definition of done for this sprint
 
-- Complete all five repair contracts and F-X255 release preparation through implementation, independent zero-defect and zero-smell microscope, scoped riders, one integrated full verification and clean sprint review. Preserve parser limits, namespace-qualified ownership, schema child order and unmodelled XML. Explain and review every intentional deterministic output change.
+- Complete all eight repair contracts and F-X255 release preparation through implementation, independent zero-defect and zero-smell microscope, scoped riders, one integrated full verification and clean sprint review. Preserve parser limits, namespace-qualified ownership, schema child order and unmodelled XML. Explain and review every intentional deterministic output change.
 - F-X248 resolves Issue384's unchanged reproduction through `rdocx validate`, `Document.validate()` and `rdocx.validate_file`. Valid block-control paragraphs keep paraId, textId, namespace bindings and opaque payload through open, save and reopen. Word TOC, nested-control and ordinary-paragraph companions pass. Genuine owner mismatch and malformed-source controls still refuse without stripping identifiers or bypassing validation.
 - F-X249 removes the qualified placeholder flag on successful selected fills, writes the corresponding fullDate under supported producer format metadata, maps declared dropdown values or display text to the declared display, and refuses invalid choices before publication. Individual tag and alias selectors raise KeyError when missing. Preserve native all-match counts, unsupported-kind refusal, distinct bulk bind rules, bound XML consistency, late-failure atomicity and exact no-op authority. Python and CLI results agree after save/reopen, with independent Word-produced controls and explicit finite date/calendar admission.
 - F-X251 refuses the five reported Word cases before mutation or output: a DOCX saved to .pdf, duplicate stored-position tab stop, header page break, malformed language tag and authored font lacking its name table. Valid document variants, binary streams, licensed fonts, legitimate language and body-break controls remain supported. Word font CLI errors stop recommending unavailable --force while retaining collision and no-overwrite safeguards.
@@ -57,11 +60,18 @@ Keep worker artifacts and installed environments isolated. A blocked worker must
 
 ## New repair intake, Issue386
 
-F-X256, F-X257 and F-X258 are pending in S95.1 for the new Word numeric,
-Word naming/legacy diagnostic and PowerPoint naming/color/language contracts.
-That three-story group is estimated at 8 to 11 developer-days. The former
-S95.1 four-story group moves intact to S95.11 at 12 to 16 developer-days,
-before S95.2. S95 retains its six stories and F-X255 dependencies. New work is
-not a claim of Issue386 closure, Python3.14 qualification or extra release
-acceptance. Existing qualified list and picture refusals receive no duplicate
-completion credit. Later boundaries open sequentially through their workflow.
+The user explicitly brings F-X256, F-X257 and F-X258 into active S95 before
+release preparation completes. Their eight to eleven developer-days expand
+this sprint to nine stories, overriding the usual capacity split. Design the
+numeric and enum/string compatibility contracts before implementation. Run
+Word changes in sequence where source, tests or HLD sections overlap. Run the
+PowerPoint story alongside only with disjoint leases. Preserve the exact
+Issue386 reproduction and independently qualify each row. Existing list-style
+and picture refusals receive no duplicate completion credit. Python3.14 is
+not a new qualification target. Issue386 closure requires the complete accepted
+union, rather than the self-catching script's exit status.
+
+The former four-story group remains in S95.11. The now-empty S95.1 intake
+boundary is absorbed into S95. F-X255's preserved local artifacts qualify only
+their intermediate source. Fresh final artifacts and release acceptance must
+include the new repairs. No publication has started.

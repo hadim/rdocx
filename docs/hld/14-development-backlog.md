@@ -8353,7 +8353,7 @@ exceeds its estimate, without dropping any of these acceptance criteria.
 ### F-X255, Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases
 
 **Size**: L
-**Depends on**: F-X221, F-X248, F-X249, F-X251, F-X252, F-X253
+**Depends on**: F-X221, F-X248, F-X249, F-X251, F-X252, F-X253, F-X256, F-X257, F-X258
 **Test gate**: release regression
 **Spec reference**: `10-bindings-spec.md`, Packaging, and `15-build-and-toolchain.md`, Packaging, Publishing and Release process.
 
@@ -8403,7 +8403,7 @@ absolute typed spacing and valid section dimensions. Cover finite/nonfinite,
 bool/type, save/reopen, held-owner and before/after package controls. Do not
 expand this into a generic unit engine or silently alter all integer setters.
 
-The acceptance source is [Issue386](https://github.com/tensorbee/rdocx/issues/386), reported against main d44a69af. Pin its original body and script separately from the existing Issue385 twelve-case union. Its self-catching script exit status is not acceptance. Report actual row outcomes and independent saved-package observations. A reported Python3.14 environment is not a new runtime qualification claim. This story is pending in S95.1 and does not gate F-X255 or authorize issue closure.
+The acceptance source is [Issue386](https://github.com/tensorbee/rdocx/issues/386), reported against main d44a69af. Pin its original body and script separately from the existing Issue385 twelve-case union. Its self-catching script exit status is not acceptance. Report actual row outcomes and independent saved-package observations. A reported Python3.14 environment is not a new runtime qualification claim. This story is included in active S95 at the user's explicit request and gates F-X255 final release preparation. Completion alone does not authorize issue closure.
 
 ### F-X257, Complete remaining Word names and legacy dropdown diagnostics
 
@@ -8431,7 +8431,7 @@ claim new default-template numbering or native aspect-ratio semantics.
 Retain the exact reproduction, independently observed returns and saved XML,
 existing consumers/stubs, source/handle atomicity and positive provider controls.
 
-The acceptance source is [Issue386](https://github.com/tensorbee/rdocx/issues/386), reported against main d44a69af. Pin its original body and script separately from the existing Issue385 twelve-case union. Its self-catching script exit status is not acceptance. Report actual row outcomes and independent saved-package observations. A reported Python3.14 environment is not a new runtime qualification claim. This story is pending in S95.1 and does not gate F-X255 or authorize issue closure.
+The acceptance source is [Issue386](https://github.com/tensorbee/rdocx/issues/386), reported against main d44a69af. Pin its original body and script separately from the existing Issue385 twelve-case union. Its self-catching script exit status is not acceptance. Report actual row outcomes and independent saved-package observations. A reported Python3.14 environment is not a new runtime qualification claim. This story is included in active S95 at the user's explicit request and gates F-X255 final release preparation. Completion alone does not authorize issue closure.
 
 ### F-X258, Complete remaining PowerPoint names color and language contracts
 
@@ -8452,4 +8452,4 @@ and layout/master owners, source XML, saved/reopened values and current stubs.
 Qualify every named row individually, with before/after bytes and held-owner
 checks for assignments and explicit supported controls.
 
-The acceptance source is [Issue386](https://github.com/tensorbee/rdocx/issues/386), reported against main d44a69af. Pin its original body and script separately from the existing Issue385 twelve-case union. Its self-catching script exit status is not acceptance. Report actual row outcomes and independent saved-package observations. A reported Python3.14 environment is not a new runtime qualification claim. This story is pending in S95.1 and does not gate F-X255 or authorize issue closure.
+The acceptance source is [Issue386](https://github.com/tensorbee/rdocx/issues/386), reported against main d44a69af. Pin its original body and script separately from the existing Issue385 twelve-case union. Its self-catching script exit status is not acceptance. Report actual row outcomes and independent saved-package observations. A reported Python3.14 environment is not a new runtime qualification claim. This story is included in active S95 at the user's explicit request and gates F-X255 final release preparation. Completion alone does not authorize issue closure.
