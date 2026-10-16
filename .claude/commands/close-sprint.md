@@ -42,9 +42,14 @@ publication.
    explicitly. Some gates are manual, such as opening corpus decks in
    PowerPoint. **Do not mark a manual gate as met without performing it.**
 
-5. **Update the tracker.** Append the per-sprint summary row to
-   `docs/sprints/SPRINT_TRACKER.md` with planned, done, carried, estimated and
-   actual days, and recalculate the velocity table. A validation-only sprint
+5. **Confirm the reviewed tracker.** Consume the per-sprint summary and velocity
+   rows prepared before final sprint review in `docs/sprints/SPRINT_TRACKER.md`,
+   with planned, done, carried, estimated and actual days. Do not append a second
+   summary or change the reviewed tree merely because close was invoked. If a
+   row is missing or wrong, correct the delivery metadata on the sprint branch,
+   review that correction and adopt its permitted metadata successor before
+   merging. Product checks stay applicable when their inputs are unchanged.
+   A validation-only sprint
    records zero planned, done, carried and estimated implementation days. Its
    actual days record the elapsed validation work, and its velocity is 0.00
    stories per week.
@@ -58,8 +63,8 @@ publication.
 
 8. **Push** `main` and the tag. Record the reviewed sprint HEAD, the merge
    commit SHA, and the tree comparison needed by `/release`. A release tag is
-   created later at this merge SHA, after its own full gate and separate
-   approval.
+   created later at this merge SHA, after authenticating applicable full evidence
+   and obtaining separate approval.
 
 9. **Clean completed workers.** Only after both pushes succeed, inspect every
    cleanup target recorded in the run state:

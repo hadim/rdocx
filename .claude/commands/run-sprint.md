@@ -287,8 +287,10 @@ For every integrated F-ID, including release preparation and locally completed
 provider-prefix stories, write actual final delivery records exactly once:
 
 1. Confirm HLD intent was updated before the full gate. Append the actual
-   `AS_BUILT.md` evidence at producer H and the `SPRINT_TRACKER.md` row. Do not
-   insert source or HLD edits in this completion-only phase.
+   `AS_BUILT.md` evidence at producer H and the `SPRINT_TRACKER.md` row. Prepare
+   the close-sprint summary and velocity rows here so final review covers them
+   and close can consume them without changing the reviewed tree. Do not insert
+   source or HLD edits in this completion-only phase.
 2. Set `done` in `BACKLOG.md` and `CURRENT_SPRINT.md`, clear its `Owner` cell,
    and regenerate the AUTOGEN counts.
 3. Set its design plan to `**Status**: completed`.
