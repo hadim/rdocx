@@ -10,6 +10,64 @@ import zlib
 import pytest
 
 
+@pytest.mark.parametrize("identifier", ["paraId", "textId", "both"])
+def test_fx248_identified_block_control_all_validation_routes(tmp_path, identifier):
+    import xml.etree.ElementTree as ET
+
+    import rdocx
+
+    word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    producer = "http://schemas.microsoft.com/office/word/2010/wordml"
+    attributes = {
+        "paraId": 'producer:paraId="388B6825"',
+        "textId": 'producer:textId="00AABBCC"',
+        "both": 'producer:paraId="388B6825" producer:textId="00AABBCC"',
+    }[identifier]
+    opaque = '<x:witness x:value="&amp;">keep &amp; exact</x:witness>'
+    control = (
+        f'<w:sdt><w:sdtPr><w:id w:val="1"/>{opaque}</w:sdtPr><w:sdtContent>'
+        f'<w:p {attributes}><w:r><w:t>Inside</w:t></w:r></w:p>'
+        f'<w:sdt><w:sdtPr/><w:sdtContent><w:p {attributes}>'
+        '<w:r><w:t>Nested</w:t></w:r></w:p></w:sdtContent></w:sdt>'
+        '</w:sdtContent></w:sdt>'
+    )
+    seed = rdocx.Document()
+    seed.add_paragraph("Before")
+    source = io.BytesIO(seed.to_bytes())
+    path = tmp_path / "identified.docx"
+    with zipfile.ZipFile(source) as original, zipfile.ZipFile(path, "w") as output:
+        for info in original.infolist():
+            payload = original.read(info.filename)
+            if info.filename == "word/document.xml":
+                xml = payload.decode().replace(
+                    "<w:document ",
+                    f'<w:document xmlns:producer="{producer}" xmlns:x="urn:opaque" ',
+                    1,
+                )
+                payload = xml.replace("<w:sectPr", control + "<w:sectPr", 1).encode()
+            output.writestr(info, payload)
+    before = path.read_bytes()
+    document = rdocx.Document.open(path)
+    document.validate()
+    rdocx.validate_file(path)
+    assert path.read_bytes() == before
+    saved = tmp_path / "saved.docx"
+    document.save(saved)
+    rdocx.Document.open(saved).validate()
+    rdocx.validate_file(saved)
+    with zipfile.ZipFile(saved) as package:
+        xml = package.read("word/document.xml")
+    assert opaque.encode() in xml
+    root = ET.fromstring(xml)
+    paragraphs = root.findall(f".//{{{word}}}sdtContent/{{{word}}}p")
+    assert len(paragraphs) == 2
+    for paragraph in paragraphs:
+        if identifier in ("paraId", "both"):
+            assert paragraph.get(f"{{{producer}}}paraId") == "388B6825"
+        if identifier in ("textId", "both"):
+            assert paragraph.get(f"{{{producer}}}textId") == "00AABBCC"
+
+
 def _replace_document_body(document, body, root_default=None):
     source = io.BytesIO(document.to_bytes())
     result = io.BytesIO()

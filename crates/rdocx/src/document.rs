@@ -2276,18 +2276,32 @@ fn paragraph_visibility_from_main_source(
                     && admitted_parent
                     && matches!(event, Event::Start(_))
                 {
-                    let prefixes = reader
-                        .resolver()
-                        .bindings()
-                        .filter(|(_, namespace)| namespace.as_ref() == W_NS.as_bytes())
-                        .map(|(prefix, _)| match prefix {
-                            PrefixDeclaration::Default => Ok(String::new()),
-                            PrefixDeclaration::Named(prefix) => {
-                                std::str::from_utf8(prefix).map(str::to_owned)
+                    let prefixes = reader.resolver().bindings().try_fold(
+                        Vec::new(),
+                        |mut scope, (declaration, namespace)| {
+                            let prefix = match declaration {
+                                PrefixDeclaration::Default => "",
+                                PrefixDeclaration::Named(prefix) => std::str::from_utf8(prefix)
+                                    .map_err(rdocx_oxml::OxmlError::from)?,
+                            };
+                            // Resolver bindings retain raw namespace attribute bytes.
+                            // The SDT scope carrier and serializer use semantic URIs.
+                            let namespace = quick_xml::events::attributes::Attribute {
+                                key: quick_xml::name::QName(b"xmlns"),
+                                value: Cow::Borrowed(namespace.as_ref()),
                             }
-                        })
-                        .collect::<std::result::Result<Vec<_>, _>>()
-                        .map_err(|error| Error::Other(error.to_string()))?;
+                            .decoded_and_normalized_value(
+                                XmlVersion::Implicit1_0,
+                                element.decoder(),
+                            )
+                            .map_err(rdocx_oxml::OxmlError::from)?;
+                            scope.push(format!("\0{prefix}\0{namespace}"));
+                            if namespace == W_NS {
+                                scope.push(prefix.to_owned());
+                            }
+                            Ok::<_, Error>(scope)
+                        },
+                    )?;
                     let owner = if in_paragraph {
                         StorySdtOwner::Inline
                     } else {
@@ -48921,6 +48935,106 @@ mod tests {
         // New document has no title or author
         assert!(issues.iter().any(|i| i.message.contains("no title")));
         assert!(issues.iter().any(|i| i.message.contains("no author")));
+    }
+
+    #[test]
+    fn fx248_identified_block_control_scope_matches_model_and_preserves_source() {
+        let producer = "http://schemas.microsoft.com/office/word/2010/wordml";
+        let opaque = r#"<x:witness x:value="&amp;">keep &amp; exact</x:witness>"#;
+        for attributes in [
+            r#"p:paraId="00AABBCC""#,
+            r#"p:textId="00DDEEFF""#,
+            r#"p:paraId="00AABBCC" p:textId="00DDEEFF""#,
+        ] {
+            let xml = format!(
+                r#"<w:document xmlns:w="{W_NS}" xmlns:p="{producer}" xmlns:x="urn:opaque"><w:body><w:p {attributes}><w:r><w:t>ordinary</w:t></w:r></w:p><w:sdt><w:sdtPr>{opaque}</w:sdtPr><w:sdtContent><w:p {attributes}><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> TOC </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>contents</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p><w:sdt><w:sdtPr/><w:sdtContent><w:p {attributes}><w:r><w:t>nested</w:t></w:r></w:p></w:sdtContent></w:sdt></w:sdtContent></w:sdt><w:sectPr/></w:body></w:document>"#
+            );
+            let mut original = Document::new();
+            original
+                .package
+                .set_part(&original.doc_part_name, xml.into_bytes());
+            let mut input = std::io::Cursor::new(Vec::new());
+            original.package.write_to(&mut input).unwrap();
+            let mut document = Document::from_bytes(input.get_ref()).unwrap();
+            assert_eq!(document.paragraph_count(), 3, "{attributes}");
+            assert_eq!(document.paragraph_visibility().unwrap(), vec![true; 3]);
+            document.validate().unwrap();
+            let bytes = document.to_bytes().unwrap();
+            let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+            let saved =
+                std::str::from_utf8(package.get_part(&document.doc_part_name).unwrap()).unwrap();
+            assert!(saved.contains(opaque), "{saved}");
+            for attribute in attributes.split_whitespace() {
+                assert_eq!(saved.matches(attribute).count(), 3, "{saved}");
+            }
+            let reopened = Document::from_bytes(&bytes).unwrap();
+            assert_eq!(reopened.paragraph_visibility().unwrap(), vec![true; 3]);
+            reopened.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn fx248_effective_namespace_scope_preserves_producer_attributes() {
+        let xml = format!(
+            r#"<q:document xmlns:q="{W_NS}" xmlns="urn:unused" xmlns:id="urn:outer&amp;producer"><q:body><q:sdt xmlns=""><q:sdtPr/><q:sdtContent><q:p id:stamp="outer"><q:r><q:t>outer</q:t></q:r></q:p><q:sdt xmlns:id="urn:inner&amp;producer"><q:sdtPr/><q:sdtContent><q:p id:stamp="inner"><q:r><q:t>inner</q:t></q:r></q:p></q:sdtContent></q:sdt><q:p id:stamp="restored"><q:r><q:t>restored</q:t></q:r></q:p></q:sdtContent></q:sdt><q:sectPr/></q:body></q:document>"#
+        );
+        let mut original = Document::new();
+        original
+            .package
+            .set_part(&original.doc_part_name, xml.into_bytes());
+        let mut input = std::io::Cursor::new(Vec::new());
+        original.package.write_to(&mut input).unwrap();
+        let mut document = Document::from_bytes(input.get_ref()).unwrap();
+        assert_eq!(document.paragraph_count(), 3);
+        assert_eq!(document.paragraph_visibility().unwrap(), vec![true; 3]);
+        document.validate().unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.paragraph_visibility().unwrap(), vec![true; 3]);
+        reopened.validate().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        let saved =
+            std::str::from_utf8(package.get_part(&document.doc_part_name).unwrap()).unwrap();
+        assert!(saved.contains("urn:outer&amp;producer"), "{saved}");
+        assert!(saved.contains("urn:inner&amp;producer"), "{saved}");
+        assert!(!saved.contains("&amp;amp;"), "{saved}");
+        let mut reader = NsReader::from_reader(saved.as_bytes());
+        let mut buffer = Vec::new();
+        let mut stamps = Vec::new();
+        loop {
+            match reader.read_event_into(&mut buffer).unwrap() {
+                Event::Start(element) | Event::Empty(element) => {
+                    for attribute in element.attributes() {
+                        let attribute = attribute.unwrap();
+                        let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                        if local.as_ref() == b"stamp" {
+                            let ResolveResult::Bound(Namespace(namespace)) = namespace else {
+                                panic!("saved producer attribute lost its namespace");
+                            };
+                            let value = attribute
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    element.decoder(),
+                                )
+                                .unwrap();
+                            // This parser's namespace resolver exposes raw URI bytes.
+                            stamps.push((namespace.to_vec(), value.into_owned()));
+                        }
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+        assert_eq!(
+            stamps,
+            vec![
+                (b"urn:outer&amp;producer".to_vec(), "outer".to_owned()),
+                (b"urn:inner&amp;producer".to_vec(), "inner".to_owned()),
+                (b"urn:outer&amp;producer".to_vec(), "restored".to_owned()),
+            ]
+        );
     }
 
     #[test]

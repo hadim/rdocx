@@ -4201,6 +4201,14 @@ Text watermark opacity coverage includes exact named refusals for zero, one and 
 
 Missing-operation Base controls precede new public routes. Installed current-source controls verify typed payloads, atomic JSON conversion, live property ownership, immutable equation and fragment snapshots, and qualified checkbox scalar/font selection. Strict typing and stubtest run against the authenticated wheel while the complete installed PowerPoint distribution remains unchanged.
 
+Identified block-control regression controls execute CLI validate,
+Document.validate and module validate_file before and after save/reopen.
+Qualified paraId and textId are checked independently in saved XML, alongside
+exact opaque control payload. Native companions cover ordinary paragraphs,
+TOC content and nested controls, inherited aliases, namespace shadowing,
+default clearing and escaped producer URIs. Equal-count wrong-owner and
+malformed-source controls continue to refuse.
+
 Text controls compare accepted Paragraph and story snapshots across body, tables, controls and related stories. CLI plain and JSON views retain aliases, tabs, direct and simple-field newlines, and closed complex cached-field page and column controls. Nested instruction, deleted and moveFrom content stays suppressed. Malformed related stories retain main text and the existing ordered omission diagnostic. Markdown keeps literal whitespace and physical field, control, revision and hard-break boundaries. Export controls inspect owned ODT space elements and EPUB content rather than relying on lexical XML substrings.
 
 ## PowerPoint master and theme controls

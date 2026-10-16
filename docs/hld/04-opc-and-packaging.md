@@ -1904,6 +1904,14 @@ Document import closes the native fragment dependency graph before publication. 
 
 Checkbox admission and state selection use expanded Word2010 names, including qualified aliases and the default namespace. Only the selected qualified checked value changes. Foreign same-name elements, attributes, namespace declarations and opaque child order remain source-owned. The selected Unicode scalar and state font are admitted together before any matching control changes. Forbidden XML text and late invalid state values refuse the entire operation.
 
+Validation probes for block content controls retain the complete effective
+namespace scope, including producer bindings needed by paraId and textId.
+Raw namespace declaration values are decoded once before entering the semantic
+scope carrier. Local shadowing and default namespace clearing retain their
+actual scope. Paragraph identifiers and opaque control payload remain owned
+source through save and reopen. The validation inventory still requires the
+same physical paragraph owners and refuses malformed source.
+
 Checked paragraph, regular-run, table, cell and section-property replacement
 first resolves the actual held physical owner. One complete expected expanded-
 name root, modeled sequence and known property profiles, relationship kind and

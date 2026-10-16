@@ -1,6 +1,6 @@
 # F-X248, Validate identified paragraphs inside block content controls
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95
 **Size**: M
 **Depends on**: F-X196, F-X211a, F-X222
@@ -58,11 +58,11 @@ All 49 hashes and seven deterministic pixel buffers are expected unchanged. No b
 
 ## Implementation checklist
 
-- [ ] Retain exact Issue384 source and actual pre-repair outcomes.
-- [ ] Carry normalized full scope at the existing narrow probe.
-- [ ] Qualify every validation route and independent saved XML preservation.
-- [ ] Retain genuine owner and malformed-source negatives.
-- [ ] Complete scoped riders, independent microscope and structured handoff.
+- [x] Retain exact Issue384 source and actual pre-repair outcomes.
+- [x] Carry normalized full scope at the existing narrow probe.
+- [x] Qualify every validation route and independent saved XML preservation.
+- [x] Retain genuine owner and malformed-source negatives.
+- [x] Complete scoped riders, independent microscope and structured handoff.
 
 ## Open questions
 

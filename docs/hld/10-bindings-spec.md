@@ -3897,6 +3897,12 @@ and known semantic mappings retain precedence.
 
 Document exposes HTML and Markdown, CLI-equivalent text and owned TextReport, typed ODT, RTF and EPUB payloads with complete ordered diagnostic tuples, and explicit body word and character counts. Validation accepts an owned document snapshot, bytes or a path. Package decode and path errors propagate, while admitted advisory findings preserve native severity, order and validity.
 
+Document.validate and module validate_file share the native physical-owner
+validation used by the Word CLI. Identified paragraphs inside block content
+controls retain inherited producer namespace bindings, including qualified
+paraId and textId, through open, save and reopen. This does not relax genuine
+owner mismatch or malformed-source refusal.
+
 Template input accepts a string-keyed dict of bounded JSON values. Bool precedes integer conversion. Nonfinite values, cyclic containers, out-of-range integers and arbitrary objects refuse before publication. FragmentConflictPolicy exposes independent style, numbering and related-part reuse choices. ContentLocation and DocumentFragment retain physical source boundaries. Checked insertion uses the native fragment path and excludes final section properties by default.
 
 CustomFileTime validates explicit RFC3339 text. CustomProperties returns immutable typed snapshots and stages checked set/delete operations. AppProperties and presence-sensitive track_revisions are live document-owned handles. Equations return immutable source snapshots, ordered per-child conversion results and native loss diagnostics. Tag and alias control updates stage all selected qualified values once. Runtime constructors, explicit exports and strict stubs describe the same public classes and defaults.

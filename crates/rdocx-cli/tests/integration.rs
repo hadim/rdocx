@@ -2393,6 +2393,48 @@ fn validation_qualified_display_content_and_field_controls_preserve_source() {
 }
 
 #[test]
+fn fx248_validate_reporter_identified_block_control() {
+    let temp = TempWorkspace::new("validate-identified-control");
+    let input = temp.path.join("identified.docx");
+    write_document(&input, &["Before"]);
+    let mut package = OpcPackage::open(&input).unwrap();
+    let part = package.main_document_part().unwrap();
+    let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+    let producer = "http://schemas.microsoft.com/office/word/2010/wordml";
+    let xml = xml.replace(
+        "<w:document ",
+        &format!("<w:document xmlns:producer=\"{producer}\" "),
+    );
+    let control = concat!(
+        "<w:sdt><w:sdtPr><w:id w:val=\"1\"/></w:sdtPr><w:sdtContent>",
+        "<w:p producer:paraId=\"388B6825\" producer:textId=\"00AABBCC\">",
+        "<w:r><w:t>Inside</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+    );
+    package.set_part(
+        &part,
+        xml.replace("<w:sectPr", &format!("{control}<w:sectPr"))
+            .into_bytes(),
+    );
+    package.save(&input).unwrap();
+    let before = fs::read(&input).unwrap();
+    assert_success(
+        &cli(&["validate", path_text(&input)]),
+        "validate identified block control",
+    );
+    assert_eq!(fs::read(&input).unwrap(), before);
+    let output = temp.path.join("reopened.docx");
+    Document::open(&input).unwrap().save(&output).unwrap();
+    assert_success(
+        &cli(&["validate", path_text(&output)]),
+        "validate saved identified block control",
+    );
+    let package = OpcPackage::open(&output).unwrap();
+    let xml = std::str::from_utf8(package.get_part(&part).unwrap()).unwrap();
+    assert!(xml.contains("producer:paraId=\"388B6825\""), "{xml}");
+    assert!(xml.contains("producer:textId=\"00AABBCC\""), "{xml}");
+}
+
+#[test]
 fn validation_preserves_recursive_block_control_and_table_paragraph_scope() {
     let temp = TempWorkspace::new("validate-control-scope");
     let input = temp.path.join("controls.docx");
