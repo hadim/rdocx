@@ -8620,7 +8620,7 @@ Pedro Assumpcao and the rdocx maintainers.
         audited = {f"F-{number:03d}" for number in range(240, 311)}
         self.assertLessEqual(audited, all_stories)
 
-        placements: dict[str, list[tuple[int, str, str]]] = {
+        placements: dict[str, list[tuple[tuple[int, ...], str, str]]] = {
             fid: [] for fid in audited
         }
         sprint_markers = list(
@@ -8639,28 +8639,31 @@ Pedro Assumpcao and the rdocx maintainers.
                 row_pattern = row_pattern.removesuffix("$") + r" [^|\n]+ \|$"
             for fid, title, size in re.findall(row_pattern, section, re.MULTILINE):
                 if fid in placements:
-                    placements[fid].append((int(marker.group(1)), title.strip(), size))
+                    sprint = tuple(int(part) for part in marker.group(1).split("."))
+                    placements[fid].append((sprint, title.strip(), size))
         self.assertTrue(all(value for value in placements.values()))
         self.assertTrue(all(len(value) == 1 for value in placements.values()))
         self.assertEqual(
             {sprint for value in placements.values() for sprint, _, _ in value},
-            set(range(70, 75)) | {86, 89, 90, 95} | set(range(97, 100)),
+            {(number,) for number in set(range(70, 75)) | {86, 89, 90} | set(range(97, 100))}
+            | {(95, 2), (95, 3), (95, 4)},
         )
 
-        backlog_rows: dict[str, list[tuple[int, str, str, str]]] = {
+        backlog_rows: dict[str, list[tuple[tuple[int, ...], str, str, str]]] = {
             fid: [] for fid in audited
         }
         sprint_backlog = (workflow.REPO / "docs/sprints/BACKLOG.md").read_text(
             encoding="utf-8"
         )
         for fid, title, sprint, size, status in re.findall(
-            r"^\| (F-\d{3}) \| ([^|]+?) \| S(\d+) \| ([SML]) \| "
+            r"^\| (F-\d{3}) \| ([^|]+?) \| S(\d+(?:\.\d+)?) \| ([SML]) \| "
             r"(pending|in-progress|reviewed|done|archived) \|$",
             sprint_backlog,
             re.MULTILINE,
         ):
             if fid in backlog_rows:
-                backlog_rows[fid].append((int(sprint), title.strip(), size, status))
+                sprint_number = tuple(int(part) for part in sprint.split("."))
+                backlog_rows[fid].append((sprint_number, title.strip(), size, status))
         self.assertTrue(all(len(value) == 1 for value in backlog_rows.values()))
         hld_rows = {
             fid: (title.strip(), size)
