@@ -1121,3 +1121,19 @@ Four integrated prerequisites complete through scoped evidence so the end-S95 re
 | F-X249 | S95 | M | 2 to 3 | not recorded | 2026-10-16 | Scoped acceptance, independent clean feature review and integrated source authentication. Receipt SHA256 5d095be06d08d3e74acdac972f682f27a8354cff8464269b9b3117827798c5f2. Final full sprint gate and review remain due |
 | F-X251 | S95 | M | 2 to 3 | not recorded | 2026-10-16 | Scoped acceptance, independent clean feature review and integrated source authentication. Receipt SHA256 6ce4af6b199c3c337a72f44f9927e8d245633b81aa1f6f8baf3d07a85621d6c3. Final full sprint gate and review remain due |
 | F-X253 | S95 | M | 2 to 3 | not recorded | 2026-10-16 | Scoped acceptance, independent clean feature review and integrated source authentication. Receipt SHA256 54a4fc73d167e4b00e36a24d98dd4a7517c38a85e7927f86c539024468023a87. Final full sprint gate and review remain due |
+
+## Issue386 intake and capacity split, 2026-10-16
+
+Read-only GitHub refresh found new Issue386 and no open PRs. Its new Word unit,
+remaining Word names/legacy diagnostic and PowerPoint name/color/language
+contracts are pending F-X256, F-X257 and F-X258 in S95.1, totaling 8 to 11
+estimated developer-days. The former S95.1 F-X250/F-X254/F-X219/F-X223 group
+moves intact to S95.11, at 12 to 16 developer-days, before S95.2. This preserves
+all acceptance groups and the user's new-repair priority without extending
+S95 or making its release wait for future repairs. No implementation, runtime,
+completion or velocity credit is claimed. Historical references to the prior
+S95.1 allocation retain their original planning date. The canonical roadmap
+and backlog carry the revised homes. Issue385 and Issue386 remain open for
+their respective remaining acceptance unions. Exact input and source facts
+are retained in `/private/tmp/S95-issue386-intake-triage-1/triage.md` and its
+receipt SHA256 `8024b68da12ba4f7a1d7c12265ad7b3a80935954d74a16cc133822fb470b0fa0`.

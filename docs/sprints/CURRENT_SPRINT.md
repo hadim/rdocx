@@ -53,4 +53,15 @@ Keep worker artifacts and installed environments isolated. A blocked worker must
 - F-X253 independently proves the four requested imported chart subtypes rather than relying on the reporter's permissive None branch. Genuinely unknown types return None. Preserve data, plot order and opaque XML through reopen. PDF, PNG, convert and render all omit master-owned shapes when show_master_shapes is false, with actual native PowerPoint and LibreOffice evidence and sensitive master-logo controls. True and absent flag controls, layout and slide shapes, placeholders, inherited styling and backgrounds retain their distinct behavior.
 - Preserve the original Issue384/385 bodies and immutable skills commit `91a57108f13877cfb6179a70077d425d6ebf098b`. Establish actual RED against final integrated S94. Retain unchanged strict XFAIL and XPASS(strict) outcomes. Separately execute unchanged bodies/checks, such as with --runxfail, and bind actual outcomes to current installed artifacts and independent semantic or atomicity observers. Never label a strict expected-failure observer contradiction as raw green.
 - Pass the applicable installed Python, typing, stub, native, WASM, documentation, package, supply-chain, deterministic hash/pixel and differential riders. Preserve prior evidence and explicit historical/oracle limits. Release preparation is part of this sprint. Publication follows sprint close and separate final approval under `/release`.
-- Record Issue385 as partially addressed until S95.1's F-X250 and F-X254 groups, including the remaining CLI point, also pass. Do not duplicate S94 names, signing or five-kind inventory work, claim full Issue385 closure, consume the later form-authoring programme or claim M24's end gate. M24's final stability boundary remains S99.
+- Record Issue385 as partially addressed until S95.11's F-X250 and F-X254 groups, including the remaining CLI point, also pass. Do not duplicate S94 names, signing or five-kind inventory work, claim full Issue385 closure, consume the later form-authoring programme or claim M24's end gate. M24's final stability boundary remains S99.
+
+## New repair intake, Issue386
+
+F-X256, F-X257 and F-X258 are pending in S95.1 for the new Word numeric,
+Word naming/legacy diagnostic and PowerPoint naming/color/language contracts.
+That three-story group is estimated at 8 to 11 developer-days. The former
+S95.1 four-story group moves intact to S95.11 at 12 to 16 developer-days,
+before S95.2. S95 retains its six stories and F-X255 dependencies. New work is
+not a claim of Issue386 closure, Python3.14 qualification or extra release
+acceptance. Existing qualified list and picture refusals receive no duplicate
+completion credit. Later boundaries open sequentially through their workflow.
