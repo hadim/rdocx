@@ -20205,3 +20205,87 @@ review remain due. The handoff is consumed and clean worker directory removed
 without force, with branch retained through close. Issue385 remains partial
 until the remaining F-X250/F-X254 groups in S95.11 pass. Issue386 has distinct
 pending S95.1 stories and receives no completion or release credit here.
+
+### F-X256, Refuse ambiguous Word numeric units and preserve line spacing
+
+**Sprint.** S95
+**Completed.** 2026-10-16
+**Size.** M, estimated 2 to 3 days, actual not recorded
+
+**What was built.** Tiny bare spacing values that quantize to zero now refuse
+with explicit unit guidance. Integer line spacing uses multiples. Nonzero
+public section geometry requires a Length. Live section EMU setters, signed
+character spacing and native truncation remain intact. Argument admission
+precedes conversion hooks and preserves package bytes and held owners.
+
+**Non-obvious choices.** Seven stale installed fixtures were reconciled under
+the approved plan revision without changing integrated SDT or tab behavior.
+The oracle's off-grid rounding and tiny bare-space acceptance remain explicit
+divergences. No native published Rust source or new module changed.
+
+**Spec sections touched.** HLD10 Word units and section contracts, HLD12 numeric
+and installed qualification.
+
+**Tests.** Regression gate and actual old-source four-row RED retained. Complete
+installed Word933 and focused33 passed at successor3. The sole successor4
+change is one non-collected typing expression. Current strict typing,
+seven-module stubtest and independent four-row saved-package observer pass
+with unchanged installed wheel, full RECORD and native identities. Independent
+pass5 authenticates this bounded applicability rather than claiming another
+complete run. Scoped clippy, both WASM graphs, formatting, prose and adapters
+pass. Policy183 run,181 passed and two existing skips. Scoped receipt SHA256
+994cc03db90a3673be78d1a48674eb8624abb66b712794743a82b72a85a8cfa7.
+Root authenticated24 referenced proofs and actual command logs and JUnit.
+Integration f3291339 preserves all seven changed product/test files exactly.
+Only identical checklist metadata conflicted and was reconciled.
+
+**Hash harness.** Worker49 hashes and seven deterministic pixel buffers
+unchanged. No baseline change.
+
+**Notes for future sessions.** Scoped dependency-prefix acceptance permits
+F-X257. Final nine-story integrated full gate and sprint review remain due.
+Issue386 whole paired-script acceptance remains pending. Handoff consumed,
+clean worker directory eligible for removal, branch retained through close.
+
+### F-X258, Complete remaining PowerPoint names color and language contracts
+
+**Sprint.** S95
+**Completed.** 2026-10-16
+**Size.** M, estimated 2 to 3 days, actual not recorded
+
+**What was built.** Slide IDs use existing registered identity. Private XML
+names provide actionable checked Element alternatives after owner validation.
+The approved Python source compatibility change returns color enums, with
+finite theme projection and explicit unsupported-source diagnostics. A finite
+216-member language enum uses existing font storage and preserves the string
+language API. No native parser, renderer or published Rust source changed.
+
+**Non-obvious choices.** The finite traditional Spanish mapping uses checked
+storage without relaxing general underscore admission. Historical font oracle
+inputs retain their original producer attribution. Root admitted only the exact
+eight-line Shape diagnostic addition for historical chart-proof applicability.
+Historical mutants remain historical, with fresh final four-route observations
+still due.
+
+**Spec sections touched.** HLD10 PowerPoint color, language and checked XML
+contracts, HLD12 corresponding binding qualification.
+
+**Tests.** Regression gate, six selected original reporter rows and complete
+ordinary installed PowerPoint961 pass with zero skips. Strict smoke, ten inline
+files and ten stubtest modules pass with actual source, wheel, full RECORD,
+native and oracle guards. Independent correctness pass1 is clean. Scoped
+clippy, both WASM graphs, formatting, prose and adapters pass. Policy183 run,
+181 passed and two existing skips. Scoped receipt SHA256
+b64e5b90699642af62e92fda021ef8f5f1bb12aada01ee5154a83516f5108ddd.
+Root authenticated21 referenced proofs, actual command logs and961-test JUnit.
+Integration8c9fb137 preserves all nine changed product/test files exactly.
+Disjoint Word and PowerPoint HLD additions merged without semantic conflict.
+
+**Hash harness.** Worker49 hashes and seven deterministic pixel buffers at
+150DPI unchanged. No baseline change.
+
+**Notes for future sessions.** Scoped dependency-prefix acceptance contributes
+to F-X255 readiness. Final nine-story integrated full verification, native
+four-route observations, paired Issue386 replay and sprint review remain due.
+No whole Issue385/386 closure or Python3.14 qualification claimed. Handoff
+consumed, clean worker directory eligible for removal, branch retained.

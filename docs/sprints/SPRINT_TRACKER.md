@@ -1144,3 +1144,16 @@ All five repair prerequisites are now complete. F-X255 can design and start
 release preparation for Word0.16.2 and shared/PowerPoint0.14.2. The actual
 full integrated gate, hosted artifacts and independent sprint review still
 follow the final versioned source. No publication has started.
+
+## S95 expanded dependency-prefix checkpoint, 2026-10-16
+
+The user expanded active S95 to nine stories. F-X256 and F-X258 now complete
+through scoped evidence and exact integrated product/test reconciliation.
+F-X257 follows the Word prefix, then F-X255 reconciles its preserved release
+preparation. Final integrated full verification and sprint review remain due.
+Historical S95.1 allocation statements above retain their original date.
+
+| F-ID | Sprint | Size | Estimate days | Actual days | Completed | Evidence |
+|------|--------|------|---------------|-------------|-----------|----------|
+| F-X256 | S95 | M | 2 to 3 | not recorded | 2026-10-16 | Scoped Word933 and focused33 at successor3, current typing-only applicability and stub checks, clean independent pass5, exact integration f3291339. Policy181pass2skip, worker hash49/pixels7 unchanged. Final sprint gate due |
+| F-X258 | S95 | M | 2 to 3 | not recorded | 2026-10-16 | Scoped complete PPT961 with no skips, selected6 and typing/stub checks, clean independent pass1, exact integration8c9fb137. Policy181pass2skip, worker hash49/pixels7 unchanged. Final sprint gate due |
