@@ -27,7 +27,7 @@
 | F-X251 | Refuse invalid Word values before publication | M | done | |
 | F-X252 | Refuse newly invalid Word raw XML atomically | M | done | |
 | F-X253 | Honor imported chart types and hidden master shapes | M | done | |
-| F-X255 | Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases | L | pending | |
+| F-X255 | Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases | L | in-progress | codex |
 
 ## Sequencing note
 
