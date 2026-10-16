@@ -207,11 +207,11 @@ remain mandatory, with no general source-hash waiver.
 
 ## Implementation checklist
 
-- [ ] Authenticate preserved54-file WIP, original claim and actual new reconciliation base.
-- [ ] Establish actual target-specific old-source RED and preserve historical contracts.
-- [ ] Align exact version carriers, current assertions and expanded family contribution notes, including approved Python getter migration and bounded HLD10 cross-reference repair.
-- [ ] Pass scoped local Rust/Python/WASM/docs/policy/hash checks and independent microscope.
-- [ ] Qualify genuine22 archives and root-owned measured catalog/README reconciliation.
+- [x] Authenticate preserved54-file WIP, original claim and actual new reconciliation base.
+- [x] Establish actual target-specific old-source RED and preserve historical contracts.
+- [x] Align exact version carriers, current assertions and expanded family contribution notes, including approved Python getter migration and bounded HLD10 cross-reference repair.
+- [x] Pass scoped local Rust/Python/WASM/docs/policy/hash checks and independent microscope.
+- [x] Qualify genuine22 archives and root-owned measured catalog/README reconciliation.
 - [ ] Prepare and integrate source availability handoff with explicit pending hosted gates.
 - [ ] Pass actual SHA-bound hosted build-only jobs and downloaded metadata/runtime/typing checks.
 - [ ] Complete ordinary preparation records, leaving publication to separate release approval.

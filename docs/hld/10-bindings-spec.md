@@ -449,8 +449,8 @@ strings, so callers migrate comparisons to enum members despite patch release
 numbering. Theme source takes precedence over cached RGB or auto. Reads retain
 source tint, shade and opaque metadata. Word theme_color remains str or None.
 
-PowerPoint uses the approved enum-valued getters in place of the string getter
-signatures above: ColorFormat.type returns MSO_COLOR_TYPE or None, and
+PowerPoint uses its own enum-valued getters: ColorFormat.type returns
+MSO_COLOR_TYPE or None, and
 theme_color returns MSO_THEME_COLOR. A direct nonscheme color returns
 NOT_THEME_COLOR, an absent direct color raises AttributeError, and an
 unmapped scheme token refuses with preserved-source inspection guidance.
@@ -460,8 +460,7 @@ handout export.
 
 `None` in these colour-format setter signatures clears only font sources.
 Existing fill, line and shadow colour setters reject it. Word `type` reports
-`rgb`, `theme` or `auto`, while PowerPoint additionally models `preset` and
-`system`. Unset or unmodeled direct colours report `None`. Scheme references
+its RGB, THEME or AUTO enum member. PowerPoint models RGB, SCHEME, PRESET and SYSTEM members. Unset or unmodeled direct colours report `None`. Scheme references
 are not flattened to guessed RGB. Word `rgb` can expose an existing cached
 literal beside its theme reference, and reads `None` for `auto`. Editing a
 Word theme reference keeps that cached literal, tint, shade and opaque source.
@@ -3395,14 +3394,14 @@ flag, system codec, subprocess, or binary asset.
 ## Packaging
 
 Current source prepares the exact seven-package Word Rust family, `rdocx`
-Python distribution, `rdocx-wasm` and inherited support carriers at0.16.1.
+Python distribution, `rdocx-wasm` and inherited support carriers at0.16.2.
 The exact fifteen-package shared OOXML and PowerPoint family plus `rpptx-py`
-and its Python distribution are prepared at0.14.1. The separate unpublished
+and its Python distribution are prepared at0.14.2. The separate unpublished
 `rpptx-wasm` npm carrier remains0.12.1. Word's current dependency pins require
-shared0.14.1, so the shared family precedes Word publication. Preparation is
+shared0.14.2, so the shared family precedes Word publication. Preparation is
 local metadata and artifact verification, without registry publication or tag
-authority. The previous unified v0.16.0 and rpptx-v0.14.0 releases remain
-immutable at reviewed main733ce6f7b2b816c5760692abf5c99d68b29ae897.
+authority. The previous unified v0.16.1 and rpptx-v0.14.1 releases remain
+immutable at reviewed main80117123c1073b826392b06a6e6601311a929b44.
 
 **maturin, mixed Rust and Python layout**, so type stubs and enum shims have a
 home. `python-source = "python"`, `module-name = "rdocx._rdocx"`,
@@ -3489,8 +3488,11 @@ version, the immutable v0.11.0 tag, and GitHub release state remain unchanged.
 namespaces. A tag selects one exact Rust allowlist, CLI and Python distribution.
 Historical `py-*` tags remain immutable and cannot start new publication.
 Manual dispatch builds both Python projects across six declared targets plus
-one source distribution each. It cannot publish to registries or create a
-GitHub release and does not build the tag-only CLI archives.
+one source distribution each, and both CLIs across six platforms each. It
+cannot publish to registries or create a GitHub release. The build-only run
+has27 successful build/aggregate jobs and four publication jobs skipped,
+with26 unique payloads: twelve wheels, two source distributions and twelve
+CLI archives. Aggregate copies do not add unique artifacts.
 
 Each freshly built native wheel runs clean installed priority runtime checks.
 The supported floor remains Python3.9. Exact `mypy==2.3.0 --strict` and
@@ -3502,11 +3504,14 @@ native and CI coverage. The musllinux cells use a clean Python3.9 Alpine
 runtime. Build jobs have read-only repository permissions, while selected
 tag-only publication uses OIDC through the `pypi` environment.
 
-After final integrated full verification, clean sprint review and sprint push,
-the SHA-bound build-only rehearsal must produce twelve `cp39-abi3` wheels and
-two source distributions at that reviewed source. Downloaded provenance,
-metadata and clean Python3.9/3.12 installed checks are required before close.
-Local worker artifacts do not substitute for this final hosted evidence.
+After local scoped checks and independent clean review, release preparation
+may use the canonical sprint source availability checkpoint for its named
+hosted gates. Its plan stays approved and feature stays in-progress until
+actual SHA-bound build-only jobs, downloaded metadata and clean
+Python3.9/3.12 installed checks pass. Local artifacts do not substitute for
+hosted evidence. Final integrated full verification and sprint review remain
+required before close, and material source changes invalidate affected
+hosted evidence.
 
 After sprint close, each family requires its own immediate approval at the
 reviewed main merge SHA. The tagged workflow verifies six CLI archives, six
