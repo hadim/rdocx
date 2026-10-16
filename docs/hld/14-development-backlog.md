@@ -8349,3 +8349,38 @@ Run the exact pinned parameterized tests, both frame kinds and flip axes,
 valid schema and native controls, and separate CLI failure/atomicity controls.
 Design the bounded admission contract and split this story if actual work
 exceeds its estimate, without dropping any of these acceptance criteria.
+
+### F-X255, Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases
+
+**Size**: L
+**Depends on**: F-X221, F-X248, F-X249, F-X251, F-X252, F-X253
+**Test gate**: release regression
+**Spec reference**: `10-bindings-spec.md`, Packaging, and `15-build-and-toolchain.md`, Packaging, Publishing and Release process.
+
+At the user's end-S95 release request, prepare the exact seven-package Word
+Rust/CLI family and Python distribution at0.16.2 and the exact fifteen-package
+shared/PowerPoint Rust/CLI family and Python distribution at0.14.2. Preserve
+the existing version lines, unified allowlists and release workflow. Align
+binding manifests, internal pins, lockfile, current version assertions and
+metadata. Keep the unpublished PowerPoint WASM carrier at0.12.1 and preserve
+historical release notes, registry records and performance observations.
+
+Authenticate the contribution inventory since the actual published0.16.1 and
+0.14.1 tags. Write family-specific notes with included issue/PR links, actual
+contributor credit, direct or hardened-equivalent provenance and bounded
+acceptance claims. Disclose the approved Rust rendering struct source changes,
+ZIP9 public error type boundary and newly refused authored inputs. Patch
+numbering does not imply full source compatibility. Do not claim whole
+Issue385 closure, future form authoring, or deferred native interoperability.
+
+Qualify all22 genuine locally patched publication dry-runs, exact archive
+inventories below10MiB and newly measured current README rows. Inspect fresh
+installed artifacts, metadata and priority runtime under clean Python3.9 and
+3.12, with strict typing and stub checks under3.12. Retain both WASM graphs,
+deterministic hashes and pixels. Run the actual both-family hosted build-only
+rehearsal at the reviewed source SHA and authenticate its downloaded six wheels
+and source distribution per family. Preserve separate actual observer outcomes
+and immutable historical evidence. Preparation does not publish. Final full
+verification, independent sprint review and close precede `/release` from the
+exact reviewed main merge SHA, shared/PowerPoint first, with separate final
+approval per family before tags or registry publication.

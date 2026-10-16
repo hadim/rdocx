@@ -2723,7 +2723,7 @@ Issue384 and Issue385 repairs and the eleven existing carryovers.
 #### Sprint S95, New validation, form and rendering repairs
 
 **Goal**: prioritize the new Issue384 and Issue385 repairs after S94 closes.
-Five stories total 10 to 15 developer-days. S95 does not close the whole Issue385
+Five medium repairs and one large release preparation story total 14 to 20 developer-days. S95 does not close the whole Issue385
 union, whose remaining authoring and PowerPoint admission work is in S95.1.
 
 | F-ID | Title | Size |
@@ -2733,6 +2733,9 @@ union, whose remaining authoring and PowerPoint admission work is in S95.1.
 | F-X251 | Refuse invalid Word values before publication | M |
 | F-X252 | Refuse newly invalid Word raw XML atomically | M |
 | F-X253 | Honor imported chart types and hidden master shapes | M |
+| F-X255 | Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases | L |
+
+F-X255 follows the completed five repairs through a scoped dependency-prefix checkpoint and prepares both Rust and Python patch families in the user-selected0.16.x and0.14.x lines. Actual hosted build-only artifacts, final integrated full verification and independent sprint review precede close. Separate `/release` approval at the reviewed main merge SHA owns publication. Later sprint boundaries remain unchanged.
 
 #### Sprint S95.1, Remaining everyday APIs and native interoperability
 
