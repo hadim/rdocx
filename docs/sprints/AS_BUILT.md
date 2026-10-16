@@ -20135,3 +20135,73 @@ completion statuses and pending final sprint gates remain unchanged. The
 bounded record check is retained at
 `/private/tmp/S95-four-prefix-delivery-consistency-audit-1/report.md`, SHA256
 `9cdb3548006c69822f22eefd879730fff92592891c0b0137e2ccb1d9f3adbc15`.
+
+### F-X252, Refuse newly invalid Word raw XML atomically
+
+**Sprint.** S95
+**Completed.** 2026-10-16
+**Size.** M, estimated 2 to 3 days, actual not recorded
+
+**What was built.** Checked paragraph replacement admits the finite official
+35-name direct CT_P grammar, with a single first pPr, qualified namespace and
+inherited MC URI authority before publication. Newly invalid Word children,
+misplaced math and non-Ignorable foreign children refuse atomically. Imported
+direct-child exceptions require ordered physical correspondence, exact raw
+bytes and retained interpretation. Exact source no-op remains first.
+
+**Non-obvious choices.** This is a direct grammar frontier, not recursive schema
+validation or Strict import support. Nested typed controls, fields, drawings
+and math retain existing checked providers. Unsupported retained MC attributes
+qualify their own raw value and meaning without freezing supported owner edits.
+Actual source ancestry excludes unrelated siblings. Compact parent route IDs,
+namespace/grant undo deltas and interned diagnostic namespace identity bound
+retained storage. A 1,631-byte positive input retained 69,001 namespace bytes
+before the last repair and 1,609 after it. Three independent review findings
+received real failing controls before repair and are closed.
+
+**Deviations from the design plan.** The approved finite-frontier clarification
+preserves delegated nested edits and introduces no public source-evidence API,
+OXML provider, module or dependency. Two measured catalog/README numeric lines
+received bounded independent review and fresh policy/publication checks. Plan
+completion changes only status and five checklist ticks.
+
+**Spec sections touched.** HLD04 checked Word source ownership, HLD10 Word
+checked XML owner authority and HLD12 independent grammar and atomicity controls.
+
+**Tests.** Regression gate: unchanged original
+`test_raw_xml_that_word_refuses_is_refused` and
+`fx252_edited_paragraph_direct_children_follow_schema` pass. Twelve focused
+native controls include the independent thirty input pairs, primary grammar
+helper membership, namespace/MC scope, physical provenance, delegated typed
+metadata and bounded storage. Schema helper membership does not assert every
+required attribute or range pairing. Default native results are 3,480 passed
+and 28 ignored: 672 unit, 382 integration, 2,424 regression and two doctests.
+Fresh ordinary installed checks pass all 45 selected controls, strict mypy and
+stubtest. Original reporter body is one pass under runxfail, separately from
+one XPASS(strict) failure. Earlier candidate and scaffolding failures remain
+historical. Both WASM targets, applicable clippy, fmt, prose and adapters pass.
+Policy ran 183 tests, with 181 passed and two existing skips.
+
+The genuine affected rdocx publication dry-run uses all 22 local patches and
+verifies the actual unpacked package. All 37 verification members and source
+Rust/README/original manifest bytes match. Its 3,762,392-byte archive has
+52,124,172 normalized member bytes and 37 members, four compressed bytes from
+the measured catalog within the unchanged 64-byte tolerance and 10 MiB ceiling.
+All 22 inventory archives and 333 members are separately authenticated.
+Scoped receipt `/private/tmp/S95-F-X252-worker-3/scoped-receipt.json`, SHA256
+`c609f89d192f4b2c736d8d5d29f5ce5cee06ec7d9d136fef55aeac4af5b1bd19`.
+Root authentication at `/private/tmp/S95-root-F-X252-scoped-authentication-1/receipt.json`
+binds 68 paths, 13 native command records and nine installed command logs.
+Independent correctness pass3 and numerical packaging pass4 are clean.
+Integration `94cd8abb0b0c73100233557e8f13c386866d5773` retains all twelve qualified
+files byte for byte. Only identical checklist completion metadata conflicted.
+
+**Hash harness.** All 49 hashes and seven deterministic pixel buffers unchanged.
+No baseline changed. Numerical metadata exceptions do not alter accepted paint.
+
+**Notes for future sessions.** Formal dependency-prefix completion permits
+F-X255 design and claim. Final six-story integrated full verification and sprint
+review remain due. The handoff is consumed and clean worker directory removed
+without force, with branch retained through close. Issue385 remains partial
+until the remaining F-X250/F-X254 groups in S95.11 pass. Issue386 has distinct
+pending S95.1 stories and receives no completion or release credit here.

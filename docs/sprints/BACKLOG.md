@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 272 | 255 | 1 | 12 |
-| **Total** | **603** | **529** | **1** | **69** |
+| X, Cross-cutting | 272 | 256 | 0 | 12 |
+| **Total** | **603** | **530** | **0** | **69** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -820,7 +820,7 @@ HLD14 contract before adopting contributor changes.
 | F-X249 | Set typed content control values as Word does | S95 | M | done |
 | F-X250 | Complete everyday Word chart equation list and note APIs | S95.11 | L | pending |
 | F-X251 | Refuse invalid Word values before publication | S95 | M | done |
-| F-X252 | Refuse newly invalid Word raw XML atomically | S95 | M | in-progress |
+| F-X252 | Refuse newly invalid Word raw XML atomically | S95 | M | done |
 | F-X253 | Honor imported chart types and hidden master shapes | S95 | M | done |
 | F-X254 | Refuse invalid PowerPoint values XML and empty edits | S95.11 | L | pending |
 | F-X255 | Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases | S95 | L | pending |

@@ -1137,3 +1137,10 @@ and backlog carry the revised homes. Issue385 and Issue386 remain open for
 their respective remaining acceptance unions. Exact input and source facts
 are retained in `/private/tmp/S95-issue386-intake-triage-1/triage.md` and its
 receipt SHA256 `8024b68da12ba4f7a1d7c12265ad7b3a80935954d74a16cc133822fb470b0fa0`.
+
+| F-X252 | S95 | M | 2 to 3 | not recorded | 2026-10-16 | Scoped prerequisite acceptance: native3480/28ignored, installed45, typing/stub, policy181pass2skip, genuine affected publication, hash49/pixels7 unchanged. Independent correctness3 and numeric packaging4 clean. Integrated94cd8abb preserves all12 qualified files. Final six-story full gate and sprint review remain due |
+
+All five repair prerequisites are now complete. F-X255 can design and start
+release preparation for Word0.16.2 and shared/PowerPoint0.14.2. The actual
+full integrated gate, hosted artifacts and independent sprint review still
+follow the final versioned source. No publication has started.
