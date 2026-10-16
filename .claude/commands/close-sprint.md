@@ -27,13 +27,15 @@ publication.
      carried worker, an untracked branch or a worktree absent from the run
      state is not a cleanup target.
 
-2. **`/verify --full`.** Everything, workspace-wide, including packaging and the
-   supply-chain check. Not `--fast`, not `--scoped`, and not the changed-crate
-   subset.
+2. **Consume final verification.** Require the latest applicable passing full
+   sprint evidence and any validated completion-only metadata adoption. Run
+   missing or invalidated categories only, never the full gate a second time
+   because `/close-sprint` was invoked. Failed or missing evidence blocks close.
 
-3. **`/sprint-review SNN`.** Run the bounded review loop to completion. Blocking
-   findings are fixed and the loop repeats, at most three passes by default. A
-   fourth pass means the sprint is not ready.
+3. **Consume `/sprint-review SNN`.** Require its latest clean bounded review.
+   Invoke it only when absent or invalidated by material changes. Do not run a
+   confirmation pass after clean review. Source remediation requires affected
+   checks and review of its new material, not automatic repetition of all work.
 
 4. **Confirm the milestone gate** if this sprint closes one. Find the
    "End-of-milestone gate" in `docs/hld/14-development-backlog.md` and check it
