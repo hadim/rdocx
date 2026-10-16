@@ -414,7 +414,7 @@ ARCHIVE_MEASUREMENTS = {
     "rpptx-cli": (66_411, 305_091, 8),
     "rpptx-layout": (97_656, 566_294, 11),
     "rpptx-oxml": (217_204, 1_378_568, 20),
-    "rpptx-render": (84_647, 461_150, 8),
+    "rpptx-render": (84_664, 461_174, 8),
 
 }
 PACKAGE_VERSIONS = {
