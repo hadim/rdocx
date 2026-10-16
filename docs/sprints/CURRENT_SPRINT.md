@@ -27,14 +27,14 @@
 | F-X251 | Refuse invalid Word values before publication | M | done | |
 | F-X252 | Refuse newly invalid Word raw XML atomically | M | done | |
 | F-X253 | Honor imported chart types and hidden master shapes | M | done | |
-| F-X255 | Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases | L | in-progress | codex |
+| F-X255 | Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases | L | done | |
 | F-X256 | Refuse ambiguous Word numeric units and preserve line spacing | M | done | |
 | F-X257 | Complete remaining Word names and legacy dropdown diagnostics | L | done | |
 | F-X258 | Complete remaining PowerPoint names color and language contracts | M | done | |
 
 ## Sequencing note
 
-F-X255 follows completed F-X221 and all eight S95 repairs. All eight repair prerequisites are complete. Its revised plan is approved against the full prefix. Reconcile the preserved54-file worker delta against the approved current source, retaining original claim and intermediate proof attribution. Fresh artifacts and scoped acceptance must qualify that expanded prefix. Release preparation owns version carriers and notes exclusively. Its actual hosted build-only acceptance may use the reviewed source availability checkpoint. Full integrated verification and sprint review remain due after release preparation. Publication follows close under `/release`, with separate approval at the exact reviewed main SHA.
+F-X255 follows completed F-X221 and all eight S95 repairs. All nine S95 contracts are complete through their declared feature gates, including actual hosted build-only and downloaded-artifact acceptance for the release preparation. Original claim, preserved WIP and intermediate evidence retain their producer attribution. Final installed, public, PowerPoint, Issue386 and pinned reporter observations bind6b7c97987f6edcec5d147116c2778865e289c5fa. The integrated native floor passes all18commands,49unchanged hashes, seven unchanged deterministic pixels and genuine verification of22crates. Formal sprint review remains due. Publication follows close under `/release`, with separate approval at the exact reviewed main SHA.
 
 Rows follow the adopted plan and existing provider dependencies. F-X248 depends on F-X196, F-X211a and F-X222. F-X249 consumes F-X241. F-X251 consumes F-X201, F-X220 and F-X238. F-X252 consumes F-X211a. F-X253 consumes F-X209 and F-X215. Verify those completed providers at opening. Scheduling does not add dependency edges between these five stories.
 

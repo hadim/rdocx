@@ -1,6 +1,6 @@
 # F-X255, Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95
 **Size**: L
 **Depends on**: F-X221, F-X248, F-X249, F-X251, F-X252, F-X253, F-X256, F-X257, F-X258
@@ -212,9 +212,9 @@ remain mandatory, with no general source-hash waiver.
 - [x] Align exact version carriers, current assertions and expanded family contribution notes, including approved Python getter migration and bounded HLD10 cross-reference repair.
 - [x] Pass scoped local Rust/Python/WASM/docs/policy/hash checks and independent microscope.
 - [x] Qualify genuine22 archives and root-owned measured catalog/README reconciliation.
-- [ ] Prepare and integrate source availability handoff with explicit pending hosted gates.
-- [ ] Pass actual SHA-bound hosted build-only jobs and downloaded metadata/runtime/typing checks.
-- [ ] Complete ordinary preparation records, leaving publication to separate release approval.
+- [x] Prepare and integrate source availability handoff with explicit pending hosted gates.
+- [x] Pass actual SHA-bound hosted build-only jobs and downloaded metadata/runtime/typing checks.
+- [x] Complete ordinary preparation records, leaving publication to separate release approval.
 
 ## Open questions
 

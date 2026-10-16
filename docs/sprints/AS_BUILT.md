@@ -20336,3 +20336,80 @@ nine-story integrated full verification and sprint review remain due, including
 the untouched paired Issue386 replay and independent semantic companion.
 No whole Issue385/386 closure or publication claimed. Handoff consumed and
 clean worker directory removed without force. Branch retained through close.
+
+### F-X255, Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases
+
+**Sprint.** S95
+**Completed.** 2026-10-16
+**Size.** L, estimated 4 to 5 days, actual not recorded
+
+**What was built.** The exact seven-package Word family and Python distribution
+prepare0.16.2. The fifteen-package shared OOXML and PowerPoint family and Python
+distribution prepare0.14.2. Version carriers, internal pins, lock records,
+current assertions, install examples and family notes agree. The unpublished
+PowerPoint WASM carrier stays0.12.1. Notes disclose the approved Rust rendering,
+ZIP error and Python enum-getter compatibility boundaries despite patch versions,
+with authenticated family-specific contributor credit. No publication occurred.
+
+**Non-obvious choices.** Original claim852a47334398552bf63c0b14965d715c2dce6427
+and preserved54-file WIP remain historical. Reconciliation against the completed
+eight-repair prefix uses basecbe8034a5c8d1a7def9c6f271200b706b13c6b96.
+Incoming repairs are not recounted as F-X255 source work. The source availability
+checkpoint kept the feature in-progress until actual hosted and downloaded
+artifact acceptance. Historical version, performance and contribution records
+remain immutable. Compressed measurement-support archives are not represented
+as Cargo-retained genuine compressed output, and metadata-only applicability
+does not claim changed README compile inputs were identical.
+
+**Deviations from the design plan.** None. The approved revised plan includes
+the full eight-repair prefix and the explicit source availability checkpoint.
+Failed local and private hosted-executor attempts remain retained with their
+actual configuration and producer epochs.
+
+**Spec sections touched.** HLD10 Packaging and CI and HLD15 Packaging,
+Publishing, Release process and CI job matrix. Their current source contracts
+were updated in the implementation. Completion adds no new HLD behavior.
+
+**Tests.** Release regression tests
+`test_s95_patch_release_families_match_reviewed_targets` and
+`test_s95_patch_notes_keep_family_contributions_and_scope` have actual pre-change
+RED and scoped GREEN. Local scoped evidence retains172 priority calls under
+Python3.9/3.12, strict3.12 mypy/stub checks,3099 changed-crate default passes
+with43 ignored, both WASM graphs,185 policy tests with183 passed and two existing
+skips,27 README inventory pages and26 compiled examples. Actual postnumeric
+workspace publication verification records22 Verifying entries with all22 local
+patches. All333 raw members match retained actual verified unpacked source,
+normalized measurements match and maximum compression variance is3 bytes
+under the unchanged64-byte allowance, with every archive below10MiB. These
+local observations retain their original source epochs and bounded applicability.
+
+Fresh final integrated acceptance binds source
+6b7c97987f6edcec5d147116c2778865e289c5fa. Complete ordinary installed suites pass
+947 Word and961 PowerPoint tests,1908 total with no failures or skips, plus
+strict typing and stubtest. Actual workflow_dispatch run38936352909 has27
+successful deciding jobs and four publication jobs skipped, with26 unique
+payloads. Downloaded wheels pass172 priority calls across Python3.9/3.12 and
+strict3.12 typing/stub checks. Public23 retains13 Word and10 PowerPoint artifacts,
+three typed observations and four actual output-mutation rejections. Fresh
+PowerPoint PDF/PNG/CLI convert/render observations preserve the native four-flag
+rule and exact chart types58/52/4/69. Historical mutants remain historical, with
+bounded exact-source applicability rather than claimed new compilation. The
+untouched Issue386 script passes19 observed attempts and its independent
+companion passes16 semantic groups. The separate pinned Issue385 union records
+12 XPASS(strict) with expected raw exit1 and12 passing bodies under --runxfail
+with raw exit0. Counts do not substitute for or enlarge one another.
+
+Actual final native verification at6b7c97987f6edcec5d147116c2778865e289c5fa passed all18commands, including6582 changed-default passes with71ignored,6615 all-feature workspace passes with73ignored,149 no-default-font passes with one ignored, minimum Rust1.93 and both WASM graphs, documentation and README cases, policy185tests with two existing skips, genuine dry-run verification of all22crates, retained archive limits and cargo deny. The test runs overlap and are not added into a unique-case total. Native receipt SHA256 f972c5a81d0b82e10459abbfb6c42aaa0024a8477bb51716bfbd8dad4de32fdb. Root raw authentication SHA2563651f634632e4b8928b27cc399ebaa76ff4c48d61427f51f73710ff6b40c4c05. Full integrated native and external union receipt SHA2561862e6904d8cd72877b541ee06862edf3be93f470487a8b4416068308167631c. Actual hosted run: https://github.com/tensorbee/rdocx/actions/runs/38936352909.
+
+**Hash harness.** Scoped49 hashes and seven deterministic pixel buffers are
+unchanged, without a baseline write. Final integrated native49hashes and seven deterministic pixel buffers also match, without a baseline write.
+
+**Notes for future sessions.** All final evidence above retains its actual6b
+producer epoch. This completion does not claim a later metadata commit reran
+those producers. Root must record the exact completion-only source applicability
+and final review HEAD. Independent feature correctness pass2 and bounded numeric
+pass3 are clean. Formal sprint review and close remain separate. Issue385 stays
+partial until F-X250/F-X254 in S95.11. S95 does not establish M24's S99 stability
+boundary. Publication requires clean reviewed main and separate approval for
+each family under /release, shared/PowerPoint first. No release tag, registry
+publication, issue closure or main merge is authorized by this completion.

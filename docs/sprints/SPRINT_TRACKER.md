@@ -110,6 +110,7 @@ defended.
 | S92 | M24, X | 6 | 6 | 0 | 15 to 18 | 1 | Six repair stories completed, including explicit Issue378 intake. Actual days count the single worked date2026-10-15, not person-effort. Final full verification at133ce33b passed all14 checks,49 unchanged hashes and22 verified archives. Independent review pass2 is clean. User accepted240-cell fill3.304061s with strict open/edit and linear-work gates retained. Future parity/forms planning is included without delivery credit. M24 continues to S99. No release prepared |
 | S93 | M24, X | 7 | 7 | 0 | 21 to 27 | 2 | Seven issue-repair contracts completed. Actual days count worked dates2026-10-15and2026-10-16, not person-effort. Fresh final full verification at55122db6 passes15checks,49hashes,7pixel checks and22verified archives. Native and1666installed Python members have explicit unchanged-input successor authentication. Reviewed18net unique hash changes and4pixel buffers are intentional. Independent review pass2 is clean after the HLD SVG wording correction. Issue365 stays open for pending F-X247/S94. M24 continues to S99. No release prepared |
 | S94 | M24, X | 5 | 5 | 0 | 14 to 19 | 1 | Five Python, CLI and finite conversion contracts completed. Actual days count the single worked date 2026-10-16, not person-effort. Independent sprint review pass2 has 0 blocking and 0 should-fix findings, with one optional formatting nit. Fresh reviewed-HEAD full verification at 588f2640 passed all 18 native/repository commands, 49 unchanged hashes, seven deterministic pixels and 22 verified archives, with authenticated installed, hosted and finite oracle evidence. Hosted acceptance remains the authenticated build-only 27-job run at 9cdbea00, with four publication guards skipped. M24 continues to S99. No release prepared |
+| S95 | M24, X | 9 | 9 | 0 | 22 to 31 | 1 | Nine contracts completed, including the user-approved Issue386 expansion and Word0.16.2/shared-PowerPoint0.14.2 release preparation. Actual days count the single worked date2026-10-16, not person-effort. Actual6b source has1908 installed tests with no skips, hosted27success4publicationSKIP/26payloads/172 runtime calls, public23, PPT four routes, Issue38619+16 and pinned reporter12strictXPASS/raw1 plus12bodies/raw0. Integrated native18commands,49hashes,7pixels and22verified archives pass at6b7c9798. Formal sprint review remains due. S95.11 scope remains future backlog, not S95 carries. Main merge, sprint close and separately approved publication have not occurred |
 
 ## Completed features
 
@@ -694,6 +695,7 @@ five working days.
 | S92 | 6 | 1 | 30.00 |
 | S93 | 7 | 2 | 17.50 |
 | S94 | 5 | 1 | 25.00 |
+| S95 | 9 | 1 | 45.00 |
 
 S90 velocity measures calendar throughput for a parallel team. It does not
 measure person effort or establish a sustainable single-developer forecast.
@@ -713,6 +715,8 @@ S93 records two worked dates,2026-10-15and2026-10-16. Its17.50 stories per week 
 
 S94 records one worked date, 2026-10-16. Its 25.00 stories per week measures parallel calendar throughput, not person-effort or a sustainable single-developer forecast. The last three windows, S92, S93 and S94, total 18 stories over 4 worked-date units, or 22.50 stories per week. Shared dates are not person-days, and per-feature actual effort remains unrecorded. The 42.86 percent increase from S93 exceeds the 30 percent close-report escalation threshold. Retain the approved 14 to 19 developer-day effort estimate and the capacity-reviewed S95 through S95.4 repair and carryover boundaries. The new rolling window is 5.88 percent above the preceding 21.25 rate, but remains unsuitable as a person-effort forecast.
 
+S95 records one worked date,2026-10-16. Its45.00 stories per week measures parallel calendar throughput, not person-effort or a sustainable single-developer forecast. The last three windows,S93,S94andS95,total21stories over4worked-date units,or26.25stories per week. Shared dates are not person-days, and per-feature actual effort remains unrecorded. The80.00percent increase from S94 exceeds the30percent close-report escalation threshold. The rolling rate is16.67percent above the preceding22.50 rate. Retain the approved22to31 developer-day estimate for seven medium and two large stories. The user explicitly expanded S95 to include Issue386 before release preparation. Preserve the dependent S95.11 and later roadmap boundaries and their effort estimates. This summary does not claim sprint review, main merge, sprint close, tags or publication have occurred.
+
 ## Escalation record
 
 Logged when an escalation trigger from `.claude/WORKFLOW.md` fires, with what
@@ -720,6 +724,7 @@ was done about it. Empty is the expected state.
 
 | Date | Trigger | F-ID or sprint | Response |
 |------|---------|----------------|----------|
+| 2026-10-16 | Sprint throughput variance exceeds30percent | S95 | Record45.00stories/week,80.00percent above S94,as parallel calendar throughput. The last three windows yield26.25stories/week. Preserve22to31developer-day effort estimates and the explicit user-approved expansion to nine stories. Retain S95.11 and later dependency boundaries without converting throughput into elapsed delivery promises. Formal review,close and publication remain separate |
 | 2026-10-16 | Sprint throughput variance exceeds30percent | S93 | Record17.50stories/week,41.67percent below S92, as parallel calendar throughput. The last three windows yield21.25stories/week, above the2story/week planning assumption. Preserve effort estimates and require the existing S95 capacity split before opening that sprint |
 | 2026-10-15 | Three-sprint throughput differs from the2-stories/week assumption by983percent | S91, S91.1, S92 | Record21.67 stories/week as parallel calendar throughput. Retain dependency-defined roadmap boundaries and developer-effort estimates. Do not convert this observation into elapsed delivery promises or invent person-effort actuals |
 | 2026-07-30 | Three-sprint velocity variance exceeded 30 percent | S01 to S03 | Reforecast 366 remaining estimated days to 45 to 50 active weeks, retain dependency-defined boundaries, and recalibrate after S06 |
@@ -1164,3 +1169,5 @@ All eight S95 repairs now complete through scoped dependency-prefix acceptance.
 Release preparation F-X255 remains in-progress for revised design and preserved
 WIP reconciliation. The final nine-story union, actual hosted acceptance and
 sprint review remain due. No publication or measured person-effort credit.
+
+| F-X255 | S95 | L | 4 to 5 | not recorded | 2026-10-16 | Exact Word0.16.2/shared-PPT0.14.2 preparation. Clean source/numeric reviews, scoped verified22 archives and actual6b final installed1908/no skips, hosted27success4publicationSKIP/26payloads/172 priority calls, public23, PPT four routes, Issue38619+16 and reporter12strictXPASS/raw1 plus12bodies/raw0. Integrated native18commands,49hashes,7pixels and22verified archives pass at6b7c9798. Formal sprint review and publication remain separate |
