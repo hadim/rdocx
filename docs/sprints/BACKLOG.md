@@ -787,7 +787,7 @@ HLD14 contract before adopting contributor changes.
 | F-X216 | Import complete slides and merge decks with source formatting | S91 | L | done |
 | F-X217 | Import HTML and Markdown through public Word surfaces | S91 | L | done |
 | F-X218 | Export presentations as semantic HTML and Markdown | S91 | L | done |
-| F-X219 | Qualify full-range text watermark interoperability | S95.11 | M | pending |
+| F-X219 | Qualify full-range text watermark interoperability | S96 | M | pending |
 | F-X220 | Embed fonts through both native and public package families | S91 | L | done |
 | F-X221 | Prepare Word 0.16.1 and PowerPoint 0.14.1 patch releases | S91 | L | done |
 | F-X222 | Restore linear Word story range inventory and empty owners | S91 | M | done |

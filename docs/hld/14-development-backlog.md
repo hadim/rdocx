@@ -6983,7 +6983,7 @@ raise once, preserving explicit position shifts. Native typeface substitution
 and print-background preferences are reported separately from deterministic
 repository paint.
 
-The new DrawingML text watermark route admits only opacity 0.5 and refuses other requested values atomically. F-X219 retains the full-range DrawingML text opacity work in S95.11. Legacy VML text opacity and DrawingML image opacity remain unchanged.
+The new DrawingML text watermark route admits only opacity 0.5 and refuses other requested values atomically. F-X219 retains the unfinished full-range DrawingML text opacity work in S96 under an explicit user-approved carry. Legacy VML text opacity and DrawingML image opacity remain unchanged.
 
 **Depends on**: F-X206.
 **Test gate**: regression. Reproduce each missing operation or reported defect
@@ -7822,6 +7822,10 @@ Resolve Issues352 and353 captured at2026-10-11 18:56UTC. Rust, Python and CLI ex
 Detached results carry text, owned assets and ordered diagnostics. Python string methods reject detached image mode, while export companions and save methods preserve assets. CLI semantic flags reject rendering options. Complete-body image validation uses the crate-private native validator and bounded existing workspace decoder dependencies even without render/default-template features. Native PowerPoint source semantics and save/reopen establish source authority, while HTML and Markdown retain their own independent conformance gates.
 
 ### F-X219, Qualify full-range text watermark interoperability
+
+**Scheduling**: S96, explicitly carried unfinished from S95.11. No faithful shared
+Word and pinned LibreOffice representation was established. Preserve the0.5-only
+restriction and original failed endpoints. Reopen design before implementation.
 
 **Size**: M
 **Depends on**: F-X201
