@@ -20121,3 +20121,17 @@ Shared actual hosted, installed, current 23-package and closed receipts, success
 **Hash harness.** All 49 hashes and seven deterministic pixel buffers unchanged in the scoped evidence. No baseline changed.
 
 **Notes for future sessions.** Completed through the formal dependency-prefix checkpoint for F-X255. Final integrated full verification and sprint review remain due after all six stories. This is scoped feature acceptance, not final sprint acceptance or publication. Clean worker worktree removed after integration without force, branch retained through close. Issue385 remains partial pending the S95.1 acceptance union.
+
+#### S95 dependency-prefix evidence wording correction, 2026-10-16
+
+The four preceding F-X248, F-X249, F-X251 and F-X253 entries describe scoped
+feature acceptance. Their policy suite count is 183 tests run, including two
+existing skips, so 181 passed and two skipped. The phrase 183 policy passes
+in those entries incorrectly labeled the suite total. F-X249's named test gate
+is differential, with actual native Word differential RED before the repair
+and GREEN after it. Its preceding Regression gate label is incorrect. The
+underlying authenticated receipts, independent reviews, integration facts,
+completion statuses and pending final sprint gates remain unchanged. The
+bounded record check is retained at
+`/private/tmp/S95-four-prefix-delivery-consistency-audit-1/report.md`, SHA256
+`9cdb3548006c69822f22eefd879730fff92592891c0b0137e2ccb1d9f3adbc15`.
