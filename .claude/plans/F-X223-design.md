@@ -68,11 +68,11 @@ Expected unchanged for the49 hash and7 deterministic pixel cases. A discovered i
 
 ## Implementation checklist
 
-- [ ] Authenticate preserved prepared font lineage, exact licenses and source graph inputs.
-- [ ] Prepare proper-role single bold, paired and authentic four-face distinguishing controls.
-- [ ] Retain Base/local graph evidence and add focused regressions only for an actual source repair.
-- [ ] Preserve current package/API/renderer contracts and update HLD intent before review.
-- [ ] Obtain scoped local evidence and independent microscope, final native debt explicit.
+- [x] Authenticate preserved prepared font lineage, exact licenses and source graph inputs.
+- [x] Prepare proper-role single bold, paired and authentic four-face distinguishing controls.
+- [x] Retain Base/local graph evidence and add focused regressions only for an actual source repair.
+- [x] Preserve current package/API/renderer contracts and update HLD intent before review.
+- [x] Obtain scoped local evidence and independent microscope, final native debt explicit.
 - [ ] Run actual native face-selection matrix once in the integrated sprint union.
 - [ ] Complete only after genuine face proof or a separately explicit native-limit disposition.
 

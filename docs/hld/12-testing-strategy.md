@@ -4489,11 +4489,50 @@ Word's positive records actual regular use, synthetic bold and empty native
 saved bold parts under the approved one-font-per-name boundary. Fresh family
 and fresh UUID controls isolate the pre-save result, and a single bold-body
 control proves font loading without substituting for multi-face acceptance.
-That additional interoperability belongs to F-X223. Word's disabled control
+The historical single bold-body control stores that body in embedRegular with
+a plain run. It does not qualify the distinct proper embedBold-only control,
+which has no embedRegular and uses an ordinary bold run. That additional
+interoperability belongs to F-X223. Word's disabled control
 retains its first loaded-face PDF and the different reopened fallback PDF
 after native font-part removal. It does not falsely assert raster continuity.
 Changed-face controls built from one regular body can synthesize a bold
 variant and do not replace the genuine PowerPoint paired-face positive.
+
+The bounded Word multi-face matrix uses licensed authentic regular, bold,
+italic and bold-italic bodies with distinguishing unchanged outlines and
+metrics, fresh family identities and explicit keys. It includes the proper
+bold-slot-only discriminator, each regular-plus-other-face pair and all four
+roles, alongside missing-font, disabled-embedding, raw-storage and changed-Bold
+sensitivity cases. Every probe has the actual 15 characters
+`afmrW0123456789`. These cases retain initial, native-saved and known-close
+normal disk-reopened observations, actual app/build and source/output custody.
+Fresh native host admission checks both the test identities and source-face
+family/path availability. Preparation-time absence is not future admission or
+proof of the application's font-cache state.
+
+An independent PDF observer resolves the actual selected resource, character
+map and embedded program for every text show. It compares nonempty complete
+probe glyph outlines, contour flags and normalized advances/bearings against
+all four prepared faces, requiring a unique intended-face match rather than
+selecting a source by resource name. Active rendering mode, stroke width,
+text/graphics transforms and repeated paint distinguish genuine selection from
+synthesis. Declare metric tolerance rules before capture from source
+units-per-em and serialized PDF width and operand quantization. Preserve actual
+character/word spacing and TJ adjustments, rather than substituting summed
+source advances for painted text geometry.
+Unsupported font programs, encodings, forms or paint state require explicit
+refusal or a reviewed bounded observer extension, never guessed attribution.
+
+Native face-use evidence joins these PDF facts with authenticated source role
+relationships, fresh host/source-face availability and sensitivity outcomes.
+Name-only derivative outlines alone cannot exclude an identical installed
+fallback. Saved font-part emptiness, key/name changes and other normalization
+are separate observations. Disabled embedding can govern saving while an
+already loaded face remains usable, and raw storage can be handled differently
+by native consumers. Neither control has a predetermined failure outcome.
+Genuine multi-face acceptance requires the actual intended positive faces or
+an explicit separately accepted native-limit disposition. Preparation and
+historical observations do not grant that acceptance.
 
 Native application normalization remains separate from the library's exact
 unrelated-edit preservation controls. Known absent historical movie and PNG

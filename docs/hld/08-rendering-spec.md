@@ -2746,7 +2746,10 @@ in a resource name.
 Native Word is bounded by the [documented one-font-per-name implementation](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/22da0d03-7202-4731-9518-b96bfbe4de61).
 A paired uninstalled family can paint the actual regular font with synthetic
 bold before any native save, and native saving can leave its bold part empty.
-A separate bold-body control proves that body can load, without proving
-multi-face family selection. Word multi-face interoperability belongs to
-F-X223. Neither that boundary nor native fallback weakens genuine regular,
-bold, italic and bold-italic selection in our renderer or caller overrides.
+A separate bold-body control in the regular slot proves that body can load,
+without proving bold-slot or multi-face family selection. A proper embedBold-only
+control has no embedRegular entry and uses an ordinary bold run. Its native
+selection is a separate discriminator, not an already qualified result. Word
+multi-face interoperability belongs to F-X223, with the bounded comparison
+method in HLD12. Neither that boundary nor native fallback weakens genuine
+regular, bold, italic and bold-italic selection in our renderer or caller overrides.

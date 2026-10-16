@@ -4226,8 +4226,11 @@ API. They are not a promise that every external application selects every
 embedded face. PowerPoint has independently qualified actual regular and bold
 use. Native Word's documented one-font-per-name behavior remains explicit,
 including synthetic bold and changed or empty saved parts, with multi-face
-interoperability owned by F-X223. API inputs, exact license authorization,
-immutable snapshots and own-renderer face selection retain their contracts.
+interoperability owned by F-X223. A proper bold-slot control uses the existing
+bold kind, explicit font key and ordinary bold run without a regular face.
+It needs no family alias, new API or rewrite of the run's document semantics.
+API inputs, exact license authorization, immutable snapshots and own-renderer
+face selection retain their contracts.
 
 ## Presentation semantic text export
 

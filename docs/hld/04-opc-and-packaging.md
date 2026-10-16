@@ -2105,6 +2105,9 @@ embedding can remove font parts on native save even while the already loaded
 document still paints an embedded face. A normal reopened copy can then use
 fallback. These observed native changes do not authorize the library to discard
 opaque source or reinterpret missing decoded bytes as a successfully used font.
+Four authored relationship slots describe the package graph, not a guarantee
+that native Word consumes all four faces. Initial, native-saved and normally
+reopened graph observations remain separate from PDF face-selection evidence.
 
 ## Presentation semantic export resources
 
