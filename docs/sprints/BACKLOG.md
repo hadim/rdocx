@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 272 | 260 | 2 | 6 |
-| **Total** | **603** | **534** | **2** | **63** |
+| X, Cross-cutting | 272 | 260 | 3 | 5 |
+| **Total** | **603** | **534** | **3** | **62** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -791,7 +791,7 @@ HLD14 contract before adopting contributor changes.
 | F-X220 | Embed fonts through both native and public package families | S91 | L | done |
 | F-X221 | Prepare Word 0.16.1 and PowerPoint 0.14.1 patch releases | S91 | L | done |
 | F-X222 | Restore linear Word story range inventory and empty owners | S91 | M | done |
-| F-X223 | Qualify native Word embedded multi-face interoperability | S95.11 | M | pending |
+| F-X223 | Qualify native Word embedded multi-face interoperability | S95.11 | M | in-progress |
 | F-X224 | Repair hosted release tool and stack routing | S91.1 | M | done |
 | F-X225 | Keep DrawingML text-style parsing within the default WASM stack | S91.1 | M | done |
 | F-X226 | Release superseded relationships after checked PowerPoint XML edits | S91.1 | M | done |

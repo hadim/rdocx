@@ -23,7 +23,7 @@
 | F-X250 | Complete everyday Word chart equation list and note APIs | L | in-progress | codex |
 | F-X254 | Refuse invalid PowerPoint values XML and empty edits | L | in-progress | codex |
 | F-X219 | Qualify full-range text watermark interoperability | M | pending | - |
-| F-X223 | Qualify native Word embedded multi-face interoperability | M | pending | - |
+| F-X223 | Qualify native Word embedded multi-face interoperability | M | in-progress | codex |
 
 ## Sequencing note
 
