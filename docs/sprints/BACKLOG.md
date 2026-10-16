@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 261 | 246 | 1 | 10 |
-| **Total** | **592** | **520** | **1** | **67** |
+| X, Cross-cutting | 261 | 246 | 2 | 9 |
+| **Total** | **592** | **520** | **2** | **66** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -815,5 +815,5 @@ HLD14 contract before adopting contributor changes.
 | F-X244 | Signature field, bindings and CLI option | S96 | M | pending |
 | F-X245 | Preserve chart data changes in Word comparison | S93 | L | done |
 | F-X246 | Honor chart legend position and overlay during rendering | S93 | L | done |
-| F-X247 | Preserve the common LaTeX inputs reported in Issue365 | S94 | L | pending |
+| F-X247 | Preserve the common LaTeX inputs reported in Issue365 | S94 | L | in-progress |
 <!-- AUTOGEN:backlog-MX END -->

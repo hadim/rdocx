@@ -23,7 +23,7 @@
 | F-X239 | python-pptx notes names and refusal of silent zero values | M | pending | - |
 | F-X240 | Python and CLI signing and signature verification | M | pending | - |
 | F-X241 | Python and CLI form reading and filling | M | pending | - |
-| F-X247 | Preserve the common LaTeX inputs reported in Issue365 | L | pending | - |
+| F-X247 | Preserve the common LaTeX inputs reported in Issue365 | L | in-progress | codex |
 
 ## Sequencing note
 
