@@ -26,7 +26,7 @@
 | F-X249 | Set typed content control values as Word does | M | pending | - |
 | F-X251 | Refuse invalid Word values before publication | M | pending | - |
 | F-X252 | Refuse newly invalid Word raw XML atomically | M | pending | - |
-| F-X253 | Honor imported chart types and hidden master shapes | M | pending | - |
+| F-X253 | Honor imported chart types and hidden master shapes | M | in-progress | codex |
 
 ## Sequencing note
 
