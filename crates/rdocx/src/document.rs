@@ -38057,7 +38057,7 @@ fn valid_authored_sfnt(data: &[u8]) -> bool {
             return false;
         }
     }
-    true
+    tags.contains(b"name".as_slice())
 }
 
 /// The two candidate XOR keys for ODTTF deobfuscation, most likely first.
@@ -38143,6 +38143,28 @@ fn has_consistent_sfnt_header(data: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fx251_native_equal_position_tab_insertion_stays_supported() {
+        let mut document = Document::new();
+        let mut paragraph = document.add_paragraph("native contract");
+        assert_eq!(
+            paragraph
+                .try_add_tab_stop(crate::TabAlignment::Left, Length::twips(10), None)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            paragraph
+                .try_add_tab_stop(crate::TabAlignment::Right, Length::twips(10), None)
+                .unwrap(),
+            1
+        );
+        assert!(paragraph.tab_stop(0).is_some() && paragraph.tab_stop(1).is_some());
+        assert!(paragraph.tab_stop(2).is_none());
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.paragraph(0).unwrap().tab_stop_count(), 2);
+    }
+
     #[test]
     #[ignore = "Owned release-mode same-host performance qualification"]
     fn fx222_release_scaling_and_output_equivalence() {
@@ -53470,6 +53492,84 @@ mod reader_fact_tests {
 #[cfg(test)]
 mod odttf_tests {
     use super::*;
+
+    #[test]
+    fn fx251_authored_font_requires_name_table_before_key_or_part() {
+        let licensed = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let mut malformed = licensed.to_vec();
+        let count = u16::from_be_bytes([malformed[4], malformed[5]]) as usize;
+        let record = (0..count)
+            .map(|index| 12 + index * 16)
+            .find(|offset| &malformed[*offset..*offset + 4] == b"name")
+            .unwrap();
+        malformed[record..record + 4].copy_from_slice(b"nam_");
+        malformed.extend_from_slice(b"name");
+        let head = (0..count)
+            .map(|index| 12 + index * 16)
+            .find(|offset| &malformed[*offset..*offset + 4] == b"head")
+            .unwrap();
+        let adjustment =
+            u32::from_be_bytes(malformed[head + 8..head + 12].try_into().unwrap()) as usize + 8;
+        malformed[adjustment..adjustment + 4].fill(0);
+        let checksum = malformed.chunks(4).fold(0u32, |sum, chunk| {
+            let mut word = [0u8; 4];
+            word[..chunk.len()].copy_from_slice(chunk);
+            sum.wrapping_add(u32::from_be_bytes(word))
+        });
+        malformed[adjustment..adjustment + 4]
+            .copy_from_slice(&0xB1B0_AFBAu32.wrapping_sub(checksum).to_be_bytes());
+        assert!(malformed.windows(4).any(|bytes| bytes == b"name"));
+        assert!(derive_font_key(&malformed).is_err());
+        let mut document = Document::new();
+        document.add_paragraph("held source");
+        let before = document.to_bytes().unwrap();
+        let make = |data| {
+            EmbeddedFont::new(
+                EmbeddedFontKind::Regular,
+                data,
+                "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+                FontEmbeddingLicense::new(true, "Apache-2.0: Caladea"),
+            )
+        };
+        assert!(
+            document
+                .embed_font("Refused font", make(malformed.clone()))
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert!(
+            document
+                .fonts()
+                .iter()
+                .all(|font| font.embedded_fonts.is_empty())
+        );
+        assert!(derive_font_key(licensed).is_ok());
+        document
+            .embed_font("Licensed font", make(licensed.to_vec()))
+            .unwrap();
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert!(reopened.fonts().iter().any(|font| font.name == "Licensed font" && font.embedded_fonts[0].data == licensed));
+        // Imported unsupported font bodies remain opaque through unrelated work.
+        let reference = document
+            .font_table
+            .as_ref()
+            .unwrap()
+            .fonts()
+            .iter()
+            .find(|font| font.name == "Licensed font")
+            .unwrap()
+            .embedded_fonts[0]
+            .clone();
+        let (part, _) = document.checked_embedded_font_source(&reference).unwrap();
+        let stored =
+            obfuscate_odttf_with_key(&malformed, &font_key_bytes(&reference.font_key).unwrap());
+        document.package.set_part(&part, stored.clone());
+        let mut imported = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        imported.add_paragraph("unrelated edit");
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(imported.to_bytes().unwrap())).unwrap();
+        assert_eq!(package.get_part(&part).unwrap(), stored);
+    }
 
     #[test]
     fn fx220_missing_record_embedding_is_one_native_transaction() {

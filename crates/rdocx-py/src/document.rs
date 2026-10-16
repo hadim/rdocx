@@ -6713,6 +6713,15 @@ impl PyDocument {
 
     fn save(&mut self, path: &Bound<'_, PyAny>, py: Python<'_>) -> PyResult<()> {
         if let Ok(path) = path.extract::<PathBuf>() {
+            if path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+            {
+                return Err(PyValueError::new_err(
+                    "use to_pdf() to export a PDF instead of save()",
+                ));
+            }
             return py
                 .detach(|| self.inner.save(path))
                 .map_err(|error| rdocx_to_pyerr(py, error));

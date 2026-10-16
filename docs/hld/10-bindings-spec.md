@@ -267,7 +267,11 @@ owner validation and tri-state behavior.
 
 Document construction/open accept binary seekable streams as well as paths.
 Save serializes fully before writing to a binary stream, detects short writes
-and preserves caller stream ownership. I/O errors propagate. Picture streams
+and preserves caller stream ownership. A final case-insensitive .pdf path
+extension raises ValueError naming to_pdf before any write. Existing document
+variants, other path extensions and binary streams retain their routes. A
+stream's display name does not turn it into a filesystem path. I/O errors
+propagate. Picture streams
 reuse native byte admission. Supplying only one picture dimension refuses with
 the explicit width-and-height alternative. Direct-body paragraph insertion
 resolves the physical body index. Hyperlink anchor=Paragraph refuses with
@@ -312,16 +316,25 @@ double_strike, hidden and rtl. Superscript and subscript share one direct
 mode, and None removes the direct mode. An absent mode reads None, while a
 direct baseline reads false for both. Clears on absent source insert no nodes.
 Language, language_east_asia, language_bidi, name_east_asia and
-name_complex_script edit their selected slots. General font name retains its
+name_complex_script edit their selected slots. Authored language accepts a
+nonempty ASCII alphanumeric sequence of subtags separated by single hyphens,
+beginning with a letter. Case is preserved and None clears the property. This
+is a finite lexical rule, without registry or complete BCP47 validation.
+Imported values and the separate East Asia and bidi setters keep their existing
+contracts. General font name retains its
 established four-slot assignment. `character_spacing` accepts signed integer
 EMU or None and returns Length or None, validating signed twips before
 narrowing with truncation toward zero.
 
 `ParagraphFormat.tab_stops` is a live parent-bound collection with length,
 indexing, iteration, indexed deletion, add_tab_stop and clear_all. Returned
-TabStop values are immutable position/alignment/leader snapshots. Added stops
-insert before the first greater position and after equal positions, without
-sorting imported occurrences. Alignment includes List, Start and End.
+TabStop values are immutable position/alignment/leader snapshots. New Python
+positions use the existing signed EMU conversion, truncating toward zero at
+635 EMU per twip with signed32-bit bounds. A repeated stored position raises
+ValueError before publication. Distinct positions insert before the first
+greater position without sorting imported occurrences or rejecting imported
+duplicates. The native equal-position insertion contract is unchanged.
+Alignment includes List, Start and End.
 An absent leader reads SPACES, while an unsupported owned token raises an
 explicit error and remains preserved. Collection edits keep the paragraph
 handle live. Paragraph formatting also exposes border read/set/clear, shading,
@@ -3909,6 +3922,11 @@ owner mismatch or malformed-source refusal.
 
 Template input accepts a string-keyed dict of bounded JSON values. Bool precedes integer conversion. Nonfinite values, cyclic containers, out-of-range integers and arbitrary objects refuse before publication. FragmentConflictPolicy exposes independent style, numbering and related-part reuse choices. ContentLocation and DocumentFragment retain physical source boundaries. Checked insertion uses the native fragment path and excludes final section properties by default.
 
+Python Run.add_break refuses Page in a relationship-resolved physical header,
+including table-cell descendants and nonstandard part names. Body Page and
+header Line remain admitted. Footer and Column behavior is unchanged. Imported
+breaks remain source-owned through unrelated edits.
+
 CustomFileTime validates explicit RFC3339 text. CustomProperties returns immutable typed snapshots and stages checked set/delete operations. AppProperties and presence-sensitive track_revisions are live document-owned handles. Equations return immutable source snapshots, ordered per-child conversion results and native loss diagnostics. Tag and alias control updates stage all selected qualified values once. Runtime constructors, explicit exports and strict stubs describe the same public classes and defaults.
 
 Python `Document.legacy_form_fields()` returns a tuple of frozen owned
@@ -4052,6 +4070,11 @@ embed_true_type_fonts/save_subset_fonts. Authored PowerPoint EmbeddedFont values
 retain explicit kind and license. Snapshot bytes and Python result allocations
 precede native publication, and exact no-ops preserve existing owner handles.
 
+Word authored font input requires a bounded sfnt directory with the exact name
+tag before key derivation or native publication. Licensed valid faces keep
+existing input and snapshot behavior. A permissive external font parser's
+ability to load nameless bytes does not widen that authoring contract.
+
 Both CLIs use font list, font embed, font remove and font settings. Embedding
 requires --license-authorized and --license-identity, accepts --name, --font
 and --kind regular/bold/italic/bold-italic, and writes a new --output. Word also
@@ -4060,7 +4083,11 @@ while an explicit kind removes only that face. Settings read without mutation
 options, and explicit true/false/none values require a new output. JSON uses
 the existing schema1 envelope and stable native record/face order, with actual
 part/format/length facts. Input/font aliases and existing output collisions
-refuse. Complete native serialization precedes staged output publication.
+refuse. Word font errors use truthful nonreplacement diagnostics without an
+unavailable force option. Identity/file-kind preflight grants no replacement
+authority, and final staging remains nonreplacing. Real force-capable commands
+retain their existing diagnostics. Complete native serialization precedes
+staged output publication.
 
 The four face kinds describe authored package entries and the native-backed
 API. They are not a promise that every external application selects every

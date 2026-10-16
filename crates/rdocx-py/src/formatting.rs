@@ -469,6 +469,19 @@ impl PyFont {
     }
     #[setter]
     fn set_language(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        if let Some(value) = value
+            && (!value
+                .as_bytes()
+                .first()
+                .is_some_and(|byte| byte.is_ascii_alphabetic())
+                || !value.split('-').all(|subtag| {
+                    !subtag.is_empty() && subtag.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                }))
+        {
+            return Err(PyValueError::new_err(
+                "language tag must begin with an ASCII letter and contain nonempty ASCII alphanumeric subtags separated by single hyphens",
+            ));
+        }
         self.apply(py, FontUpdate::Language(value))
     }
 
@@ -1064,8 +1077,23 @@ impl PyTabStops {
             })?;
         let alignment = tab_alignment_from_int(alignment)?;
         let leader = tab_leader_from_int(leader)?;
-        self.format(py)
-            .apply(py, ParagraphUpdate::AddTab(alignment, position, leader))?;
+        let format = self.format(py);
+        let location = format.validate(py)?;
+        let duplicate = location
+            .read(&self.document.borrow(py).inner, |paragraph| {
+                (0..paragraph.tab_stop_count()).any(|index| {
+                    paragraph
+                        .tab_stop(index)
+                        .is_some_and(|tab| tab.position() == position)
+                })
+            })
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        if duplicate {
+            return Err(PyValueError::new_err(
+                "a tab stop already exists at this stored position",
+            ));
+        }
+        format.apply(py, ParagraphUpdate::AddTab(alignment, position, leader))?;
         Ok(PyTabStop {
             position,
             alignment,

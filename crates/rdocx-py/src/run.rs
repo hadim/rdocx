@@ -348,6 +348,26 @@ impl PyRun {
                 ));
             }
         };
+        if kind == rdocx::BreakKind::Page {
+            let (location, _) = self.validate(py)?;
+            if let ParagraphLocation::Related(location) = location {
+                let document = self.document.borrow(py);
+                let in_header = document
+                    .inner
+                    .stories()
+                    .map_err(|error| crate::rdocx_to_pyerr(py, error))?
+                    .iter()
+                    .any(|story| {
+                        story.kind() == rdocx::StoryKind::Header
+                            && story.part_name() == location.story().part_name()
+                    });
+                if in_header {
+                    return Err(PyValueError::new_err(
+                        "a page break cannot be added inside a header",
+                    ));
+                }
+            }
+        }
         self.edit(py, |run| run.add_break(kind))
     }
 

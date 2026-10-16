@@ -3285,6 +3285,26 @@ required, and no binary fixture enters the repository.
 
 ## Binding tests
 
+Word invalid-value controls execute the five immutable original reporter
+bodies separately from their strict XFAIL or XPASS marker outcomes. Refusal
+checks preserve signed bytes, live paragraph/run/section owners and absent or
+existing outputs. Valid document variants and named binary streams, signed
+EMU truncation and native duplicate behavior, body Page/header Line, unchanged
+footer/Column behavior and valid/None language controls remain qualified.
+Renamed physical headers and their cell descendants distinguish relationship
+ownership from filename guesses, with a header-like body part as a negative.
+Imported duplicate tabs, language and breaks retain source through unrelated
+work.
+
+Authored font controls mutate only the actual name directory tag in an existing
+licensed face, retain a raw name sentinel and repair the full sfnt checksum.
+Independent pinned FontTools/Pillow observations authenticate directory and
+payload bounds, original reporter replacement positions, licenses and the
+finite authored-policy divergence from permissive font loading. Existing font
+graph, licensed face, signed-stream and unit controls remain required. Font CLI
+checks cover document/font aliases, hardlinks, symlinks, existing destinations,
+truthful diagnostics and staged-residue absence.
+
 Word typed control qualification compares independent saved-package XML with
 actual Word16.114 build16.114.26101123 selected-control edits and repair-free
 disk reopen. Explicit text, date and dateTime mappings, yyyy-MM-dd and

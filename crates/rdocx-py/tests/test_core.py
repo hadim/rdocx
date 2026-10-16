@@ -10,6 +10,186 @@ import zlib
 import pytest
 
 
+@pytest.mark.parametrize('operation', ['pdf', 'duplicate', 'header', 'language', 'font'])
+def test_fx251_five_reporter_invalid_values_refuse_atomically(tmp_path, operation):
+    from pathlib import Path
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph('held body')
+    if operation == 'duplicate':
+        document.paragraphs[0].paragraph_format.tab_stops.add_tab_stop(rdocx.Inches(1))
+    if operation == 'header':
+        document.section(0).header.add_paragraph('held header')
+    key, certificate = _fx240_material()
+    document.sign(key, certificate)
+    paragraph, section = document.paragraphs[0], document.section(0)
+    run = paragraph.runs[0]
+    before = document.to_bytes()
+    if operation == 'pdf':
+        for name, existing in [('absent.PdF', None), ('existing.pdf', b'keep existing output')]:
+            path = tmp_path / name
+            if existing is not None:
+                path.write_bytes(existing)
+            with pytest.raises(ValueError, match='to_pdf'):
+                document.save(path)
+            assert path.read_bytes() == existing if existing is not None else not path.exists()
+    elif operation == 'duplicate':
+        tabs = paragraph.paragraph_format.tab_stops
+        for value in (rdocx.Inches(1), rdocx.Inches(1) + 634):
+            with pytest.raises(ValueError, match='position|duplicate'):
+                tabs.add_tab_stop(value)
+        assert len(tabs) == 1
+    elif operation == 'header':
+        header = section.header.paragraphs[-1]
+        header_run = header.runs[0]
+        with pytest.raises(ValueError, match='header'):
+            header_run.add_break('page')
+        assert header.text == header_run.text == 'held header'
+    elif operation == 'language':
+        for invalid in ('not a tag!', '', '-en', 'en-', 'en--US', '1-en', 'en_US', 'é-US', 'en-!'):
+            with pytest.raises(ValueError, match='language|tag'):
+                run.font.language = invalid
+    else:
+        font = bytearray((Path(__file__).resolve().parents[2] / 'oxml-layout/fonts/Caladea-Regular.ttf').read_bytes())
+        count = int.from_bytes(font[4:6], 'big')
+        offset = next(index for index in range(12, 12 + count * 16, 16) if font[index:index + 4] == b'name')
+        font[offset:offset + 4] = b'nam_'
+        font.extend(b'name')
+        head = next(index for index in range(12, 12 + count * 16, 16) if font[index:index + 4] == b'head')
+        adjustment = int.from_bytes(font[head + 8:head + 12], 'big') + 8
+        font[adjustment:adjustment + 4] = b'\0' * 4
+        padded = bytes(font) + b'\0' * (-len(font) % 4)
+        checksum = sum(value[0] for value in struct.iter_unpack('>I', padded)) & 0xffffffff
+        font[adjustment:adjustment + 4] = ((0xB1B0AFBA - checksum) & 0xffffffff).to_bytes(4, 'big')
+        license = rdocx.FontEmbeddingLicense(authorized=True, identity='Apache-2.0: Caladea')
+        for explicit in (None, '{00112233-4455-6677-8899-AABBCCDDEEFF}'):
+            with pytest.raises(rdocx.RdocxError):
+                document.embed_font('Refused font', bytes(font), license=license, font_key=explicit)
+    assert document.to_bytes() == before
+    assert paragraph.text == run.text == 'held body' and section.xml
+    assert document.verify_signatures()[0]['cryptographically_valid']
+
+
+def test_fx251_valid_paths_tabs_breaks_and_language_remain_supported(tmp_path):
+    import xml.etree.ElementTree as ET
+    import rdocx
+    w = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    document = rdocx.Document()
+    document.add_paragraph('valid source')
+    for extension in ('.docx', '.dotx', '.docm', '.dotm', '.DOCX', '.custom', ''):
+        path = tmp_path / ('output' + extension)
+        document.save(path)
+        assert rdocx.Document.open(path).paragraphs[0].text == 'valid source'
+    class NamedStream(io.BytesIO):
+        name = 'a-stream.pdf'
+    stream = NamedStream()
+    document.save(stream)
+    assert not stream.closed and rdocx.Document.open(io.BytesIO(stream.getvalue())).paragraphs[0].text == 'valid source'
+    paragraph = document.paragraphs[0]
+    tabs = paragraph.paragraph_format.tab_stops
+    for position in (-635, 0, 635, 1270):
+        tabs.add_tab_stop(position)
+    assert [int(tab.position) for tab in tabs] == [-635, 0, 635, 1270]
+    before = document.to_bytes()
+    with pytest.raises(ValueError):
+        tabs.add_tab_stop(-634)
+    assert document.to_bytes() == before
+    for language in ('en-US', 'de-DE', 'zh-Hans', 'x-example', 'en-001', 'a', 'a-123456789', None):
+        paragraph.runs[0].font.language = language
+        assert document.paragraphs[0].runs[0].font.language == language
+        reopened = rdocx.Document.from_bytes(document.to_bytes())
+        assert reopened.paragraphs[0].runs[0].font.language == language
+    for host, kind in [('body', 'page'), ('header', 'line'), ('footer', 'page'), ('header', 'column')]:
+        owner = rdocx.Document()
+        if host == 'body':
+            target = owner.add_paragraph('control')
+        else:
+            target = getattr(owner.section(0), host).add_paragraph('control')
+        target.runs[0].add_break(kind)
+        with zipfile.ZipFile(io.BytesIO(owner.to_bytes())) as package:
+            part = 'word/document.xml' if host == 'body' else next(name for name in package.namelist() if name.startswith('word/' + host) and name.endswith('.xml'))
+            root = ET.fromstring(package.read(part))
+        br = root.find('.//' + w + 'br')
+        assert br is not None and br.get(w + 'type', 'textWrapping') == ('textWrapping' if kind == 'line' else kind)
+    malformed_language = _replace_document_body(rdocx.Document(), '<w:p><w:r><w:rPr><w:lang w:val="not a tag!" w:eastAsia="ja-JP" w:bidi="ar-SA"/></w:rPr><w:t>imported</w:t></w:r></w:p><w:sectPr/>')
+    assert malformed_language.paragraphs[0].runs[0].font.language == 'not a tag!'
+    malformed_language.add_paragraph('unrelated')
+    reopened = rdocx.Document.from_bytes(malformed_language.to_bytes())
+    assert reopened.paragraphs[0].runs[0].font.language == 'not a tag!'
+    assert reopened.paragraphs[0].runs[0].font.language_east_asia == 'ja-JP'
+    assert reopened.paragraphs[0].runs[0].font.language_bidi == 'ar-SA'
+    # Imported duplicates remain source-owned. Only a newly repeated position refuses.
+    duplicate = '<w:p><w:pPr><w:tabs><w:tab w:val="left" w:pos="10"/><w:tab w:val="right" w:pos="10"/></w:tabs></w:pPr><w:r><w:t>imported</w:t></w:r></w:p><w:sectPr/>'
+    imported = _replace_document_body(rdocx.Document(), duplicate)
+    tabs = imported.paragraphs[0].paragraph_format.tab_stops
+    assert len(tabs) == 2
+    tabs.add_tab_stop(20 * 635)
+    assert len(tabs) == 3
+    assert [int(tab.position) for tab in tabs] == [10 * 635, 10 * 635, 20 * 635]
+    opaque = _replace_document_body(rdocx.Document(), duplicate.replace('w:val="right"', 'w:val="futureAlignment"'))
+    opaque.paragraphs[0].paragraph_format.tab_stops.add_tab_stop(20 * 635)
+    assert b'futureAlignment' in _document_xml(opaque)
+
+
+@pytest.mark.parametrize('host', ['header', 'header-cell', 'renamed-header', 'renamed-header-cell', 'renamed-body'])
+def test_fx251_page_break_guard_uses_physical_header_owner(host):
+    import xml.etree.ElementTree as ET
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph('body')
+    if host != 'renamed-body':
+        header = document.section(0).header
+        if host.endswith('cell'):
+            header.add_table(1, 1).cell(0, 0).text = 'header cell'
+        else:
+            header.add_paragraph('header')
+    if host.startswith('renamed'):
+        source, output = io.BytesIO(document.to_bytes()), io.BytesIO()
+        with zipfile.ZipFile(source) as zin, zipfile.ZipFile(output, 'w') as zout:
+            old = 'word/document.xml' if host == 'renamed-body' else next(name for name in zin.namelist() if name.startswith('word/header') and name.endswith('.xml'))
+            new = 'word/headerPretender.xml' if host == 'renamed-body' else 'word/furnitureOdd.xml'
+            for entry in zin.infolist():
+                raw = zin.read(entry.filename)
+                name = entry.filename
+                if name == '[Content_Types].xml':
+                    raw = raw.replace(('/' + old).encode(), ('/' + new).encode())
+                if name.endswith('.rels'):
+                    if host == 'renamed-body' and name == '_rels/.rels':
+                        raw = raw.replace(old.encode(), new.encode())
+                    elif host != 'renamed-body' and name == 'word/_rels/document.xml.rels':
+                        raw = raw.replace(old.removeprefix('word/').encode(), new.removeprefix('word/').encode())
+                if name == old:
+                    name = new
+                elif host == 'renamed-body' and name == 'word/_rels/document.xml.rels':
+                    name = 'word/_rels/headerPretender.xml.rels'
+                zout.writestr(name, raw)
+        document = rdocx.Document.from_bytes(output.getvalue())
+    if host == 'renamed-body':
+        document.paragraphs[0].runs[0].add_break('page')
+        assert rdocx.Document.from_bytes(document.to_bytes()).paragraphs[0].text == 'body\n'
+        return
+    header = document.section(0).header
+    paragraph = header.tables[0].cell(0, 0).paragraphs[0] if host.endswith('cell') else header.paragraphs[-1]
+    run = paragraph.runs[0]
+    before, text = document.to_bytes(), paragraph.text
+    with pytest.raises(ValueError, match='header'):
+        run.add_break('page')
+    assert document.to_bytes() == before and paragraph.text == run.text == text
+    # An imported header page break survives no-op save and unrelated body work.
+    source, output = io.BytesIO(before), io.BytesIO()
+    with zipfile.ZipFile(source) as zin, zipfile.ZipFile(output, 'w') as zout:
+        part = next(item.part_name.lstrip('/') for item in document.stories if item.kind == 'header')
+        for entry in zin.infolist():
+            raw = zin.read(entry.filename)
+            if entry.filename == part:
+                raw = raw.replace(b'</w:r>', b'<w:br w:type="page"/></w:r>', 1)
+            zout.writestr(entry, raw)
+    imported = rdocx.Document.from_bytes(output.getvalue())
+    imported.add_paragraph('unrelated')
+    with zipfile.ZipFile(io.BytesIO(imported.to_bytes())) as package:
+        assert ET.fromstring(package.read(part)).find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}br') is not None
+
+
 @pytest.mark.parametrize("identifier", ["paraId", "textId", "both"])
 def test_fx248_identified_block_control_all_validation_routes(tmp_path, identifier):
     import xml.etree.ElementTree as ET

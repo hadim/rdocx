@@ -6501,6 +6501,91 @@ fn fx220_cli_font_settings_keep_absence_and_false_distinct() {
 }
 
 #[test]
+fn fx251_font_existing_output_diagnostic_has_no_unavailable_force() {
+    let workspace = TempWorkspace::new("fx251-font-collision");
+    let source = workspace.path.join("source.docx");
+    Document::new().save(&source).unwrap();
+    let font = workspace.path.join("font.ttf");
+    fs::write(
+        &font,
+        include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf"),
+    )
+    .unwrap();
+    let output = workspace.path.join("existing.docx");
+    fs::write(&output, b"retain existing output").unwrap();
+    let before_source = fs::read(&source).unwrap();
+    let before_font = fs::read(&font).unwrap();
+    let commands = [
+        vec![
+            "font",
+            "embed",
+            path_text(&source),
+            "--name",
+            "Licensed",
+            "--font",
+            path_text(&font),
+            "--license-authorized",
+            "--license-identity",
+            "Apache-2.0: Caladea",
+        ],
+        vec!["font", "remove", path_text(&source), "--name", "Licensed"],
+        vec![
+            "font",
+            "settings",
+            path_text(&source),
+            "--embed-true-type-fonts",
+            "true",
+        ],
+    ];
+    for command in &commands {
+        for collision in [&output, &source] {
+            let result = cli(&[&command[..], &["--output", path_text(collision)]].concat());
+            assert!(!result.status.success());
+            let error = String::from_utf8_lossy(&result.stderr);
+            assert!(!error.contains("--force"), "{error}");
+            assert_eq!(fs::read(&output).unwrap(), b"retain existing output");
+            assert_eq!(fs::read(&source).unwrap(), before_source);
+        }
+    }
+    let result = cli(&[&commands[0][..], &["--output", path_text(&font)]].concat());
+    assert!(!result.status.success());
+    assert!(!String::from_utf8_lossy(&result.stderr).contains("--force"));
+    assert_eq!(fs::read(&font).unwrap(), before_font);
+    #[cfg(unix)]
+    {
+        let doc_symlink = workspace.path.join("document-symlink.docx");
+        let doc_hardlink = workspace.path.join("document-hardlink.docx");
+        let font_symlink = workspace.path.join("font-symlink.docx");
+        let font_hardlink = workspace.path.join("font-hardlink.docx");
+        std::os::unix::fs::symlink(&source, &doc_symlink).unwrap();
+        fs::hard_link(&source, &doc_hardlink).unwrap();
+        std::os::unix::fs::symlink(&font, &font_symlink).unwrap();
+        fs::hard_link(&font, &font_hardlink).unwrap();
+        for command in &commands {
+            for collision in [&doc_symlink, &doc_hardlink] {
+                let result = cli(&[&command[..], &["--output", path_text(collision)]].concat());
+                assert!(!result.status.success());
+                assert!(!String::from_utf8_lossy(&result.stderr).contains("--force"));
+            }
+        }
+        for collision in [&font_symlink, &font_hardlink] {
+            let result = cli(&[&commands[0][..], &["--output", path_text(collision)]].concat());
+            assert!(!result.status.success());
+            assert!(!String::from_utf8_lossy(&result.stderr).contains("--force"));
+        }
+        assert_eq!(fs::read(&source).unwrap(), before_source);
+        assert_eq!(fs::read(&font).unwrap(), before_font);
+    }
+    assert!(fs::read_dir(&workspace.path).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")
+    }));
+}
+
+#[test]
 fn fx220_cli_font_refusals_preserve_inputs_and_existing_outputs() {
     let workspace = TempWorkspace::new("fx220-refusals");
     let source = workspace.path.join("source.docx");

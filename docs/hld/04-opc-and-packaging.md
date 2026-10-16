@@ -1997,6 +1997,12 @@ transaction and completes before serialize, reopen and live publication.
 
 ## Embedded font package transactions
 
+Authored Word sfnt input requires the exact name table directory tag in
+addition to the existing bounded face and table checks. Unrelated payload bytes
+spelling name grant no directory authority. Refusal precedes derived keys,
+font records, settings and parts. Imported font payloads retain their existing
+opaque preservation and decoding behavior.
+
 Word writes checked single-face sfnt input as ODTTF with its explicit or
 deterministically derived uppercase OOXML GUID. Embedding can stage a missing
 font record and the owned embedTrueTypeFonts setting together with the font

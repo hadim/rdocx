@@ -1,6 +1,6 @@
 # F-X251, Refuse invalid Word values before publication
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95
 **Size**: M
 **Depends on**: F-X201, F-X220, F-X238
@@ -65,11 +65,11 @@ Expected unchanged across all 49 hashes and seven deterministic pixel buffers. N
 
 ## Implementation checklist
 
-- [ ] Establish exact five reporter and CLI diagnostic RED controls.
-- [ ] Add the five narrow pre-publication guards.
-- [ ] Compose truthful existing-output diagnostics with retained identity checks.
-- [ ] Qualify valid controls, refusal bytes/owners and signed stream nonregression.
-- [ ] Complete scoped riders, zero-finding microscope and handoff.
+- [x] Establish exact five reporter and CLI diagnostic RED controls.
+- [x] Add the five narrow pre-publication guards.
+- [x] Compose truthful existing-output diagnostics with retained identity checks.
+- [x] Qualify valid controls, refusal bytes/owners and signed stream nonregression.
+- [x] Complete scoped riders, zero-finding microscope and handoff.
 
 ## Open questions
 
