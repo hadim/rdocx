@@ -1,6 +1,6 @@
 # F-X252, Refuse newly invalid Word raw XML atomically
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95
 **Size**: M
 **Depends on**: F-X211a
@@ -70,11 +70,11 @@ All 49 hashes and seven deterministic pixel buffers should remain unchanged. Thi
 
 ## Implementation checklist
 
-- [ ] Retain actual pre-repair reporter outcomes and primary authority.
-- [ ] Add direct-child grammar at the selected checked paragraph boundary.
-- [ ] Resolve inherited MC URI authority and direct-child exception provenance, preserving delegated nested edits.
-- [ ] Qualify valid extensions and all owner/no-op/refusal negatives.
-- [ ] Complete installed/scoped riders, independent microscope and handoff.
+- [x] Retain actual pre-repair reporter outcomes and primary authority.
+- [x] Add direct-child grammar at the selected checked paragraph boundary.
+- [x] Resolve inherited MC URI authority and direct-child exception provenance, preserving delegated nested edits.
+- [x] Qualify valid extensions and all owner/no-op/refusal negatives.
+- [x] Complete installed/scoped riders, independent microscope and handoff.
 
 ## Open questions
 

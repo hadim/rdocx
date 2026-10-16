@@ -10,6 +10,108 @@ import zlib
 import pytest
 
 
+@pytest.mark.parametrize('child', [
+    '<w:bogus/>', '<x:foo xmlns:x="urn:example"/>',
+    '<m:f xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"/>',
+    '<w:pPr/>',
+])
+def test_fx252_raw_xml_refusal_preserves_current_owners(child):
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph('held body')
+    document.add_paragraph('unrelated body')
+    document.add_table(rows=1, cols=1).cell(0, 0).text = 'held cell'
+    key, certificate = _fx240_material()
+    document.sign(key, certificate)
+    held, unrelated = document.paragraphs[:2]
+    run, section, cell = held.runs[0], document.section(0), document.tables[0].cell(0, 0)
+    original = held.xml
+    before = document.to_bytes()
+    invalid = original.replace('</w:p>', child + '</w:p>')
+    with pytest.raises((ValueError, rdocx.RdocxError)):
+        held.replace_xml(invalid)
+    assert document.to_bytes() == before
+    assert held.xml == original and held.text == run.text == 'held body'
+    assert unrelated.text == 'unrelated body' and cell.text == 'held cell' and section.xml
+    assert document.verify_signatures()[0]['cryptographically_valid']
+    # A late native relationship failure retains the same held authorities.
+    late = '<w:hyperlink xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="missing"><w:r><w:t>late</w:t></w:r></w:hyperlink>'
+    with pytest.raises(rdocx.RdocxError, match='relationship'):
+        held.replace_xml(original.replace('</w:p>', late + '</w:p>'))
+    assert document.to_bytes() == before and run.text == 'held body'
+
+
+def test_fx252_foreign_source_and_stale_owner_cannot_lend_opaque_authority():
+    import rdocx
+    donor = _replace_document_body(rdocx.Document(), '<w:p><w:r><w:t>donor</w:t></w:r><x:opaque xmlns:x="urn:producer" keep="exact"/></w:p>')
+    document = rdocx.Document()
+    document.add_paragraph('held')
+    held = document.paragraphs[0]
+    donor_before, before = donor.to_bytes(), document.to_bytes()
+    with pytest.raises((ValueError, rdocx.RdocxError)):
+        held.replace_xml(donor.paragraphs[0].xml)
+    assert document.to_bytes() == before and donor.to_bytes() == donor_before
+    assert held.text == 'held' and donor.paragraphs[0].text == 'donor'
+    stale = document.add_paragraph('retire me')
+    stale_xml = stale.xml
+    assert document.remove_content(document.find_content_index(stale))
+    held = document.paragraphs[0]
+    before = document.to_bytes()
+    with pytest.raises(rdocx.StaleElementError):
+        stale.replace_xml(stale_xml)
+    assert document.to_bytes() == before and held.text == 'held'
+
+
+@pytest.mark.parametrize('compatibility', ['', ' xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:MustUnderstand="w"'])
+def test_fx252_typed_sdt_metadata_edits_preserve_unmodelled_property_slots(compatibility):
+    import rdocx
+    opaque = "<f:keep xmlns:f=\"urn:metadata\" data='exact'/>"
+    body = '<w:p><w:sdt><w:sdtPr><w:id w:val="10"/><w:alias w:val="Alias"/><w:tag w:val="key"/><w:date w:fullDate="2026-10-16T00:00:00Z"><w:dateFormat w:val="yyyy-MM-dd"/></w:date>' + opaque + '</w:sdtPr><w:sdtContent><w:r><w:t>held</w:t></w:r></w:sdtContent></w:sdt></w:p>'
+    body = body.replace('<w:sdtPr>', '<w:sdtPr' + compatibility + '>')
+    document = _replace_document_body(rdocx.Document(), body)
+    held = document.paragraphs[0]
+    original = held.xml
+    changed = original.replace('w:val="Alias"', 'w:val="Changed"').replace('yyyy-MM-dd', 'dd/MM/yyyy')
+    assert changed != original
+    held.replace_xml(changed)
+    assert held.text == 'held'
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    xml = reopened.paragraphs[0].xml
+    assert 'w:val="Changed"' in xml and 'dd/MM/yyyy' in xml and opaque in xml
+
+
+def test_fx252_markers_math_and_imported_opaque_scalar_edits_reopen():
+    import xml.etree.ElementTree as ET
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph('held')
+    held = document.paragraphs[0]
+    original = held.xml
+    before = document.to_bytes()
+    held.replace_xml(original)
+    assert document.to_bytes() == before
+    additions = '<w:bookmarkStart w:id="42" w:name="checked"/><w:bookmarkEnd w:id="42"/><m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>x</m:t></m:r></m:oMath>'
+    held.replace_xml(original.replace('</w:p>', additions + '</w:p>'))
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    root = ET.fromstring(reopened.paragraphs[0].xml)
+    w = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    m = 'http://schemas.openxmlformats.org/officeDocument/2006/math'
+    assert root.find('{' + w + '}bookmarkStart').get('{' + w + '}name') == 'checked'
+    assert root.find('{' + w + '}bookmarkEnd').get('{' + w + '}id') == '42'
+    assert root.find('{' + m + '}oMath/{' + m + '}r/{' + m + '}t').text == 'x'
+    opaque = "<x:opaque xmlns:x=\"urn:producer\" keep='exact'><x:nested/></x:opaque>"
+    document = _replace_document_body(rdocx.Document(), '<w:p><w:r><w:t>old</w:t></w:r>' + opaque + '</w:p><w:p><w:r><w:t>other</w:t></w:r></w:p>')
+    held, other = document.paragraphs[:2]
+    original = held.xml
+    before = document.to_bytes()
+    held.replace_xml(original)
+    assert document.to_bytes() == before
+    held.replace_xml(original.replace('>old<', '>new<'))
+    assert held.text == 'new' and other.text == 'other'
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert opaque in reopened.paragraphs[0].xml and reopened.paragraphs[1].text == 'other'
+
+
 @pytest.mark.parametrize('operation', ['pdf', 'duplicate', 'header', 'language', 'font'])
 def test_fx251_five_reporter_invalid_values_refuse_atomically(tmp_path, operation):
     from pathlib import Path

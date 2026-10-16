@@ -4622,6 +4622,25 @@ interpreter, wheel, native library and first-attempt identities are pinned.
 Correct-file qualification requires at least90 percent of that unchanged
 denominator. Exit zero alone does not qualify a saved file or render.
 
+Checked Word paragraph admission uses separately authenticated ECMA-376
+fifth-edition CT_P/EG_PContent expansion and Part3 compatibility controls.
+All35 qualified direct names, pPr ordering, actual ancestor URI accumulation,
+sibling restoration, declaration rebinding and exact-once normalization have
+bounded controls. These primary schema facts do not claim native Word
+execution. Direct-child opaque exceptions distinguish exact no-op, valid
+scalar edits, stable repeated routes, copies, moves, changed ancestry and
+reinterpreted namespace/MC meaning. Existing nested host, DrawingML and OMML
+routes remain positive controls, with typed SDT metadata editable around an
+unchanged unsupported MC attribute. Retained Choice Requires rebinding refuses,
+while unchanged bindings permit scalar edits. Bounded deep delegated controls
+measure actual retained route and namespace/grant entries rather than timing.
+A finite long-URI/many-island positive measures retained namespace bytes,
+including diagnostic storage, without large allocation stress.
+Installed controls retain signed bytes, held owners, unrelated
+content, late relationship refusals, valid markers and math after reopen.
+Original reporter bodies retain their immutable identity, with body outcomes
+separate from strict XFAIL/XPASS marker accounting.
+
 Every required XML owner, lifetime and native/render obligation remains a hard
 gate. Typed observations bind actual and expected values to authenticated
 source and output evidence. Pending facts leave the full metric unset. Named

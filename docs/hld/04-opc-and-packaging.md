@@ -1939,6 +1939,38 @@ inclusive32 boundary. Iterative borrowed-model admission precedes staging
 clones and serialization. Opaque foreign routes do not consume modeled nesting
 authority.
 
+Checked paragraph replacement admits the finite fifth-edition Transitional
+CT_P particle:33 Word names, including optional single pPr first, plus
+qualified math oMath/oMathPara,35 expanded names in total. This is a direct paragraph
+boundary, not a recursive schema validator or Strict import extension. The
+renderer's modeled traversal list is not schema authority. Ordinary import
+retains unsupported source and exact source no-op remains the earliest path.
+
+MC Ignorable authority accumulates resolved namespace URIs from the actual
+selected physical source ancestors. Each declaration resolves prefixes at its
+own element. Local blank lists preserve inherited grants, rebinding does not
+retarget them and sibling exit restores scope. Qualified attribute names and
+namespace values use exact URI identity after one normalization. An understood
+Word namespace cannot grant permission for an unknown Word child. Unsupported
+new complex compatibility constructs refuse instead of implying general MC
+processing. Existing checked drawing and object providers keep their supported
+foreign vocabularies and branches.
+
+An imported opaque direct-child exception requires its selected physical
+owner, unique ordered structural ancestry, exact raw bytes and relevant
+namespace/MC interpretation. Matching bytes elsewhere do not authorize a
+copied, moved or reinterpreted exception, including a move into an already
+admitted wrapper. Stable repeated islands retain their proven individual
+routes. New ignored foreign direct children require an applicable grant.
+Nested typed content controls, fields, ruby, revisions, drawings and math
+retain their established providers. An unchanged unsupported MC attribute
+retains its own raw value and resolved declaration meaning at the physical
+route without freezing its typed owner. Retained Choice Requires prefixes keep
+their resolved declaration meaning. Traversal retains compact parent route IDs
+and namespace/grant undo deltas, with storage proportional to actual input.
+These checks precede candidate publication and preserve bytes and held authority
+on refusal.
+
 Checked table, cell and section replacement retains expanded root attribute
 names and decoded values, with the required namespace bindings. Attribute
 quoting and entity spelling may be normalized by reconstruction. Captured

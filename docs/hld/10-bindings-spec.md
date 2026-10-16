@@ -4146,9 +4146,21 @@ operation. Checked paragraph replacement retains ancestor-declared namespace
 bindings needed by preserved inline and anchored drawing payloads when the
 typed paragraph serializer drops the original declaration. It accounts for
 bindings retained on paragraph and run roots and for local namespace shadows.
-The opaque payload interior remains exact. Ordinary parsing and physical
-picture snapshots keep their source authority, and invalid replacement or
-save candidates fail atomically.
+The opaque payload interior remains exact. Namespace-complete paragraph XML
+keeps its existing public fragment contract. Checked replacement separately
+reads actual physical ancestor MC authority and admits the finite35 expanded
+direct-child names from the selected Word vocabulary, with pPr first and
+single. Unknown newly authored Word children and non-Ignorable foreign children
+refuse before mutation. Qualified OMML and valid markers remain admitted.
+Unchanged opaque direct-child exceptions retain unique ordered physical
+correspondence and namespace meaning, with exact snapshot no-op first. A
+raw-subtree multiset cannot lend source authority across owners or structural
+routes. Nested typed owners keep their existing providers. An unchanged
+unsupported MC attribute retains its own raw value and resolved meaning,
+without freezing supported text and metadata edits on its owner. This does
+not establish a recursive schema validator or broaden ordinary import.
+Ordinary parsing and physical picture snapshots keep their source authority,
+and invalid replacement or save candidates fail atomically.
 
 Complete Word owner snapshots use the native hidden
 `Document.story_owner_snapshots` provider across the existing crate boundary.
