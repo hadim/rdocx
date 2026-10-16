@@ -3285,6 +3285,24 @@ required, and no binary fixture enters the repository.
 
 ## Binding tests
 
+Numbering replacement-level controls exercise both bullet-over-decimal refusal
+and decimal-over-bullet restart and continuation after reopen. A bounded native
+counter control requires one source build, owner discovery, item discovery and
+namespace traversal for both small and many-paragraph empty chart collections.
+The observer uses existing counters without a wall-clock threshold.
+
+Everyday Word chart, display-equation, list restart/font and note-reference/removal
+repairs use six unique local regressions with actual old-source RED and fixed-source
+GREEN observations. Independent saved-package XML observes physical chart order,
+precise type and cache values, math display boundaries, numbering overrides and
+marker font slots, both reference styles and current-id removal atomicity.
+Final integrated acceptance executes the five unchanged original Issue385 bodies
+from those four groups, with strict marker outcomes separate from body success.
+Complete installed suites, pinned structural comparisons, native appearance,
+WASM, hash/pixel and affected publication riders run in the final sprint union.
+No local regression result claims an unperformed final oracle pass.
+
+
 Word numeric qualification preserves the separate original Issue386 source and
 its four numeric rows. Tiny nonzero bare EMU spacing refuses, explicit lengths
 retain truncation, signed character spacing and intentional zero remain valid,

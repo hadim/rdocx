@@ -1890,6 +1890,22 @@ DrawingML text watermark compatibility preserves one WPS choice and a real VML t
 
 ## Checked Word operation source ownership
 
+The bulk chart reader serializes only the main body once, without resolving
+unrelated story relationships. It discovers body owners and direct items once, then closes
+paragraph namespace scope from one batched traversal. Empty chart collections do
+not rescan or rebuild the complete body for each paragraph.
+
+Direct-body Word chart snapshots enumerate physical paragraph and drawing occurrences,
+including repeated references to shared targets. Only the qualified direct
+paragraph/run/drawing/inline-or-anchor/graphic/graphicData/chart chain grants
+read authority. Namespace URI references are normalized once. Unique internal
+relationships resolve from the actual document part with checked chart content
+types. Reads do not publish revisions or normalize retained chart source.
+Tables, related stories and opaque wrappers remain outside this finite collection.
+Numbering restart and note removal stage the existing native candidate and
+publish only after validation, preserving other physical owners on refusal.
+
+
 Captured hyperlink records bind the current physical owner and its ordinal.
 Unrelated link changes retain a proven surviving owner. Removing a link
 retires its captured record even when an identical public record remains or

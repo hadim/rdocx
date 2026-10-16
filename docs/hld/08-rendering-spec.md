@@ -2588,6 +2588,13 @@ parameters remain diagnostic instead of silently selecting another effect.
 
 ## Authored Word page appearance and note references
 
+New footnote and endnote reference runs and note-body markers carry their matching
+FootnoteReference or EndnoteReference character style. Missing authored character
+styles define superscript through the existing style provider. Producer styles
+are retained. Effective superscript and default note superscripting remain
+mutually exclusive, so reference paint is raised once.
+
+
 Qualified Word2010 solid text fill projects an RGB colour and alpha while
 retaining its original extension source. Gradient representations remain opaque. Style merging transports this
 semantic fill with direct-property precedence, without copying arbitrary

@@ -111,13 +111,13 @@ Expected unchanged for the existing deterministic49 hash cases and7 pixel cases.
 
 ## Implementation checklist
 
-- [ ] Confirm the approved finite chart scope and bind actual provider/source authority.
-- [ ] Establish unique local old-source RED and fixed-source GREEN observations without changing original reporter bytes.
-- [ ] Add chart snapshots, display selection, persisted list restart/font and common native note styles/removal through existing carriers.
-- [ ] Preserve scalar admission, relationship/owner authority, opaque source and late-failure atomicity with independent package observers.
-- [ ] Align existing exports/stubs and update exactly the HLD impact sections before source freeze.
-- [ ] Obtain independent zero-defect, zero-smell microscope and scoped local verification.
-- [ ] Prepare `sprint-final-acceptance` with named actual local checks passed and named final sprint checks pending.
+- [x] Confirm the approved finite chart scope and bind actual provider/source authority.
+- [x] Establish unique local old-source RED and fixed-source GREEN observations without changing original reporter bytes.
+- [x] Add chart snapshots, display selection, persisted list restart/font and common native note styles/removal through existing carriers.
+- [x] Preserve scalar admission, relationship/owner authority, opaque source and late-failure atomicity with independent package observers.
+- [x] Align existing exports/stubs and update exactly the HLD impact sections before source freeze.
+- [x] Obtain independent zero-defect, zero-smell microscope and scoped local verification.
+- [x] Prepare `sprint-final-acceptance` with named actual local checks passed and named final sprint checks pending.
 - [ ] Complete only after the final integrated round-trip/oracle/risk union actually passes.
 
 ## Open questions

@@ -306,6 +306,23 @@ line/page/column alternatives.
 
 ## Python Word formatting and checked list publication
 
+Numbering restart admission and decimal continuation use the concrete instance's
+replacement level before its abstract definition. An effective bullet cannot be
+restarted as a number or reused by the decimal helper. An effective decimal over
+an abstract bullet remains eligible. The existing abstract-level reader projection
+retains its separate inspection contract.
+
+ListLevel accepts optional nonempty XML-valid font text, carried through native
+marker properties to ascii and hAnsi font slots. Numbered-item restart=True
+creates a fresh instance starting at1. Later compatible decimal items continue
+the most recent physical explicit level restart, including after reopen, while
+unrelated plain or bullet items do not reset it. Without an active explicit
+restart, historical default selection remains. restart_numbering accepts a live
+same-document direct-body numbered non-bullet paragraph, retains its level and
+other overrides, and returns the new instance id. Its non-bool start accepts the
+full unsigned32 domain. Unprojectable imported override source refuses atomically.
+
+
 Native `Run::set_width_scale_value` accepts `Option<u32>` percent and
 `Run::set_position_value` accepts `Option<i32>` signed half-points. Some writes
 an explicit direct property, including zero. None removes only that property
@@ -3974,6 +3991,18 @@ presentation or bytes with ordered OdpDiagnostics. save_reports exposes the
 ordered report payload.
 
 ## Python Word document operations
+
+Document.charts is a read-only tuple of owned Chart snapshots. chart_type is an
+optional integer, categories a tuple of strings and series a tuple of existing
+CategorySeriesData values. Reading preserves package bytes and held owners.
+Paragraph.add_equation retains the required format keyword and adds display=False.
+True selects existing display OfficeMath, exposed by is_display, while finite
+conversion diagnostics and inline defaults remain unchanged.
+Document.remove_footnote(id) and remove_endnote(id) use current checked native
+removal, independent of retired note handles. Non-bool signed32 ids are admitted
+before publication. Missing or reserved ids retain native refusal behavior.
+Selected note removal cannot revive retired aliases or remove unrelated notes.
+
 
 Both families' PDF diagnostic companions return the encoded payload and an
 owned diagnostic tuple from the same successful layout. Explicit Word symbols
