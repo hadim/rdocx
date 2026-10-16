@@ -1293,6 +1293,14 @@ require actual affected archive verification and measured inventories before
 feature completion, in addition to genuine wheel and consumer checks.
 Fresh paired wheel qualification authenticates every archive member, RECORD
 digest/length, local Python/stub source and native binary before isolated install.
+The first-draft name corpus is an independent immutable122-file input at
+PR333 commit193819ca0a1dcf3415017c0be1186fe8df6bcb86. Its76/44 script membership,
+both original runners, archive and per-file SHA256/Git blob identities accompany
+raw reports and separate requirement classification. Pinned python-docx1.2.0
+and python-pptx1.0.2 run against authenticated installed wheels in isolated
+Python environments. Package/source, stub, native-library and RECORD identities
+are checked without source-path imports. Raw runner failures remain recorded,
+including the historical passing-merge divergence marker.
 Affected crate inventories and measured archive tuples come from actual verified
 packages, with the existing10MiB ceiling. Separate downstream skill guidance
 requires its own reviewed patch and submission boundary. Local README changes

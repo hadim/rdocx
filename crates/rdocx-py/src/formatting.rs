@@ -114,6 +114,26 @@ fn checked_underline_code(value: i32) -> PyResult<i32> {
     }
 }
 
+const HIGHLIGHT_COLORS: [&str; 17] = [
+    "none",
+    "black",
+    "blue",
+    "cyan",
+    "green",
+    "magenta",
+    "red",
+    "yellow",
+    "white",
+    "darkBlue",
+    "darkCyan",
+    "darkGreen",
+    "darkMagenta",
+    "darkRed",
+    "darkYellow",
+    "darkGray",
+    "lightGray",
+];
+
 fn checked_highlight(value: &str) -> PyResult<&str> {
     match value {
         "black" | "blue" | "cyan" | "darkBlue" | "darkCyan" | "darkGray" | "darkGreen"
@@ -568,27 +588,27 @@ impl PyFont {
     }
 
     #[getter]
-    fn bold(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+    pub(crate) fn bold(&self, py: Python<'_>) -> PyResult<Option<bool>> {
         Ok(self.snapshot(py)?.bold)
     }
 
     #[setter]
-    fn set_bold(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+    pub(crate) fn set_bold(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
         self.apply(py, FontUpdate::Bold(value))
     }
 
     #[getter]
-    fn italic(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+    pub(crate) fn italic(&self, py: Python<'_>) -> PyResult<Option<bool>> {
         Ok(self.snapshot(py)?.italic)
     }
 
     #[setter]
-    fn set_italic(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+    pub(crate) fn set_italic(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
         self.apply(py, FontUpdate::Italic(value))
     }
 
     #[getter]
-    fn underline(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+    pub(crate) fn underline(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         match self.snapshot(py)?.underline {
             None => Ok(None),
             Some(0) => Ok(Some(
@@ -600,7 +620,11 @@ impl PyFont {
     }
 
     #[setter]
-    fn set_underline(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+    pub(crate) fn set_underline(
+        &self,
+        py: Python<'_>,
+        value: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
         let style = match value {
             None => None,
             Some(value) if value.is_none() => None,
@@ -620,6 +644,39 @@ impl PyFont {
     #[setter]
     fn set_strike(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
         self.apply(py, FontUpdate::Strike(value))
+    }
+
+    #[getter]
+    fn highlight_color(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.snapshot(py)?
+            .highlight
+            .map(|value| {
+                let index = HIGHLIGHT_COLORS
+                    .iter()
+                    .position(|name| *name == value)
+                    .ok_or_else(|| {
+                        PyValueError::new_err("use font.highlight for this retained color")
+                    })?;
+                py.import("rdocx.enum.text")?
+                    .getattr("WD_COLOR_INDEX")?
+                    .call1((index,))
+                    .map(Bound::unbind)
+            })
+            .transpose()
+    }
+
+    #[setter]
+    fn set_highlight_color(
+        &self,
+        py: Python<'_>,
+        value: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let color = value.filter(|v| !v.is_none()).map(|value| {
+            if value.is_instance_of::<pyo3::types::PyBool>() { return Err(PyTypeError::new_err("highlight_color requires WD_COLOR_INDEX or None; use font.highlight for names")); }
+            let index = value.extract::<usize>()?;
+            HIGHLIGHT_COLORS.get(index).copied().ok_or_else(|| PyValueError::new_err("use WD_COLOR_INDEX or font.highlight with a supported color name"))
+        }).transpose()?;
+        self.apply(py, FontUpdate::Highlight(color))
     }
 
     #[getter]

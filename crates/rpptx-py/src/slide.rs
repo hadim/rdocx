@@ -1509,6 +1509,14 @@ impl PySlideCollection {
         Ok(self.publish_import(py, request)?.output)
     }
 
+    #[getter(_sldIdLst)]
+    fn unsupported_slide_xml_list(&self, py: Python<'_>) -> PyResult<()> {
+        self.len(py)?;
+        Err(pyo3::exceptions::PyNotImplementedError::new_err(
+            "use prs.slides.remove(slide) to delete a slide and prs.slides.move(old_index, new_index) to reorder",
+        ))
+    }
+
     /// Removes one slide of this presentation with its notes and owned media.
     fn remove(&self, py: Python<'_>, slide: &Bound<'_, PyAny>) -> PyResult<()> {
         self.len(py)?;

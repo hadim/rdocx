@@ -592,3 +592,25 @@ def fx240_owned_signature_reports(owner: Document, private_key: bytes, certifica
     for checked in owner.verify_signatures():
         print(checked["signature_part"], checked["cryptographically_valid"])
     print(part, valid, complete, parts)
+
+
+if TYPE_CHECKING:
+    import io
+    from rdocx.enum.text import WD_COLOR_INDEX, WD_BREAK
+    from rdocx.enum.section import WD_SECTION, WD_SECTION_START, WD_ORIENT, WD_ORIENTATION
+    _section_start: WD_SECTION_START = WD_SECTION.NEW_PAGE
+    _orientation: WD_ORIENTATION = WD_ORIENT.LANDSCAPE
+    assert_type(_section_start, WD_SECTION_START)
+    assert_type(_orientation, WD_ORIENTATION)
+    _parity_document = Document()
+    _parity_paragraph = _parity_document.add_paragraph(style="Normal")
+    assert_type(_parity_document.add_heading("Heading", 1), Paragraph)
+    _parity_run = _parity_paragraph.add_run("run")
+    _parity_run.bold = True
+    _parity_run.italic = None
+    _parity_run.underline = False
+    _parity_run.font.highlight_color = WD_COLOR_INDEX.YELLOW
+    _parity_run.add_break(WD_BREAK.PAGE)
+    _parity_document.save(io.BytesIO())
+    _parity_document = Document.open(io.BytesIO())
+    assert_type(_parity_document.styles, tuple[Style, ...])

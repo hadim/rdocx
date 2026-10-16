@@ -11039,3 +11039,13 @@ def test_fx240_refusal_preserves_current_bytes_and_held_authority():
     assert owner.verify_signatures()[0]["cryptographically_valid"]
     assert owner.to_bytes() == saved
     assert shape.text == frame.text == paragraph.text == run.text == "signed text" and len(slide.shapes) == 1
+
+
+def test_fx238_slide_xml_hack_refuses_with_remove_pointer():
+    import rpptx
+    presentation = rpptx.Presentation()
+    presentation.slides.add_slide(presentation.slide_layouts[6])
+    before = presentation.to_bytes()
+    with pytest.raises(NotImplementedError, match="slides.remove"):
+        presentation.slides._sldIdLst
+    assert presentation.to_bytes() == before

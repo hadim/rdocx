@@ -255,6 +255,54 @@ impl PyPictureOptions {
     }
 }
 
+fn binary_stream_bytes(value: &Bound<'_, PyAny>, seek: bool) -> PyResult<Vec<u8>> {
+    if seek {
+        value.call_method1("seek", (0,)).map_err(|error| {
+            if error.is_instance_of::<pyo3::exceptions::PyAttributeError>(value.py()) {
+                PyTypeError::new_err(
+                    "Document requires a seekable binary stream; use Document.from_bytes(stream.read())",
+                )
+            } else {
+                error
+            }
+        })?;
+    }
+    let bytes = value.call_method0("read").map_err(|error| {
+        if error.is_instance_of::<pyo3::exceptions::PyAttributeError>(value.py()) {
+            PyTypeError::new_err(
+                "use a binary stream, filesystem path or Document.from_bytes(bytes)",
+            )
+        } else {
+            error
+        }
+    })?;
+    bytes
+        .cast::<PyBytes>()
+        .map(|bytes| bytes.as_bytes().to_vec())
+        .map_err(|_| {
+            PyTypeError::new_err(
+                "stream.read() must return binary bytes; use Document.from_bytes(bytes)",
+            )
+        })
+}
+
+fn open_document_input(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<rdocx::Document> {
+    if let Ok(path) = value.extract::<PathBuf>() {
+        return rdocx::Document::open(path).map_err(|error| rdocx_to_pyerr(py, error));
+    }
+    rdocx::Document::from_bytes(&binary_stream_bytes(value, true)?)
+        .map_err(|error| rdocx_to_pyerr(py, error))
+}
+
+fn checked_heading_level(value: &Bound<'_, PyAny>) -> PyResult<i64> {
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(
+            "heading level must be an integer from 0 through 9, not bool",
+        ));
+    }
+    value.extract()
+}
+
 pub(crate) fn picture_input(
     image: &Bound<'_, PyAny>,
     filename: Option<&str>,
@@ -265,9 +313,15 @@ pub(crate) fn picture_input(
             filename.unwrap_or("picture").to_owned(),
         ));
     }
-    let path = image
-        .extract::<PathBuf>()
-        .map_err(|_| PyTypeError::new_err("picture must be bytes or a filesystem path"))?;
+    let path = match image.extract::<PathBuf>() {
+        Ok(path) => path,
+        Err(_) => {
+            return Ok((
+                binary_stream_bytes(image, false)?,
+                filename.unwrap_or("picture").to_owned(),
+            ));
+        }
+    };
     let bytes = std::fs::read(&path)
         .map_err(|error| pyo3::exceptions::PyOSError::new_err(error.to_string()))?;
     Ok((
@@ -2468,8 +2522,38 @@ pub struct PySection {
     pub break_type: Option<String>,
 }
 
+impl PySection {
+    fn live_section_alternative(&self, property: &str) -> PyResult<()> {
+        Err(pyo3::exceptions::PyNotImplementedError::new_err(format!(
+            "Section is a snapshot; use document.section({}).{}",
+            self.ordinal, property,
+        )))
+    }
+}
+
 #[pymethods]
 impl PySection {
+    #[getter]
+    fn header(&self) -> PyResult<()> {
+        self.live_section_alternative("header")
+    }
+    #[getter]
+    fn footer(&self) -> PyResult<()> {
+        self.live_section_alternative("footer")
+    }
+    #[getter]
+    fn first_page_header(&self) -> PyResult<()> {
+        self.live_section_alternative("first_page_header")
+    }
+    #[getter]
+    fn different_first_page_header_footer(&self) -> PyResult<()> {
+        self.live_section_alternative("different_first_page_header_footer")
+    }
+    #[setter]
+    fn set_different_first_page_header_footer(&self, _value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.live_section_alternative("different_first_page_header_footer")
+    }
+
     #[new]
     #[pyo3(signature = (*, ordinal, is_final, orientation, page_width, page_height, margin_top, margin_right, margin_bottom, margin_left, gutter, column_count, column_spacing, page_number_start, header_distance, footer_distance, different_first_page, break_type))]
     #[allow(clippy::too_many_arguments)]
@@ -6457,20 +6541,17 @@ impl PyDocument {
 
     #[new]
     #[pyo3(signature = (path = None))]
-    fn new(path: Option<PathBuf>, py: Python<'_>) -> PyResult<Self> {
-        match path {
-            Some(path) => rdocx::Document::open(path)
-                .map_err(|error| rdocx_to_pyerr(py, error))
-                .and_then(|inner| Self::from_document(inner, py)),
-            None => Self::from_document(rdocx::Document::new(), py),
-        }
+    fn new(path: Option<&Bound<'_, PyAny>>, py: Python<'_>) -> PyResult<Self> {
+        let inner = match path {
+            Some(path) => open_document_input(py, path)?,
+            None => rdocx::Document::new(),
+        };
+        Self::from_document(inner, py)
     }
 
     #[staticmethod]
-    fn open(path: PathBuf, py: Python<'_>) -> PyResult<Self> {
-        rdocx::Document::open(path)
-            .map_err(|error| rdocx_to_pyerr(py, error))
-            .and_then(|inner| Self::from_document(inner, py))
+    fn open(path: &Bound<'_, PyAny>, py: Python<'_>) -> PyResult<Self> {
+        Self::from_document(open_document_input(py, path)?, py)
     }
 
     #[staticmethod]
@@ -6617,9 +6698,26 @@ impl PyDocument {
         Ok(PyTuple::new(py, reports)?.unbind())
     }
 
-    fn save(&mut self, path: PathBuf, py: Python<'_>) -> PyResult<()> {
-        py.detach(|| self.inner.save(path))
-            .map_err(|error| rdocx_to_pyerr(py, error))
+    fn save(&mut self, path: &Bound<'_, PyAny>, py: Python<'_>) -> PyResult<()> {
+        if let Ok(path) = path.extract::<PathBuf>() {
+            return py
+                .detach(|| self.inner.save(path))
+                .map_err(|error| rdocx_to_pyerr(py, error));
+        }
+        let write = path.getattr("write").map_err(|_| PyTypeError::new_err(
+            "save requires a filesystem path or binary writable stream; use stream.write(document.to_bytes())",
+        ))?;
+        let bytes = self
+            .inner
+            .to_bytes()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let written = write.call1((PyBytes::new(py, &bytes),))?;
+        if written.extract::<usize>().ok() != Some(bytes.len()) {
+            return Err(pyo3::exceptions::PyOSError::new_err(
+                "binary stream write returned a short or invalid byte count",
+            ));
+        }
+        Ok(())
     }
 
     #[pyo3(name = "to_bytes")]
@@ -8090,7 +8188,12 @@ impl PyDocument {
 
     #[getter]
     fn styles<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        PyTuple::new(py, self.inner.styles().into_iter().map(style_snapshot))
+        let snapshots = PyTuple::new(py, self.inner.styles().into_iter().map(style_snapshot))?;
+        py.import("rdocx")?
+            .getattr("_StyleSnapshots")?
+            .call1((snapshots,))?
+            .cast_into::<PyTuple>()
+            .map_err(Into::into)
     }
 
     // Create a style as python-docx's `styles.add_style` does, deriving the
@@ -9041,6 +9144,14 @@ impl PyDocument {
         let (data, filename) = picture_input(data, filename)?;
         let width = checked_section_length(width, "picture width")?.map(rdocx::Length::emu);
         let height = checked_section_length(height, "picture height")?.map(rdocx::Length::emu);
+        if width.is_some() != height.is_some() {
+            return Err(crate::rdocx_to_pyerr(
+                py,
+                rdocx::Error::Other(
+                    "use add_picture(..., width=..., height=...) with both dimensions; omit both for the native image size".to_owned(),
+                ),
+            ));
+        }
         let after = after
             .map(|value| -> PyResult<rdocx::ContentLocation> {
                 if let Ok(item) = value.extract::<PyRef<'_, PyStoryItem>>() {
@@ -9902,40 +10013,66 @@ impl PyDocument {
         Py::new(py, PyTableCollection::new(slf))
     }
 
-    fn add_paragraph(slf: Py<Self>, py: Python<'_>, text: &str) -> PyResult<Py<PyParagraph>> {
-        let mut document = slf.borrow_mut(py);
-        let mut candidate = document.inner.clone_for_staging();
-        let index = candidate.paragraph_count();
-        candidate.add_paragraph(text);
-        let prepared = document.prepare_word_revision(
-            py,
-            &candidate,
-            "Document.add_paragraph",
-            crate::document::WordPublication::AppendBody,
-        )?;
-        let path = document
-            .revisions
-            .capture_prepared(
-                &prepared.revision,
-                smallvec![PathSeg::Body(0), PathSeg::Para(index)],
-            )
-            .map_err(revision_to_pyerr)?;
-        let result = Py::new(
-            py,
-            PyParagraph::new(slf.clone_ref(py), path)
-                .bind_prepared(py, &document, &prepared, &candidate, None)?,
-        )?;
-        document.commit_word_revision(prepared)?;
-        document.inner = candidate;
-        Ok(result)
+    #[pyo3(signature = (text = "", style = None))]
+    fn add_paragraph(
+        slf: Py<Self>,
+        py: Python<'_>,
+        text: &str,
+        style: Option<&str>,
+    ) -> PyResult<Py<PyParagraph>> {
+        Self::append_paragraph_candidate(slf, py, text, style, false)
     }
 
-    #[pyo3(signature = (rows, cols))]
-    fn add_table(slf: Py<Self>, py: Python<'_>, rows: usize, cols: usize) -> PyResult<Py<PyTable>> {
+    #[pyo3(signature = (text = "", level = 1))]
+    fn add_heading(
+        slf: Py<Self>,
+        py: Python<'_>,
+        text: &str,
+        #[pyo3(from_py_with = checked_heading_level)] level: i64,
+    ) -> PyResult<Py<PyParagraph>> {
+        if !(0..=9).contains(&level) {
+            return Err(PyValueError::new_err(
+                "heading level must be from 0 through 9",
+            ));
+        }
+        let style = if level == 0 {
+            "Title".to_owned()
+        } else {
+            format!("Heading{level}")
+        };
+        Self::append_paragraph_candidate(slf, py, text, Some(&style), false)
+    }
+
+    fn add_page_break(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyParagraph>> {
+        Self::append_paragraph_candidate(slf, py, "", None, true)
+    }
+
+    #[pyo3(signature = (start_type = None))]
+    fn add_section(&self, start_type: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let _ = start_type;
+        Err(pyo3::exceptions::PyNotImplementedError::new_err(
+            "use document.insert_section(len(document.sections)) and document.update_section(index, break_type=...); existing native insertion copies geometry only",
+        ))
+    }
+
+    #[pyo3(signature = (rows, cols, style = None))]
+    fn add_table(
+        slf: Py<Self>,
+        py: Python<'_>,
+        rows: usize,
+        cols: usize,
+        style: Option<&str>,
+    ) -> PyResult<Py<PyTable>> {
         let mut document = slf.borrow_mut(py);
         let mut candidate = document.inner.clone_for_staging();
         let index = candidate.table_count();
-        candidate.add_table(rows, cols);
+        let style = style
+            .map(|value| crate::table::checked_table_style(py, &mut candidate, value))
+            .transpose()?;
+        let mut table = candidate.add_table(rows, cols);
+        if let Some(style) = style {
+            table.set_style(&style);
+        }
         let prepared = document.prepare_word_revision(
             py,
             &candidate,
@@ -9997,11 +10134,13 @@ impl PyDocument {
         PyTuple::new(py, self.inner.find_content_indices(text))
     }
 
-    fn insert_paragraph(
+    #[pyo3(signature = (index, text, style = None))]
+    pub(crate) fn insert_paragraph(
         slf: Py<Self>,
         py: Python<'_>,
         index: usize,
         text: &str,
+        style: Option<&str>,
     ) -> PyResult<Py<PyParagraph>> {
         let result = {
             let mut document = slf.borrow_mut(py);
@@ -10009,7 +10148,13 @@ impl PyDocument {
             if index > candidate.content_count() {
                 return Err(PyIndexError::new_err("content index out of range"));
             }
-            candidate.insert_paragraph(index, text);
+            let style = style
+                .map(|value| style_id_of_type(&candidate, value, rdocx::StyleType::Paragraph))
+                .transpose()?;
+            let mut inserted = candidate.insert_paragraph(index, text);
+            if let Some(style) = style {
+                inserted.set_style(&style);
+            }
             let paragraph = candidate
                 .paragraph_index_of_content(index)
                 .expect("an inserted body paragraph has a paragraph index");
@@ -11694,4 +11839,49 @@ fn fx241_form_certificates_require_unique_routes_and_unchanged_source() {
         !form_owner_certificates(&duplicate, &new, &matched, &before, &after)
             .contains(&(matched[unchanged].unwrap(), unchanged))
     );
+}
+
+impl PyDocument {
+    fn append_paragraph_candidate(
+        slf: Py<Self>,
+        py: Python<'_>,
+        text: &str,
+        style: Option<&str>,
+        page_break: bool,
+    ) -> PyResult<Py<PyParagraph>> {
+        let mut document = slf.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        let index = candidate.paragraph_count();
+        let style = style
+            .map(|value| style_id_of_type(&candidate, value, rdocx::StyleType::Paragraph))
+            .transpose()?;
+        let mut paragraph = candidate.add_paragraph(text);
+        if let Some(style) = style {
+            paragraph.set_style(&style);
+        }
+        if page_break {
+            paragraph.add_run("").add_break(rdocx::BreakKind::Page);
+        }
+        let prepared = document.prepare_word_revision(
+            py,
+            &candidate,
+            "Document.add_paragraph",
+            crate::document::WordPublication::AppendBody,
+        )?;
+        let path = document
+            .revisions
+            .capture_prepared(
+                &prepared.revision,
+                smallvec![PathSeg::Body(0), PathSeg::Para(index)],
+            )
+            .map_err(revision_to_pyerr)?;
+        let result = Py::new(
+            py,
+            PyParagraph::new(slf.clone_ref(py), path)
+                .bind_prepared(py, &document, &prepared, &candidate, None)?,
+        )?;
+        document.commit_word_revision(prepared)?;
+        document.inner = candidate;
+        Ok(result)
+    }
 }

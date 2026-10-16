@@ -4506,6 +4506,40 @@ runner success while other feature surfaces remain unresolved. Fresh actual
 paired wheels, installed RECORD/native/stub identities, strict typing, complete
 Presentation acceptance and focused Word controls qualify changed consumers.
 
+
+## First-draft Python name qualification
+
+The separate PR333 corpus pins commit193819ca0a1dcf3415017c0be1186fe8df6bcb86:
+76 Word scripts,44 Presentation scripts and both original runners. Execution
+authenticates all122 bodies, checks, membership and source identities. Original
+runner reports and exits remain immutable. Their needs marks do not qualify
+an interface, and the passing Cell.merge specimen retains its stale divergence
+marker and raw diagnostic. This corpus is separate from the100-case metric
+below.
+
+An independent complete attempt classifies each of the32 issue-listed Word
+specimens as correct saved-file success, explicit supported-alternative
+refusal, or unresolved. The three original divergence messages require exact
+first-line `remove_content`, `set_style` and `slides.remove` tokens. Check
+failures never receive refusal credit, generic errors remain unresolved, and
+results from separate candidates are not stitched together. Original expected
+passes that receive an approved alternative remain visible raw failures.
+
+Installed regressions compare expanded Word names and normalized structural
+values against python-docx1.2.0, including heading styles, run formatting,
+highlight and page breaks. Empty lexical text nodes do not change logical
+text. Stream save/reopen, malformed binary results, short writes and I/O
+failures retain source and held-owner checks. Signed five-kind forms retain filled
+values and valid complete reports through stream save/reopen. F238-created
+paragraph, table, cell and section owners follow current form and Signing
+publication, including form-retired runs and Signing/no-op survivors. Tuple snapshot protocols and
+both first-page compatibility names have explicit controls. Direct imports from
+`rdocx.enum.section` require all pinned enum values and alias identities, strict
+positive consumers and rejecting wrong-value or missing-member consumers. Fresh paired
+wheel identities, strict typing and stubtest qualify actual installed members.
+The complete Word suite and focused Presentation pointer test form the feature
+gate, with both full family suites repeated over the integrated sprint union.
+
 ## Integrated Python compatibility qualification
 
 The immutable corpus contains100 scripts,49 Word and51 PowerPoint, with

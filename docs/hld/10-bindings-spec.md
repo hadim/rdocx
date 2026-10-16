@@ -216,7 +216,7 @@ p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 r = p.add_run(" world")
 r.font.bold = True
 r.font.size = Pt(18)
-doc.add_picture("img.png", width=Inches(2))   # height inferred by oxml-media
+doc.add_picture("img.png", width=Inches(2), height=Inches(1))
 doc.save("out.docx")
 doc.save_pdf("out.pdf")                        # documented as an rdocx extension
 ```
@@ -251,6 +251,47 @@ doc.save_pdf("out.pdf")                        # documented as an rdocx extensio
   to `XmlError`, layout failures map to `LayoutError`, and the shared stale
   domain error maps to `StaleElementError`. `oxml-py-support` therefore remains
   independent of any Python base class.
+
+Word paragraph creation accepts empty text and an optional resolved paragraph
+style. `add_heading` resolves Title or Heading1 through Heading9, and
+`add_page_break` stages its paragraph and page-break run together. Table style
+creation follows the existing checked table-style resolver. Validation and
+returned-owner allocation finish on a candidate before publication. Missing
+list styles name explicit numbering and style providers without changing the
+default template. Run bold, italic and underline aliases share `run.font`'s
+owner validation and tri-state behavior.
+
+Document construction/open accept binary seekable streams as well as paths.
+Save serializes fully before writing to a binary stream, detects short writes
+and preserves caller stream ownership. I/O errors propagate. Picture streams
+reuse native byte admission. Supplying only one picture dimension refuses with
+the explicit width-and-height alternative. Direct-body paragraph insertion
+resolves the physical body index. Hyperlink anchor=Paragraph refuses with
+explicit add_bookmark/add_internal_hyperlink guidance. Cell and related-story insertion refuse with
+the supported story or document authoring path.
+
+`styles` is an immutable tuple subtype containing frozen Style snapshots.
+Integer indexing, slicing, iteration and equality retain tuple behavior, with
+slices returning ordinary tuples. String indexing raises a first-line
+`set_style` pointer. Exact builtin tuple type identity is outside this contract.
+Frozen Section header/footer/first-page properties name the live
+`document.section(snapshot.ordinal)` alternative. `add_section` names native
+insert/update operations without promising python-docx section cloning.
+Table column compatibility names refuse with `insert_column`,
+`set_column_width`, `grid_widths` and `cell.width` alternatives. Paragraph
+`_element` and Presentation `_sldIdLst` name `remove_content` and
+`slides.remove` respectively, without exposing lxml mutation.
+
+The `rdocx.enum.text` module defines bounded `WD_BREAK_TYPE`/`WD_BREAK` and
+`WD_COLOR_INDEX`. The concrete `rdocx.enum.section` module defines
+`WD_SECTION_START`/`WD_SECTION` and `WD_ORIENTATION`/`WD_ORIENT` with pinned
+python-docx numeric values and identity-preserving aliases. Its inline annotations
+provide the same direct import path at runtime and under strict typing. These
+constants do not add XML conversion methods or section-cloning semantics. The
+table module's `WD_ALIGN_VERTICAL` aliases `WD_CELL_VERTICAL_ALIGNMENT` by identity.
+`Font.highlight_color` maps the supported color-index values to native Word
+highlight names and clears with None. Other break forms retain named
+line/page/column alternatives.
 
 ## Python Word formatting and checked list publication
 

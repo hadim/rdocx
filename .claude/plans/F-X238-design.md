@@ -1,6 +1,6 @@
 # F-X238, Restore python-docx Word names from the first-draft corpus
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S94
 **Size**: L
 **Depends on**: none
@@ -33,7 +33,7 @@ The immutable tbl_merge_cells.py:2 has a stale divergence token set_cell_grid_sp
 
 ### Source-safe binding changes and concrete signatures
 
-Keep every existing native Rust signature and default unchanged. Implement in existing binding/Python files only. The current existing-file plan proposes no new product file, module object, crate, trait, generic parameter, feature or dependency. A separate reviewable one-file enum.section exception is prepared privately and cannot be adopted without an affirmative permission answer. Reuse existing checked publication helpers rather than publishing an object and then applying its style in a second transaction.
+Keep every existing native Rust signature and default unchanged. Implement in existing binding/Python files, with the one explicitly user-approved new file crates/rdocx-py/python/rdocx/enum/section.py. The user answered "both approved" on2026-10-16, authorizing this prepared module exception. No additional file, crate, trait, generic parameter, feature or dependency is authorized. Reuse existing checked publication helpers rather than publishing an object and then applying its style in a second transaction.
 
 Proposed Python-facing signatures, with ordinary existing calls preserved:
 
@@ -63,7 +63,7 @@ Document.add_section(start_type=None), Table.add_column(width), Table.columns an
 | insert_paragraph_before: doc_insert_paragraph_before | Support live same-document direct-body paragraphs through document.insert_paragraph at document.rs:9479 after physical content-index resolution. Apply optional style on the candidate. Cell/related/unknown owners refuse before mutation, naming supported story authoring or Document.insert_paragraph with the actual direct-body limitation. Do not reinterpret recursive paragraph indices as body indices. |
 | add_page_break: sec_page_break | Stage one paragraph and page-break run together using Run.add_break at run.rs:313 and native BreakKind at crates/rdocx/src/run.rs:16,488. Return a bound Paragraph only after prepared publication. |
 | frozen Section.header/footer/different_first_page_header_footer and first_page_header: hf_header_text, hf_footer_text, hf_footer_page_number, hf_different_first_page | Preserve Document.sections snapshot semantics. Add explicit refused compatibility getters/setter naming document.section(snapshot.ordinal), whose existing header, footer, first_page_header and flag are at document.rs:1752,1772,1760,1469. The exact first-page script assigns the flag before touching first_page_header, so independently test both names rather than stopping at its first failure. |
-| enum.section WD_SECTION/WD_ORIENT and add_section: sec_add_section, plus outside-corpus name | Two concrete alternatives await the module/file permission question below. The current allowed fallback aliases the existing enum.text module object from enum/__init__.py and places declarations in existing enum/text.py. The cleaner one-file proposal is privately prepared at /private/tmp/S94-section-proposal/section.py, targeting enum/section.py only if separately approved. Never create a synthetic module or unapproved product file. Document.add_section explicitly refuses with a pointer to document.insert_section(len(document.sections)) then document.update_section(..., break_type=...). Native insert_section at document.rs:30237,30260 inherits resolved geometry only, which is not permission to promise python-docx's section-cloning policy. Preserve native final-section ownership and opaque source. |
+| enum.section WD_SECTION/WD_ORIENT and add_section: sec_add_section, plus outside-corpus name | Use the explicitly approved concrete enum/section.py module for WD_SECTION_START/WD_SECTION and WD_ORIENTATION/WD_ORIENT, with the exact pinned numeric members and identity aliases. Remove their temporary declarations from enum/text.py and remove its runtime sys.modules alias from enum/__init__.py. Inline annotations must qualify the exact direct submodule import under strict mypy. No synthetic module or duplicate enum classes. Document.add_section explicitly refuses with a pointer to document.insert_section(len(document.sections)) then document.update_section(..., break_type=...). Native insert_section at document.rs:30237,30260 inherits resolved geometry only, which is not permission to promise python-docx's section-cloning policy. Preserve native final-section ownership and opaque source. |
 | WD_BREAK and Run.add_break(enum): sec_run_add_break | Add the bounded enum in existing enum/text.py and accept its line/page/column values through run.rs:313 without changing supported strings. Other enum break forms refuse with line/page/column alternatives. |
 | WD_COLOR_INDEX and Font.highlight_color: fmt_highlight_color | Include both the enum import and the property, not an import-only fix. Map supported pinned enum values to existing Font.highlight names at formatting.rs:618,623. None clears only the selected property. Unsupported values name font.highlight with its supported colors. Assert expanded Word highlight names and values after reopen. |
 | WD_ALIGN_VERTICAL: tbl_row_height_and_valign | An identity-preserving alias of existing WD_CELL_VERTICAL_ALIGNMENT in enum/table.py:15. Do not add another conversion policy. |
@@ -72,6 +72,8 @@ Document.add_section(start_type=None), Table.add_column(width), Table.columns an
 | add_picture(width only): pic_add_picture_width, pic_centered_picture | Keep existing native admission at crates/rdocx/src/document.rs:20799. Refuse with an explicit supported add_picture(..., width=..., height=...) alternative rather than introducing new sizing semantics in a binding-only story. Native metadata/probe behavior for both omitted dimensions is unchanged. Record this residual against the same original issue contract. |
 | Table.add_column, columns/Column.width: tbl_add_column, tbl_column_widths | Add actionable refusal surfaces naming existing Table.insert_column(index, before=...), set_column_width(column,width), grid_widths and cell.width. Existing providers are table.rs:1160,1048,1030,2491. An empty zero-column grid needs the explicit Document.add_table(rows, cols) construction alternative rather than an invalid insertion index. Do not fabricate Column objects or change merged-grid authority. |
 | add_table(style=...): tbl_style_and_alignment | Resolve/ensure the same existing built-in table style and type rules as table.rs:679 on the candidate before document.rs:9413 publishes the new table. Return only the prepared table owner. |
+
+The exact link_internal_anchor script also passes anchor=heading to Paragraph.add_hyperlink after heading creation. Admit that keyword only to refuse before mutation with document.add_bookmark and paragraph.add_internal_hyperlink guidance. Automatic Paragraph-to-bookmark inference is outside the native-reuse contract.
 
 Existing names not listed retain their behavior. Validate text, enum/style and unit operands before source access that could publish. Read-only properties and no-op aliases must not allocate package nodes or revisions. Expanded names, not prefix spelling or local-name search, decide structured assertions. Unrelated namespace declarations, relationships, source children and source order remain preserved.
 
@@ -89,6 +91,12 @@ Change the actual getter in existing document.rs:7571, retaining `fn styles<'py>
 
 Keep public stub `Document.styles -> tuple[Style, ...]` at `_rdocx.pyi:1067`. No stub-only public helper class or extension export is introduced. Installed tests assert `isinstance(styles, tuple)`, actual private subtype construction, unchanged snapshot contents after subsequent document edits, all tuple protocols and the exact string-index pointer. Strict typing and installed stubtest qualify the public tuple annotation and exports without new ignores. The exact builtin type changes, which HLD10 records explicitly. No claim of exact `type(styles) is tuple` compatibility is made.
 
+### Integrated-prefix reconciliation
+
+The original claim Base remains a644dd9443346223e0003066bbfd33dc7937e3c7. ResumePrefix is55144ff81073f538544c3093404bba0f87f1ef55. Original dirty intent and untracked section/reviews are retained in stash652e0e3d2bf9d9cd4a5f1d1fa006c39c6706a2c2 and a private hashed snapshot. Reconcile only this feature against the prefix, preserving current F239 size/notes, F241 FormValues, F240 Signing/report/verify and ZIP9, and F247 math. Historical source qualifications do not qualify this union. Independent microscope compares the resumed HEAD while retaining the original intent and claim provenance.
+
+Existing parity regressions additionally qualify F238-created paragraph/table/cell/section owner survival through current form operations and Signing. Run authority retires on actual form mutation and survives certified Signing and exact no-op. A signed five-kind form package must save/reopen through BytesIO with valid complete reports and filled values. Short writes leave package bytes, signature validity and held paragraph authority unchanged, without promising rollback of the caller stream.
+
 ### Feature source leases
 
 F-X238 owns the Word binding document/paragraph/run/formatting/table files, existing Word enum/package/stub carriers and Word test_python_docx_parity.py/typing_smoke.py. Its third divergence uses existing PowerPoint slide.rs and documented-example/typing carriers. F-X247 owns separate native math/conversion and Word test_core.py math controls in wave1, with no binding API, stub or native PPT edit lease.
@@ -99,13 +107,13 @@ F-X239 receives Word formatting.rs and parity tests after F-X238. It owns PPT no
 
 - Replacing frozen sections/styles with silently mutable live proxies, which changes established ownership and snapshots.
 - Adding default list/template semantics or image sizing behavior through Python wrappers, outside the native-reuse contract.
-- A synthetic section module or unapproved product file. A concrete proper-file exception is prepared privately below and remains blocked until an affirmative answer.
+- A synthetic section module or runtime-only alias. The user-approved section.py provides the actual direct runtime and typed import path.
 - Editing the immutable corpus, treating needs as automatic acceptance, regressing working Cell.merge or claiming raw full-runner green after its stale marker fails.
 - Publishing a paragraph/table before style or returned-owner allocation succeeds, which would expose partial mutation on refusal.
 
 ## Test plan
 
-The **test gate** is **regression**, verbatim from the backlog. Pinned differential and installed-artifact checks below are additional riders, not a replacement gate. Keep F-X238 Word additions in existing test_python_docx_parity.py and typing_smoke.py. Lease existing PPT test_documented_examples.py and typing_smoke.py for the cross-family divergence. F-X247 owns the separate Word test_core.py lane during wave1. No new tests/ binary or product file.
+The **test gate** is **regression**, verbatim from the backlog. Pinned differential and installed-artifact checks below are additional riders, not a replacement gate. Keep F-X238 Word additions in existing test_python_docx_parity.py and typing_smoke.py. Lease existing PPT test_documented_examples.py and typing_smoke.py for the cross-family divergence. F-X247 owns the separate Word test_core.py lane during wave1. No new tests/ binary. The only new product file is the explicitly approved enum/section.py.
 
 | Category | Proposed existing-file test case | Asserts |
 |---|---|---|
@@ -137,7 +145,7 @@ Apply the canonical .claude/skills/risk-routing.md and differential-testing.md.
 - External oracle comparison: pin python-docx==1.2.0 and python-pptx==1.0.2, record actual tool/interpreter/native producer identities and unchanged source bodies, keep F-X211 corpus/metric separate.
 - Parser/serializer-adjacent binding authoring: read HLD04 checked publication and HLD06 public facade/source order. Existing native providers write all OOXML. Qualify namespace aliases/default namespaces, complete expanded-name structural assertions, opaque byte preservation, order and failure atomicity. No local-name-only XML owner admission.
 - Image/media behavior: reuse current native bounds/admission, no new dimensions or default template render behavior. Deterministic mode for any existing rendering check and all baseline checks.
-- New file/module row: the proposal creates no product file or module object. Existing-module import alias versus the separately proposed proper-file exception, and the tuple subtype, are explicitly documented compatibility boundaries. Only the section-file exception awaits user permission. Neither is implicit permission for a new module/file. No new trait or generic exists to justify.
+- New file/module row: the user explicitly approved the prepared enum/section.py exception on2026-10-16. Qualify its packaged membership, runtime import, exact enum values/alias identities and strict direct-import positive and negative consumers. Remove the temporary enum.text declarations and runtime-only alias. No other new product file, trait or generic is authorized.
 
 Semver: existing native Rust signatures remain unchanged. Python aliases are additive. Exact-type identity of styles would change from builtin tuple to a tuple subtype if approved, while immutable ordering/index/snapshot behavior remains. Previously bare missing-name/import errors intentionally become named refusals. These compatibility boundaries require explicit documentation and tests, not an unqualified drop-in claim.
 
@@ -147,19 +155,19 @@ Expected all49 existing entries and shared decoded pixel baselines unchanged. No
 
 ## Implementation checklist
 
-- [ ] Approve all five S94 designs after S93 close and S94 opening, including the selected concrete choices and pending section-file permission boundary below.
-- [ ] Acquire actual existing-file leases and preserve current worktree/cache ownership.
-- [ ] Freeze authenticated122-file inputs and explicit issue-name inventory without copying a second canonical corpus/tracker.
-- [ ] Add actual old-artifact RED and independent saved-file/refusal controls to existing test carriers.
-- [ ] Implement selected aliases on prepared native candidates and named refusal paths, including stream save, highlight property and first-page header.
-- [ ] Preserve exact three divergence tokens and immutable raw/stale-merge reports.
-- [ ] Update existing exports/stubs and run pinned differential, fresh installed, typing and applicable risk checks.
-- [ ] Complete independent microscope with zero defects and zero smells, scoped verify and structured handoff. Final integrated full gate and sprint review remain later orchestration steps.
+- [x] Approve all five S94 designs after S93 close and S94 opening. The user explicitly approved the prepared section.py file exception on2026-10-16.
+- [x] Acquire actual existing-file leases and preserve current worktree/cache ownership.
+- [x] Freeze authenticated122-file inputs and explicit issue-name inventory without copying a second canonical corpus/tracker.
+- [x] Add actual old-artifact RED and independent saved-file/refusal controls to existing test carriers.
+- [x] Implement selected aliases on prepared native candidates and named refusal paths, including stream save, highlight property and first-page header.
+- [x] Preserve exact three divergence tokens and immutable raw/stale-merge reports.
+- [x] Update existing exports/stubs and run pinned differential, fresh installed, typing and applicable risk checks.
+- [x] Complete independent microscope with zero defects and zero smells, scoped verify and structured handoff. Final integrated full gate and sprint review remain later orchestration steps.
 
 ## Open questions
 
 No unresolved blocking product question remains. The orchestrator approves the concrete approach and risk riders in this plan under the authorized S94 scope. Native and external controls are future gates until actually executed.
-The immutable tuple-subtype getter bridge and separate immutable-runner/independent requirement classification are approved. The original stale merge-marker failure stays visible. The approved implementation uses declarations in existing enum/text.py and an alias of that existing module object from existing enum/__init__.py. Creation of enum/section.py is outside the approved implementation until the user affirmatively answers the separate file-permission question. No answer or elapsed time grants that permission. A later affirmative answer permits the specifically prepared one-file refinement, with the same enum values/import contract and explicit plan checkpoint.
+The immutable tuple-subtype getter bridge and separate immutable-runner/independent requirement classification are approved. The original stale merge-marker failure stays visible. The user answered "both approved" on2026-10-16, expressly authorizing the prepared enum/section.py file and the separately coordinated ZIP migration. F-X238 adopts only the section-file refinement here. Its concrete module replaces the temporary enum.text declarations and runtime alias while retaining the seven pinned enum values and identity aliases. The new section.py inline annotations provide typing, so no new stub file is needed. Review D2 remains unresolved until actual strict direct-import checks and independent review qualify it. Fresh whole-feature qualification follows reconciliation with integrated forms, math, notes, signing and ZIP migration source.
 
 ## Approved sprint waves and exclusive resources
 
