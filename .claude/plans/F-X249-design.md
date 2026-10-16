@@ -1,6 +1,6 @@
 # F-X249, Set typed content control values as Word does
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95
 **Size**: M
 **Depends on**: F-X241
@@ -75,13 +75,13 @@ Expect all 49 shared hashes and seven deterministic pixels unchanged. Native typ
 
 ## Implementation checklist
 
-- [ ] Preserve reporter and establish actual S94 baseline outcomes.
-- [ ] Acquire independent Word-produced date/list controls and resolve the finite date convention.
-- [ ] Normalize selected typed values before any publication.
-- [ ] Apply qualified placeholder/date metadata and bound scalar atomically.
-- [ ] Add individual Python KeyError/ValueError while preserving bulk/native contracts.
-- [ ] Revise named stale expectations and generate new successor public artifacts.
-- [ ] Qualify signing, no-op/refusal owners, differential and scoped riders, microscope and handoff.
+- [x] Preserve reporter and establish actual S94 baseline outcomes.
+- [x] Acquire independent Word-produced date/list controls and resolve the finite date convention.
+- [x] Normalize selected typed values before any publication.
+- [x] Apply qualified placeholder/date metadata and bound scalar atomically.
+- [x] Add individual Python KeyError/ValueError while preserving bulk/native contracts.
+- [x] Revise named stale expectations and generate new successor public artifacts.
+- [x] Qualify signing, no-op/refusal owners, differential and scoped riders, microscope and handoff.
 
 ## Open questions
 

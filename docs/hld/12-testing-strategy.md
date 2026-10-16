@@ -3285,6 +3285,32 @@ required, and no binary fixture enters the repository.
 
 ## Binding tests
 
+Word typed control qualification compares independent saved-package XML with
+actual Word16.114 build16.114.26101123 selected-control edits and repair-free
+disk reopen. Explicit text, date and dateTime mappings, yyyy-MM-dd and
+dd/MM/yyyy display, declared dropdown display and binding, and qualified
+placeholder removal are separate observations. Selected date-only fullDate
+at UTC midnight is a deterministic API policy. Native unchanged-save timezone
+rewrites do not establish a global normalization rule.
+
+Schema-qualified absent mapping uses formatted text while Word rewrites the
+absent element to dateTime and produces a timezone-less bound timestamp.
+Absent val uses the schema text default without a separately observed native
+claim. Value-only dropdown display falls back to value under Part1 clause
+17.5.2.22, while observed native selection produced five spaces and an empty
+bound scalar. Tests retain these explicit divergences. Native lastValue cache
+updates are observed but not part of selected product mutation. Opaque native
+property losses do not authorize product losses.
+
+Focused controls cover leap years and finite formats, empty versus absent
+attributes, namespace aliases and shadows, qualified lookalikes, exact no-ops,
+metadata-only mutation, late binding failures, held-owner retirement and
+signatures. Individual KeyError and local InvalidValue-to-ValueError mapping
+have bulk and unrelated-error negative controls. Fresh retained public outputs
+use independent display, fullDate and relationship-resolved scalar observers,
+with actual mutated output packages proving observer sensitivity. Historical
+reporter bodies, native packages and predecessor artifacts remain immutable.
+
 Word HTML and CommonMark import controls exercise fresh installed constructors,
 file reads, immutable diagnostics and body, cell, header and footer insertion.
 Foreign and stale owners, invalid resources and an actual diagnostic allocation

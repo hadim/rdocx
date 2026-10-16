@@ -6,7 +6,7 @@ use oxml_py_support::{
     ContentPath, PathSeg, PreparedRevision, RevisionCounter, RevisionScope, RevisionState,
     StaleElementError, revision_to_pyerr,
 };
-use pyo3::exceptions::{PyIndexError, PyOverflowError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyKeyError, PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{
     PyAny, PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyMapping, PyString, PyTuple,
@@ -5754,13 +5754,26 @@ impl PyDocument {
         value: &str,
         by_tag: bool,
     ) -> PyResult<usize> {
+        let missing = if by_tag {
+            self.inner.content_controls_by_tag(name).is_empty()
+        } else {
+            self.inner.content_controls_by_alias(name).is_empty()
+        };
+        if missing {
+            return Err(PyKeyError::new_err(name.to_owned()));
+        }
         let mut candidate = self.inner.clone_for_staging();
         let count = if by_tag {
             candidate.set_content_control_value_by_tag(name, value)
         } else {
             candidate.set_content_control_value_by_alias(name, value)
         }
-        .map_err(|e| rdocx_to_pyerr(py, e))?;
+        .map_err(|error| match error {
+            rdocx::Error::Oxml(rdocx_oxml::OxmlError::InvalidValue(message)) => {
+                PyValueError::new_err(message)
+            }
+            other => rdocx_to_pyerr(py, other),
+        })?;
         self.publish_api_candidate(py, candidate, "Document.set_content_control_value")?;
         Ok(count)
     }

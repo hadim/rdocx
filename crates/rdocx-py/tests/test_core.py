@@ -7391,6 +7391,78 @@ def _fx241_five_kind_document():
     return _replace_document_body(rdocx.Document(), body + _fx241_legacy_text() + '<w:sectPr/>')
 
 
+def test_fx249_individual_errors_noops_and_bulk_contracts():
+    import rdocx
+    import xml.etree.ElementTree as ET
+    w = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    body = _fx241_control('plain', '<w:text/>', 'same', alias='Plain alias')
+    body += _fx241_control('date', '<w:date w:fullDate="2026-10-31T00:00:00Z"><w:dateFormat w:val="dd/MM/yyyy"/></w:date>', '31/10/2026')
+    body += _fx241_control('choice', '<w:dropDownList><w:listItem w:displayText="Draft" w:value="draft"/><w:listItem w:displayText="Final" w:value="final"/></w:dropDownList>', 'Draft')
+    body += '<w:p><w:r><w:t>held</w:t></w:r></w:p><w:sectPr/>'
+    document = _replace_document_body(rdocx.Document(), body)
+    paragraph, section = document.paragraphs[-1], document.section(0)
+    run = paragraph.runs[0]
+    before = document.to_bytes()
+    assert document.set_content_control_value_by_tag('plain', 'same') == 1
+    assert document.set_content_control_value_by_alias('Plain alias', 'same') == 1
+    assert document.set_content_control_value_by_tag('date', '2026-10-31') == 1
+    assert document.bind_content_controls({'missing': 'ignored', 'plain': 'same'}) == 1
+    assert document.to_bytes() == before
+    for method in (document.set_content_control_value_by_tag, document.set_content_control_value_by_alias):
+        with pytest.raises(KeyError):
+            method('missing', 'value')
+        for value in (None, 12, True):
+            with pytest.raises(TypeError):
+                method('plain', value)
+    for tag, value in [('date', '2026-02-29'), ('choice', 'Archived'), ('plain', '\x01')]:
+        with pytest.raises(ValueError):
+            document.set_content_control_value_by_tag(tag, value)
+    with pytest.raises(rdocx.XmlError, match='Draft|Final'):
+        document.bind_content_controls({'plain': 'early', 'choice': 'Archived'})
+    assert document.to_bytes() == before
+    assert paragraph.text == 'held' and run.text == 'held' and section.xml
+    assert document.set_content_control_value_by_tag('choice', 'final') == 1
+    assert document.content_controls()[2].text == 'Final'
+    with pytest.raises(rdocx.StaleElementError):
+        _ = paragraph.text
+
+    # A successful metadata-only fill is a real conservative publication.
+    placeholder = _fx241_control('plain', '<w:showingPlcHdr/><p:showingPlcHdr xmlns:p="urn:producer"/><w:text/>', 'same')
+    document = _replace_document_body(rdocx.Document(), placeholder + '<w:p><w:r><w:t>held</w:t></w:r></w:p><w:sectPr/>')
+    paragraph = document.paragraphs[-1]
+    key, cert = _fx240_material()
+    document.sign(key, cert)
+    before = document.to_bytes()
+    assert document.set_content_control_value_by_tag('plain', 'same') == 1
+    assert document.to_bytes() != before
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as package:
+        root = ET.fromstring(package.read('word/document.xml'))
+    assert root.find('.//' + w + 'showingPlcHdr') is None
+    assert root.find('.//{urn:producer}showingPlcHdr') is not None
+    assert not document.verify_signatures()[0]['cryptographically_valid']
+    with pytest.raises(rdocx.StaleElementError):
+        _ = paragraph.text
+
+    # Missing external bindings and unsupported kinds retain their generic family.
+    for owner, tag in [(_fx241_bound_document(missing=True), 'bound'),
+                       (_replace_document_body(rdocx.Document(), _fx241_control('picture', '<w:picture/>') + '<w:sectPr/>'), 'picture')]:
+        before = owner.to_bytes()
+        with pytest.raises(rdocx.RdocxError) as caught:
+            owner.set_content_control_value_by_tag(tag, 'value')
+        assert not isinstance(caught.value, (KeyError, ValueError))
+        assert owner.to_bytes() == before
+
+    # Selected malformed InvalidValue payloads use the individual local mapping.
+    malformed = _fx241_control('bad', '<w14:checkbox xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w14:checkedState w14:val="not-hex"/></w14:checkbox>')
+    owner = _replace_document_body(rdocx.Document(), malformed + '<w:sectPr/>')
+    before = owner.to_bytes()
+    with pytest.raises(ValueError, match='Unicode scalar'):
+        owner.set_content_control_value_by_tag('bad', 'true')
+    with pytest.raises(rdocx.XmlError, match='Unicode scalar'):
+        owner.bind_content_controls({'bad': 'true'})
+    assert owner.to_bytes() == before
+
+
 def test_fx241_python_fill_all_five_reported_form_kinds():
     import rdocx
     document = _fx241_five_kind_document()
@@ -7408,7 +7480,7 @@ def test_fx241_python_fill_all_five_reported_form_kinds():
         result.value = "mutate"
     reopened = rdocx.Document.from_bytes(document.to_bytes())
     controls = {item.tag: item for item in reopened.content_controls()}
-    assert [controls[key].text for key in ("plain", "choice", "date")] == ["Ada", "two", "2026-10-16"]
+    assert [controls[key].text for key in ("plain", "choice", "date")] == ["Ada", "Two", "2026-10-16"]
     assert reopened.legacy_form_fields()[0].value == "filled"
     _fx241_assert_five_kind_source(reopened.to_bytes())
 
@@ -7424,7 +7496,7 @@ def _fx241_assert_five_kind_source(raw):
     assert '☒' in ''.join(check.itertext())
     fonts = check.find('.//w:rFonts', ns)
     assert fonts.get(w+'ascii') == fonts.get(w+'hAnsi') == 'MS Gothic'
-    assert root.find('.//w:date', ns).get(w+'fullDate') == '2026-09-15T00:00:00Z'
+    assert root.find('.//w:date', ns).get(w+'fullDate') == '2026-10-16T00:00:00Z'
     assert root.find('.//w:dateFormat', ns).get(w+'val') == 'yyyy-MM-dd'
     assert root.find('.//w:dropDownList', ns).get(w+'lastValue') == 'one'
     assert [x.get(w+'value') for x in root.findall('.//w:dropDownList/w:listItem', ns)] == ['one', 'two']

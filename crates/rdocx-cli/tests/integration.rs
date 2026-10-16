@@ -6727,11 +6727,11 @@ fn fx241_cli_fill_five_kinds_preserves_order_source_and_old_tag_contract() {
         .iter()
         .map(|x| x.text())
         .collect::<Vec<_>>();
-    assert_eq!(texts, ["Ada", "☒", "two", "2026-10-16"]);
+    assert_eq!(texts, ["Ada", "☒", "Two", "2026-10-16"]);
     let xml = package_part_text(&output, "/word/document.xml");
     assert!(xml.contains("w14:checked w14:val=\"1\""));
     assert!(xml.contains("MS Gothic"));
-    assert!(xml.contains("2026-09-15T00:00:00Z"));
+    assert!(xml.contains("2026-10-16T00:00:00Z"));
     assert!(xml.contains("yyyy-MM-dd"));
     assert!(xml.contains("w:default w:val=\"filled\""));
     assert_eq!(
@@ -6752,6 +6752,93 @@ fn fx241_cli_fill_five_kinds_preserves_order_source_and_old_tag_contract() {
     ]);
     assert_eq!(conflict.status.code(), Some(2));
     assert!(!output.exists());
+}
+
+#[test]
+fn fx249_fill_typed_values_match_python_after_reopen() {
+    let temp = TempWorkspace::new("fx249-typed");
+    let input = temp.path.join("input.docx");
+    let output = temp.path.join("output.docx");
+    let values = temp.path.join("values.json");
+    let text = "<w:p><w:r><w:t>old</w:t></w:r></w:p>";
+    let binding = r#"<w:dataBinding w:storeItemID="{11111111-1111-1111-1111-111111111111}" w:xpath="/root/date"/>"#;
+    let date = format!(
+        r#"{binding}<w:showingPlcHdr/><p:showingPlcHdr/><w:date w:fullDate="2026-09-15T00:00:00Z"><w:dateFormat w:val="dd/MM/yyyy"/><w:storeMappedDataAs w:val="date"/></w:date>"#
+    );
+    let body = [fx241_control("date", &date, text), fx241_control("choice", r#"<w:alias w:val="Choice alias"/><w:showingPlcHdr/><w:dropDownList><w:listItem w:displayText="Draft" w:value="draft"/><w:listItem w:displayText="Final" w:value="final"/></w:dropDownList>"#, text)].concat();
+    fx241_template(&input, &body);
+    let mut package = OpcPackage::open(&input).unwrap();
+    package.set_part(
+        "/customXml/data249.xml",
+        b"<root><date>old</date></root>".to_vec(),
+    );
+    package.set_part("/customXml/props249.xml", br#"<ds:datastoreItem xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml" ds:itemID="{11111111-1111-1111-1111-111111111111}"><ds:schemaRefs/></ds:datastoreItem>"#.to_vec());
+    package.get_or_create_part_rels("/word/document.xml").add(
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml",
+        "../customXml/data249.xml",
+    );
+    package
+        .get_or_create_part_rels("/customXml/data249.xml")
+        .add(
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps",
+            "props249.xml",
+        );
+    package.content_types.add_override(
+        "/customXml/props249.xml",
+        "application/vnd.openxmlformats-officedocument.customXmlProperties+xml",
+    );
+    package.save(&input).unwrap();
+    let before = fs::read(&input).unwrap();
+    fs::write(&values, r#"{"date":"2026-10-31","Choice alias":"final"}"#).unwrap();
+    assert_success(
+        &fx241_fill(&input, &values, &output),
+        "typed date/list fill",
+    );
+    let reopened = Document::open(&output).unwrap();
+    assert_eq!(
+        reopened
+            .content_controls()
+            .iter()
+            .map(|control| control.text())
+            .collect::<Vec<_>>(),
+        ["31/10/2026", "Final"]
+    );
+    let xml = package_part_text(&output, "/word/document.xml");
+    assert!(xml.contains("w:fullDate=\"2026-10-31T00:00:00Z\""));
+    assert!(!xml.contains("<w:showingPlcHdr"));
+    assert!(xml.contains("<p:showingPlcHdr/>"));
+    assert_eq!(
+        package_part_text(&output, "/customXml/data249.xml"),
+        "<root><date>2026-10-31</date></root>"
+    );
+    assert_eq!(
+        package_part_text(&output, "/customXml/opaque.xml"),
+        "<opaque exact='yes'/>"
+    );
+    assert_eq!(fs::read(&input).unwrap(), before);
+    fs::remove_file(&output).unwrap();
+    for invalid in [
+        r#"{"date":"2026-10-31","choice":"Archived"}"#,
+        r#"{"date":"2026-02-29","choice":"final"}"#,
+    ] {
+        fs::write(&values, invalid).unwrap();
+        let failed = fx241_fill(&input, &values, &output);
+        assert!(!failed.status.success());
+        assert!(!output.exists());
+        assert_eq!(fs::read(&input).unwrap(), before);
+    }
+    // A late binding refusal cannot publish an earlier selected display.
+    let mut package = OpcPackage::open(&input).unwrap();
+    package.set_part(
+        "/customXml/data249.xml",
+        b"<root><other>old</other></root>".to_vec(),
+    );
+    package.save(&input).unwrap();
+    let before = fs::read(&input).unwrap();
+    fs::write(&values, r#"{"choice":"final","date":"2026-10-31"}"#).unwrap();
+    assert!(!fx241_fill(&input, &values, &output).status.success());
+    assert!(!output.exists());
+    assert_eq!(fs::read(&input).unwrap(), before);
 }
 
 #[test]

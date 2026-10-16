@@ -1904,6 +1904,16 @@ Document import closes the native fragment dependency graph before publication. 
 
 Checkbox admission and state selection use expanded Word2010 names, including qualified aliases and the default namespace. Only the selected qualified checked value changes. Foreign same-name elements, attributes, namespace declarations and opaque child order remain source-owned. The selected Unicode scalar and state font are admitted together before any matching control changes. Forbidden XML text and late invalid state values refuse the entire operation.
 
+Selected text, date and dropdown control values are prepared together with
+bound scalars before publication. Successful fills remove only the qualified
+Word showingPlcHdr property. Date fills update only the qualified fullDate
+attribute and preserve other metadata. Foreign lookalikes, opaque property
+slots and child order remain source-owned. Effective parser namespace context
+is separate from emitted declarations, including aliases and local shadows.
+Unselected controls do not gain declarations merely because their scope was
+read. Refusals and exact display, metadata and binding no-ops retain bytes.
+Dropdown lastValue remains producer-owned cache metadata.
+
 Validation probes for block content controls retain the complete effective
 namespace scope, including producer bindings needed by paraId and textId.
 Raw namespace declaration values are decoded once before entering the semantic

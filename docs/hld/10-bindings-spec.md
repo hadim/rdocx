@@ -3925,10 +3925,31 @@ Bind dictionaries validate all keys and values before staging. Both new Python
 mutations allocate returned Python values before prepared owner publication.
 Exact source no-ops preserve bytes and authority. Failed staging preserves live
 source and held owners. SDT scope remains main body with nested controls, while
-legacy inventory follows native supported related stories. Date/drop-down SDTs
-retain existing display and bound-string semantics with producer metadata,
-without new date parsing or item validation. These scalar form operations do
-not add form creation, live snapshot proxies or a second XML provider.
+legacy inventory follows native supported related stories. Individual tag and
+alias setters raise KeyError when their selector is missing. Selected native
+InvalidValue errors map locally to ValueError in those individual setters.
+Other error families and the generic bulk error mapping remain unchanged.
+Native missing selectors still return zero. Bind ignores unknown keys and
+retains tag-first alias fallback. Matched counts include exact no-ops. Strict
+fill keeps missing and duplicate rejection with ordered assignment counts.
+
+Date SDTs accept valid Gregorian YYYY-MM-DD values in years0001 through9999.
+The explicit display masks are yyyy-MM-dd and dd/MM/yyyy. Calendar absence,
+absent val and gregorian are admitted. Missing or unsupported masks, other
+calendars and ambiguous metadata refuse atomically. Selected fullDate uses
+canonical UTC midnight. Bound text uses the formatted display, date uses the
+ISO date and dateTime uses fullDate. An absent mapping element or val uses
+text semantics without adding metadata. Unselected date metadata is unchanged.
+
+Dropdown selection matches an exact declared value or display to one unique
+mapping. An absent displayText falls back to a present value. Empty attributes
+remain distinct from absence. Missing values, unknown items and conflicting
+mappings refuse before publication, with legal choices in the error. ComboBox
+retains free text. Successful fills clear only qualified Word placeholder
+metadata. Dropdown lastValue is preserved as producer-owned cache, so display
+and bound scalar parity do not promise every native cache field. These scalar
+form operations do not add form creation, live snapshot proxies or a second
+XML provider.
 
 Form publication preserves an owner only when independent exact physical-route
 maps identify one old and one candidate owner, the existing matcher agrees,
