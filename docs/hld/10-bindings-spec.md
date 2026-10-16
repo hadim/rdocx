@@ -4140,6 +4140,25 @@ Scoped alternate text-box replacement maps each selected logical paragraph or de
 
 ## PowerPoint Element XML surface
 
+Python save refuses a case-insensitive pdf destination before writing and names
+to_pdf. Authored changed slide dimensions must lie in the inclusive1to56 inch
+range, 914400through51206400 EMU. Exact retained imported values remain no-op,
+and changing one axis does not coerce the other. Changed horizontal or vertical
+flip flags on table and chart frames refuse before geometry materialization.
+Ordinary supported shape flips keep their established behavior.
+
+Table style selection accepts None, unchanged source, an existing built-in
+style or a uniquely defined qualified style in the actual deck style part.
+Braced GUID identity is case-insensitive without rewriting the selected spelling.
+Foreign lookalikes, absent styles and ambiguous or invalid style relationships
+refuse. Invalid imported values remain source-owned until explicitly changed.
+
+The finite XML diagnostic carrier exposes invalid_xml_child with actual part,
+path and message. Refused edits preserve package bytes, revision and held
+physical owners. The four source frontiers and inherited compatibility scope
+are the native admission contract, not a Python XML validator or a renderer
+whitelist.
+
 The exported Element exposes immutable xml:str and replace_xml(xml:str)->None.
 Paragraph, regular Run, Table, Cell, Shape, TextFrame, Slide, SlideLayout and
 SlideMaster expose element. Legacy Shape.xml remains bytes. Reads capture the
@@ -4181,6 +4200,12 @@ Word authored font input requires a bounded sfnt directory with the exact name
 tag before key derivation or native publication. Licensed valid faces keep
 existing input and snapshot behavior. A permissive external font parser's
 ability to load nameless bytes does not widen that authoring contract.
+
+PowerPoint CLI replacement maps require every pair without explicit expect to
+match at least once. Explicit expect0 remains valid. An absent selected font or
+face fails without publishing a pretend removal. Non-force font commands retain
+input/alias identity checks and no-overwrite staging while their existing-output
+messages do not recommend an unavailable force option.
 
 Both CLIs use font list, font embed, font remove and font settings. Embedding
 requires --license-authorized and --license-identity, accepts --name, --font

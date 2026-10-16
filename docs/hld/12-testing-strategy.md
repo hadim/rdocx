@@ -4415,6 +4415,23 @@ source provenance. An absent required focused input fails qualification.
 
 ## PowerPoint checked XML qualification
 
+Finite admission regressions cover all four reported owner frontiers, required
+particles, order and multiplicity before and after typed projection. Raw
+foreign children that a parser might discard cannot evade the preparse gate.
+Imported invalid inputs remain readable and receive explicit part/path
+validation diagnostics. Controls retain unique unchanged opaque source during
+valid scalar edits and reject copied, moved or rebound frontier exceptions.
+Namespace aliases, default namespaces, exact-once URI decoding, declaration-time
+Ignorable grants, blank/additive scope, sibling restoration and Choice Requires
+meaning have independent controls. Safe bounded storage counters qualify shared
+namespace and route storage without large allocation or elapsed-time claims.
+
+Local story readiness uses unique in-repo RED/GREEN tests and microscope.
+Complete ordinary installed suites, strict typing/stubs, original reporter
+markers and bodies, native PowerPoint controls and pinned external comparisons
+run once in the final sprint union. Pending native acceptance is never inferred
+from package inspection or passing local tests.
+
 Native controls exercise all nine owners and five shape variants with actual
 source-part relationships, qualified aliases, opaque inherited namespaces,
 model child sequence and save/reopen facts. Negative controls verify wrong

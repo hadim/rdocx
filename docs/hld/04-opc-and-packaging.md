@@ -2018,6 +2018,23 @@ contracts, and success JSON follows file publication.
 
 ## Checked PowerPoint XML transactions
 
+The finite admission gate checks both raw incoming XML spliced into its actual
+physical owning part and the typed candidate after parsing. Qualified shape-tree
+identity and the selected table, cell, body, paragraph or regular-run path locate
+the raw range without borrowing another owner's namespace authority. A parser
+cannot hide a newly invalid child by dropping or normalizing it before the gate.
+The owning part snapshot includes live typed edits and retained root scope.
+
+Only direct children of qualified sp, sld, prstGeom and text p at supported
+physical traversal frontiers receive the new grammar checks. Original opaque
+exceptions survive only at the same unique physical route and qualified
+enclosing shape identity, including enclosing group identities, with exact
+source and namespace/compatibility meaning. Whole-part replacement cannot
+transfer an exception by changing or swapping nonvisual shape IDs. Removing an invalid child can repair the
+source. Delegated payloads keep their existing providers, without a recursive
+unknown-element policy. Exact no-op precedes admission. The existing cloned
+transaction and relationship cleanup still publish once after all checks.
+
 Checked replacement resolves relationships from the selected physical owner
 part. Internal slide targets must be actual slide parts. Image targets must
 match their actual format and registered content type, with bounded complete

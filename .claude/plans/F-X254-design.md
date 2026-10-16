@@ -278,16 +278,16 @@ numeric catalog/README reconciliation and shared baseline authority.
 
 ## Implementation checklist
 
-- [ ] Reauthenticate current branch/Base, completed prerequisites and exact reporter/schema pins.
-- [ ] Establish actual current-prefix RED for named local behavior tests.
-- [ ] Add prepublication .pdf, selected dimension and graphic-frame flip refusals.
-- [ ] Resolve selected styles through existing74built-ins and actual qualified deck definitions.
-- [ ] Add the four finite schema frontiers with source/MC provenance and linear storage controls.
-- [ ] Expose finite imported XML diagnostics through the explicit existing enum carrier and Python mapping.
-- [ ] Reject implicit zero-match map pairs and absent CLI font removals atomically with truthful output wording.
-- [ ] Run only unique local GREEN regressions and scoped fast checks, reusing applicable observations.
-- [ ] Update exactly the HLD impact files before freeze, obtain independent zero-defect/zero-smell microscope.
-- [ ] Prepare the explicit sprint-final-acceptance handoff with named pending final checks, no delivery completion.
+- [x] Reauthenticate current branch/Base, completed prerequisites and exact reporter/schema pins.
+- [x] Establish actual current-prefix RED for named local behavior tests.
+- [x] Add prepublication .pdf, selected dimension and graphic-frame flip refusals.
+- [x] Resolve selected styles through existing74built-ins and actual qualified deck definitions.
+- [x] Add the four finite schema frontiers with source/MC provenance and linear storage controls.
+- [x] Expose finite imported XML diagnostics through the explicit existing enum carrier and Python mapping.
+- [x] Reject implicit zero-match map pairs and absent CLI font removals atomically with truthful output wording.
+- [x] Run only unique local GREEN regressions and scoped fast checks, reusing applicable observations.
+- [x] Update exactly the HLD impact files before freeze, obtain independent zero-defect/zero-smell microscope.
+- [x] Prepare the explicit sprint-final-acceptance handoff with named pending final checks, no delivery completion.
 - [ ] At integrated final gate, execute original reporter groups, complete installed/typing/stub/native/oracle/rider union once.
 - [ ] After actual final acceptance, write truthful delivery records and compatibility note, complete plan once.
 
