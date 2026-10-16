@@ -1571,6 +1571,15 @@ normalize once. Unchanged complex compatibility metadata retains raw value and
 resolved QName meaning, including unqualified Choice Requires. New unsupported
 complex metadata refuses explicitly. Namespace facts and ancestry routes use
 shared IDs and scope deltas rather than per-node copies of every ancestor.
+Compatibility traversal follows the existing provider: unsupported Choice
+branches retain opaque source, while the selected shape-tree Fallback receives
+its supported shape grammar checks, including nested AlternateContent reached
+through that Fallback. A root AlternateContent transition wrapper
+is delegated to the transition provider rather than counted as an ordinary
+slide child or flattened across mutually exclusive branches. Complex metadata
+still keeps its physical-owner, route and namespace custody. New, copied or
+reinterpreted compatibility metadata refuses. Unbound Requires prefixes remain
+invalid rather than acquiring guessed namespace authority.
 
 Ordinary imports retain malformed producer source. Validation reports finite
 frontier violations through InvalidXmlChild with part, path and message. The

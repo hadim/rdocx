@@ -1756,22 +1756,32 @@ fn ppt_xml_frontiers(source: &[u8], names: &mut PptXmlNames) -> Result<PptXmlFro
                         &names.values[uri],
                         &names.values[local],
                     );
+                    // Complex MC is a retained delegated provider, not an
+                    // ordinary typed shape branch. Its metadata is still
+                    // captured below for exact source/namespace custody.
                     modeled = p.modeled
                         && (order.is_some()
                             || names.values[p.uri] == A_NS
                                 && names.values[p.local] == "graphicData"
                                 && names.values[uri] == A_NS
                                 && names.values[local] == "tbl"
-                            || names.values[p.uri] == PPT_MC_NS
-                                && matches!(
-                                    names.values[p.local].as_str(),
-                                    "AlternateContent" | "Choice" | "Fallback"
-                                )
-                                && matches!(names.values[uri].as_str(), P_NS | PPT_MC_NS)
-                            || names.values[p.uri] == P_NS
+                            || (names.values[p.uri] == P_NS
                                 && matches!(names.values[p.local].as_str(), "spTree" | "grpSp")
+                                || names.values[p.uri] == PPT_MC_NS
+                                    && names.values[p.local] == "Fallback")
                                 && names.values[uri] == PPT_MC_NS
-                                && names.values[local] == "AlternateContent");
+                                && names.values[local] == "AlternateContent"
+                            || names.values[p.uri] == PPT_MC_NS
+                                && names.values[p.local] == "AlternateContent"
+                                && names.values[uri] == PPT_MC_NS
+                                && names.values[local] == "Fallback"
+                            || names.values[p.uri] == PPT_MC_NS
+                                && names.values[p.local] == "Fallback"
+                                && names.values[uri] == P_NS
+                                && matches!(
+                                    names.values[local].as_str(),
+                                    "sp" | "pic" | "graphicFrame" | "cxnSp" | "grpSp"
+                                ));
                     if p.modeled && ppt_xml_frontier(&names.values[p.uri], &names.values[p.local]) {
                         if let Some((rank, repeated)) = order {
                             if p.rank
@@ -1782,8 +1792,10 @@ fn ppt_xml_frontiers(source: &[u8], names: &mut PptXmlNames) -> Result<PptXmlFro
                                     Some("finite XML child order or multiplicity is invalid");
                             }
                             p.rank = Some(rank);
-                        } else if matches!(names.values[uri].as_str(), P_NS | A_NS)
-                            || !scope.ignorable.contains(&uri)
+                        } else if !(names.values[uri] == PPT_MC_NS
+                            && names.values[local] == "AlternateContent")
+                            && (matches!(names.values[uri].as_str(), P_NS | A_NS)
+                                || !scope.ignorable.contains(&uri))
                         {
                             violation = Some("unknown or misplaced direct XML child");
                         }
@@ -40219,6 +40231,81 @@ fn fx254_retained_choice_requires_keeps_meaning() {
     assert!(check_ppt_frontier_changes(&before, &before).is_ok());
     let after = fx254_slide_xml(body, r#"xmlns:x="urn:two""#);
     assert!(check_ppt_frontier_changes(&before, &after).is_err());
+}
+
+#[test]
+fn fx254_complex_mc_keeps_choice_opaque_and_checks_selected_fallback() {
+    let shape = r#"<p:sp><p:nvSpPr><p:cNvPr id="1"/></p:nvSpPr><p:spPr/></p:sp>"#;
+    let alternate = format!(
+        r#"<mc:AlternateContent><mc:Choice Requires="p14"><p:sp/></mc:Choice><mc:Fallback>{shape}</mc:Fallback></mc:AlternateContent>"#
+    );
+    let source = fx254_slide_xml(&alternate, r#"xmlns:p14="urn:unsupported-choice""#);
+    let mut names = PptXmlNames::default();
+    assert!(
+        ppt_xml_frontiers(&source, &mut names)
+            .unwrap()
+            .islands
+            .is_empty()
+    );
+    let changed = String::from_utf8(source.clone())
+        .unwrap()
+        .replace("<p:spPr/>", "<p:spPr/><a:bogus/>");
+    assert!(check_ppt_frontier_changes(&source, changed.as_bytes()).is_err());
+    let moved = String::from_utf8(source.clone())
+        .unwrap()
+        .replace("</p:spTree>", &format!("{alternate}</p:spTree>"));
+    assert!(check_ppt_frontier_changes(&source, moved.as_bytes()).is_err());
+    let rebound = String::from_utf8(source.clone())
+        .unwrap()
+        .replace("urn:unsupported-choice", "urn:reinterpreted-choice");
+    assert!(check_ppt_frontier_changes(&source, rebound.as_bytes()).is_err());
+    let transition = fx254_slide_xml("", r#"xmlns:p14="urn:unsupported-choice""#);
+    let transition = String::from_utf8(transition).unwrap().replace("</p:sld>", r#"<mc:AlternateContent><mc:Choice Requires="p14"><p:transition/></mc:Choice><mc:Fallback><p:transition/></mc:Fallback></mc:AlternateContent></p:sld>"#);
+    let mut names = PptXmlNames::default();
+    assert!(
+        ppt_xml_frontiers(transition.as_bytes(), &mut names)
+            .unwrap()
+            .islands
+            .is_empty()
+    );
+    let unbound = String::from_utf8(source)
+        .unwrap()
+        .replace(r#" xmlns:p14="urn:unsupported-choice""#, "");
+    assert!(ppt_xml_frontiers(unbound.as_bytes(), &mut PptXmlNames::default()).is_err());
+}
+
+#[test]
+fn fx254_nested_selected_fallback_keeps_frontier_checks() {
+    let shape = r#"<p:sp><p:nvSpPr><p:cNvPr id="1"/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>before</a:t></a:r></a:p></p:txBody></p:sp>"#;
+    let inner =
+        format!(r#"<mc:AlternateContent><mc:Fallback>{shape}</mc:Fallback></mc:AlternateContent>"#);
+    let outer = format!(
+        r#"<mc:AlternateContent><mc:Choice Requires="p14"><p:sp/></mc:Choice><mc:Fallback>{inner}</mc:Fallback></mc:AlternateContent>"#
+    );
+    let source = fx254_slide_xml(&outer, r#"xmlns:p14="urn:unsupported-choice""#);
+    assert!(
+        ppt_xml_frontiers(&source, &mut PptXmlNames::default())
+            .unwrap()
+            .islands
+            .is_empty()
+    );
+    let typed_edit = String::from_utf8(source.clone())
+        .unwrap()
+        .replace("before", "after");
+    assert!(check_ppt_frontier_changes(&source, typed_edit.as_bytes()).is_ok());
+    let changed = String::from_utf8(source.clone())
+        .unwrap()
+        .replace("<p:spPr/>", "<p:spPr/><a:bogus/>");
+    assert!(
+        check_ppt_frontier_changes(&source, changed.as_bytes()).is_err(),
+        "the actual selected nested Fallback remains a supported shape owner"
+    );
+    assert!(
+        !ppt_xml_frontiers(changed.as_bytes(), &mut PptXmlNames::default())
+            .unwrap()
+            .islands
+            .is_empty()
+    );
 }
 
 #[test]

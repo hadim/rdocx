@@ -26890,7 +26890,7 @@ fn rich_slide_xml() -> Vec<u8> {
         text_shape("fallback")
     );
     format!(
-        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:mc="{MC_NS}"><p:cSld name="Second in storage, first in order"><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>{}{picture}{table}{group}{connector}{alternate}</p:spTree></p:cSld></p:sld>"#,
+        r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:mc="{MC_NS}" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main"><p:cSld name="Second in storage, first in order"><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>{}{picture}{table}{group}{connector}{alternate}</p:spTree></p:cSld></p:sld>"#,
         text_shape("plain")
     )
     .into_bytes()
@@ -33833,7 +33833,7 @@ fn fx216_imported_table_styles_remap_collisions_and_preserve_destination_default
             .unwrap()
             .table_mut()
             .unwrap()
-            .set_style_id(Some(id.into()))
+            .set_style_id(None)
             .unwrap();
         let mut source_package = saved_valid_package(&source, "table source");
         let source_style = related_part(
@@ -33859,7 +33859,27 @@ fn fx216_imported_table_styles_remap_collisions_and_preserve_destination_default
             let image = oxml_opc::relationship::rel_types::IMAGE;
             source_package.set_part_rels(&source_style, oxml_opc::Relationships::from_xml(format!(r#"<Relationships xmlns="{uri}" xmlns:z="urn:style-record"><Relationship Id="stylePicture" Type="{image}" Target="media/style-source.png" z:keep='&#69;'/></Relationships>"#).as_bytes()).unwrap());
         }
-        let source = open_package(source_package).unwrap();
+        let mut source = open_package(source_package).unwrap();
+        // Authored selection requires the actual definition installed above.
+        // Default layout placeholders are not table owners.
+        let source_table = source
+            .slide(0)
+            .unwrap()
+            .shapes()
+            .enumerate()
+            .filter(|(_, shape)| shape.table().is_some())
+            .nth(1)
+            .unwrap()
+            .0;
+        source
+            .slide_mut(0)
+            .unwrap()
+            .shape_mut(source_table)
+            .unwrap()
+            .table_mut()
+            .unwrap()
+            .set_style_id(Some(id.into()))
+            .unwrap();
         let source_before = source.to_bytes().unwrap();
         let mut destination = Presentation::new().unwrap();
         destination.add_slide(0).unwrap();
@@ -33870,7 +33890,7 @@ fn fx216_imported_table_styles_remap_collisions_and_preserve_destination_default
             .unwrap()
             .table_mut()
             .unwrap()
-            .set_style_id(Some(id.into()))
+            .set_style_id(None)
             .unwrap();
         let mut destination_package = saved_valid_package(&destination, "table destination");
         let destination_style = related_part(
@@ -33886,6 +33906,23 @@ fn fx216_imported_table_styles_remap_collisions_and_preserve_destination_default
         );
         destination_package.set_part(&destination_style, destination_xml.into_bytes());
         let mut destination = open_package(destination_package).unwrap();
+        let destination_table = destination
+            .slide(0)
+            .unwrap()
+            .shapes()
+            .enumerate()
+            .find(|(_, shape)| shape.table().is_some())
+            .unwrap()
+            .0;
+        destination
+            .slide_mut(0)
+            .unwrap()
+            .shape_mut(destination_table)
+            .unwrap()
+            .table_mut()
+            .unwrap()
+            .set_style_id(Some(id.into()))
+            .unwrap();
         let options = rpptx::ImportSlideOptions {
             layout_index: Some(0),
             ..Default::default()
