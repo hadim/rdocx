@@ -1,6 +1,6 @@
 # F-X247, Preserve the common LaTeX inputs reported in Issue365
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S94
 **Size**: L
 **Depends on**: F-X234, F-X235
@@ -79,9 +79,19 @@ Fresh native controls must independently open/export the product-authored canoni
 
 ### Glyph and layout scope
 
-Reuse the existing deterministic caller-font route and math layout. Extend only the finite mathematical-italic Greek mapping in existing crates/rdocx-layout/src/math.rs if actual native matched-font controls show the selected MATH face requires covered mathematical-alphabet codepoints. Preserve logical input characters and pi's existing behavior. Check full mapped-run cmap coverage before substitution, as the existing ASCII/pi path does. Do not synthesize unproved glyph IDs or force all Greek into one variant. phi U+03D5 and varphi U+03C6 stay distinct.
+Reuse deterministic caller-font math layout. The integrator approved a bounded revision after actual Word controls showed missing Greek advances and relation glue. Extend the finite covered mathematical-italic Greek mapping in crates/rdocx-layout/src/math.rs and apply the selected face's actual MATH italic correction at true ordinary-math atom boundaries for covered mapped Latin and Greek glyphs. Boundaries are an operator, explicit math space or run end. Do not add inter-letter spacing to identifiers or functions, do not apply mathematical corrections to upright or normal-text runs, and preserve pi's historical handling. Add conventional medium4mu binary and thick5mu relation glue for only the newly admitted finite operator characters, in the existing layout_text carrier. Preserve old pi and ASCII behavior and retain their old native controls. Logical strings, public types, dependencies and files remain unchanged. Full mapped-run cmap coverage remains mandatory. phi U+03D5 and varphi U+03C6 remain distinct.
 
-Use authentic installed Cambria/Cambria Math bytes through existing APIs when permitted, with actual face index, file hashes and producer pins. Do not install or redistribute fonts. Native matched-font qualification and bundled deterministic fallback are separate controls. Missing glyph/MATH coverage must produce an explicit stable diagnostic or the already documented bounded fallback, with its chosen physical font recorded. A conversion pass is not evidence of matching paint. Do not silently change bundled fonts, default styles or unrelated fraction positioning.
+Qualify actual native and product glyph advances and the selected MATH face independently. Use authentic installed Cambria/Cambria Math bytes with face indices, file hashes and producer pins. Do not install or redistribute fonts. Native matched-font qualification and bundled deterministic fallback remain separate controls. Missing glyph/MATH coverage keeps explicit stable diagnostics or the documented bounded fallback.
+
+The integrator also approved clamping the MathLeading shift of generically run-only display equations at a lower bound of zero, retaining its existing upper bound. Empty and multiple run lists, upright text and spacing use the same structural rule. Mixed, fraction, script, radical, n-ary and delimiter frames retain their existing adjustment. The rejected global clamp moved actual binomial and canonical-fraction controls downward and remains captured in the private failed-attempt evidence. Actual short-run ink lies below MathLeading within the font ascender, so a negative adjustment incorrectly moves its baseline upward. Independently measured PDF baselines show the cause, rather than a fixture-specific coordinate correction. A regression must prove short displays never move upward while tall constructs retain positive leading. Existing six-case and per-expression controls remain mandatory.
+
+For a Bar fraction whose selected physical face supplies MATH constants, operand advances and actual italic corrections own the horizontal width. The integrator approved removing the synthetic .06em-per-side fallback padding from this path after independent native PDF rule spans and consecutive numerator positions exposed the discrepancy. NoBar stack/delimiter clearance and the non-MATH fallback retain their original .06em-per-side padding. The rejected both-zero attempt failed actual binomial width qualification and remains retained. Apply the Bar rule generically to physical MATH faces, including nested and canonical Bar fractions, without font-name or fixture exceptions. Retain failed predecessor receipts and verify all old and new controls.
+
+A physical MATH Bar whose direct numerator or denominator expression sequence contains a Bar fraction receives2mu clearance per side. MathArgument sequences are transparent grouping boundaries. Do not descend into scripts, radicals, delimiters or other structural children for this classification. The independently captured old nested-fraction native PDF has inner/outer bar widths6.96/9.36points, while removing all nested clearance made the current outer bar7.046875points. The integrator approved2mu as this bounded observed normalization, not an invented OpenType MATH constant or a universal Office claim. Ordinary glyph/radical/script operands remain zero-padding, while NoBar and non-MATH retain their previous clearance.
+
+Both PDF font-box and actual raster-ink geometry remain at1.0point, with150DPI and0.99 block-luminance SSIM. Actual Word PDF font-size quantization is evidence to investigate, not permission to remove a failing criterion. Any normalization must first show independent physical font-size, glyph metrics and baseline evidence and receive review. Never calibrate product coordinates to fixture bounds.
+
+Remediation controls retain one physical italic correction at a script attachment, with explicit private measured-box accounting for an already-applied terminal advance. Ordinary identifiers gain no internal correction. Superscript, subscript and combined controls use authentic positive Cambria MATH values for x, f and alpha. Normal text and pi keep their existing treatment. Completed MathML trees are validated after contextual boundary-space synthesis, including exact at-limit and one-byte-over-limit cases. semantics wrappers recognize supported mstyle content before canonical stacked-fraction normalization, independently of annotation order.
 
 ### Finite73 acceptance map
 
@@ -134,7 +144,7 @@ The ordered source list is /private/tmp/S93-Issue365-73-inputs.json. Its compact
 | 43 | `\degree` | degree symbol °, U+00B0, independent native/symbol authority because Pandoc rejects this command |
 | 44 | `\ldots` | ellipsis …, U+2026 |
 | 45 | `\cdots` | centered ellipsis ⋯, U+22EF |
-| 46 | `\lim_{x \to 0} x` | upright lim with LowerLimit(x→0), then x, preserving existing F-X234 tree |
+| 46 | `\lim_{x \to 0} x` | upright lim with Subscript(base=lim,script=x→0), then x, preserving existing F-X234 tree |
 | 47 | `\sin x` | upright function sin, then x |
 | 48 | `\log x` | upright function log, then x |
 | 49 | `\ln x` | upright function ln, then x |
@@ -182,6 +192,11 @@ The ordered source list is /private/tmp/S93-Issue365-73-inputs.json. Its compact
 - Use source annotation echo, token presence, product self-normalization or absence of diagnostics as the sole oracle. They can all hide wrong script bases, fraction operands or text spacing.
 - Add general TeX support, macro expansion, new product files or an external production converter. None is required by the finite contract.
 - Hide logical text as opaque XML or merge all normal-looking run roles. Existing supported run properties can express this design while preserving meaningful normal text.
+
+
+The supplementary script-boundary capture is a diagnostic, separate from the seven finite paint gates. The duplicate terminal/script italic advance has a genuine positive-font RED and GREEN regression and retained predecessor/current PDFs. Its correction reduces accumulated width by1.97656pt. The supplementary current-native comparison still fails derived width by1.142188pt. Existing script attachment does not apply physical MATH MathKern, which the actual Cambria table contains. Full MathKern implementation is outside this approved increment. Retain this failing diagnostic and do not advertise a supplementary native pass. Independent successor review must assess this bounded limitation against the finite contract.
+
+The historical13-family raw native PDF and producer receipt were not located. Recorded-vector runtime and mutation checks are distinct from historical raw-PDF/raster replay. Fresh Word16.114 captures use the exact historical Caladea-request recipe and a separate explicit Cambria variant. Word substitutes Cambria in the Caladea-request export. That original-source product PDF is byte-identical between genuine baseline and current wheels under the same caller-font route. Current deterministic product geometry matches that route. The matched-Cambria variant retains a preexisting8.833383pt lower-bound discrepancy, while current width improves toward native. These observations do not establish full13-family matched-font fidelity or reproduce historical producer exports.
 
 ## Test plan
 
@@ -242,14 +257,14 @@ Prefer a separate conflict-free math wave from Python parity integration if exis
 
 ## Implementation checklist
 
-- [ ] After S94 opens, reconcile this draft with all five canonical designs, confirm dependencies done and receive one consolidated approval.
-- [ ] Authenticate exact original comment/script/73 inputs and run fresh current-source RED, preserving original unconditional summary and output.
-- [ ] Record the one-line conditional-summary observer separately and independent semantic expectations/mutation controls.
-- [ ] Implement finite symbol/name/text/space/binomial/canonical Bar rules in existing carriers with unchanged caps and public signatures.
-- [ ] Qualify actual Pandoc72/73 observations and degree's independent authority without rewriting input or suppressing known losses elsewhere.
-- [ ] Execute public native and fresh installed Python save/reopen, opaque preservation, strict typing and WASM checks.
-- [ ] Capture actual native matched-font glyph/text/spacing/binomial/fraction controls and honest fallback diagnostics, preserving historical evidence.
-- [ ] Complete applicable publication/hash/risk riders, independent zero-finding microscope and scoped gate, then prepare structured handoff.
+- [x] After S94 opens, reconcile this draft with all five canonical designs, confirm dependencies done and receive one consolidated approval.
+- [x] Authenticate exact original comment/script/73 inputs and run fresh current-source RED, preserving original unconditional summary and output.
+- [x] Record the one-line conditional-summary observer separately and independent semantic expectations/mutation controls.
+- [x] Implement finite symbol/name/text/space/binomial/canonical Bar rules in existing carriers with unchanged caps and public signatures.
+- [x] Qualify actual Pandoc72/73 observations and degree's independent authority without rewriting input or suppressing known losses elsewhere.
+- [x] Execute public native and fresh installed Python save/reopen, opaque preservation, strict typing and WASM checks.
+- [x] Capture actual native matched-font glyph/text/spacing/binomial/fraction controls and honest fallback diagnostics, preserving historical evidence.
+- [x] Complete applicable publication/hash/risk riders, independent zero-finding microscope and scoped gate, then prepare structured handoff.
 
 ## Open questions
 

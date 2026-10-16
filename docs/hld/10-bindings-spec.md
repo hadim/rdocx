@@ -1720,7 +1720,22 @@ carry ordered `MathConversionDiagnostic` records. The boundary accepts a bare
 argument, so document-wide and display-paragraph properties stay with their
 owners rather than being silently projected. Format attributes and expression
 properties that cannot survive the conversion are diagnosed. The surface is
-native Rust only and remains additive before 1.0.
+native Rust, with Python's existing `Paragraph.add_equation(source, format=...)`
+route reusing it. The finite Issue365 matrix admits named Greek variants,
+relations, operators, arrows and degree, upright sin/log/ln/exp/operatorname,
+plain mathrm and literal text. Function runs use normal=true, plain mathematics
+uses style=Plain and normal text uses both. Literal text retains boundary and
+interior whitespace. Supported MathML function application and text-boundary
+spacing normalize into these existing carriers. Unknown marker contexts and
+unsupported properties retain explicit diagnostics.
+
+frac, dfrac and tfrac normalize to stacked Bar fractions and canonical frac
+output. Forced TeX display/text style is not preserved. binom uses existing
+parentheses around a NoBar fraction. Thin, semicolon and quad spaces retain
+U+2009, U+2004 and U+2001 respectively, with canonical MathML widths .167em,
+.278em and1em. Native semicolon paint uses an explicit Unicode approximation.
+These bounded pre-1.0 behavior expansions add no public signature, model field,
+variant or binding method and do not claim unrestricted TeX support.
 
 Native Rust callers can import RTF through `Document::from_rtf_bytes` and
 `Document::open_rtf`. These additive pre-1.0 APIs return an `RtfReadResult`

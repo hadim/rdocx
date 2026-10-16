@@ -8158,6 +8158,12 @@ spacing without losing atom/script ownership or meaningful text. Design any
 forced fraction style, text whitespace or unsupported representation distinction
 explicitly before implementation. This is a bounded extension, not unrestricted
 TeX support, and does not reopen the completed S93 exact-formula contract.
+The bounded conversion canonicalizes frac/dfrac/tfrac to stacked Bar fractions,
+uses a parenthesized NoBar for binom, distinguishes upright functions from plain
+math and normal text with existing properties, and preserves literal whitespace
+and three distinct explicit space tokens. Forced TeX display/text style is not
+preserved. Native font/atom corrections and fraction/short-display frames retain
+their independently qualified geometry bounds.
 
 Retain original output separately from a corrected observer whose only script
 change makes the unconditional FAIL summary depend on actual losses. Require

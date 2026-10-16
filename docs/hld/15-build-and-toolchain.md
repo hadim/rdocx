@@ -332,6 +332,15 @@ because the format-neutral backend is their named consumer. The selected
 versions pass the repository license and advisory policy, compile for the WASM
 target graph, and do not add a format-family dependency edge.
 
+The finite OfficeMath conversion controls keep source-only recipes and their
+actual native producer receipts outside published archives. Their current
+Word16.114 font qualification retains physical collection face indices and
+Cambria/Cambria Math source hashes, independent of historical Word16.113.2 and
+Word16.104 producer pins. Caller fonts are read through the existing APIs,
+never installed, copied into archives or redistributed. Fresh installed Python
+wheels, scoped native rustdoc, WASM and verified package dry runs qualify the
+unchanged public conversion signatures and their bounded semantic expansion.
+
 ## Packaging
 The native bibliography module is ordinary `rdocx` source and belongs in its
 published source archive. Bound Word inputs, UI receipts, native output graphs

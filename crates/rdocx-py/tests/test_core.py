@@ -7177,3 +7177,133 @@ def test_fx246_word_malformed_chart_document_is_refused_atomically(trailer):
         with pytest.raises(Exception):
             operation()
         assert document.to_bytes() == before and paragraph.xml
+
+
+
+def _fx247_oracle_and_cases():
+    import importlib.util
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    spec = importlib.util.spec_from_file_location("fx247_oracle", root / "scripts/officemath_oracle_harness.py")
+    oracle = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(oracle)
+    manifest = json.loads((root / "scripts/officemath_oracle_manifest.json").read_text())
+    return oracle, manifest["fx247"]["cases"]
+
+
+def _fx247_document():
+    import rdocx
+
+    oracle, cases = _fx247_oracle_and_cases()
+    document = rdocx.Document()
+    for source in cases:
+        converted = document.add_paragraph("").add_equation(source, format="latex")
+        assert converted.diagnostics == (), (source, converted.diagnostics)
+    return oracle, cases, document
+
+
+def test_fx247_all73_saved_semantics_and_public_reopen(tmp_path):
+    import rdocx
+
+    oracle, cases, document = _fx247_document()
+    path = tmp_path / "all73.docx"
+    document.save(path)
+    first = oracle.verify_fx247_package(path)
+    assert len(first["rows"]) == len(cases) == 73
+    reopened = rdocx.Document(path)
+    assert len(reopened.paragraphs) == 73
+    for paragraph in reopened.paragraphs:
+        equations = paragraph.equations()
+        assert len(equations) == 1
+        assert equations[0].to_latex().equations[0].diagnostics == ()
+        assert equations[0].to_mathml().equations[0].diagnostics == ()
+    reopened.save(path)
+    assert [row["semantics"] for row in oracle.verify_fx247_package(path)["rows"]] == [row["semantics"] for row in first["rows"]]
+
+
+@pytest.mark.parametrize("mutation,row", [
+    ("swap-fraction", 58), ("binomial-bar", 54), ("phi-variant", 9),
+    ("detach-script", 72), ("italic-function", 47), ("strip-text-space", 53),
+    ("collapse-quad", 57), ("collapse-semicolon", 71),
+])
+def test_fx247_saved_semantic_observer_rejects_real_mutations(tmp_path, mutation, row):
+    from xml.etree import ElementTree as ET
+
+    oracle, _, document = _fx247_document()
+    original = io.BytesIO(document.to_bytes())
+    result = tmp_path / (mutation + ".docx")
+    ns = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
+    with zipfile.ZipFile(original) as source, zipfile.ZipFile(result, "w") as output:
+        for info in source.infolist():
+            raw = source.read(info.filename)
+            if info.filename == "word/document.xml":
+                root = ET.fromstring(raw)
+                equation = root.findall(".//" + ns + "oMath")[row - 1]
+                if mutation == "swap-fraction":
+                    fraction = equation.find(ns + "f")
+                    numerator = fraction.find(ns + "num")
+                    denominator = fraction.find(ns + "den")
+                    numerator.tag, denominator.tag = denominator.tag, numerator.tag
+                elif mutation == "binomial-bar":
+                    equation.find(".//" + ns + "type").set(ns + "val", "bar")
+                elif mutation == "phi-variant":
+                    equation.find(".//" + ns + "t").text = "φ"
+                elif mutation == "detach-script":
+                    equation.find(".//" + ns + "sSup/" + ns + "e/" + ns + "r/" + ns + "t").text = "4π"
+                elif mutation == "italic-function":
+                    equation.find(".//" + ns + "nor").set(ns + "val", "0")
+                elif mutation == "strip-text-space":
+                    equation.find(".//" + ns + "t").text = "if"
+                else:
+                    text = equation.find(".//" + ns + "t")
+                    text.text = text.text.replace("\u2001", "\u2009").replace("\u2004", "\u2009")
+                raw = ET.tostring(root, encoding="utf-8")
+            output.writestr(info, raw)
+    with pytest.raises(ValueError, match=f"row{row} saved semantics differ"):
+        oracle.verify_fx247_package(result)
+
+
+def test_fx247_literal_caps_refuse_atomically_and_opaque_source_survives(tmp_path):
+    import rdocx
+
+    document = rdocx.Document()
+    paragraph = document.add_paragraph("before")
+    before = document.to_bytes()
+    for source in [r"\text{bad{nested}}", r"\text{bad\unknown}", r"\text{" + "x" * 100_001 + "}"]:
+        with pytest.raises(rdocx.RdocxError):
+            paragraph.add_equation(source, format="latex")
+        assert document.to_bytes() == before
+    opaque = '<x:opaque xmlns:x="urn:fx247" data="untouched">  kept </x:opaque>'
+    body = '<w:p><w:r><w:t>before</w:t></w:r>' + opaque + '</w:p>'
+    document = _replace_document_body(document, body)
+    document.paragraphs[0].add_equation(r"\text{if }x+\binom{n}{k}", format="latex")
+    document = rdocx.Document.from_bytes(document.to_bytes())
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        assert opaque.encode() in archive.read("word/document.xml")
+
+
+
+def test_fx247_synthesized_mathml_text_space_cap_is_atomic(tmp_path):
+    import rdocx
+
+    document = rdocx.Document()
+    paragraph = document.add_paragraph("kept")
+    before = document.to_bytes()
+    namespace = "http://www.w3.org/1998/Math/MathML"
+    for prefix, suffix in [("", '<mspace width="0.333em"/>'), ('<mspace width="0.333em"/>', "")]:
+        source = f'<math xmlns="{namespace}">{prefix}<mtext>{"x" * 524_288}</mtext>{suffix}</math>'
+        with pytest.raises(rdocx.RdocxError):
+            paragraph.add_equation(source, format="mathml")
+        assert document.to_bytes() == before
+    source = f'<math xmlns="{namespace}"><mtext>{"x" * 524_287}</mtext><mspace width="0.333em"/></math>'
+    assert paragraph.add_equation(source, format="mathml").diagnostics == ()
+    path = tmp_path / "at-limit.docx"
+    document.save(path)
+    with zipfile.ZipFile(path) as archive:
+        from xml.etree import ElementTree as ET
+        root = ET.fromstring(archive.read("word/document.xml"))
+        texts = root.findall(".//{http://schemas.openxmlformats.org/officeDocument/2006/math}t")
+        assert sum(len(t.text or "") for t in texts) == 524_288
+        assert texts[-1].text.endswith(" ")

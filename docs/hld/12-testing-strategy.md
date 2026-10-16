@@ -1570,6 +1570,49 @@ sizes, deep saturation, degree depth and optical alternates. The original
 Caladea-request fallback mismatch and implicit-spacing sources remain separate
 diagnostics, preserving all historical sources, identities and outcomes.
 
+The finite73 follow-up uses independent saved-OMML expectations for every source
+row and public native plus freshly installed Python save/reopen. Physical-font script regressions independently read positive MATH corrections
+for x, f and alpha and test superscript, subscript and combined attachment.
+Completed MathML trees enforce text limits after synthesized boundary spaces,
+with exact at-limit and one-byte-over-limit atomic-publication controls.
+semantics/style-wrapper probes retain actual fraction operands despite preceding
+annotations, while unknown styles remain diagnosed. Actual package
+mutations swap fraction operands, change phi variants and binomial type, attach
+scripts to a wrong base, italicize a function, strip text space and collapse
+explicit mathematical spaces. The unchanged reporter script retains its literal
+unconditional FAIL label. A separately identified one-line summary correction
+reports the actual loss count, while structural observers decide acceptance.
+
+Fresh Pandoc3.11 forward DOCX/MathML and annotation-free reverse retain all73
+inputs in inline and display contexts. Only72 emit math because degree produces
+an actual unsupported-command warning. Independent Unicode and native controls
+qualify degree. Explicit assertions classify the writer's tfrac Linear fraction,
+forced-style normalization, native text/function roles, no-bar binomial,
+spacing approximations and structural reverse losses.
+
+Seven separately named source-built controls pin actual Word16.114
+build16.114.26101123, normal save/reopen, authentic caller fonts and Poppler26.09.
+Absolute PDF bounds, derived width and150DPI actual ink keep1.0point limits with
+0.99 block-luminance SSIM. Actual rendered1.01point group translations remain
+negative controls. The older13-family and six-case producer pins stay unchanged.
+Captured six-case verification authenticates the original producer receipt,
+PDFs, source/font/tool hashes and current-source product output. It explicitly
+reports that installed Word differs from the historical producer. The strict
+installed-old-application check still refuses that mismatch, and historical
+artifact replay is never reported as a fresh old-Word export.
+
+The supplementary script-boundary diagnostic preserves actual predecessor and
+corrected PDFs, positive-font single-IC RED/GREEN and the still-failing1.142188pt
+derived-width difference. Physical MATH MathKern is outside this increment.
+The original13-family raw native PDF and producer receipt are unavailable.
+Its recorded-vector runtime checks are separate from raw-PDF/raster replay.
+Fresh current Word captures retain the exact Caladea-request source and a
+separate explicit Cambria variant. Word substitutes Cambria for Caladea. The
+original-source product is byte-identical between baseline and current wheels
+on the same caller-font route. Matched-Cambria retains the baseline's8.833383pt
+lower-bound difference. No full13-family matched-font fidelity is inferred.
+
+
 The general native field construction gate reopens explicit simple and complex
 fields with identical instruction semantics and ordered cached content. Tests
 construct inputs in code and cover recursive argument and switch operands,
