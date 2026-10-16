@@ -1,22 +1,31 @@
 # F-X255, Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S95
 **Size**: L
 **Depends on**: F-X221, F-X248, F-X249, F-X251, F-X252, F-X253, F-X256, F-X257, F-X258
 
-## Rescope checkpoint
+## Reconciliation checkpoint
 
-The user expanded active S95 with F-X256, F-X257 and F-X258 after this
-preparation began. This prior design is stale and parked in draft. Preserve
-the dirty worker and intermediate receipts. No implementation, handoff or
-source availability push resumes until those dependencies complete and this
-plan is revised and approved against the expanded integrated source. The
-remaining text records the prior contract and must be reconciled then.
+All eight S95 repair prerequisites are completed, including the integrated
+F-X256, F-X257 and F-X258 contracts. Resume the preserved release preparation
+against this complete prefix. The original claim at
+852a47334398552bf63c0b14965d715c2dce6427 and its intermediate receipts remain
+historical. Root retained all54 WIP file bytes, status and binary-capable diff
+at /private/tmp/S95-F-X255-preserved-WIP-before-reconciliation-1, receipt
+SHA2564e19518f5fe75c827face8a08017f48ab4714def28d35223ac7fdbeb3fbb1a47.
+Authenticate that preservation before reconciling. Advance the existing worker
+branch to the approved current prefix and reapply only its preserved feature
+delta, retaining original claim and new reconciliation base separately. Do not
+copy old complete files over new binding or HLD contracts. Re-read every
+resulting conflict against the approved plans and independently review it.
+Prior version/carrier research, actual old target RED, historical note proofs
+and artifact identities may be reused with their original attribution.
+Intermediate runtime, archive or review outcomes do not qualify changed source.
 
 ## Problem
 
-The five S95 repairs are complete, but Cargo.toml:36 and the binding projects
+The eight S95 repairs are complete, but Cargo.toml:36 and the binding projects
 still prepare Word0.16.1 and shared/PowerPoint0.14.1. The user requests Rust
 and Python releases at the end of S95 and explicitly retains the0.16.x and
 0.14.x version lines. The published baseline is both complete family tags at
@@ -66,15 +75,39 @@ release inventory as new. Retain explicit bounded equation/native/oracle
 limitations and the intentional prior render deltas. Describe supported form,
 signing, chart and source-owned XML behavior without claiming future work.
 
+Include actual completed numeric admission, Word mapping/name/legacy dropdown
+and PowerPoint name/color/language outcomes in the matching family notes.
+Credit Issue386 and authenticated reporter hadim once per applicable family,
+without treating three repair F-IDs as three contributor records. Preserve the
+existing exact42/44 priority memberships. Do not count unchanged default-list
+or one-dimension-picture alternatives as new repair outcomes. Update current
+target-specific note assertions that excluded386 or promised PPT string
+getters, preserving all immutable historical note inventories.
+
 Disclose the approved Rust rendering source changes since the published
 baseline: revision_style fields on RenderOptions/LayoutInput, ParagraphBlock's
 bool-to-Option<Color> change bar and NoteLayout's color-valued revision ranges.
 Plain remains default and stored formatting is unchanged. Disclose the ZIP9
-OpcError::Zip upstream type boundary and named Python refusals. Patch numbering
-does not imply full source compatibility. Do not claim Issue385 or Issue386
-closure, new default-template numbering, Python3.14 qualification, future
-fillable PDF, bibliography/navigation or pending interoperability. Issue386
-belongs to S95.1 and the remaining Issue385 groups to S95.11.
+OpcError::Zip upstream type boundary and named Python refusals. Also disclose
+the approved Python source compatibility migration: Word ColorFormat.type now
+returns its MSO_COLOR_TYPE or None, while Word theme_color remains str or None.
+PowerPoint ColorFormat.type returns its own MSO_COLOR_TYPE or None and
+its theme_color returns MSO_THEME_COLOR, with explicit absent, nonscheme and
+unsupported-source contracts. Existing supported string setters and native
+color math remain intact. Patch numbering does not imply full source
+compatibility. Reconcile HLD10's adjacent PowerPoint color sentence so it names
+its own enum getters rather than referring to now-obsolete string signatures
+above. Preserve both families' actual contracts and the F-X256 numeric rules.
+
+Write stable release notes around concrete implemented outcomes. Whole
+Issue386 acceptance and later closure require the completed256/257/258 union
+plus the actual final paired untouched19-attempt script and independent16-group
+semantic companion. Root's separately reviewed preparation2 supplies that final
+gate. A self-catching exit0 alone is insufficient. Do not permanently exclude
+Issue386 or claim its final union already passed. Issue385 remains partial
+until F-X250/F-X254 in S95.11 complete. Do not claim new default-template
+numbering, Python3.14 qualification, future fillable PDF, bibliography/navigation
+or pending interoperability.
 
 Rebuild and retain genuine verified archives for the exact22 published union
 with all22 local patches, --locked and verification enabled. No upload occurs.
@@ -166,13 +199,17 @@ Expected unchanged49 hashes and seven deterministic pixel buffers. Version and
 release metadata do not change accepted document paint. No baseline lease.
 Prior intentional S93 behavior changes remain attributed in notes, not a new
 F-X255 delta. Preserve the existing bounded historical PPT mutant applicability
-exception for the exact test-only chart version assertion, with all other
-production bytes unchanged.
+exceptions for the exact test-only chart version assertion and exact additive
+eight-line Shape._element diagnostic admitted by root. The authenticated
+PPTprep5 decision retains all other historical bytes strictly. Historical
+mutants are not freshly compiled. Fresh final producer four-route observations
+remain mandatory, with no general source-hash waiver.
 
 ## Implementation checklist
 
+- [ ] Authenticate preserved54-file WIP, original claim and actual new reconciliation base.
 - [ ] Establish actual target-specific old-source RED and preserve historical contracts.
-- [ ] Align exact version carriers, current assertions and family contribution notes.
+- [ ] Align exact version carriers, current assertions and expanded family contribution notes, including approved Python getter migration and bounded HLD10 cross-reference repair.
 - [ ] Pass scoped local Rust/Python/WASM/docs/policy/hash checks and independent microscope.
 - [ ] Qualify genuine22 archives and root-owned measured catalog/README reconciliation.
 - [ ] Prepare and integrate source availability handoff with explicit pending hosted gates.
@@ -184,6 +221,6 @@ production bytes unchanged.
 No material unanswered user question. Both Rust/Python families and the0.16.x
 and0.14.x lines are explicit. Candidate0.16.2/0.14.2 versions and remote tags
 were absent in the authenticated registry intake and must be rechecked at the
-release boundary. The earlier approved Rust source changes remain disclosed.
+release boundary. The approved Rust and Python source compatibility changes remain disclosed.
 Registry roles and trusted-publisher configuration must be verified before the
 separate final publication approval, not invented from build-only success.
