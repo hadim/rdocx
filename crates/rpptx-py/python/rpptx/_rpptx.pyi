@@ -1,3 +1,4 @@
+from typing import TypedDict as _TypedDict
 from typing import BinaryIO as _BinaryIO
 import os as _os
 from collections.abc import Iterable as _Iterable, Iterator as _Iterator, Sequence as _Sequence
@@ -33,6 +34,28 @@ from .enum.text import (
     PP_PARAGRAPH_ALIGNMENT as _PP_ALIGN,
 )
 from .util import Length as _Length
+
+class _SignerCertificateIdentity(_TypedDict):
+    subject: str
+    issuer: str
+    serial_number: str
+
+class _CoveredRelationship(_TypedDict):
+    source_part: str
+    relationship_id: str
+
+class _SignatureIssue(_TypedDict):
+    kind: _Literal["missing_part", "changed_reference", "duplicate_reference", "missing_relationship", "duplicate_relationship", "external_relationship", "missing_relationship_target", "uncovered_part", "uncovered_relationship", "signature_value_mismatch", "orphan_signature_part"]
+    details: dict[str, str]
+
+class _SignatureReport(_TypedDict):
+    signature_part: str
+    signer: _SignerCertificateIdentity | None
+    cryptographically_valid: bool
+    coverage_complete: bool
+    covered_parts: list[str]
+    covered_relationships: list[_CoveredRelationship]
+    issues: list[_SignatureIssue]
 
 _Path = str | _os.PathLike[str]
 _ImageFile = _Path | bytes | _IO[bytes]
@@ -337,6 +360,8 @@ class PresentationTextExport:
 
 @_final
 class Presentation:
+    def sign(self, private_key: bytes, certificate: bytes) -> _SignatureReport: ...
+    def verify_signatures(self) -> tuple[_SignatureReport, ...]: ...
     @property
     def embedded_fonts(self) -> tuple[EmbeddedTypeface, ...]: ...
     def embed_font(self, name: str, font: _FontInput | EmbeddedFont, kind: _FontKind = "regular", *, license: FontEmbeddingLicense) -> None: ...

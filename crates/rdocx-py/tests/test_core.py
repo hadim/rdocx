@@ -7631,3 +7631,180 @@ def test_fx241_retired_recreated_owner_is_never_revived_by_equal_source():
     with pytest.raises(rdocx.StaleElementError):
         _ = retired.text
     assert current.text == 'equal'
+
+
+def _fx240_material():
+    # Authentic existing native test identity, not a production or trusted key.
+    import base64
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[2] / "oxml-opc" / "src" / "signature.rs").read_text(encoding="utf-8")
+    def constant(name):
+        return base64.b64decode(re.search(r'const ' + name + r': &str = "([^"]+)";', source)[1], validate=True)
+    return constant("TEST_PRIVATE_KEY_PKCS8_BASE64"), constant("TEST_CERTIFICATE_DER_BASE64")
+
+
+def _fx240_zip_edit(source, part=None, old=None, new=None, extra=None):
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(source)) as archive, zipfile.ZipFile(output, "w") as result:
+        for info in archive.infolist():
+            data = archive.read(info.filename)
+            if info.filename == part:
+                assert old in data
+                data = data.replace(old, new, 1)
+            result.writestr(info, data)
+        if extra:
+            result.writestr("word/uncovered.xml" if "rdocx" == "rdocx" else "ppt/uncovered.xml", b"<uncovered/>")
+    return output.getvalue()
+
+
+def test_fx240_sign_verify_owned_reports_pem_and_multisignatures():
+    import base64
+    import rdocx as product
+    owner = product.Document()
+    assert owner.verify_signatures() == ()
+    opaque = b'<unmodelled xmlns="urn:caller-owned"><payload a="keep">opaque</payload></unmodelled>'
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(owner.to_bytes())) as source, zipfile.ZipFile(output, "w") as result:
+        entries = [(item.filename, source.read(item.filename)) for item in source.infolist()]
+        for name, data in entries:
+            result.writestr(name, data)
+        result.writestr("custom/opaque.xml", opaque)
+    owner = product.Document.from_bytes(output.getvalue())
+    key, cert = _fx240_material()
+    def pem(label, value):
+        encoded = base64.b64encode(value)
+        return b" \r\n-----BEGIN " + label + b"-----\r\n" + b"\r\n".join(encoded[i:i+64] for i in range(0, len(encoded), 64)) + b"\r\n-----END " + label + b"-----\t\r\n"
+    report = owner.sign(pem(b"PRIVATE KEY", key), pem(b"CERTIFICATE", cert))
+    assert type(report) is dict and report["cryptographically_valid"] and report["coverage_complete"]
+    assert set(report) == {"signature_part", "signer", "cryptographically_valid", "coverage_complete", "covered_parts", "covered_relationships", "issues"}
+    assert set(report["signer"]) == {"subject", "issuer", "serial_number"}
+    assert "F-172 Test Signer" in report["signer"]["subject"]
+    assert report["issues"] == [] and report["covered_parts"] and report["covered_relationships"]
+    assert set(report["covered_relationships"][0]) == {"source_part", "relationship_id"}
+    report["covered_parts"].clear()
+    report["signer"]["subject"] = "mutated"
+    assert owner.verify_signatures()[0]["covered_parts"]
+    assert owner.verify_signatures()[0]["signer"]["subject"] != "mutated"
+    before = owner.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(before)) as preserved:
+        assert preserved.read("custom/opaque.xml") == opaque
+    with pytest.raises(product.PackageError):
+        owner.sign(key, cert)  # The native provider refuses re-signing a signed graph.
+    assert owner.to_bytes() == before
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(before)) as archive, zipfile.ZipFile(output, "w") as result:
+        signature_bytes = archive.read("_xmlsignatures/sig1.xml")
+        for info in archive.infolist():
+            result.writestr(info, archive.read(info.filename))
+        result.writestr("_xmlsignatures/sig2.xml", signature_bytes)
+    reports = product.Document.from_bytes(output.getvalue()).verify_signatures()
+    assert type(reports) is tuple and len(reports) == 2
+    assert reports[1]["signer"] is None and not reports[1]["cryptographically_valid"]
+    assert reports[1]["issues"] == [{"kind": "orphan_signature_part", "details": {"part_name": "/_xmlsignatures/sig2.xml"}}]
+    assert not any(hasattr(product, name) for name in ("SignatureReport", "_SignatureReport", "_SignatureIssue"))
+
+
+def test_fx240_current_tamper_partial_unsigned_and_malformed():
+    import rdocx as product
+    owner = product.Document()
+    owner.add_paragraph("signed text")
+    key, cert = _fx240_material()
+    owner.sign(key, cert)
+    original = owner.to_bytes()
+    owner.paragraphs[0].text = "changed text"
+    reports = owner.verify_signatures()
+    assert len(reports) == 1 and not reports[0]["cryptographically_valid"]
+    issues = reports[0]["issues"]
+    changed = [issue for issue in issues if issue["kind"] == "changed_reference"]
+    assert any(issue["details"]["uri"].startswith("/word/document.xml?") for issue in changed)
+    assert all(set(issue["details"]) == {"uri", "expected_digest", "actual_digest"} for issue in changed)
+    partial = product.Document.from_bytes(_fx240_zip_edit(original, extra=True))
+    report = partial.verify_signatures()[0]
+    assert report["cryptographically_valid"] and not report["coverage_complete"]
+    assert {"kind": "uncovered_part", "details": {"part_name": "/word/uncovered.xml"}} in report["issues"]
+    malformed = _fx240_zip_edit(original, "_xmlsignatures/sig1.xml", b"http://www.w3.org/2001/04/xmldsig-more#rsa-sha256", b"urn:unsupported-signature")
+    with pytest.raises(product.PackageError):
+        product.Document.from_bytes(malformed).verify_signatures()
+    assert product.Document().verify_signatures() == ()
+
+
+def test_fx240_refusal_preserves_current_bytes_and_held_authority():
+    import rdocx as product
+    owner = product.Document()
+    owner.add_paragraph("signed text")
+    paragraph = owner.paragraphs[0]; run = paragraph.runs[0]
+    before = owner.to_bytes()
+    key, cert = _fx240_material()
+    for bad in (b"", b"x" * (1024 * 1024 + 1), b"-----BEGIN RSA PRIVATE KEY-----Zg==-----END RSA PRIVATE KEY-----", key + b" "):
+        with pytest.raises(product.PackageError):
+            owner.sign(bad, cert)
+        assert owner.to_bytes() == before and owner.verify_signatures() == ()
+        assert paragraph.text == "signed text" and run.text == "signed text"
+    for value in ("not bytes", 123, None):
+        with pytest.raises(TypeError):
+            owner.sign(value, cert)
+    report = owner.sign(key, cert)
+    assert report["cryptographically_valid"]
+    assert paragraph.text == "signed text" and run.text == "signed text"
+    saved = owner.to_bytes()
+    assert owner.verify_signatures()[0]["cryptographically_valid"]
+    assert owner.to_bytes() == saved
+    assert paragraph.text == "signed text" and run.text == "signed text"
+
+
+def test_fx240_fill_then_sign_sign_then_fill_and_unchanged_story_owners():
+    import rdocx
+    key, cert = _fx240_material()
+    document = _fx241_five_kind_document()
+    document.bind_content_controls({"plain": "Ada", "check": "true", "choice": "two", "date": "2026-10-16"})
+    document.set_legacy_form_field_value("legacy", "filled")
+    assert document.sign(key, cert)["coverage_complete"]
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.verify_signatures()[0]["cryptographically_valid"]
+    assert reopened.legacy_form_fields()[0].value == "filled"
+    reopened.bind_content_controls({"plain": "after signing"})
+    report = reopened.verify_signatures()[0]
+    assert not report["cryptographically_valid"]
+    assert any(issue["kind"] == "changed_reference" and issue["details"]["uri"].startswith("/word/document.xml?") for issue in report["issues"])
+
+    unchanged = _replace_document_body(rdocx.Document(), '<w:p><w:bookmarkStart w:id="0" w:name="anchor"/><w:r><w:t>held</w:t></w:r><w:bookmarkEnd w:id="0"/><w:hyperlink w:anchor="anchor"><w:r><w:t>link</w:t></w:r></w:hyperlink></w:p><w:sectPr/>')
+    paragraph = unchanged.paragraphs[0]
+    run = paragraph.runs[0]
+    link = unchanged.hyperlinks[0]
+    story = next(item for item in unchanged.stories if item.kind == "body")
+    snapshot = unchanged.story_items[0]
+    unchanged.sign(key, cert)
+    assert paragraph.text == "heldlink" and run.text == "held" and link.anchor == "anchor"
+    assert unchanged.verify_signatures()[0]["cryptographically_valid"]
+    assert snapshot.xml
+    unchanged.add_hyperlink_to_story(story, "still current", "https://example.com/after")
+    assert any(item.text == "still current" for item in unchanged.hyperlinks)
+    assert not unchanged.verify_signatures()[0]["cryptographically_valid"]
+
+
+def test_fx240_late_graph_refusal_preserves_link_run_story_and_raw_parts():
+    import rdocx
+    owner = rdocx.Document()
+    owner.add_paragraph("held").add_hyperlink("external", "https://example.com/")
+    paragraph = owner.paragraphs[0]
+    run = paragraph.runs[0]
+    link = owner.hyperlinks[0]
+    story = next(item for item in owner.stories if item.kind == "body")
+    before = owner.to_bytes()
+    key, cert = _fx240_material()
+    with pytest.raises(rdocx.PackageError, match="relationship"):
+        owner.sign(key, cert)
+    assert owner.to_bytes() == before and owner.verify_signatures() == ()
+    assert paragraph.text == "heldexternal" and run.text == "held" and link.url == "https://example.com/"
+    owner.add_hyperlink_to_story(story, "current", "https://example.com/after")
+    assert any(item.text == "current" for item in owner.hyperlinks)
+    changed = rdocx.Document()
+    changed.add_paragraph("same")
+    old_run = changed.paragraphs[0].runs[0]
+    paragraph = changed.paragraphs[0]
+    paragraph.replace_xml(paragraph.xml.replace("<w:r>", "<w:r><w:rPr><w:b/></w:rPr>", 1))
+    with pytest.raises(rdocx.StaleElementError):
+        _ = old_run.text
+    changed.sign(key, cert)
+    with pytest.raises(rdocx.StaleElementError):
+        _ = old_run.text

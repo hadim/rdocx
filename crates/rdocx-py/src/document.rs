@@ -4243,6 +4243,7 @@ fn word_owner_locations(
 pub(crate) enum WordPublication {
     Conservative,
     FormValues,
+    Signing,
     AppendBody,
     HeaderFooterAppend(usize),
     ParagraphText(rdocx::ContentLocation),
@@ -4335,6 +4336,51 @@ fn form_owner_certificates(
             if ancestors_proved {
                 proved.insert((*previous, index));
             }
+        }
+    }
+    proved
+}
+
+// Signing changes package infrastructure. Preserve content authority only when
+// the physical source and every required ancestor survived serialization unchanged.
+fn signing_owner_certificates(
+    old: &[WordOwner],
+    new: &[WordOwnerAddress],
+    matched: &[Option<usize>],
+    before: &FormSources,
+    after: &FormSources,
+) -> std::collections::HashSet<(usize, usize)> {
+    let mut proved = form_owner_certificates(old, new, matched, before, after);
+    let mut paragraphs = HashMap::<FormSourceKey, Vec<(usize, usize)>>::new();
+    for &(previous, next) in &proved {
+        if let WordOwnerLocation::Paragraph(location) = &new[next].location {
+            paragraphs
+                .entry(form_source_key(location))
+                .or_default()
+                .push((previous, next));
+        }
+    }
+    for (next, address) in new.iter().enumerate() {
+        let Some(previous) = matched[next] else {
+            continue;
+        };
+        let survives = match (&old[previous].location, &address.location) {
+            (WordOwnerLocation::Run(a, left), WordOwnerLocation::Run(b, right)) => {
+                left == right
+                    && form_source_key(a) == form_source_key(b)
+                    && matches!((old[previous].parent, address.parent), (Some(a), Some(b)) if proved.contains(&(a, b)))
+            }
+            (WordOwnerLocation::Hyperlink(a, left), WordOwnerLocation::Hyperlink(b, right)) => {
+                left == right
+                    && form_source_key(a) == form_source_key(b)
+                    && paragraphs
+                        .get(&form_source_key(b))
+                        .is_some_and(|pairs| pairs.len() == 1)
+            }
+            _ => false,
+        };
+        if survives {
+            proved.insert((previous, next));
         }
     }
     proved
@@ -5322,7 +5368,10 @@ impl PyDocument {
         operation: &'static str,
         publication: WordPublication,
     ) -> PyResult<PreparedWordRevision> {
-        let forms = matches!(publication, WordPublication::FormValues);
+        let forms = matches!(
+            publication,
+            WordPublication::FormValues | WordPublication::Signing
+        );
         let mut old_sources = FormSources::default();
         let mut new_sources = FormSources::default();
         let locations = word_owner_locations(candidate, forms.then_some(&mut new_sources))
@@ -5367,6 +5416,7 @@ impl PyDocument {
             publication,
             WordPublication::Conservative
                 | WordPublication::FormValues
+                | WordPublication::Signing
                 | WordPublication::AppendBody
         ) && selected_index.is_none()
         {
@@ -5375,7 +5425,15 @@ impl PyDocument {
             ));
         }
         let matches = indexed_inventory_matches(&self.owners, &locations, &publication);
-        let form_certificates = if forms {
+        let form_certificates = if matches!(publication, WordPublication::Signing) {
+            signing_owner_certificates(
+                &self.owners,
+                &locations,
+                &matches,
+                &old_sources,
+                &new_sources,
+            )
+        } else if forms {
             form_owner_certificates(
                 &self.owners,
                 &locations,
@@ -5386,6 +5444,21 @@ impl PyDocument {
         } else {
             std::collections::HashSet::new()
         };
+        let preserve_snapshot = matches!(publication, WordPublication::Signing)
+            && self
+                .inner
+                .stories()
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+                == candidate
+                    .stories()
+                    .map_err(|error| rdocx_to_pyerr(py, error))?
+            && self
+                .inner
+                .story_item_snapshots()
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+                == candidate
+                    .story_item_snapshots()
+                    .map_err(|error| rdocx_to_pyerr(py, error))?;
         let mut retained = Vec::new();
         let mut births = Vec::new();
         for (index, address) in locations.iter().enumerate() {
@@ -5442,7 +5515,9 @@ impl PyDocument {
                     || (route_proved
                         && !matches!(
                             publication,
-                            WordPublication::Conservative | WordPublication::FormValues
+                            WordPublication::Conservative
+                                | WordPublication::FormValues
+                                | WordPublication::Signing
                         )
                         && !descendant
                         && !(matches!(publication, WordPublication::HyperlinkRemove(_))
@@ -5480,11 +5555,13 @@ impl PyDocument {
             .flat_map(WordOwner::states)
             .filter(|state| !surviving.contains(&state.generation()))
             .collect::<Vec<_>>();
-        retired.push(self.snapshot_scope.clone());
-        births.push(RevisionScope::Text);
+        if !preserve_snapshot {
+            retired.push(self.snapshot_scope.clone());
+            births.push(RevisionScope::Text);
+        }
         let revision = if matches!(
             publication,
-            WordPublication::ElementXml(_) | WordPublication::RunText(_)
+            WordPublication::ElementXml(_) | WordPublication::RunText(_) | WordPublication::Signing
         ) {
             self.revisions
                 .prepare_local_scopes(operation, &retired, &births)
@@ -5503,7 +5580,11 @@ impl PyDocument {
                 }));
             }
         }
-        let snapshot_scope = revision.born(born).expect("prepared snapshot birth");
+        let snapshot_scope = if preserve_snapshot {
+            self.snapshot_scope.clone()
+        } else {
+            revision.born(born).expect("prepared snapshot birth")
+        };
         let owners = word_owners_with_states(locations, &states);
         Ok(PreparedWordRevision {
             revision,
@@ -6497,6 +6578,43 @@ impl PyDocument {
         let diagnostics = html_diagnostics(py, result.diagnostics)?;
         document.publish_api_candidate(py, candidate, "Document.insert_html")?;
         Ok(diagnostics)
+    }
+
+    /// Sign current typed content with DER or one unencrypted PKCS#8/X.509 PEM block.
+    fn sign(
+        &mut self,
+        private_key: &[u8],
+        certificate: &[u8],
+        py: Python<'_>,
+    ) -> PyResult<Py<pyo3::types::PyDict>> {
+        let mut candidate = self.inner.clone_for_staging();
+        let report = py
+            .detach(|| candidate.sign(private_key, certificate))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let result = oxml_py_support::signature_report_to_py(py, &report)?;
+        let prepared =
+            self.prepare_word_revision(py, &candidate, "Document.sign", WordPublication::Signing)?;
+        self.commit_word_revision(prepared)?;
+        self.inner = candidate;
+        Ok(result)
+    }
+
+    /// Verify serialized current content, without publishing state or asserting chain trust.
+    fn verify_signatures(&self, py: Python<'_>) -> PyResult<Py<PyTuple>> {
+        let reports = py
+            .detach(|| {
+                let mut current = self.inner.clone_for_staging();
+                let bytes = current.to_bytes()?;
+                rdocx::Document::from_bytes(&bytes)?
+                    .verify_signatures()
+                    .map_err(rdocx::Error::from)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let reports = reports
+            .iter()
+            .map(|report| oxml_py_support::signature_report_to_py(py, report))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(PyTuple::new(py, reports)?.unbind())
     }
 
     fn save(&mut self, path: PathBuf, py: Python<'_>) -> PyResult<()> {

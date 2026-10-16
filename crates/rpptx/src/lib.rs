@@ -2449,7 +2449,8 @@ impl Presentation {
 
     /// Signs the current staged presentation with the strict RSA-SHA256 profile.
     ///
-    /// The private key must be PKCS#8 DER and the certificate must be X.509 DER.
+    /// The private key must be PKCS#8 DER or one unencrypted PRIVATE KEY PEM
+    /// block. The certificate must be X.509 DER or one CERTIFICATE PEM block.
     /// The live package changes only after the shared signer verifies the cloned
     /// candidate with complete coverage. Certificate-chain trust remains caller
     /// policy.

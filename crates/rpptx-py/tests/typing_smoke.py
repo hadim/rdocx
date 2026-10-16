@@ -819,3 +819,24 @@ if TYPE_CHECKING:
         color: int = MSO_COLOR_TYPE.RGB
         theme: int = MSO_THEME_COLOR_INDEX.ACCENT_1
         assert present or color or theme
+
+
+def fx240_owned_signature_reports(owner: Presentation, private_key: bytes, certificate: bytes) -> None:
+    report = owner.sign(private_key, certificate)
+    part: str = report["signature_part"]
+    valid: bool = report["cryptographically_valid"]
+    complete: bool = report["coverage_complete"]
+    parts: list[str] = report["covered_parts"]
+    if report["signer"] is not None:
+        subject: str = report["signer"]["subject"]
+        issuer: str = report["signer"]["issuer"]
+        serial: str = report["signer"]["serial_number"]
+        print(subject, issuer, serial)
+    for relationship in report["covered_relationships"]:
+        print(relationship["source_part"], relationship["relationship_id"])
+    for issue in report["issues"]:
+        details: dict[str, str] = issue["details"]
+        print(issue["kind"], details)
+    for checked in owner.verify_signatures():
+        print(checked["signature_part"], checked["cryptographically_valid"])
+    print(part, valid, complete, parts)

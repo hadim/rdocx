@@ -25,6 +25,14 @@ The shared signer accepts strict DER only at crates/oxml-opc/src/signature.rs:15
 
 S94 is open from main3a3b0de8be9f8bf4eb588a9a24c565f0af8ee190. This approved design claims no unexecuted evidence. Establish the exact feature Base at claim and retain actual source/producer identities.
 
+### Approved ZIP supply-chain compatibility revision
+
+The user approved the bounded ZIP9 migration after the actual current cargo-deny gate rejected yanked zip8.6.0. Use workspace zip9.0.3 with the existing disabled default features and deflate-flate2-zlib-rs selection, precise lock resolution and the fifteen original checked-name callsite adaptations, including four test getters identified by the actual compile check, and the existing ODT extra-data assertion adaptation. Do not add a dependency alias, wrapper error, codec, product file or module. Existing domain errors carry fallible decoded names. ODT keeps its independent raw UTF8-name precheck. OPC and ODP retain existing normalization, traversal, duplicate and expansion rules without a new strict raw-name policy.
+
+The native method signatures remain, but OpcError::Zip exposes the upstream zip9 error type instead of zip8. This is an explicitly accepted pre-1.0 source-compatibility change, also propagated through native Word and PowerPoint error families. Python errors keep their existing mapped families. ZIP9 tries valid UTF8 independently of the flag and otherwise CP437. This can change decoded identities, lookup and alias collisions. It is not a promise to reject every invalid UTF8-flagged name.
+
+Retained old8 native packages already use ordinary Deflate central-directory made-by version20, refuting the source-only prediction of a45-to20 output change. Retain actual old8 and new9 same-content packages and compare raw headers, ordered names, flags, timestamps, permissions, compression and inflated member bytes independently. Attribute any observed container delta separately from semantic or painted output. The49 hash and pixel baselines are expected unchanged and must not be rerecorded. Original ZIP8 wheels/native receipts remain predecessors. Fresh affected native, installed-wheel, CLI, archive and supply-chain qualifications are mandatory on ZIP9, including MSRV, WASM and no-default paths. Preserve all original RED artifacts and unchanged yanked-deny policy.
+
 ### Existing signer and one PEM normalization path
 
 Keep RSA-SHA256 creation, graph validation, signature schema order and complete-coverage verification in the existing oxml-opc signer. Extend the private create_signature boundary in signature.rs:153 to normalize both inputs once before its existing DER parsers. The private PEM provider adds no module, product file, crate, trait, generic or feature. The separate CLI support report helper has the one explicitly justified default-off feature described below.
@@ -40,15 +48,19 @@ The two internal labels are PRIVATE KEY and CERTIFICATE. The helper does not ins
 
 Accept raw DER without trimming or alteration. For PEM, accept exactly one unencrypted PKCS#8 PRIVATE KEY block for the key and one X.509 CERTIFICATE block for the certificate. Allow ASCII whitespace outside the single block and ASCII whitespace within wrapped standard base64, including LF/CRLF. Require matching exact labels, strict padded base64 and no extra header fields or non-whitespace trailer. Bound each material input at1MiB before copying or decoding. Reject empty/truncated material, wrong labels, multiple blocks, encrypted/private-key legacy formats, malformed base64 and non-ASCII framing. Existing ASN.1/key checks retain strict DER, RSA algorithm admission and key/certificate match. Do not add passwords, PKCS#1 conversion, certificate chains, ambient trust or OpenSSL production execution.
 
-Native sign signatures remain unchanged, with additive DER/PEM input acceptance documented in their existing docstrings. Existing DER callers retain behavior. Use existing base64 already enabled by digital-signatures. No new package is expected.
+Native sign signatures remain unchanged, with additive DER/PEM input acceptance documented in their existing docstrings. Existing DER callers retain behavior. Use existing base64 already enabled by digital-signatures. Signing alone adds no newly resolved package. The approved ZIP9 migration additionally resolves its required macOS/BSD nix0.31.3 edge with only fs/defaults-off and cfg_aliases0.2.2 build dependency. Preserve the actual target-specific graph and qualify their licenses/MSRV.
 
-### Current-state verification without a native error-contract expansion
+### Current-state verification without a new native verification method
 
-Keep the existing public native Document::verify_signatures return/error signature. The Word Python and CLI verification adapter stages current state through existing public providers: clone_for_staging, serialize that clone with to_bytes, reopen those bytes with Document::from_bytes, then call native verify_signatures on the reopened current package. Original typed state and held Python owners are not published or mutated. This reuses the same canonical preparation/invalidation behavior as a real save at document.rs:17646 and:17786. It avoids coercing arbitrary facade preparation errors into a misleading OpcError or adding a new public verification method solely for a wrapper.
+Keep the existing public native Document::verify_signatures return/error signature, subject to the explicitly approved upstream ZIP error-type compatibility change. The Word Python and CLI verification adapter stages current state through existing public providers: clone_for_staging, serialize that clone with to_bytes, reopen those bytes with Document::from_bytes, then call native verify_signatures on the reopened current package. Original typed state and held Python owners are not published or mutated. This reuses the same canonical preparation/invalidation behavior as a real save at document.rs:17646 and:17786. It avoids coercing arbitrary facade preparation errors into a misleading OpcError or adding a new public verification method solely for a wrapper.
 
 For PowerPoint, use the existing staged current-state verify_signatures at lib.rs:2446 directly. A real RED probe must first sign, make an unsaved typed Word edit and show the retained-package route's result compared with independently serialized current bytes. If the suspected stale-package behavior is refuted, retain that result and still test the current-state adapter. Never label source inspection as an executed RED.
 
 Signing uses a native staged candidate in each binding. Build the complete returned Python report and prepare owner/revision publication before replacing live state. Reuse Word publication at document.rs:5272 and PowerPoint prepare_owners/publish_owners at presentation.rs:3392. Signing must preserve supported unchanged paragraph/slide/shape handles, and failures must preserve bytes and authority. Read-only verification does not refresh or retire owners.
+
+### Signing publication refinement
+
+Signing uses a distinct private Signing publication policy. It does not use FormValues, AppendBody or the generic conservative lane. Reuse the exact physical source and ancestor certificates for unchanged paragraph, table, cell and section owners. An unchanged run additionally requires its exact accepted run path and certified parent paragraph. An unchanged hyperlink requires the same unique physical paragraph source and local hyperlink index. Unproved owners retire. Use prepare_local_scopes to retain document authority for certified content. Retain story snapshot authority only when the complete ordered story identities and item snapshots are equal before and after staging. All report, inventory and revision preparation precedes token commit and the infallible native replacement. Other publication policies remain unchanged.
 
 ### Python API and report shape
 
@@ -176,6 +188,7 @@ Update existing `crates/oxml-cli-support/README.md` to state the report helper i
 
 ## Risk routing
 
+- ZIP supply-chain compatibility: HLD03/04/10/12/15. Qualify all fifteen original checked-name sites, an actual downstream zip9 error identity, UTF8/CP437 raw-name/flag fixtures, normalized aliases, limits, opaque data and ODT raw UTF8 refusal. Exercise ODT/ODP imports and ODT/EPUB exports, signatures/encryption, deterministic raw-header attribution, fresh affected installed/native/CLI artifacts, MSRV1.93, WASM and no-default graphs with unchanged codec and yank policy.
 - Parser/serializer: Package integrity in HLD04 and Parts/schema sequencing in HLD06. Strict PEM admission and native XML signature ordering/preservation controls, exact opaque payload round trips, malformed-input atomicity and bounded bytes are required.
 - Dependency graph and shipped feature activation: HLD03 and HLD15. Inspect actual locked target graphs, keep four named wrapper consumers, the two current support-feature consumers, and unchanged native/CLI-support defaults explicit. Isolated support default/no-default checks must prove the optional dependency remains absent, while explicit feature and both musl CLI dependency selections prove it present. Do not use all-workspace feature unification to claim a default-off graph, run cargo deny with unchanged policy, both ordinary WASM target checks and oxml-layout no-default-features tests.
 - Published API: HLD10 and structural rules. State additive native PEM acceptance and owned binding report shape, run denied-warning rustdoc/Clippy, actual local-patched verified publication dry run and genuine affected archive inventories under unchanged size/member policy.
@@ -183,21 +196,27 @@ Update existing `crates/oxml-cli-support/README.md` to state the report helper i
 - External comparison/artifact builds: Pin actual compiler, target, signing fixture and any independent verifier. Capture matched-profile artifact before/after sizes and provenance. Any accepted external CI results bind exact reviewed source. No native GUI signature-trust or public CA trust claim is added.
 - Release scripting: Any wheel/CLI build invocation edit needs HLD15/release-contract inspection and actual family preflight/policy tests. This F-ID performs no tag or publication.
 
+## Gate environment clarification
+
+The immutable historical rdocx-layout0.10.1 policy proves its checksum-authenticated published locked graph with unchanged original manifests and lock, registry-only normal dependencies and the original oxml-layout0.6.0 selection. Fresh unlocked consumer resolution is currently unavailable because every admissible zip8 release is yanked. This does not alter current workspace supply-chain policy, synthesize a consumer lock or claim historical fresh resolution succeeds. The actual unlocked failure and independent published-lock probe are retained in private evidence.
+
 ## Hash harness
 
 Expected unchanged, all49entries and the shared pixel manifest. Signing and verification fixtures are source-built and do not change shared sample rendering. F-X240 has no baseline write lease. Any unrelated delta stops completion. Numeric package observations use the existing README/catalog carriers and belong to the integrator's exclusive metadata lease.
 
 ## Implementation checklist
 
-- [ ] Adopt after S94 opens, confirm pending status/current branch/Base, approve the all-sprint plan and claim the isolated worktree.
-- [ ] Freeze authenticated prefeature ordinary wheel/CLI graphs, sizes and artifacts under matched profiles.
-- [ ] Execute current public-surface RED and the Word current-state verification probe, retaining actual outcomes.
-- [ ] Add the one strict existing-provider DER/PEM path, four ordinary facade consumers, and default-off CLI-support report feature explicitly selected by its two actual CLI callers. Preserve isolated support default graph.
-- [ ] Implement owned Python reports/stubs, prepared sign publication and current-state verification.
-- [ ] Implement both CLI pairs, precise exit/JSON/text profiles and atomic output behavior.
-- [ ] Execute both-family installed/release CLI tamper/partial/unsigned/PEM controls and meaningful negatives.
-- [ ] Complete graph/licence/size, WASM, docs, archive and policy riders, independent microscope and scoped verification.
-- [ ] Reconcile HLD and package observations through the integrator and prepare structured handoff without sprint ledgers or worker push.
+- [x] Adopt after S94 opens, confirm pending status/current branch/Base, approve the all-sprint plan and claim the isolated worktree.
+- [x] Freeze authenticated prefeature ordinary wheel/CLI graphs, sizes and artifacts under matched profiles.
+- [x] Execute current public-surface RED and the Word current-state verification probe, retaining actual outcomes.
+- [x] Add the one strict existing-provider DER/PEM path, four ordinary facade consumers, and default-off CLI-support report feature explicitly selected by its two actual CLI callers. Preserve isolated support default graph.
+- [x] Implement owned Python reports/stubs, prepared sign publication and current-state verification.
+- [x] Implement both CLI pairs, precise exit/JSON/text profiles and atomic output behavior.
+- [x] Complete the explicitly approved ZIP9 compatibility migration and fresh affected runtime/wheel/archive qualification, retaining old8 source/artifacts and attributed raw-container differences.
+- [x] Execute both-family installed/release CLI tamper/partial/unsigned/PEM controls and meaningful negatives.
+- [x] Complete graph/licence/size, WASM, docs, archive and policy riders, independent microscope and scoped verification.
+- [ ] Execute the actual Unified family release workflow at the reviewed remote SHA: twelve installed wheel signing members, twelve selected CLI signing members including both no-default musl routes, two sdist members and the CLI-assets verifier. Preserve manual build-only publication guards. External CI remains pending until all required jobs actually pass.
+- [x] Reconcile HLD and package observations through the integrator and prepare structured handoff without sprint ledgers or worker push.
 
 ## Open questions
 

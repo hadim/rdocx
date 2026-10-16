@@ -10919,3 +10919,123 @@ def test_fx239_valid_spacing_matches_pinned_python_pptx(tmp_path):
             root = ET.fromstring(package.read("ppt/slides/slide1.xml"))
         projections.append(tuple((next(root.iter(a + name))[0].tag, next(root.iter(a + name))[0].get("val")) for name in ["spcBef", "spcAft", "lnSpc"]))
     assert projections[0] == projections[1]
+
+
+def _fx240_material():
+    # Authentic existing native test identity, not a production or trusted key.
+    import base64
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[2] / "oxml-opc" / "src" / "signature.rs").read_text(encoding="utf-8")
+    def constant(name):
+        return base64.b64decode(re.search(r'const ' + name + r': &str = "([^"]+)";', source)[1], validate=True)
+    return constant("TEST_PRIVATE_KEY_PKCS8_BASE64"), constant("TEST_CERTIFICATE_DER_BASE64")
+
+
+def _fx240_zip_edit(source, part=None, old=None, new=None, extra=None):
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(source)) as archive, zipfile.ZipFile(output, "w") as result:
+        for info in archive.infolist():
+            data = archive.read(info.filename)
+            if info.filename == part:
+                assert old in data
+                data = data.replace(old, new, 1)
+            result.writestr(info, data)
+        if extra:
+            result.writestr("word/uncovered.xml" if "rpptx" == "rdocx" else "ppt/uncovered.xml", b"<uncovered/>")
+    return output.getvalue()
+
+
+def test_fx240_sign_verify_owned_reports_pem_and_multisignatures():
+    import base64
+    import rpptx as product
+    owner = product.Presentation()
+    assert owner.verify_signatures() == ()
+    opaque = b'<unmodelled xmlns="urn:caller-owned"><payload a="keep">opaque</payload></unmodelled>'
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(owner.to_bytes())) as source, zipfile.ZipFile(output, "w") as result:
+        entries = [(item.filename, source.read(item.filename)) for item in source.infolist()]
+        for name, data in entries:
+            result.writestr(name, data)
+        result.writestr("custom/opaque.xml", opaque)
+    owner = product.Presentation.from_bytes(output.getvalue())
+    key, cert = _fx240_material()
+    def pem(label, value):
+        encoded = base64.b64encode(value)
+        return b" \r\n-----BEGIN " + label + b"-----\r\n" + b"\r\n".join(encoded[i:i+64] for i in range(0, len(encoded), 64)) + b"\r\n-----END " + label + b"-----\t\r\n"
+    report = owner.sign(pem(b"PRIVATE KEY", key), pem(b"CERTIFICATE", cert))
+    assert type(report) is dict and report["cryptographically_valid"] and report["coverage_complete"]
+    assert set(report) == {"signature_part", "signer", "cryptographically_valid", "coverage_complete", "covered_parts", "covered_relationships", "issues"}
+    assert set(report["signer"]) == {"subject", "issuer", "serial_number"}
+    assert "F-172 Test Signer" in report["signer"]["subject"]
+    assert report["issues"] == [] and report["covered_parts"] and report["covered_relationships"]
+    assert set(report["covered_relationships"][0]) == {"source_part", "relationship_id"}
+    report["covered_parts"].clear()
+    report["signer"]["subject"] = "mutated"
+    assert owner.verify_signatures()[0]["covered_parts"]
+    assert owner.verify_signatures()[0]["signer"]["subject"] != "mutated"
+    before = owner.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(before)) as preserved:
+        assert preserved.read("custom/opaque.xml") == opaque
+    with pytest.raises(product.PackageError):
+        owner.sign(key, cert)  # The native provider refuses re-signing a signed graph.
+    assert owner.to_bytes() == before
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(before)) as archive, zipfile.ZipFile(output, "w") as result:
+        signature_bytes = archive.read("_xmlsignatures/sig1.xml")
+        for info in archive.infolist():
+            result.writestr(info, archive.read(info.filename))
+        result.writestr("_xmlsignatures/sig2.xml", signature_bytes)
+    reports = product.Presentation.from_bytes(output.getvalue()).verify_signatures()
+    assert type(reports) is tuple and len(reports) == 2
+    assert reports[1]["signer"] is None and not reports[1]["cryptographically_valid"]
+    assert reports[1]["issues"] == [{"kind": "orphan_signature_part", "details": {"part_name": "/_xmlsignatures/sig2.xml"}}]
+    assert not any(hasattr(product, name) for name in ("SignatureReport", "_SignatureReport", "_SignatureIssue"))
+
+
+def test_fx240_current_tamper_partial_unsigned_and_malformed():
+    import rpptx as product
+    owner = product.Presentation()
+    slide = owner.slides.add_slide(owner.slide_layouts[6]); slide.shapes.add_textbox(0, 0, 1000000, 1000000).text = "signed text"
+    key, cert = _fx240_material()
+    owner.sign(key, cert)
+    original = owner.to_bytes()
+    owner.slides[0].shapes[0].text = "changed text"
+    reports = owner.verify_signatures()
+    assert len(reports) == 1 and not reports[0]["cryptographically_valid"]
+    issues = reports[0]["issues"]
+    changed = [issue for issue in issues if issue["kind"] == "changed_reference"]
+    assert any(issue["details"]["uri"].startswith("/ppt/slides/slide1.xml?") for issue in changed)
+    assert all(set(issue["details"]) == {"uri", "expected_digest", "actual_digest"} for issue in changed)
+    partial = product.Presentation.from_bytes(_fx240_zip_edit(original, extra=True))
+    report = partial.verify_signatures()[0]
+    assert report["cryptographically_valid"] and not report["coverage_complete"]
+    assert {"kind": "uncovered_part", "details": {"part_name": "/ppt/uncovered.xml"}} in report["issues"]
+    malformed = _fx240_zip_edit(original, "_xmlsignatures/sig1.xml", b"http://www.w3.org/2001/04/xmldsig-more#rsa-sha256", b"urn:unsupported-signature")
+    with pytest.raises(product.PackageError):
+        product.Presentation.from_bytes(malformed).verify_signatures()
+    assert product.Presentation().verify_signatures() == ()
+
+
+def test_fx240_refusal_preserves_current_bytes_and_held_authority():
+    import rpptx as product
+    owner = product.Presentation()
+    slide = owner.slides.add_slide(owner.slide_layouts[6]); slide.shapes.add_textbox(0, 0, 1000000, 1000000).text = "signed text"
+    slide = owner.slides[0]; shape = slide.shapes[0]
+    frame = shape.text_frame; paragraph = frame.paragraphs[0]; run = paragraph.runs[0]
+    before = owner.to_bytes()
+    key, cert = _fx240_material()
+    for bad in (b"", b"x" * (1024 * 1024 + 1), b"-----BEGIN RSA PRIVATE KEY-----Zg==-----END RSA PRIVATE KEY-----", key + b" "):
+        with pytest.raises(product.PackageError):
+            owner.sign(bad, cert)
+        assert owner.to_bytes() == before and owner.verify_signatures() == ()
+        assert shape.text == frame.text == paragraph.text == run.text == "signed text" and len(slide.shapes) == 1
+    for value in ("not bytes", 123, None):
+        with pytest.raises(TypeError):
+            owner.sign(value, cert)
+    report = owner.sign(key, cert)
+    assert report["cryptographically_valid"]
+    assert shape.text == frame.text == paragraph.text == run.text == "signed text" and len(slide.shapes) == 1
+    saved = owner.to_bytes()
+    assert owner.verify_signatures()[0]["cryptographically_valid"]
+    assert owner.to_bytes() == saved
+    assert shape.text == frame.text == paragraph.text == run.text == "signed text" and len(slide.shapes) == 1

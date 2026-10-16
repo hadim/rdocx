@@ -1,3 +1,4 @@
+from typing import TypedDict as _TypedDict
 from typing import BinaryIO as _BinaryIO
 import datetime as _datetime
 import os as _os
@@ -8,6 +9,28 @@ from . import shared as _shared
 from .enum import MSO_THEME_COLOR as _MSO_THEME_COLOR
 from .enum import table as _table
 from .enum import text as _text
+
+class _SignerCertificateIdentity(_TypedDict):
+    subject: str
+    issuer: str
+    serial_number: str
+
+class _CoveredRelationship(_TypedDict):
+    source_part: str
+    relationship_id: str
+
+class _SignatureIssue(_TypedDict):
+    kind: _Literal["missing_part", "changed_reference", "duplicate_reference", "missing_relationship", "duplicate_relationship", "external_relationship", "missing_relationship_target", "uncovered_part", "uncovered_relationship", "signature_value_mismatch", "orphan_signature_part"]
+    details: dict[str, str]
+
+class _SignatureReport(_TypedDict):
+    signature_part: str
+    signer: _SignerCertificateIdentity | None
+    cryptographically_valid: bool
+    coverage_complete: bool
+    covered_parts: list[str]
+    covered_relationships: list[_CoveredRelationship]
+    issues: list[_SignatureIssue]
 
 _Path = str | _os.PathLike[str]
 _RevisionView = _Literal["accepted", "tracked"]
@@ -867,6 +890,8 @@ class FontDefinition:
 
 @_final
 class Document:
+    def sign(self, private_key: bytes, certificate: bytes) -> _SignatureReport: ...
+    def verify_signatures(self) -> tuple[_SignatureReport, ...]: ...
     @property
     def fonts(self) -> tuple[FontDefinition, ...]: ...
     def set_font(self, font: FontDefinition) -> None: ...

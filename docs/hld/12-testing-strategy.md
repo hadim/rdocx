@@ -983,6 +983,27 @@ editing. Word for Mac does not expose a Windows certificate-trust verdict. The
 oracle does not establish certificate trust or replace the Rust cryptographic
 and coverage assertions.
 
+The signing tool regression gate covers both ordinary installed Python families
+and both release CLI artifacts. Source-built inputs exercise DER, LF/CRLF PEM,
+strict envelope and size refusals, unsaved Word edits, precise changed-part
+issues, valid but incomplete coverage, unsigned input and multiple reports.
+Both shared report converters test every issue variant and its exact payload.
+Held Word paragraph, run, internal hyperlink and story authority and held
+presentation slide, shape and text authority survive supported package-only
+signing. Genuine late graph refusal retains bytes and authority. Integrated
+five-kind form fill then sign is fully covered, while later fill reports the
+changed Word part. Reports are owned values and cannot mutate package state.
+
+The wheel workflow retains exact installed test membership in native and Alpine
+musl consumers. CLI acceptance runs the actual selected executable on every
+release target, including its no-default-features musl build. It creates fixtures
+from the existing source recipes without importing either Python product wheel.
+These target results must bind the reviewed source before feature acceptance.
+Standalone default and no-default CLI-support graphs are checked independently
+from workspace feature unification. Explicit support signing and both CLI
+consumers activate the optional report helper. Native defaults and WASM stay
+unchanged. No certificate-chain trust or GUI signature-trust result is inferred.
+
 The scalar template unit gate splits one tag across five differently formatted
 runs and proves that the first matched run supplies replacement formatting
 while unmatched prefix and suffix formatting remain intact. The structural
@@ -4535,3 +4556,9 @@ measurement, empty or hidden content and first-use dedup exclude historical
 facts. Unknown semantic meaning and actual glyph absence remain separate
 claims. Test-only family-name rewriting authenticates complete font checksums
 and unchanged glyph tables without adding a font asset.
+
+## ZIP dependency compatibility controls
+
+ZIP migration controls retain actual old8 and new9 artifacts, with matched raw local/central name bytes and flags, CRC-valid payloads and independent header inspection. They cover UTF8 and CP437 identity, normalized alias rejection, traversal, limits, malformed names, ODT raw UTF8 refusal, ODP first stored mimetype, Unicode-path extras and opaque/resource retention. Existing signature/encryption and ODT/ODP/EPUB controls remain mandatory.
+
+Raw container header changes are attributed separately from ordered member names, inflated XML/media, compressed payloads, timestamps and permissions. The49 semantic/render hashes and deterministic pixels remain unchanged gates. The native upstream error identity gets an actual downstream consumer. Fresh affected ZIP9 native, installed-wheel and CLI qualifications supersede predecessor runtime claims, while original artifacts remain intact.

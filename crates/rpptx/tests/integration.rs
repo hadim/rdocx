@@ -1962,6 +1962,86 @@ fn odp_reader_and_writer_match_pinned_libreoffice_both_directions() {
 }
 
 #[test]
+fn zip9_odp_flag_clear_utf8_image_and_mimetype_refusal() {
+    let source = f222_odp_fixture();
+    let mut archive = zip::ZipArchive::new(Cursor::new(source)).unwrap();
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry
+            .name()
+            .unwrap()
+            .into_owned()
+            .replace("Pictures/source.png", "Pictures/é.png");
+        let method = entry.compression();
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
+        if name.ends_with(".xml") {
+            bytes = String::from_utf8(bytes)
+                .unwrap()
+                .replace("Pictures/source.png", "Pictures/é.png")
+                .into_bytes();
+        }
+        writer
+            .start_file(
+                name,
+                zip::write::SimpleFileOptions::default().compression_method(method),
+            )
+            .unwrap();
+        std::io::Write::write_all(&mut writer, &bytes).unwrap();
+    }
+    let mut source = writer.finish().unwrap().into_inner();
+    for offset in 0..source.len().saturating_sub(46) {
+        let flags = match &source[offset..offset + 4] {
+            b"PK\x03\x04" => offset + 6,
+            b"PK\x01\x02" => offset + 8,
+            _ => continue,
+        };
+        source[flags + 1] &= !8;
+    }
+    let before = source.clone();
+    let imported = Presentation::from_odp_bytes(&source).unwrap();
+    assert!(imported.diagnostics.is_empty());
+    let package = open_opc(
+        &imported.presentation.to_bytes().unwrap(),
+        "ZIP9 ODP UTF8 resource",
+    );
+    assert!(
+        package
+            .parts
+            .iter()
+            .any(|(name, bytes)| name.starts_with("/ppt/media/")
+                && bytes.as_slice() == valid_one_pixel_png())
+    );
+    assert_eq!(source, before);
+    let mut wrong_first = source.clone();
+    let mut changed = 0;
+    for offset in 0..wrong_first.len().saturating_sub(46) {
+        let header = match &wrong_first[offset..offset + 4] {
+            b"PK\x03\x04" => 30,
+            b"PK\x01\x02" => 46,
+            _ => continue,
+        };
+        let start = offset + header;
+        if wrong_first.get(start..start + 8) == Some(b"mimetype") {
+            wrong_first[start..start + 8].copy_from_slice(b"notatype");
+            changed += 1;
+        }
+    }
+    assert_eq!(changed, 2);
+    let error = match Presentation::from_odp_bytes(&wrong_first) {
+        Ok(_) => panic!("ODP accepted a different first entry"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("ODP mimetype must be the first stored entry"),
+        "{error}"
+    );
+}
+
+#[test]
 fn odp_round_trip_preserves_supported_presentation_content() {
     let source = Presentation::from_odp_bytes(&f222_odp_fixture()).unwrap();
     assert!(source.diagnostics.is_empty());
@@ -2025,7 +2105,7 @@ fn odp_packages_are_bounded_deterministic_and_manifest_complete() {
     assert_eq!(first, second);
     let mut archive = zip::ZipArchive::new(Cursor::new(&first)).unwrap();
     let mimetype = archive.by_index(0).unwrap();
-    assert_eq!(mimetype.name(), "mimetype");
+    assert_eq!(mimetype.name().unwrap(), "mimetype");
     assert_eq!(mimetype.compression(), zip::CompressionMethod::Stored);
     drop(mimetype);
     let manifest = {
@@ -13205,23 +13285,47 @@ fn collaboration_mutations_never_report_the_retained_signature_as_valid() {
 }
 
 #[test]
-fn presentation_security_features_are_default_off_and_binding_manifests_do_not_enable_them() {
-    let manifest = include_str!("../Cargo.toml");
-    assert!(manifest.contains("agile-encryption = [\"oxml-opc/agile-encryption\"]"));
-    assert!(manifest.contains("digital-signatures = [\"oxml-opc/digital-signatures\"]"));
-    let default = manifest
-        .lines()
-        .find(|line| line.starts_with("default ="))
-        .expect("rpptx default feature declaration");
-    assert!(!default.contains("agile-encryption"));
-    assert!(!default.contains("digital-signatures"));
+fn security_features_remain_opt_in_for_native_facades_and_explicit_for_signing_tools() {
+    for manifest in [
+        include_str!("../Cargo.toml"),
+        include_str!("../../rdocx/Cargo.toml"),
+    ] {
+        assert!(manifest.contains("agile-encryption = [\"oxml-opc/agile-encryption\"]"));
+        assert!(manifest.contains("digital-signatures = [\"oxml-opc/digital-signatures\"]"));
+        let default = manifest
+            .lines()
+            .find(|line| line.starts_with("default ="))
+            .expect("native facade default feature declaration");
+        assert!(!default.contains("agile-encryption"));
+        assert!(!default.contains("digital-signatures"));
+    }
     for binding in [
-        include_str!("../../rpptx-py/Cargo.toml"),
+        include_str!("../../rdocx-wasm/Cargo.toml"),
         include_str!("../../rpptx-wasm/Cargo.toml"),
-        include_str!("../../rpptx-cli/Cargo.toml"),
     ] {
         assert!(!binding.contains("agile-encryption"));
         assert!(!binding.contains("digital-signatures"));
+    }
+    for (manifest, facade, cli) in [
+        (include_str!("../../rdocx-py/Cargo.toml"), "rdocx", false),
+        (include_str!("../../rpptx-py/Cargo.toml"), "rpptx", false),
+        (include_str!("../../rdocx-cli/Cargo.toml"), "rdocx", true),
+        (include_str!("../../rpptx-cli/Cargo.toml"), "rpptx", true),
+    ] {
+        let production = manifest.split("[dev-dependencies]").next().unwrap();
+        assert!(!production.contains("agile-encryption"));
+        let dependency = production
+            .lines()
+            .find(|line| line.starts_with(&format!("{facade} =")))
+            .expect("direct native facade dependency");
+        assert!(dependency.contains("\"digital-signatures\""));
+        if cli {
+            let support = production
+                .lines()
+                .find(|line| line.starts_with("oxml-cli-support ="))
+                .expect("direct CLI support dependency");
+            assert!(support.contains("\"digital-signatures\""));
+        }
     }
 }
 
@@ -28842,7 +28946,7 @@ fn no_op_save_preserves_every_unchanged_part() {
         let mut entries = BTreeMap::new();
         for index in 0..archive.len() {
             let mut entry = archive.by_index(index).unwrap();
-            let name = entry.name().to_owned();
+            let name = entry.name().unwrap().into_owned();
             let mut value = Vec::new();
             entry.read_to_end(&mut value).unwrap();
             entries.insert(name, value);

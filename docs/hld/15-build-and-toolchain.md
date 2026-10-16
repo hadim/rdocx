@@ -302,6 +302,7 @@ weight400-versus700 discrimination. It establishes no general browser result.
 | `oxml-opc` | `digital-signatures` | off | Adds OPC signature creation, verification, and coverage reports |
 | `rdocx` | `digital-signatures` | off | Forwards native signature creation and verification to `oxml-opc` |
 | `rpptx` | `digital-signatures` | off | Forwards native signature creation and current-state verification to `oxml-opc` |
+| `oxml-cli-support` | `digital-signatures` | off | Converts native reports for the two explicit CLI consumers |
 | `oxml-layout` | `system-fonts` | on | Off for wasm, where `fontconfig` will not build |
 | `rdocx-layout` | `system-fonts` | on | Forwards host discovery to `oxml-layout` |
 | `rdocx` | `system-fonts` | on | Forwards through the complete native layout graph |
@@ -322,9 +323,13 @@ discovery in that graph. Native `rpptx`, `rpptx-render`, and the presentation
 Python binding retain system fonts through the same explicit forwarding
 pattern. Bundled font bytes remain available in both modes. The `rpptx`
 security features are native-only named-consumer edges to `oxml-opc`. The
-Python, WASM, and CLI manifests do not opt in to `agile-encryption` or
-`digital-signatures`, so their ordinary graphs exclude the added cryptographic
-dependencies.
+Python and CLI manifests explicitly select digital-signatures through their
+facades. Both CLIs also select the default-off shared report feature through
+their dependency declarations, so no-default-features builds retain signing.
+The unpublished Python support crate has a mandatory signature-enabled OPC
+edge for its two concrete binding consumers. Isolated CLI-support default and
+no-default graphs exclude OPC and crypto. Native defaults and WASM do not
+select signing. Python, WASM and CLI manifests do not select agile-encryption.
 
 Raster encoding dependencies are intentionally narrow. `jpeg-encoder` and
 `tiff` are direct `oxml-pdf` dependencies with default features disabled,
@@ -677,9 +682,12 @@ allowlist remains exactly15 packages. The previous complete unified family is
 immutable `rpptx-v0.14.0` at733ce6f7b2b816c5760692abf5c99d68b29ae897. The
 historical S73 family retains the immutable `rpptx-v0.12.1` release at reviewed SHA
 `58ca5a279277f7cd8de0b8f250fb4650de14371b`, and earlier registry releases
-remain available. The stable 0.10.1 registry consumer proof remains pinned to
-the immutable `oxml-layout@0.6.0` dependency rather than the current workspace
-family. Shared 0.11.0 contains the additive `oxml-opc` constants required by
+remain available. The stable 0.10.1 historical graph proof authenticates the
+original registry archive and unchanged published manifests and lock, then
+resolves with `--locked`. Its normal dependencies remain registry-sourced,
+including `oxml-layout@0.6.0`, rather than the current workspace family. Fresh
+unlocked resolution is unavailable because the admissible zip8 versions are
+yanked. This historical replay does not change current supply-chain policy. Shared 0.11.0 contains the additive `oxml-opc` constants required by
 the stable recovery.
 Workspace settings consolidate the preparation commit, upgrade internal
 dependency requirements, and retain archive verification. Publishing, tag
@@ -1160,8 +1168,9 @@ dependencies have the named
 default-off `oxml-opc/agile-encryption` consumer and do not enter ordinary,
 Python, WASM, or CLI graphs.
 Ring, SHA-256, and X.509 parsing have the named default-off
-`oxml-opc/digital-signatures` consumer. They do not enter ordinary, Python,
-WASM, or CLI graphs. That feature also uses `base64`, whose ordinary runtime
+`oxml-opc/digital-signatures` consumer. Ordinary Python wheels and both CLIs
+explicitly select that consumer. Native defaults, WASM and isolated base
+CLI-support graphs exclude the edge. That feature also uses `base64`, whose ordinary runtime
 consumer and binding-graph consequences are described below. The creator uses
 operating-system randomness for strict RSA-SHA256 signing and requires a
 matching embedded public key. The verifier authenticates with that embedded
@@ -1229,11 +1238,11 @@ only by `render`. It owns strict bounded PDF object, page, resource, stream,
 font-encoding, image, annotation, and content decoding. It does not render and
 does not enter an `oxml-*`, Python, WASM, or CLI crate directly.
 
-The existing workspace `zip` 8.1 dependency has direct named consumers in the
+The workspace `zip` 9.0.3 dependency has direct named consumers in the
 private ODT reader and writer inside `rdocx`. It retains the workspace's
 disabled default features and enables only `deflate-flate2-zlib-rs`. Deflate64
-and clock-backed timestamp support remain disabled. No new external package or
-`oxml-*` dependency edge is added. The reader validates bounded archive
+and clock-backed timestamp support remain disabled. ODT adds no separate archive provider or `oxml-*` dependency edge.
+The reader validates bounded archive
 metadata before parsing. The writer fixes entry order, compression,
 permissions, the 1980-01-01 timestamp, and other metadata while bounding XML,
 media, entries, and total retained output. Neither direction reuses
@@ -1316,3 +1325,13 @@ through the existing deterministic caller-font route. No font installation is
 required. Original font mismatches and empty-legend native overlay remain
 recorded. Component paint qualification does not establish whole-chart or
 outer-frame equivalence, and deterministic shared baselines remain unchanged.
+
+## ZIP supply-chain selection
+
+The workspace requires zip9.0.3, with default features disabled and only deflate-flate2-zlib-rs enabled. Its MSRV1.88 is below workspace MSRV1.93, whose actual compile check remains mandatory. The three direct consumers are oxml-opc, rdocx and rpptx. The upstream major changes the native exposed error identity, decoded filename behavior and ordinary raw-container metadata. No new codec, alias or policy ignore is added. Current cargo-deny yanked rejection remains enabled.
+
+Matched ordinary wheel and CLI size deltas include this approved dependency migration and signing feature wiring. Original ZIP8 artifacts and receipts remain separately labelled predecessors. Genuine current archives require fresh measured catalog/README values and verified compilation, exact normalized members/count,64-byte compressed allowance and the existing10MiB ceiling.
+
+ZIP9 also selects its upstream macOS/BSD-only nix0.31.3 dependency with fs and
+disabled defaults, plus cfg_aliases0.2.2 for that dependency build. They do not
+add a ZIP codec and remain subject to actual target, license and MSRV checks.

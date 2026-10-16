@@ -2034,12 +2034,11 @@ their API and dependency graphs remain unchanged.
 When native callers enable the default-off `digital-signatures` feature,
 `Document::verify_signatures` directly returns the shared package verification
 reports. `Document::sign` accepts PKCS#8 private-key DER and X.509 certificate
-DER on native targets. It flushes typed state into a staged document, asks the
+DER or the admitted single unencrypted PEM envelopes on native targets. It flushes typed state into a staged document, asks the
 shared package layer to sign and verify the complete graph, and commits only
 the verified candidate. The additive APIs distinguish cryptographic validity
-and complete declared coverage from certificate-chain trust. They do not
-expand Python, WASM, or CLI surfaces and those dependency graphs remain
-unchanged.
+and complete declared coverage from certificate-chain trust. Python and CLI adapters explicitly enable signing and owned reports. WASM
+does not select the feature.
 
 The native `Presentation` facade exposes the parallel default-off security
 surface. `open_encrypted`, `from_encrypted_bytes`, and the bounded bytes
@@ -2047,12 +2046,13 @@ variant use the shared package reader. `save_encrypted` and
 `to_encrypted_bytes` use the shared fixed Agile profile, with sibling-file
 atomic publication for the path method. `verify_signatures` stages current
 typed presentation state before returning shared reports. Native `sign`
-accepts PKCS#8 private-key DER and X.509 certificate DER, then commits only a
+accepts PKCS#8 private-key DER and X.509 certificate DER or the admitted PEM
+envelopes, then commits only a
 candidate whose signature is cryptographically valid and has complete declared
 coverage. Relevant mutation retains signature infrastructure for inspection
-but makes verification report it as invalid. These additive pre-1.0 APIs do
-not expand Python, WASM, or CLI surfaces, and their manifests select neither
-security feature.
+but makes verification report it as invalid. Python and CLI adapters explicitly select digital signatures. WASM and
+native defaults remain unchanged, and the tool adapters do not select Agile
+encryption.
 
 Native callers rebuilding one Word document from another can call
 `Document::transfer_reusable_layout_from`. The method moves the source's normal
@@ -4074,3 +4074,45 @@ border children refuses atomically rather than losing those bytes.
 The style ID `LightShading-Accent1` and name `Light Shading Accent 1` resolve
 to the same actual canonical style definition. Lazy admission preserves
 custom definitions and leaves the default document factory unchanged.
+
+## Signing publication
+
+Python signing uses a private signing publication policy. Exact unchanged physical
+source and ancestor certificates preserve supported paragraph, table, cell and
+section owners. Runs require their certified parent and identical accepted path.
+Hyperlinks require the same unique physical paragraph source and local index.
+Unproved owners retire. Local revision preparation preserves document authority.
+Story snapshot authority survives only when the ordered story identities and
+complete item snapshots are equal across staging. Report and registry allocation
+finish before token commit and infallible native replacement. Read-only signature
+verification serializes current Word content on a private clone and publishes no
+state. Certificate identity does not establish certificate-chain trust.
+
+Both Python owners expose sign(private_key: bytes, certificate: bytes) and
+verify_signatures(). Signing returns an owned report dictionary. Verification
+returns a tuple of those dictionaries, empty for unsigned packages. Fields are
+signature_part, signer, cryptographically_valid, coverage_complete,
+covered_parts, covered_relationships and issues. The optional signer contains
+subject, issuer and serial_number. Relationship objects contain source_part
+and relationship_id. Issues contain the exact snake_case native kind and a
+details dictionary with every named string payload. Only the fieldless
+signature_value_mismatch has empty details. Private TypedDict descriptors in
+the existing stubs describe these values without adding runtime exports.
+Malformed and unsupported signatures retain package exceptions. Native
+re-signing and external-relationship refusals remain in force.
+
+Both CLIs expose sign INPUT --key KEY --cert CERT -o OUTPUT and
+verify-signatures INPUT, each with optional --json. Key and certificate reads
+are bounded at1MiB before allocation. Signing stages a verified complete
+candidate and refuses existing or aliased destinations. JSON retains schema1
+and carries signature for signing, or status and signatures for verification.
+Verification reports valid, invalid, partial or unsigned. Invalid outranks
+partial. Exit0 requires at least one report and all reports valid and complete.
+Unsigned, invalid, incomplete and runtime errors exit1. Usage errors exit2.
+Both signing and verification propagate report output errors, including broken
+pipes, as exit1. Signing publishes before reporting, so an output error can leave
+a valid new signed package. Input and existing destinations remain unchanged.
+
+## Native ZIP error compatibility
+
+OpcError::Zip exposes zip::result::ZipError from the version9 dependency, replacing its zip8 type identity. Native Word and PowerPoint error families continue to carry that OPC error. This is an accepted pre-1.0 source-compatibility boundary for downstream construction, matching and From conversions. No new wrapper error or method is introduced. Python retains the existing package/error mappings.
