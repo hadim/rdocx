@@ -5484,17 +5484,6 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertFalse(readme_doctests.validate_comparison_evidence(broad_uniqueness))
         self.assertFalse(readme_doctests.validate_comparison_evidence(duplicate_evidence))
 
-    def test_readme_depth_footprint_and_speed_claims_are_evidence_backed(
-        self,
-    ) -> None:
-        self.assertTrue(readme_doctests.validate_inventory())
-        self.assertTrue(
-            all(
-                readme_doctests.compile_readme(case)
-                for case in readme_doctests.README_CASES
-            )
-        )
-
     def test_measurement_rows_match_rederived_archive_footprint(self) -> None:
         for package in readme_doctests.ARCHIVE_MEASUREMENTS:
             recorded = readme_doctests.recorded_archive_measurement(

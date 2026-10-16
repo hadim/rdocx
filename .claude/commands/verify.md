@@ -85,7 +85,9 @@ call an unperformed final oracle a passed local gate.
    sprint is closed. S42 is the demonstration: F-X022 moved every version
    carrier under `crates/`, passed the entire local gate, and left the
    incubating preflight and the `ci.yml` WASM literal asserting the old
-   version. The whole module takes about four seconds.
+   version. The standalone README gate in step9 owns actual README compilation
+   and archive inventory checks. Policy tests retain their unique mutation and
+   contract assertions without replaying that full integration gate.
 
 7. **The no-default-features path.**
    `cargo test -p oxml-layout --no-default-features`. This is the only thing
