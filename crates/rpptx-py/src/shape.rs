@@ -2609,12 +2609,13 @@ impl PyChart {
         self.set_legend(py, None, None, Some(value.extract()?))
     }
     #[getter]
-    fn chart_type(&self, py: Python<'_>) -> PyResult<i64> {
-        let kind = self.data(py)?.0;
-        Ok(CHART_TYPES
-            .iter()
-            .find_map(|(v, k)| (*k == kind).then_some(*v))
-            .expect("supported chart kind"))
+    fn chart_type(&self, py: Python<'_>) -> PyResult<Option<i64>> {
+        let (slide, id) = self.owner(py)?;
+        self.presentation
+            .borrow(py)
+            .inner
+            .chart_type(slide, id)
+            .map_err(|error| rpptx_to_pyerr(py, error))
     }
     #[getter]
     fn categories<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {

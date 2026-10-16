@@ -1,6 +1,6 @@
 # F-X253, Honor imported chart types and hidden master shapes
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95
 **Size**: M
 **Depends on**: F-X209, F-X215
@@ -84,13 +84,40 @@ F-X253 is the only proposed S95 baseline writer. Compare all 49 hashes and seven
 
 ## Implementation checklist
 
-- [ ] Preserve reporter and actual S94 baseline results.
+- [x] Preserve reporter and actual S94 baseline results.
 - [x] Capture independent native truth table and resolve routing before approval.
-- [ ] Add exact read-only metadata and optional Python projection with current ownership rules.
-- [ ] Repair shared visibility routing only after native evidence decides it.
-- [ ] Qualify actual four output routes, independent positive controls and real failing mutations.
-- [ ] Attribute any intentional baseline delta, complete scoped riders, microscope and handoff.
+- [x] Add exact read-only metadata and optional Python projection with current ownership rules.
+- [x] Repair shared visibility routing only after native evidence decides it.
+- [x] Qualify actual four output routes, independent positive controls and real failing mutations.
+- [x] Attribute any intentional baseline delta, complete scoped riders, microscope and handoff.
 
 ## Open questions
 
 Resolved by actual native PowerPoint and separately pinned LibreOffice captures. Both select master visibility as the conjunction and layout visibility as the slide flag, with slide and occupied-placeholder controls retained. No material user decision remains. Exact affected product baseline outputs are measured and reviewed during implementation before any baseline write.
+
+
+## Completion evidence
+
+The scoped gate passes with 906 native tests, 34 explicit native ignores, 912
+freshly installed Python tests, strict mypy, stubtest and both WASM targets.
+Actual policy runs 183 tests with two skips. Independent correctness pass 2 and
+bounded packaging pass 3 both report zero defects, zero smells and zero nits.
+
+Fresh post-remediation 49 hashes and seven deterministic pixel buffers match.
+No baseline was recorded. Current installed Python PDF/PNG and CLI convert/render
+outputs match the retained native four-flag observations. Independent
+python-pptx 1.0.2-authored 58, 52, 4 and 69 remain exact after reopen. The unchanged
+reporter records five strict XPASS results separately from five passing bodies.
+Real old-renderer, over-suppression and global-rescan mutations fail their
+respective native-region and metadata-work controls.
+
+Genuine affected four-package publication dry runs use all 22 local patches and
+allow-dirty, verify actual archives and upload nothing. The final all 22 inventory
+validates exact normalized member counts and the unchanged 64-byte compression
+rule. Root alone updated exactly eight numeric lines across the four README
+observations and catalog. Those five files are the explicit applicability
+exceptions to earlier whole-source guards, while all fourteen implementation,
+test and HLD file digests remain exact. Final scoped proof is retained in
+/private/tmp/S95-F-X253-worker-verification-1/scoped-verification-summary.json,
+SHA256 54a4fc73d167e4b00e36a24d98dd4a7517c38a85e7927f86c539024468023a87.
+The integrated sprint still requires its own full gate and review.

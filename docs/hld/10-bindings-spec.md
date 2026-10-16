@@ -140,7 +140,11 @@ an intentional pre-1.0 struct-literal break. Python roots expose concrete
 `add_chart(chart_type, chart_data, width, height, after=None)` returns a prepared
 owned Paragraph and accepts only a checked same-document direct body owner.
 PowerPoint shapes add charts through the existing owned frame handle. Its live
-Chart reads category and series snapshots and replaces data through the native
+Chart reads category and series snapshots. Its chart_type returns int or None
+from qualified source metadata without requiring dense caches or a workbook.
+The four qualified imported subtypes return 58, 52, 4 and 69. Unsupported valid
+types return None, while malformed source and invalid owners raise errors.
+Type reads preserve bytes and live authority. Chart replaces data through the native
 unique-ID graph transaction, including nested groups. Returned allocations
 precede publication. Invalid or retired owners, invalid data and exact no-op
 leave bytes and captured authority unchanged. The Python data objects do not
@@ -3972,6 +3976,11 @@ qualified drawing owner's explicit true or 1 flag without changing retained
 source XML or public struct fields. Picture rendering honors that flag when
 Office saves master visibility into layout-owned pictures. Foreign or rebound
 lookalikes do not supply the flag. This adds no Python hidden property.
+
+Rendering honors show_master_shapes on the physical owners. Ordinary master
+shapes require both effective slide and layout flags. Ordinary layout shapes
+require the slide flag. Direct slide shapes and occupied placeholders retain
+visibility and inheritance independently. Missing flags mean true.
 
 ## Word tables, physical pictures and internal links
 

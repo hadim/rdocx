@@ -11049,3 +11049,80 @@ def test_fx238_slide_xml_hack_refuses_with_remove_pointer():
     with pytest.raises(NotImplementedError, match="slides.remove"):
         presentation.slides._sldIdLst
     assert presentation.to_bytes() == before
+
+
+@pytest.mark.parametrize("authored,expected,old,new", [
+    (51, 58, b'<c:barDir val="col"/>', b'<c:barDir val="bar"/>'),
+    (51, 52, b'<c:grouping val="clustered"/>', b'<c:grouping val="stacked"/>'),
+    (65, 4, b'</c:ser>', b'<c:marker><c:symbol val="none"/></c:marker></c:ser>'),
+    (5, 69, b'</c:ser>', b'<c:explosion val="0"/></c:ser>'),
+])
+def test_fx253_imported_chart_types_are_exact_after_reopen(authored, expected, old, new):
+    from rpptx import Presentation, CategoryChartData, Inches, StaleElementError
+    data = CategoryChartData()
+    data.categories = ["A", "B"]
+    data.add_series("Series", [3.0, 7.0])
+    deck = Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    frame = slide.shapes.add_chart(authored, Inches(1), Inches(1), Inches(3), Inches(2), data)
+    parts = _package_parts(deck.to_bytes())
+    part = next(name for name in parts if re.fullmatch(r"ppt/charts/chart[0-9]+.xml", name))
+    assert old in parts[part]
+    parts[part] = parts[part].replace(old, new)
+    if expected == 58:
+        parts[part] = parts[part].replace(b'val="clustered"', b'val="stacked"')
+    source = _package_bytes(parts)
+    imported = Presentation.from_bytes(source)
+    chart = imported.slides[0].shapes[0].chart
+    before = imported.to_bytes()
+    assert chart.chart_type == expected
+    assert chart.categories == ("A", "B") and chart.series[0].values == [3.0, 7.0]
+    assert chart.chart_type == expected and imported.to_bytes() == before
+    assert _package_parts(imported.to_bytes())[part] == parts[part]
+    reopened = Presentation.from_bytes(imported.to_bytes())
+    assert reopened.slides[0].shapes[0].chart.chart_type == expected
+    grouped = imported.slides[0].shapes.group([imported.slides[0].shapes[0]])
+    assert chart.chart_type == expected and grouped.shapes[0].chart.chart_type == expected
+    imported.slides[0].shapes.remove(grouped)
+    with pytest.raises(StaleElementError):
+        _ = chart.chart_type
+
+
+def test_fx253_unknown_chart_type_is_none_without_requiring_cached_data_or_workbook():
+    from rpptx import Presentation, CategoryChartData, Inches
+    data = CategoryChartData()
+    data.categories = ["A"]
+    data.add_series("Series", [3.0])
+    deck = Presentation()
+    deck.slides.add_slide(deck.slide_layouts[6]).shapes.add_chart(51, Inches(1), Inches(1), Inches(3), Inches(2), data)
+    parts = _package_parts(deck.to_bytes())
+    part = next(name for name in parts if re.fullmatch(r"ppt/charts/chart[0-9]+.xml", name))
+    shell = b'<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea>BODY</c:plotArea></c:chart></c:chartSpace>'
+    for plot, expected in [(b'<c:bubbleChart/>', None), (b'<c:barChart><c:barDir val="bar"/><c:grouping val="stacked"/></c:barChart>', 58)]:
+        parts[part] = shell.replace(b'BODY', plot)
+        imported = Presentation.from_bytes(_package_bytes(parts))
+        before = imported.to_bytes()
+        assert imported.slides[0].shapes[0].chart.chart_type == expected
+        assert imported.to_bytes() == before
+
+
+@pytest.mark.parametrize("plot,scalar,valid", [("scatterChart", "scatterStyle", "smoothMarker"), ("radarChart", "radarStyle", "filled")])
+def test_fx253_invalid_selected_styles_raise_while_valid_unsupported_styles_are_none(plot, scalar, valid):
+    from rpptx import Presentation, CategoryChartData, Inches, RpptxError
+    data = CategoryChartData()
+    data.categories = ["A"]
+    data.add_series("Series", [3.0])
+    deck = Presentation()
+    deck.slides.add_slide(deck.slide_layouts[6]).shapes.add_chart(51, Inches(1), Inches(1), Inches(3), Inches(2), data)
+    parts = _package_parts(deck.to_bytes())
+    part = next(name for name in parts if re.fullmatch(r"ppt/charts/chart[0-9]+.xml", name))
+    for value in [valid, "garbage"]:
+        parts[part] = f'<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:{plot}><c:{scalar} val="{value}"/></c:{plot}></c:plotArea></c:chart></c:chartSpace>'.encode()
+        imported = Presentation.from_bytes(_package_bytes(parts))
+        before = imported.to_bytes()
+        if value == valid:
+            assert imported.slides[0].shapes[0].chart.chart_type is None
+        else:
+            with pytest.raises(RpptxError, match="invalid.*style"):
+                _ = imported.slides[0].shapes[0].chart.chart_type
+        assert imported.to_bytes() == before

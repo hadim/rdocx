@@ -30,6 +30,7 @@ from rpptx import (
     ValidationIssue,
 )
 from rpptx._rpptx import (
+    Chart,
     ThemeColors,
     MasterTextStyles,
     TextStyleList,
@@ -840,3 +841,12 @@ def fx240_owned_signature_reports(owner: Presentation, private_key: bytes, certi
     for checked in owner.verify_signatures():
         print(checked["signature_part"], checked["cryptographically_valid"])
     print(part, valid, complete, parts)
+
+
+def fx253_optional_chart_type(chart: "Chart") -> int:
+    assert_type(chart.chart_type, int | None)
+    value = chart.chart_type
+    if value is None:
+        return -1
+    assert_type(value, int)
+    return value

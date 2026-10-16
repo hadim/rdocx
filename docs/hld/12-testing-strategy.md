@@ -4229,6 +4229,25 @@ LibreOffice round-trip accompany appearance claims. Current wheel member/origin
 proofs, strict typing, stubtest, WASM, hashes and affected verified archives are
 separate required gates.
 
+The four-flag ordinary master/layout/slide visibility matrix is111,001,011,001
+for slide/layout true/true, false/true, true/false and false/false. Independent
+PowerPoint 16.113.4 build 16.113.26100421 and LibreOffice 26.2.5.2 agree at 150 dpi
+with predeclared interior color regions. Occupied placeholder text and styling
+survive every case, while uninstantiated templates remain absent. Explicit and
+absent true flags are equivalent. Actual Python PDF/PNG and CLI convert/render
+outputs use the same observations, with retained old-gate and over-suppression
+mutants required to fail their distinguishing controls.
+
+Chart metadata controls independently qualify imported 58, 52, 4 and 69, preserve
+the seven authored forms, distinguish direct qualified series markers and
+explosion from foreign or nested lookalikes, and reject ambiguous physical
+owners. Sparse caches and absent workbook references do not block type reads.
+Unsupported valid styles and combination plots return None. Installed strict
+typing consumes int or None, while malformed input, grouped owners, retired
+handles and unchanged source remain separately asserted. Ten thousand sparse
+series must fit the explicit metadata work budget. A real whole-inventory
+rescan mutation exhausts that same budget and fails the control.
+
 ## Word story inventory controls
 
 Complete source inventories compare the prior successful algorithm across body,
