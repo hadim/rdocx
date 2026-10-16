@@ -68,6 +68,30 @@ acceptance on the meaningful bare-EMU routes. No new product API, file, module,
 dependency or native provider. Style line_spacing, space_before, indents and
 other integer setters remain outside this story.
 
+### Complete installed-suite fixture reconciliation
+
+Actual complete installed Word execution found seven stale compatibility cases
+outside the new focused controls. Two numeric fixtures must use explicit Emu
+for nonzero update_section values, retaining their exact saved geometry and
+native invalid-gutter assertion. Five other cases encode contracts superseded
+by completed F-X249 and F-X251: one missing individual SDT selector, two
+invalid checkbox scalar variants and two duplicate tab snapshot variants.
+Reconcile those existing test_core.py and test_formatting_tables.py controls
+against the completed plans and current HLD10. Missing individual selection
+must assert KeyError, invalid individual checkbox glyph must assert ValueError,
+and repeated stored tab positions must assert atomic ValueError. Keep bulk
+and native error/count behavior distinct. Preserve snapshot immutability,
+held owners, saved values and every original no-op/refusal assertion. Valid
+insert/delete/clear checks may use distinct positions with adjusted exact
+position expectations. Do not change production SDT or tab behavior, widen
+exception catches, skip tests or rewrite historical completion evidence.
+
+These are test-only reconciliations needed by the already declared complete
+installed suite, not additional product behavior. Actual failed first-attempt
+logs remain retained. Existing F195 reference inputs must be equipped and
+source/tool authenticated with their original producer attribution, rather
+than treating missing prerequisite environment as a product failure.
+
 ## Rejected alternatives
 
 - A section zero-quantization guard misses1440EMU because it stores two twips.
@@ -85,6 +109,7 @@ other integer setters remain outside this story.
 | regression | line_multiple_preserves_named_native_truncation | Off-grid native truncation stays explicit rather than falsely claiming exact oracle rounding parity |
 | regression | update_section_requires_explicit_nonzero_lengths | All ten keywords,1440and other bare values, explicit Twips versus Emu, existing domain/partner validation and multi-key atomicity |
 | regression | live_section_keeps_its_existing_emu_contract | Existing raw-EMU live setters and typed public update agree after save/reopen, held owners survive refusal |
+| regression | existing_integrated_sdt_and_tab_contracts_remain_deciding | Exact F-X249 individual errors, F-X251 duplicate refusal, retained snapshot/owner/no-op controls and positive providers |
 | differential | numeric_units_match_pinned_python_docx_and_named_refusals | python-docx1.2.0 structural controls, policy refusals and rounding divergences are distinguished |
 | installed | fresh ordinary Word suite, strict typing and stubtest | Real wheel/RECORD/native identity, exact updated annotations, current examples and complete installed tests |
 
@@ -129,6 +154,7 @@ No baseline lease.
 - [ ] Implement only the bounded spacing and public section admission changes.
 - [ ] Preserve live section forwarding, explicit truncation and atomicity.
 - [ ] Align stubs and extend existing saved-file, oracle and typing controls.
+- [ ] Reconcile only the named stale installed fixtures against completed F-X249/F-X251 contracts, preserving all deciding assertions.
 - [ ] Pass scoped checks and obtain independent zero-finding microscope.
 - [ ] Update exactly the named HLD sections and prepare validated handoff.
 
