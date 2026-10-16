@@ -3968,11 +3968,108 @@ impl WordOwnerLocation {
     }
 }
 
-fn word_owner_locations(document: &rdocx::Document) -> rdocx::Result<Vec<WordOwnerAddress>> {
+// Source keys include the complete physical route, not projected text ordinals.
+type FormSourceKey = (
+    rdocx::StoryKind,
+    String,
+    usize,
+    rdocx::StoryItemKind,
+    Vec<usize>,
+);
+type FormStoryKey = (rdocx::StoryKind, String, usize);
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum FormOwnerRoute {
+    Paragraph(FormSourceKey),
+    Table(FormSourceKey),
+    Cell(FormSourceKey, usize, usize, FormStoryKey),
+    Section(usize),
+}
+
+#[derive(Default)]
+struct FormSources {
+    xml: HashMap<FormOwnerRoute, Option<Vec<u8>>>,
+    cells: HashMap<FormOwnerRoute, usize>,
+    cell_stories: HashMap<FormStoryKey, usize>,
+}
+
+fn form_source_key(location: &rdocx::ContentLocation) -> FormSourceKey {
+    let story = location.story();
+    (
+        story.kind(),
+        story.part_name().to_owned(),
+        story.owner_index(),
+        location.item_kind(),
+        location.index_path().to_vec(),
+    )
+}
+
+fn form_owner_route(location: &WordOwnerLocation) -> Option<FormOwnerRoute> {
+    match location {
+        WordOwnerLocation::Paragraph(location) => {
+            Some(FormOwnerRoute::Paragraph(form_source_key(location)))
+        }
+        WordOwnerLocation::Table(location) => {
+            Some(FormOwnerRoute::Table(form_source_key(location)))
+        }
+        WordOwnerLocation::Cell {
+            table,
+            row,
+            cell,
+            story,
+        } => Some(FormOwnerRoute::Cell(
+            form_source_key(table),
+            *row,
+            *cell,
+            (
+                story.kind(),
+                story.part_name().to_owned(),
+                story.owner_index(),
+            ),
+        )),
+        WordOwnerLocation::Section(index) => Some(FormOwnerRoute::Section(*index)),
+        WordOwnerLocation::Run(..) | WordOwnerLocation::Hyperlink(..) => None,
+    }
+}
+
+fn word_owner_locations(
+    document: &rdocx::Document,
+    mut form_sources: Option<&mut FormSources>,
+) -> rdocx::Result<Vec<WordOwnerAddress>> {
     let mut result = Vec::new();
     let mut table_ordinals = HashMap::new();
     let (snapshots, cell_snapshots, paragraph_snapshots, link_snapshots) =
         document.story_owner_snapshots()?;
+    if let Some(sources) = form_sources.as_deref_mut() {
+        for snapshot in &snapshots {
+            if snapshot.location().item_kind() == rdocx::StoryItemKind::Table {
+                let key = FormOwnerRoute::Table(form_source_key(snapshot.location()));
+                sources
+                    .xml
+                    .entry(key)
+                    .and_modify(|xml| *xml = None)
+                    .or_insert_with(|| Some(snapshot.xml().to_vec()));
+            }
+        }
+        // Preserve raw multiplicity before the legacy cell-parent map collapses it.
+        for (table, row, cell, story) in &cell_snapshots {
+            let story_key = (
+                story.kind(),
+                story.part_name().to_owned(),
+                story.owner_index(),
+            );
+            *sources.cell_stories.entry(story_key.clone()).or_default() += 1;
+            *sources
+                .cells
+                .entry(FormOwnerRoute::Cell(
+                    form_source_key(table),
+                    *row,
+                    *cell,
+                    story_key,
+                ))
+                .or_default() += 1;
+        }
+    }
     let mut body_slots = HashMap::new();
     let mut cell_parents = HashMap::new();
     let mut table_cells = HashMap::<rdocx::ContentLocation, Vec<_>>::new();
@@ -4057,6 +4154,14 @@ fn word_owner_locations(document: &rdocx::Document) -> rdocx::Result<Vec<WordOwn
     }
     let mut paragraph_ordinals = HashMap::new();
     for (location, xml) in paragraph_snapshots {
+        if let Some(sources) = form_sources.as_deref_mut() {
+            let key = FormOwnerRoute::Paragraph(form_source_key(&location));
+            sources
+                .xml
+                .entry(key)
+                .and_modify(|source| *source = None)
+                .or_insert_with(|| Some(xml.clone()));
+        }
         let story = location.story();
         let parent = cell_parents
             .get(&(
@@ -4104,6 +4209,12 @@ fn word_owner_locations(document: &rdocx::Document) -> rdocx::Result<Vec<WordOwn
         }
     }
     for index in 0..document.section_count() {
+        if let Some(sources) = form_sources.as_deref_mut() {
+            sources.xml.insert(
+                FormOwnerRoute::Section(index),
+                Some(document.section_properties_xml(index)?),
+            );
+        }
         result.push(WordOwnerAddress {
             location: WordOwnerLocation::Section(index),
             parent: None,
@@ -4131,6 +4242,7 @@ fn word_owner_locations(document: &rdocx::Document) -> rdocx::Result<Vec<WordOwn
 #[derive(Clone)]
 pub(crate) enum WordPublication {
     Conservative,
+    FormValues,
     AppendBody,
     HeaderFooterAppend(usize),
     ParagraphText(rdocx::ContentLocation),
@@ -4140,6 +4252,92 @@ pub(crate) enum WordPublication {
     CellText(rdocx::ContentLocation, usize, usize),
     ElementXml(WordOwnerLocation),
     RunText(WordOwnerLocation),
+}
+
+fn form_owner_certificates(
+    old: &[WordOwner],
+    new: &[WordOwnerAddress],
+    matched: &[Option<usize>],
+    before: &FormSources,
+    after: &FormSources,
+) -> std::collections::HashSet<(usize, usize)> {
+    let mut old_routes = HashMap::<FormOwnerRoute, Vec<usize>>::new();
+    let mut new_routes = HashMap::<FormOwnerRoute, Vec<usize>>::new();
+    for (index, owner) in old.iter().enumerate() {
+        if let Some(route) = form_owner_route(&owner.location) {
+            old_routes.entry(route).or_default().push(index);
+        }
+    }
+    for (index, owner) in new.iter().enumerate() {
+        if let Some(route) = form_owner_route(&owner.location) {
+            new_routes.entry(route).or_default().push(index);
+        }
+    }
+    let mut proved = std::collections::HashSet::new();
+    let mut ready = vec![false; new.len()];
+    for target in 0..new.len() {
+        let mut stack = vec![(target, false)];
+        while let Some((index, parent_ready)) = stack.pop() {
+            if ready[index] {
+                continue;
+            }
+            if !parent_ready && let Some(parent) = new[index].parent {
+                stack.push((index, true));
+                if !ready[parent] {
+                    stack.push((parent, false));
+                }
+                continue;
+            }
+            ready[index] = true;
+            let Some(route) = form_owner_route(&new[index].location) else {
+                continue;
+            };
+            let Some(indices) = old_routes.get(&route) else {
+                continue;
+            };
+            let [previous] = indices.as_slice() else {
+                continue;
+            };
+            if new_routes.get(&route).map(Vec::as_slice) != Some(&[index])
+                || matched[index] != Some(*previous)
+            {
+                continue;
+            }
+            let source_proved = match &route {
+                FormOwnerRoute::Cell(_, _, _, story) => {
+                    before.cells.get(&route) == Some(&1)
+                        && after.cells.get(&route) == Some(&1)
+                        && before.cell_stories.get(story) == Some(&1)
+                        && after.cell_stories.get(story) == Some(&1)
+                }
+                FormOwnerRoute::Paragraph(key) | FormOwnerRoute::Table(key)
+                    if matches!(key.0, rdocx::StoryKind::Comment | rdocx::StoryKind::TextBox) =>
+                {
+                    false
+                }
+                _ => {
+                    matches!((before.xml.get(&route), after.xml.get(&route)), (Some(Some(a)), Some(Some(b))) if a == b)
+                }
+            };
+            if !source_proved {
+                continue;
+            }
+            let ancestors_proved = match (old[*previous].parent, new[index].parent) {
+                (Some(a), Some(b)) => proved.contains(&(a, b)),
+                (None, None) => !matches!(
+                    &route,
+                    FormOwnerRoute::Cell(..)
+                        | FormOwnerRoute::Paragraph((rdocx::StoryKind::TableCell, ..))
+                        | FormOwnerRoute::Table((rdocx::StoryKind::TableCell, ..))
+                ),
+                _ => false,
+            };
+            if ancestors_proved {
+                proved.insert((*previous, index));
+            }
+        }
+    }
+    proved
 }
 
 fn same_inventory_route(
@@ -4666,6 +4864,57 @@ impl PyDocumentFragment {
     }
 }
 
+/// An owned immutable legacy field inventory entry.
+#[pyclass(name = "LegacyFormField", frozen)]
+pub struct PyLegacyFormField {
+    #[pyo3(get)]
+    source_part: String,
+    #[pyo3(get)]
+    ordinal: usize,
+    #[pyo3(get)]
+    name: Option<String>,
+    #[pyo3(get)]
+    enabled: bool,
+    #[pyo3(get)]
+    calculate_on_exit: bool,
+    #[pyo3(get, name = "type")]
+    field_type: &'static str,
+    #[pyo3(get)]
+    value: Py<PyAny>,
+    #[pyo3(get)]
+    choices: Py<PyTuple>,
+}
+
+impl PyLegacyFormField {
+    fn from_info(py: Python<'_>, field: rdocx::LegacyFormFieldInfo) -> PyResult<Self> {
+        let value = match field.value {
+            rdocx::LegacyFormFieldValue::Text(value) => {
+                value.into_pyobject(py)?.into_any().unbind()
+            }
+            rdocx::LegacyFormFieldValue::Checked(value) => {
+                value.into_pyobject(py)?.to_owned().into_any().unbind()
+            }
+            rdocx::LegacyFormFieldValue::SelectedIndex(value) => {
+                value.into_pyobject(py)?.into_any().unbind()
+            }
+        };
+        Ok(Self {
+            source_part: field.source_part,
+            ordinal: field.ordinal,
+            name: field.name,
+            enabled: field.enabled,
+            calculate_on_exit: field.calculate_on_exit,
+            field_type: match field.kind {
+                rdocx::LegacyFormFieldKind::TextInput => "text",
+                rdocx::LegacyFormFieldKind::CheckBox => "checkbox",
+                rdocx::LegacyFormFieldKind::DropDownList => "dropdown",
+            },
+            value,
+            choices: PyTuple::new(py, field.choices)?.unbind(),
+        })
+    }
+}
+
 /// One content control of the document body.
 #[pyclass(name = "ContentControl", frozen, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
@@ -5073,8 +5322,15 @@ impl PyDocument {
         operation: &'static str,
         publication: WordPublication,
     ) -> PyResult<PreparedWordRevision> {
-        let locations =
-            word_owner_locations(candidate).map_err(|error| rdocx_to_pyerr(py, error))?;
+        let forms = matches!(publication, WordPublication::FormValues);
+        let mut old_sources = FormSources::default();
+        let mut new_sources = FormSources::default();
+        let locations = word_owner_locations(candidate, forms.then_some(&mut new_sources))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        if forms {
+            word_owner_locations(&self.inner, Some(&mut old_sources))
+                .map_err(|error| rdocx_to_pyerr(py, error))?;
+        }
         let selected = match &publication {
             WordPublication::HeaderFooterAppend(index) => Some(WordOwnerLocation::Section(*index)),
             WordPublication::ParagraphText(location)
@@ -5109,7 +5365,9 @@ impl PyDocument {
         });
         if !matches!(
             publication,
-            WordPublication::Conservative | WordPublication::AppendBody
+            WordPublication::Conservative
+                | WordPublication::FormValues
+                | WordPublication::AppendBody
         ) && selected_index.is_none()
         {
             return Err(PyValueError::new_err(
@@ -5117,6 +5375,17 @@ impl PyDocument {
             ));
         }
         let matches = indexed_inventory_matches(&self.owners, &locations, &publication);
+        let form_certificates = if forms {
+            form_owner_certificates(
+                &self.owners,
+                &locations,
+                &matches,
+                &old_sources,
+                &new_sources,
+            )
+        } else {
+            std::collections::HashSet::new()
+        };
         let mut retained = Vec::new();
         let mut births = Vec::new();
         for (index, address) in locations.iter().enumerate() {
@@ -5168,19 +5437,25 @@ impl PyDocument {
                         }
                     }
                 });
-                let preserve = route_proved
-                    && !matches!(publication, WordPublication::Conservative)
-                    && !descendant
-                    && !(matches!(publication, WordPublication::HyperlinkRemove(_))
-                        && matches!(location, WordOwnerLocation::Paragraph(_))
-                        && slot == 1)
-                    && !(old.is_some_and(|(before, _)| Some(before) == selected_index)
-                        && slot != 0
-                        && !matches!(publication, WordPublication::RunText(_))
-                        && (!matches!(
+                let preserve = old
+                    .is_some_and(|(before, _)| form_certificates.contains(&(before, index)))
+                    || (route_proved
+                        && !matches!(
                             publication,
-                            WordPublication::ParagraphText(_) | WordPublication::ParagraphAppend(_)
-                        ) || slot == 1));
+                            WordPublication::Conservative | WordPublication::FormValues
+                        )
+                        && !descendant
+                        && !(matches!(publication, WordPublication::HyperlinkRemove(_))
+                            && matches!(location, WordOwnerLocation::Paragraph(_))
+                            && slot == 1)
+                        && !(old.is_some_and(|(before, _)| Some(before) == selected_index)
+                            && slot != 0
+                            && !matches!(publication, WordPublication::RunText(_))
+                            && (!matches!(
+                                publication,
+                                WordPublication::ParagraphText(_)
+                                    | WordPublication::ParagraphAppend(_)
+                            ) || slot == 1)));
                 let state = if preserve {
                     old.map(|(_, owner)| owner.states()[slot].clone())
                 } else {
@@ -5290,6 +5565,23 @@ impl PyDocument {
         self.inner = candidate;
         Ok(())
     }
+    fn publish_form_candidate(
+        &mut self,
+        py: Python<'_>,
+        mut candidate: rdocx::Document,
+        operation: &'static str,
+    ) -> PyResult<()> {
+        let before = self.inner.to_bytes().map_err(|e| rdocx_to_pyerr(py, e))?;
+        let after = candidate.to_bytes().map_err(|e| rdocx_to_pyerr(py, e))?;
+        if before == after {
+            return Ok(());
+        }
+        let prepared =
+            self.prepare_word_revision(py, &candidate, operation, WordPublication::FormValues)?;
+        self.commit_word_revision(prepared)?;
+        self.inner = candidate;
+        Ok(())
+    }
     fn set_control_value(
         &mut self,
         py: Python<'_>,
@@ -5391,7 +5683,8 @@ impl PyDocument {
     }
 
     fn from_document(inner: rdocx::Document, py: Python<'_>) -> PyResult<Self> {
-        let locations = word_owner_locations(&inner).map_err(|error| rdocx_to_pyerr(py, error))?;
+        let locations =
+            word_owner_locations(&inner, None).map_err(|error| rdocx_to_pyerr(py, error))?;
         let mut scopes = locations
             .iter()
             .flat_map(|address| address.location.scopes().iter().copied())
@@ -6347,6 +6640,116 @@ impl PyDocument {
             self.inner = candidate;
         }
         Ok(count)
+    }
+
+    fn bind_content_controls(
+        &mut self,
+        py: Python<'_>,
+        values: &Bound<'_, PyDict>,
+    ) -> PyResult<Py<PyInt>> {
+        let values = values
+            .iter()
+            .map(|(key, value)| Ok((key.extract::<String>()?, value.extract::<String>()?)))
+            .collect::<PyResult<HashMap<_, _>>>()?;
+        let mut candidate = self.inner.clone_for_staging();
+        let count = py
+            .detach(|| candidate.bind_content_controls(&values))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let result = count.into_pyobject(py)?.unbind();
+        self.publish_form_candidate(py, candidate, "Document.bind_content_controls")?;
+        Ok(result)
+    }
+
+    fn legacy_form_fields<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let fields = self
+            .inner
+            .legacy_form_fields()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let fields = fields
+            .into_iter()
+            .map(|field| Py::new(py, PyLegacyFormField::from_info(py, field)?))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, fields)
+    }
+
+    #[pyo3(signature = (name, value, *, source_part=None, ordinal=None))]
+    fn set_legacy_form_field_value(
+        &mut self,
+        py: Python<'_>,
+        name: Option<&str>,
+        value: &Bound<'_, PyAny>,
+        source_part: Option<&str>,
+        ordinal: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyLegacyFormField>> {
+        let ordinal = ordinal
+            .map(|value| {
+                if !value.is_instance_of::<PyInt>() || value.is_instance_of::<PyBool>() {
+                    return Err(PyTypeError::new_err(
+                        "legacy field ordinal must be a nonnegative int, not bool",
+                    ));
+                }
+                value.extract::<usize>()
+            })
+            .transpose()?;
+        if source_part.is_some() != ordinal.is_some() {
+            return Err(PyValueError::new_err(
+                "source_part and ordinal must be supplied together",
+            ));
+        }
+        if source_part.is_none() && name.is_none() {
+            return Err(PyValueError::new_err(
+                "name is required without source_part and ordinal",
+            ));
+        }
+        let fields = self
+            .inner
+            .legacy_form_fields()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let mut matches = fields.into_iter().filter(|field| {
+            if let (Some(part), Some(ordinal)) = (source_part, ordinal) {
+                field.source_part == part
+                    && field.ordinal == ordinal
+                    && name.is_none_or(|name| field.name.as_deref() == Some(name))
+            } else {
+                field.name.as_deref() == name
+            }
+        });
+        let field = matches
+            .next()
+            .ok_or_else(|| PyValueError::new_err("unknown or stale legacy form field identity"))?;
+        if matches.next().is_some() {
+            return Err(PyValueError::new_err(
+                "ambiguous legacy form field name; supply source_part and ordinal",
+            ));
+        }
+        let value = match field.kind {
+            rdocx::LegacyFormFieldKind::TextInput => {
+                rdocx::LegacyFormFieldValue::Text(value.extract::<String>()?)
+            }
+            rdocx::LegacyFormFieldKind::CheckBox => {
+                if !value.is_instance_of::<PyBool>() {
+                    return Err(PyTypeError::new_err("legacy checkbox requires bool"));
+                }
+                rdocx::LegacyFormFieldValue::Checked(value.extract::<bool>()?)
+            }
+            rdocx::LegacyFormFieldKind::DropDownList => {
+                if !value.is_instance_of::<PyInt>() || value.is_instance_of::<PyBool>() {
+                    return Err(PyTypeError::new_err(
+                        "legacy dropdown requires nonnegative int, not bool",
+                    ));
+                }
+                rdocx::LegacyFormFieldValue::SelectedIndex(value.extract::<usize>()?)
+            }
+        };
+        let mut candidate = self.inner.clone_for_staging();
+        let reopened = py
+            .detach(|| {
+                candidate.set_legacy_form_field_value(&field.source_part, field.ordinal, value)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let result = Py::new(py, PyLegacyFormField::from_info(py, reopened)?)?;
+        self.publish_form_candidate(py, candidate, "Document.set_legacy_form_field_value")?;
+        Ok(result)
     }
 
     fn content_controls<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
@@ -10806,7 +11209,7 @@ fn fx237_combined_registry_matches_legacy_success_and_refusal() {
                 .unwrap();
             let document = rdocx::Document::from_bytes(&bytes).unwrap();
             let legacy = fx237_legacy_word_owner_locations(&document);
-            let combined = word_owner_locations(&document);
+            let combined = word_owner_locations(&document, None);
             if content.contains("r:id='missing'") {
                 assert!(legacy.is_err());
                 assert!(combined.is_err());
@@ -10853,14 +11256,14 @@ fn fx237_revision_route_work_is_linear() {
             document.story_link_snapshots().unwrap();
             let link_time = started.elapsed();
             let started = std::time::Instant::now();
-            let old = fx237_test_owners(word_owner_locations(&document).unwrap());
+            let old = fx237_test_owners(word_owner_locations(&document, None).unwrap());
             let inventory_time = started.elapsed();
             let started = std::time::Instant::now();
             let mut candidate = document.clone_for_staging();
             candidate.try_set_cell_text(0, 0, 0, "edited").unwrap();
             let mutation_time = started.elapsed();
             let started = std::time::Instant::now();
-            let new = word_owner_locations(&candidate).unwrap();
+            let new = word_owner_locations(&candidate, None).unwrap();
             let candidate_inventory_time = started.elapsed();
             FX237_ROUTE_WORK.set([0; 8]);
             let started = std::time::Instant::now();
@@ -10891,12 +11294,12 @@ fn fx237_revision_route_work_is_linear() {
             )
             .unwrap();
         assert_eq!(
-            word_owner_locations(&document).unwrap(),
+            word_owner_locations(&document, None).unwrap(),
             fx237_legacy_word_owner_locations(&document).unwrap()
         );
-        let old = fx237_test_owners(word_owner_locations(&document).unwrap());
+        let old = fx237_test_owners(word_owner_locations(&document, None).unwrap());
         document.try_set_cell_text(0, 0, 0, "edited").unwrap();
-        let new = word_owner_locations(&document).unwrap();
+        let new = word_owner_locations(&document, None).unwrap();
         FX237_ROUTE_WORK.set([0; 8]);
         let actual = indexed_inventory_matches(&old, &new, &WordPublication::Conservative);
         let work = FX237_ROUTE_WORK.get();
@@ -10952,12 +11355,12 @@ fn fx237_indexed_routes_match_legacy_first_match() {
         )
         .unwrap();
     previous.add_table(1, 1);
-    let previous = fx237_test_owners(word_owner_locations(&previous).unwrap());
+    let previous = fx237_test_owners(word_owner_locations(&previous, None).unwrap());
     let mut candidate = rdocx::Document::new();
     candidate.add_paragraph("before");
     candidate.add_paragraph("between");
     candidate.add_table(1, 1);
-    let candidate = word_owner_locations(&candidate).unwrap();
+    let candidate = word_owner_locations(&candidate, None).unwrap();
     FX237_ROUTE_WORK.set([0; 8]);
     let indexed = indexed_inventory_matches(&previous, &candidate, &WordPublication::Conservative);
     let generated = FX237_ROUTE_WORK.get();
@@ -10973,7 +11376,7 @@ fn fx237_indexed_routes_match_legacy_first_match() {
     let mut document = rdocx::Document::new();
     document.add_paragraph("same");
     document.add_table(1, 2).cell(0, 0).unwrap().add_table(1, 1);
-    let base = word_owner_locations(&document).unwrap();
+    let base = word_owner_locations(&document, None).unwrap();
     let mut old_addresses = Vec::new();
     // Mix slot presence independently across otherwise identical physical
     // addresses. Duplicate roots test first-match, not merely set equality.
@@ -11073,7 +11476,7 @@ fn fx237_indexed_routes_match_legacy_first_match() {
     );
     let old = fx237_test_owners(old_addresses);
     for slot in [None, Some(0), Some(1), Some(2)] {
-        let mut new = word_owner_locations(&document).unwrap();
+        let mut new = word_owner_locations(&document, None).unwrap();
         for address in &mut new {
             if matches!(address.location, WordOwnerLocation::Paragraph(_))
                 && address.parent.is_none()
@@ -11120,4 +11523,57 @@ fn fx237_indexed_routes_match_legacy_first_match() {
             );
         }
     }
+}
+
+#[test]
+fn fx241_form_certificates_require_unique_routes_and_unchanged_source() {
+    let mut document = rdocx::Document::new();
+    document.add_paragraph("equal");
+    document.add_paragraph("equal");
+    let mut candidate = document.clone_for_staging();
+    candidate
+        .paragraph_mut(1)
+        .unwrap()
+        .set_text("changed")
+        .unwrap();
+    let mut before = FormSources::default();
+    let mut after = FormSources::default();
+    let old = fx237_test_owners(word_owner_locations(&document, Some(&mut before)).unwrap());
+    let new = word_owner_locations(&candidate, Some(&mut after)).unwrap();
+    let matched = indexed_inventory_matches(&old, &new, &WordPublication::FormValues);
+    let certificates = form_owner_certificates(&old, &new, &matched, &before, &after);
+    let paragraph_indexes = new
+        .iter()
+        .enumerate()
+        .filter_map(|(index, owner)| {
+            matches!(owner.location, WordOwnerLocation::Paragraph(_)).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let unchanged = paragraph_indexes[0];
+    let changed = paragraph_indexes[1];
+    assert!(certificates.contains(&(matched[unchanged].unwrap(), unchanged)));
+    assert!(!certificates.contains(&(matched[changed].unwrap(), changed)));
+    let route = form_owner_route(&new[unchanged].location).unwrap();
+    before.xml.insert(route.clone(), None);
+    assert!(
+        !form_owner_certificates(&old, &new, &matched, &before, &after)
+            .contains(&(matched[unchanged].unwrap(), unchanged))
+    );
+    // A duplicated actual owner route must not inherit the matcher's first index.
+    let mut before = FormSources::default();
+    let mut locations = word_owner_locations(&document, Some(&mut before)).unwrap();
+    let source = &locations[unchanged];
+    locations.push(WordOwnerAddress {
+        location: source.location.clone(),
+        parent: source.parent,
+        body_slot: source.body_slot,
+        projection_ordinal: source.projection_ordinal,
+    });
+    let duplicate = fx237_test_owners(locations);
+    let matched = indexed_inventory_matches(&duplicate, &new, &WordPublication::FormValues);
+    assert!(matched[unchanged].is_some());
+    assert!(
+        !form_owner_certificates(&duplicate, &new, &matched, &before, &after)
+            .contains(&(matched[unchanged].unwrap(), unchanged))
+    );
 }

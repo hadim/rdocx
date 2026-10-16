@@ -2375,9 +2375,10 @@ Native Word callers can also inspect content controls through
 update every matching tag or alias, while `bind_content_controls` applies a
 string map with tag precedence and alias fallback. Bound values update their
 custom XML datastore and displayed text atomically through the
-package-preserving facade. These methods are additive native APIs. They do not
-implicitly add Python, WASM, or CLI methods, and the existing binding surfaces
-remain unchanged.
+package-preserving facade. Python retains callable frozen snapshots and the
+existing all-match tag/alias setters. Its bind_content_controls(dict[str,str])
+wrapper uses the same tag precedence, alias fallback and ignored unmatched keys.
+WASM has no corresponding new form surface.
 
 Native Word callers inspect direct body order through
 `Document::body_items`. Each `BodyItemRef` borrows one paragraph, table,
@@ -3545,6 +3546,27 @@ subtype/order and opaque values survive updates. Remove-custom is explicit,
 and missing removal is unchanged. Tag fill splits NAME=VALUE once, uses tags
 only and refuses duplicates, missing tags or unsupported bound owners as one
 transaction. Native/Python fill_content_control_tags returns per-tag counts.
+The mutually exclusive `fill --values VALUES.json` route accepts a nonempty
+flat UTF-8 JSON object, at most1MiB and4096 assignments. Duplicate decoded keys,
+empty keys, unsupported values, unknown selectors and ambiguous cross-kind
+matches refuse. Keys select exactly one physical SDT through its tag or alias,
+or one uniquely named legacy field. A second key selecting the same target
+refuses. Strings fill SDTs and legacy text, actual bool fills checkbox controls,
+and nonnegative usize integers select legacy drop-down indices. No implicit
+stringification is performed. JSON assignment rows retain input order and name
+the route, target kind and legacy physical part/ordinal where applicable.
+
+One private candidate applies SDTs first, then legacy fields. Exact selected
+SDT routes and metadata are revalidated before edits, after the phase and after
+final reopen. Existing nested SDT retention is admitted when selected targets
+remain valid. When any legacy assignment exists, the complete original legacy
+identity, metadata and typed-value inventory must survive the SDT phase.
+Removing an earlier legacy field inside an edited SDT therefore refuses instead
+of selecting another field at a shifted ordinal. Each subsequent legacy edit
+permits only planned earlier value substitutions. Final reopen precedes one
+atomic output publication. Existing input/output collision protection and
+existing --tag all-match semantics remain unchanged.
+
 Core set in either family changes only supplied fields, treating empty text
 as removal and preserving imported metadata.
 
@@ -3837,6 +3859,38 @@ Document exposes HTML and Markdown, CLI-equivalent text and owned TextReport, ty
 Template input accepts a string-keyed dict of bounded JSON values. Bool precedes integer conversion. Nonfinite values, cyclic containers, out-of-range integers and arbitrary objects refuse before publication. FragmentConflictPolicy exposes independent style, numbering and related-part reuse choices. ContentLocation and DocumentFragment retain physical source boundaries. Checked insertion uses the native fragment path and excludes final section properties by default.
 
 CustomFileTime validates explicit RFC3339 text. CustomProperties returns immutable typed snapshots and stages checked set/delete operations. AppProperties and presence-sensitive track_revisions are live document-owned handles. Equations return immutable source snapshots, ordered per-child conversion results and native loss diagnostics. Tag and alias control updates stage all selected qualified values once. Runtime constructors, explicit exports and strict stubs describe the same public classes and defaults.
+
+Python `Document.legacy_form_fields()` returns a tuple of frozen owned
+LegacyFormField snapshots. Each exposes source_part, ordinal, optional name,
+enabled, calculate_on_exit, exact text/checkbox/dropdown type, typed str/bool/int
+value and immutable choices. Snapshots grant no mutation authority and retain
+historical values. The setter resolves current unique names or a complete
+source_part/ordinal pair, with optional matching name. Partial, stale, ambiguous,
+negative or bool identities refuse. Text requires str, checkbox actual bool,
+and drop-down a nonnegative int excluding bool. Native bounds and malformed
+source checks remain authoritative across supported related legacy stories.
+
+Bind dictionaries validate all keys and values before staging. Both new Python
+mutations allocate returned Python values before prepared owner publication.
+Exact source no-ops preserve bytes and authority. Failed staging preserves live
+source and held owners. SDT scope remains main body with nested controls, while
+legacy inventory follows native supported related stories. Date/drop-down SDTs
+retain existing display and bound-string semantics with producer metadata,
+without new date parsing or item validation. These scalar form operations do
+not add form creation, live snapshot proxies or a second XML provider.
+
+Form publication preserves an owner only when independent exact physical-route
+maps identify one old and one candidate owner, the existing matcher agrees,
+and native owning XML is byte-identical. Paragraph/table sources share the
+same batched native inventory as their addresses. Section source uses the
+existing checked section XML provider. Every ancestor must also be certified.
+Cells bind their exact table, row, cell and physical story, so a changed table
+retires all its cells and descendants. Changed or ambiguous paragraphs retire.
+Equal text or equal inventory counts alone grant no authority. Run/Hyperlink
+and existing global run/snapshot epochs retire on actual mutation. Exact
+no-ops and refused operations keep all current tokens. Other conservative
+publishers retain their existing behavior, and retired pre-existing tokens
+cannot be revived by a same-route or equal-text form result.
 
 ## Live PowerPoint masters and layouts
 

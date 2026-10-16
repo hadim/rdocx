@@ -7307,3 +7307,327 @@ def test_fx247_synthesized_mathml_text_space_cap_is_atomic(tmp_path):
         texts = root.findall(".//{http://schemas.openxmlformats.org/officeDocument/2006/math}t")
         assert sum(len(t.text or "") for t in texts) == 524_288
         assert texts[-1].text.endswith(" ")
+
+
+def _fx241_legacy_text(name="legacy", text="old", maximum=40):
+    return (f'<w:p><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="{name}"/>'
+            f'<w:enabled/><w:calcOnExit w:val="0"/><w:textInput><w:default w:val="{text}"/>'
+            f'<w:maxLength w:val="{maximum}"/></w:textInput></w:ffData></w:fldChar></w:r>'
+            '<w:r><w:instrText> FORMTEXT </w:instrText></w:r>'
+            '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+            f'<w:r><w:t>{text}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>')
+
+
+def _fx241_control(tag, properties, text="old", alias=None):
+    alias_xml = f'<w:alias w:val="{alias}"/>' if alias else ''
+    return (f'<w:sdt><w:sdtPr><w:tag w:val="{tag}"/>{alias_xml}{properties}</w:sdtPr>'
+            f'<w:sdtContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:sdtContent></w:sdt>')
+
+
+def _fx241_five_kind_document():
+    import rdocx
+    body = _fx241_control("plain", "<w:text/>", alias="Plain alias")
+    body += _fx241_control("check", '<w14:checkbox xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w14:checked w14:val="0"/><w14:checkedState w14:val="2612" w14:font="MS Gothic"/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox>', "☐")
+    body += _fx241_control("choice", '<w:dropDownList w:lastValue="one"><w:listItem w:displayText="One" w:value="one"/><w:listItem w:displayText="Two" w:value="two"/></w:dropDownList>', "one")
+    body += _fx241_control("date", '<w:date w:fullDate="2026-09-15T00:00:00Z"><w:dateFormat w:val="yyyy-MM-dd"/></w:date>', "2026-09-15")
+    return _replace_document_body(rdocx.Document(), body + _fx241_legacy_text() + '<w:sectPr/>')
+
+
+def test_fx241_python_fill_all_five_reported_form_kinds():
+    import rdocx
+    document = _fx241_five_kind_document()
+    frozen = document.content_controls()
+    old_legacy = document.legacy_form_fields()[0]
+    assert document.bind_content_controls({"plain": "Ada", "check": "true", "choice": "two", "date": "2026-10-16"}) == 4
+    result = document.set_legacy_form_field_value("legacy", "filled")
+    assert isinstance(result, rdocx.LegacyFormField)
+    assert result.value == "filled" and old_legacy.value == "old"
+    assert result.type == "text" and result.ordinal == 0
+    assert result.source_part == "/word/document.xml" and result.choices == ()
+    assert result.enabled and not result.calculate_on_exit
+    assert frozen[0].text == "old"
+    with pytest.raises(AttributeError):
+        result.value = "mutate"
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    controls = {item.tag: item for item in reopened.content_controls()}
+    assert [controls[key].text for key in ("plain", "choice", "date")] == ["Ada", "two", "2026-10-16"]
+    assert reopened.legacy_form_fields()[0].value == "filled"
+    _fx241_assert_five_kind_source(reopened.to_bytes())
+
+
+def _fx241_assert_five_kind_source(raw):
+    import xml.etree.ElementTree as ET
+    with zipfile.ZipFile(io.BytesIO(raw)) as package:
+        root = ET.fromstring(package.read('word/document.xml'))
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main", "w14": "http://schemas.microsoft.com/office/word/2010/wordml"}
+    w = '{'+ns['w']+'}'
+    assert root.find('.//w14:checked', ns).get('{'+ns['w14']+'}val') == '1'
+    check = next(c for c in root.iter(w+'sdt') if c.find('w:sdtPr/w:tag', ns).get(w+'val') == 'check')
+    assert '☒' in ''.join(check.itertext())
+    fonts = check.find('.//w:rFonts', ns)
+    assert fonts.get(w+'ascii') == fonts.get(w+'hAnsi') == 'MS Gothic'
+    assert root.find('.//w:date', ns).get(w+'fullDate') == '2026-09-15T00:00:00Z'
+    assert root.find('.//w:dateFormat', ns).get(w+'val') == 'yyyy-MM-dd'
+    assert root.find('.//w:dropDownList', ns).get(w+'lastValue') == 'one'
+    assert [x.get(w+'value') for x in root.findall('.//w:dropDownList/w:listItem', ns)] == ['one', 'two']
+    legacy = root.find('.//w:ffData/w:textInput/w:default', ns)
+    assert legacy.get(w+'val') == 'filled'
+    field_paragraph = next(p for p in root.iter(w+'p') if p.find('.//w:ffData', ns) is not None)
+    assert ''.join(x.text or '' for x in field_paragraph.iter(w+'t')) == 'filled'
+
+
+def _fx241_legacy_typed(name, kind):
+    properties, instruction, cached = {
+        "checkbox": ('<w:checkBox><w:sizeAuto/><w:default w:val="0"/><w:checked w:val="0"/></w:checkBox>', "FORMCHECKBOX", "☐"),
+        "dropdown": ('<w:ddList><w:result w:val="0"/><w:listEntry w:val="one"/><w:listEntry w:val="two"/></w:ddList>', "FORMDROPDOWN", "one"),
+    }[kind]
+    return (f'<w:p><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="{name}"/>{properties}</w:ffData></w:fldChar></w:r>'
+            f'<w:r><w:instrText> {instruction} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+            f'<w:r><w:t>{cached}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>')
+
+
+def test_fx241_legacy_snapshots_typed_values_choices_and_qualified_unnamed():
+    import rdocx
+    import xml.etree.ElementTree as ET
+    body = _fx241_legacy_text() + _fx241_legacy_typed("flag", "checkbox") + _fx241_legacy_typed("pick", "dropdown")
+    body += _fx241_legacy_text().replace('<w:name w:val="legacy"/>', '')
+    document = _replace_document_body(rdocx.Document(), body + '<w:sectPr/>')
+    snapshots = document.legacy_form_fields()
+    assert isinstance(snapshots, tuple)
+    assert [x.type for x in snapshots] == ["text", "checkbox", "dropdown", "text"]
+    assert [type(x.value) for x in snapshots] == [str, bool, int, str]
+    assert snapshots[2].choices == ("one", "two") and snapshots[3].name is None
+    assert document.set_legacy_form_field_value("flag", True).value is True
+    assert document.set_legacy_form_field_value("pick", 1).value == 1
+    unnamed = document.set_legacy_form_field_value(None, "unnamed", source_part=snapshots[3].source_part, ordinal=3)
+    assert unnamed.name is None and unnamed.value == "unnamed"
+    assert snapshots[1].value is False and snapshots[2].value == 0
+    with pytest.raises(TypeError):
+        rdocx.LegacyFormField()
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [x.value for x in reopened.legacy_form_fields()] == ["old", True, 1, "unnamed"]
+    w = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    root = ET.fromstring(_document_xml(reopened))
+    assert root.find('.//'+w+'checkBox/'+w+'checked').get(w+'val') == '1'
+    assert root.find('.//'+w+'ddList/'+w+'result').get(w+'val') == '1'
+    assert 'two' in [x.text for x in root.iter(w+'t')]
+
+
+@pytest.mark.parametrize("name,value,kwargs", [
+    ("missing", "x", {}), (None, "x", {}), ("legacy", "x", {"source_part": "/word/document.xml"}),
+    ("legacy", "x", {"ordinal": 0}), ("legacy", "x", {"source_part": "/word/header9.xml", "ordinal": 0}),
+    ("stale", "x", {"source_part": "/word/document.xml", "ordinal": 0}),
+    ("legacy", "x", {"source_part": "/word/document.xml", "ordinal": True}),
+    ("legacy", "x", {"source_part": "/word/document.xml", "ordinal": -1}),
+    ("legacy", 1, {}), ("legacy", True, {}), ("legacy", "longer-than-four", {}),
+    ("flag", 1, {}), ("flag", "true", {}), ("pick", True, {}), ("pick", -1, {}), ("pick", 2, {}), ("pick", "one", {}),
+])
+def test_fx241_legacy_identity_and_value_refusals_are_atomic(name, value, kwargs):
+    import rdocx
+    document = _replace_document_body(rdocx.Document(), _fx241_legacy_text(maximum=4) + _fx241_legacy_typed("flag", "checkbox") + _fx241_legacy_typed("pick", "dropdown") + '<w:p><w:r><w:t>held</w:t></w:r></w:p><w:sectPr/>')
+    paragraph, section = document.paragraphs[-1], document.section(0)
+    story = next(x for x in document.stories if x.kind == "body")
+    before = document.to_bytes()
+    with pytest.raises((ValueError, TypeError, OverflowError, rdocx.RdocxError)):
+        document.set_legacy_form_field_value(name, value, **kwargs)
+    assert document.to_bytes() == before
+    assert paragraph.text == "held" and section.xml and story.kind == "body"
+    assert document.set_legacy_form_field_value("legacy", "safe").value == "safe"
+    assert paragraph.text == "held"
+
+
+def test_fx241_duplicate_names_refuse_but_current_qualified_identity_selects():
+    import rdocx
+    document = _replace_document_body(rdocx.Document(), _fx241_legacy_text() + _fx241_legacy_text() + '<w:sectPr/>')
+    before = document.to_bytes()
+    with pytest.raises(ValueError, match="ambiguous"):
+        document.set_legacy_form_field_value("legacy", "bad")
+    assert document.to_bytes() == before
+    selected = document.set_legacy_form_field_value("legacy", "second", source_part="/word/document.xml", ordinal=1)
+    assert selected.ordinal == 1
+    assert [x.value for x in document.legacy_form_fields()] == ["old", "second"]
+
+
+def test_fx241_bind_contract_priority_nested_noop_owners_and_late_failure():
+    import rdocx
+    first = _fx241_control("tag", '<w:text/>', alias="alias")
+    document = _replace_document_body(rdocx.Document(), first + '<w:p><w:r><w:t>held</w:t></w:r></w:p><w:sectPr/>')
+    paragraph, section = document.paragraphs[-1], document.section(0)
+    table = document.add_table(1, 1)
+    cell = table.cell(0, 0)
+    cell.text = "cell"
+    before = document.to_bytes()
+    for values in ({}, {"missing": "ignored"}, {"tag": "old"}):
+        count = document.bind_content_controls(values)
+        assert count == (1 if values.get("tag") else 0)
+        assert document.to_bytes() == before
+    for invalid in ({"tag": 12}, {"tag": True}, {1: "text"}, {"tag": "valid", "alias": None}):
+        with pytest.raises(TypeError):
+            document.bind_content_controls(invalid)
+        assert document.to_bytes() == before
+    assert document.bind_content_controls({"tag": "wins", "alias": "loses", "missing": "ignored"}) == 1
+    assert document.content_controls()[0].text == "wins"
+    assert paragraph.text == "held" and cell.text == "cell" and table.rows[0].cells[0].text == "cell" and section.xml
+    nested = '<w:sdt><w:sdtPr><w:tag w:val="outer"/><w:group/></w:sdtPr><w:sdtContent>' + _fx241_control("inner", '<w:text/>') + '</w:sdtContent></w:sdt>'
+    document = _replace_document_body(rdocx.Document(), first + nested + '<w:sectPr/>')
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        document.bind_content_controls({"tag": "early", "outer": "unsupported"})
+    assert document.to_bytes() == before
+    assert document.bind_content_controls({"inner": "nested"}) == 1
+    assert any(x.tag == "inner" and x.text == "nested" for x in document.content_controls())
+
+
+def _fx241_bound_document(missing=False):
+    import rdocx
+    binding = '<w:dataBinding w:storeItemID="{11111111-1111-1111-1111-111111111111}" w:xpath="/c:root/c:name" w:prefixMappings="xmlns:c=\'urn:customer\'"/>'
+    document = _replace_document_body(rdocx.Document(), _fx241_control("bound", binding+'<w:text/>') + _fx241_legacy_text() + '<w:p><w:r><w:t>held</w:t></w:r></w:p><w:sectPr/>')
+    source, result = io.BytesIO(document.to_bytes()), io.BytesIO()
+    with zipfile.ZipFile(source) as zin, zipfile.ZipFile(result, 'w') as zout:
+        for entry in zin.infolist():
+            raw = zin.read(entry.filename)
+            if entry.filename == 'word/_rels/document.xml.rels' and not missing:
+                raw = raw.replace(b'</Relationships>', b'<Relationship Id="rIdBound241" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="../customXml/item1.xml"/></Relationships>')
+            if entry.filename == '[Content_Types].xml' and not missing:
+                raw = raw.replace(b'</Types>', b'<Override PartName="/customXml/itemProps1.xml" ContentType="application/vnd.openxmlformats-officedocument.customXmlProperties+xml"/></Types>')
+            zout.writestr(entry, raw)
+        if not missing:
+            zout.writestr('customXml/item1.xml', '<c:root xmlns:c="urn:customer" opaque="keep"><c:name>old</c:name><c:other>untouched</c:other></c:root>')
+            zout.writestr('customXml/itemProps1.xml', '<ds:datastoreItem xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml" ds:itemID="{11111111-1111-1111-1111-111111111111}"><ds:schemaRefs/></ds:datastoreItem>')
+            zout.writestr('customXml/_rels/item1.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="props" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps" Target="itemProps1.xml"/></Relationships>')
+    return rdocx.Document.from_bytes(result.getvalue())
+
+
+def test_fx241_bound_xml_values_source_preservation_and_late_refusal():
+    import rdocx
+    import xml.etree.ElementTree as ET
+    document = _fx241_bound_document()
+    before = document.to_bytes()
+    assert document.bind_content_controls({'bound': 'Ada & Co'}) == 1
+    after = document.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(before)) as old, zipfile.ZipFile(io.BytesIO(after)) as new:
+        assert set(old.namelist()) == set(new.namelist())
+        for name in old.namelist():
+            if name not in ('word/document.xml', 'customXml/item1.xml'):
+                assert old.read(name) == new.read(name), name
+        root = ET.fromstring(new.read('customXml/item1.xml'))
+        assert root.find('{urn:customer}name').text == 'Ada & Co'
+        assert root.find('{urn:customer}other').text == 'untouched' and root.get('opaque') == 'keep'
+    assert rdocx.Document.from_bytes(after).content_controls()[0].text == 'Ada & Co'
+    document = _fx241_bound_document(missing=True)
+    paragraph = document.paragraphs[-1]
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        document.bind_content_controls({'bound': 'cannot resolve'})
+    assert document.to_bytes() == before and paragraph.text == 'held'
+
+
+def test_fx241_related_legacy_physical_part_and_noop_preserve_held_owners():
+    import rdocx
+    seed = rdocx.Document()
+    seed.add_paragraph('body held')
+    seed.section(0).header.add_paragraph('header held')
+    source, result = io.BytesIO(seed.to_bytes()), io.BytesIO()
+    with zipfile.ZipFile(source) as zin, zipfile.ZipFile(result, 'w') as zout:
+        header = next(name for name in zin.namelist() if re.fullmatch(r'word/header\d+\.xml', name))
+        for entry in zin.infolist():
+            raw = zin.read(entry.filename)
+            if entry.filename == header:
+                raw = raw.replace(b'</w:hdr>', (_fx241_legacy_text('headerField')+'</w:hdr>').encode())
+            zout.writestr(entry, raw)
+    document = rdocx.Document.from_bytes(result.getvalue())
+    paragraph, section = document.paragraphs[0], document.section(0)
+    header_paragraph = next(p for p in section.header.paragraphs if p.text == 'header held')
+    selected_story = next(x for x in document.stories if x.kind == 'header')
+    # Flush a prior live related-story edit through the existing provider first.
+    header_paragraph.text = 'header held edited'
+    assert header_paragraph.text == 'header held edited'
+    field = document.legacy_form_fields()[0]
+    assert field.source_part == '/'+header and field.ordinal == 0
+    with pytest.raises(rdocx.RdocxError):
+        document.replace_image_for_story(selected_story, 'missing', b'')
+    updated = document.set_legacy_form_field_value('headerField', 'changed', source_part=field.source_part, ordinal=0)
+    assert updated.value == 'changed' and field.value == 'old'
+    # Frozen Story metadata remains readable, but its old mutation epoch retires.
+    with pytest.raises(rdocx.StaleElementError):
+        document.replace_image_for_story(selected_story, 'missing', b'')
+    assert paragraph.text == 'body held' and header_paragraph.text == 'header held edited' and selected_story.kind == 'header' and section.xml
+    before = document.to_bytes()
+    assert document.set_legacy_form_field_value('headerField', 'changed').value == 'changed'
+    assert document.to_bytes() == before and header_paragraph.text == 'header held edited'
+    reopened = rdocx.Document.from_bytes(before)
+    assert reopened.legacy_form_fields()[0].source_part == field.source_part
+    assert reopened.legacy_form_fields()[0].value == 'changed'
+
+
+@pytest.mark.parametrize('broken', ['checkbox-state', 'legacy-default', 'legacy-cache'])
+def test_fx241_source_observer_rejects_semantic_state_disagreement(broken):
+    import xml.etree.ElementTree as ET
+    document = _fx241_five_kind_document()
+    document.bind_content_controls({'plain': 'Ada', 'check': 'true', 'choice': 'two', 'date': '2026-10-16'})
+    document.set_legacy_form_field_value('legacy', 'filled')
+    raw = document.to_bytes()
+    _fx241_assert_five_kind_source(raw)
+    w = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    w14 = '{http://schemas.microsoft.com/office/word/2010/wordml}'
+    mutated = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(raw)) as zin, zipfile.ZipFile(mutated, 'w') as zout:
+        for entry in zin.infolist():
+            data = zin.read(entry.filename)
+            if entry.filename == 'word/document.xml':
+                root = ET.fromstring(data)
+                if broken == 'checkbox-state':
+                    root.find('.//'+w14+'checked').set(w14+'val', '0')
+                elif broken == 'legacy-default':
+                    root.find('.//'+w+'ffData/'+w+'textInput/'+w+'default').set(w+'val', 'wrong')
+                else:
+                    field = next(p for p in root.iter(w+'p') if p.find('.//'+w+'ffData') is not None)
+                    next(field.iter(w+'t')).text = 'wrong'
+                data = ET.tostring(root)
+            zout.writestr(entry, data)
+    with pytest.raises(AssertionError):
+        _fx241_assert_five_kind_source(mutated.getvalue())
+
+
+def test_fx241_form_publication_retires_changed_owners_not_equal_text_routes():
+    import rdocx
+    document = _replace_document_body(rdocx.Document(), _fx241_legacy_text() + _fx241_legacy_text() + '<w:sectPr/>')
+    unchanged, changed = document.paragraphs[0], document.paragraphs[1]
+    old_run = unchanged.runs[0]
+    section = document.section(0)
+    section_xml = section.xml
+    document.set_legacy_form_field_value('legacy', 'second', source_part='/word/document.xml', ordinal=1)
+    assert unchanged.text == 'old' and section.xml == section_xml
+    with pytest.raises(rdocx.StaleElementError):
+        _ = changed.text
+    with pytest.raises(rdocx.StaleElementError):
+        _ = old_run.text
+    assert [x.value for x in document.legacy_form_fields()] == ['old', 'second']
+
+
+def test_fx241_changed_table_retires_cell_and_paragraph_descendants():
+    import rdocx
+    table_xml = '<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:tcPr/>' + _fx241_legacy_text() + '</w:tc></w:tr></w:tbl>'
+    document = _replace_document_body(rdocx.Document(), table_xml + '<w:p><w:r><w:t>untouched</w:t></w:r></w:p><w:sectPr/>')
+    table = document.tables[0]
+    cell = table.cell(0, 0)
+    paragraph = cell.paragraphs[0]
+    outside = document.paragraphs[-1]
+    document.set_legacy_form_field_value('legacy', 'changed')
+    for access in (lambda: table.rows, lambda: cell.text, lambda: paragraph.text):
+        with pytest.raises(rdocx.StaleElementError):
+            access()
+    assert outside.text == 'untouched'
+    assert document.tables[0].cell(0, 0).text == 'changed'
+
+
+def test_fx241_retired_recreated_owner_is_never_revived_by_equal_source():
+    import rdocx
+    document = _replace_document_body(rdocx.Document(), '<w:p><w:r><w:t>equal</w:t></w:r></w:p>' + _fx241_control('plain', '<w:text/>') + '<w:sectPr/>')
+    retired = document.paragraphs[0]
+    assert document.remove_content(0)
+    current = document.add_paragraph('equal')
+    document.bind_content_controls({'plain': 'changed'})
+    with pytest.raises(rdocx.StaleElementError):
+        _ = retired.text
+    assert current.text == 'equal'

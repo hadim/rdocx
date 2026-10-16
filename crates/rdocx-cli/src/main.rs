@@ -340,8 +340,11 @@ enum Command {
         /// Path to the DOCX file
         file: PathBuf,
         /// Set every control whose tag is NAME, repeatable
-        #[arg(long = "tag", value_name = "NAME=VALUE", value_parser = commands::parse_assignment)]
+        #[arg(long = "tag", value_name = "NAME=VALUE", conflicts_with = "values", value_parser = commands::parse_assignment)]
         tags: Vec<(String, String)>,
+        /// Fill exact content-control tags, aliases and legacy names from flat JSON
+        #[arg(long, value_name = "VALUES.json", conflicts_with = "tags")]
+        values: Option<PathBuf>,
         /// Output DOCX file
         #[arg(long, short = 'o')]
         output: PathBuf,
@@ -1039,9 +1042,13 @@ fn run_cli() {
         Command::Fill {
             file,
             tags,
+            values,
             output,
             json,
-        } => commands::fill(&file, &tags, &output, json),
+        } => match values {
+            Some(values) => commands::fill_values(&file, &values, &output, json),
+            None => commands::fill(&file, &tags, &output, json),
+        },
         Command::Toc { command } => match command {
             TocCommand::Rebuild { file, output, json } => {
                 commands::toc_rebuild(&file, &output, json)

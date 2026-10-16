@@ -1,6 +1,6 @@
 # F-X241, Python and CLI form reading and filling
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S94
 **Size**: M
 **Depends on**: none
@@ -92,6 +92,8 @@ After all JSON, selector and type checks succeed, use one private cloned Documen
 
 SDT replacements can remove legacy markers inside an SDT: content_control.rs:510/:523 retains only Text, DeletedText and CommentReference run content, so prior field markers may disappear and shift later ordinals. Consequently, after all SDT candidate edits and before any legacy setter, require the complete current legacy inventory to equal the pre-edit frozen inventory. Any removed/added/reordered field, source-part/ordinal/name/kind/metadata drift or changed legacy typed value causes strict overlap/identity-drift refusal of the whole candidate. Match count1 alone is insufficient. This intentionally refuses mixed overlapping content rather than retargeting a later field with a now-shifted ordinal. An SDT-only operation retains its existing semantics. The guard applies when this new mixed operation also has legacy assignments.
 
+Explicit SDT selectors are re-resolved before each write against their frozen unique route and metadata, then checked again after the SDT phase and final reopen. Vector indices alone do not grant authority. Existing native display replacement retains nested SDT nodes and does not create new controls. An outer control needs its own supported typed display location. Its nested selected control can remain valid in either input order, and this is admitted when both selected targets remain provably unchanged in identity. Do not invent a parent/child overlap refusal when the native provider retains both. Actual disappeared or changed selected targets refuse atomically. Unselected control inventory is not a blanket restriction on the existing SDT-only native contract. The distinct removal of legacy Field run content is real and still triggers the complete mixed legacy-inventory guard below.
+
 Before every legacy write re-resolve its original physical source-part/ordinal and compare the full identity/metadata inventory against the frozen identity sequence, allowing only typed-value changes already produced by successful earlier planned legacy assignments. Apply native set_legacy_form_field_value only after this check. Verify its returned/reopened entry matches the original target identity and intended typed value. Recheck the final inventory with exactly the planned value substitutions. Any drift, unexpected count or late native failure discards the entire private candidate. No implicit re-selection by newly shifted ordinal, first-match name or a generic count1 is allowed. Individual native commits affect only the candidate.
 
 Reopen/validate the complete final candidate before one existing atomic output publication, reusing commands.rs:2042 and existing input/output collision protections. All emitted assignment rows remain in original JSON order even though execution uses two phases. Any validation or result-allocation failure leaves input, existing output and held live owners untouched. Do not expose mixed live-document mutation halfway through a loop.
@@ -100,7 +102,11 @@ For --values --json, retain the existing mutation envelope and output assignment
 
 ### Owner, preservation and signing interactions
 
-All Python mutations use the established candidate/publication protocol, including conservative proven owner survival, exact no-op short circuit and full Python result allocation before live commit. Reuse document.rs:5272 rather than assigning inner directly. Test held Section, Paragraph, Table/Cell and selected Story owners through successful supported edits, with byte/owner equality on refused or exact no-op operations. Frozen form snapshots remain historical values, not stale mutable handles.
+All Python mutations use the established candidate/publication protocol, including conservative proven owner survival, exact no-op short circuit and full Python result allocation before live commit. Reuse document.rs:5272 rather than assigning inner directly. Test held Section, Paragraph, Table/Cell and selected related-story physical owners through successful supported edits, with byte/owner equality on refused or exact no-op operations. Frozen form snapshots remain historical values, not stale mutable handles.
+
+The existing generic Conservative publisher retires every owner, so these two new form adapters use a private FormValues publication mode in the existing document.rs. Before any runtime repair, qualify the actual untouched-owner retirement RED. Exact no-op serialized bytes short-circuit before retirement. Actual form mutations preserve only certified unchanged owners: native batched old/candidate story snapshots supply raw paragraph/table XML and physical routes, while existing section_properties_xml supplies section source. Independent exact-route maps retain all old/current indices and require unique matches on story kind, part, owner index, item kind and complete index path. Cells additionally bind their exact table/row/cell and physical story. Existing indexed matcher agreement is necessary but not sufficient, because that matcher historically selects a first candidate. Every ancestor pair must also be uniquely certified. Whole changed tables and their cells/descendants retire. Changed/ambiguous paragraphs retire, and Run/Hyperlink tokens and existing global run/snapshot epochs always retire on actual mutation. No raw XML equality, matching text/count or frozen field metadata alone can establish authority. Existing native scalar forms cannot remove/recreate paragraph/table/section containers, and old retired tokens are never reintroduced. Source collection shares each native batch with the address inventory, avoiding repeated per-paragraph scans. Serialized state is flushed through the existing to_bytes route before collecting either side, including prior live related-story edits. Frozen Story metadata remains historical and readable, but its captured mutation authority follows the existing retired snapshot epoch. Other Conservative publishers keep their behavior unchanged.
+
+The preservation matrix is exact: unchanged uniquely proved Paragraph/Table/Cell/live Section and related-story paragraph owners may survive, changed owning source or an uncertified ancestor retires the entire descendant branch, and exact no-op or refusal preserves every existing token. Tests retain changed-paragraph/cache, changed-table, duplicate-equal-text separate routes and already removed/recreated handles as negative controls. Only existing native operations are used, with no fabricated form structural behavior or new general owner API.
 
 Use native custom XML binding resolution and legacy typed source patching. Preserve unrelated raw children/attributes, schema order, producer metadata and resources. Do not introduce generic form ownership or another XML engine. Related-story legacy operations retain native physical part identity and refusal boundaries.
 
@@ -155,15 +161,15 @@ Expected unchanged, all49entries and the shared pixel manifest. New form fixture
 
 ## Implementation checklist
 
-- [ ] Adopt after S94 opens, confirm pending status/branch/Base, approve the consolidated design and claim an isolated worktree.
-- [ ] Authenticate the live Issue380 criteria and source-built five-kind acceptance template. Preserve already supported baseline behavior.
-- [ ] Freeze matched-profile prefeature wheel/CLI/package artifacts and execute missing-surface RED controls.
-- [ ] Add bind wrapper and frozen legacy snapshots/setter with exact stubs, type admission and prepared publication.
-- [ ] Extend the existing CLI Fill command with bounded flat JSON, duplicate detection and strict mixed selector preflight.
-- [ ] Apply SDTs then guarded physical-identity legacy writes on one candidate, retain original output row order, refuse any overlap/ordinal drift and publish only after final reopen/validation.
-- [ ] Prove five-kind saved/reopened values, raw preservation, held owners, ambiguity/late-failure atomicity and meaningful semantic negatives.
-- [ ] Qualify fill/sign semantics with the existing native providers, preserve old --tag behavior and hand exact fixtures to F-X240 for the later public cross-story gate.
-- [ ] Pass scoped checks/riders, independent microscope, integrator-owned HLD/archive observations and structured preparation without worker ledger edits or push.
+- [x] Adopt after S94 opens, confirm pending status/branch/Base, approve the consolidated design and claim an isolated worktree.
+- [x] Authenticate the live Issue380 criteria and source-built five-kind acceptance template. Preserve already supported baseline behavior.
+- [x] Freeze matched-profile prefeature wheel/CLI/package artifacts and execute missing-surface RED controls.
+- [x] Add bind wrapper and frozen legacy snapshots/setter with exact stubs, type admission and prepared publication.
+- [x] Extend the existing CLI Fill command with bounded flat JSON, duplicate detection and strict mixed selector preflight.
+- [x] Apply SDTs then guarded physical-identity legacy writes on one candidate, retain original output row order, refuse any overlap/ordinal drift and publish only after final reopen/validation.
+- [x] Prove five-kind saved/reopened values, raw preservation, held owners, ambiguity/late-failure atomicity and meaningful semantic negatives.
+- [x] Qualify fill/sign semantics with the existing native providers, preserve old --tag behavior and hand exact fixtures to F-X240 for the later public cross-story gate.
+- [x] Pass scoped checks/riders, independent microscope, integrator-owned HLD/archive observations and structured preparation without worker ledger edits or push.
 
 ## Open questions
 

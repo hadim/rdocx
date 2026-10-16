@@ -184,7 +184,39 @@ inserts their content and reopens the package. Lifecycle checks cover raw
 body wrapper attributes, adversarial producer prefix scopes, related-story
 control variants, retained self-closing empty containers, duplicate names,
 stale snapshots and atomic rejection of unsafe or incomplete graphs.
-The Python, WASM, and CLI surfaces and the 49-entry hash set remain unchanged.
+Installed Python and the actual release CLI qualify the same source-built
+five-kind form template. Expanded-name observers inspect checkbox state,
+glyph/font, SDT display and bound custom XML, retained producer date/drop-down
+metadata, legacy typed default and cached text. Semantic negatives retain a
+matching display while losing checkbox state or disagreeing with the legacy
+cached result, and must fail the same observer. Frozen snapshots, exact no-op
+bytes, held Section/Paragraph/Table/Cell/Story owners, current related-part
+identity, typed values, ambiguity and late failure are independent controls.
+
+Strict CLI values controls cover decoded duplicate keys, exact whitespace,
+UTF-8/file/entry bounds, scalar kinds, repeated physical targets, cross-kind
+collisions and unchanged old all-match tags. An SDT replacement removing an
+earlier legacy field must refuse the mixed operation before ordinal-based
+legacy mutation. Nested SDTs retain actual native semantics when every selected
+target remains valid. Source and pre-existing output remain unchanged on
+refusal. Ordinary release wheel/CLI hashes and sizes are compared with genuine
+matched prefeature artifacts. Strict installed typing/stubtest and genuine
+verified affected archives are required. WASM form surfaces and the49-entry
+hash set remain unchanged. Public fill/sign interaction is qualified separately
+on the integrated signing surface.
+
+Form publication preserves an owner only when independent exact physical-route
+maps identify one old and one candidate owner, the existing matcher agrees,
+and native owning XML is byte-identical. Paragraph/table sources share the
+same batched native inventory as their addresses. Section source uses the
+existing checked section XML provider. Every ancestor must also be certified.
+Cells bind their exact table, row, cell and physical story, so a changed table
+retires all its cells and descendants. Changed or ambiguous paragraphs retire.
+Equal text or equal inventory counts alone grant no authority. Run/Hyperlink
+and existing global run/snapshot epochs retire on actual mutation. Exact
+no-ops and refused operations keep all current tokens. Other conservative
+publishers retain their existing behavior, and retired pre-existing tokens
+cannot be revived by a same-route or equal-text form result.
 
 The glossary, embedded-content, and package-story malformed XML matrices run
 through the single strict XML 1.0 lexical validator in `oxml-core`. A shared

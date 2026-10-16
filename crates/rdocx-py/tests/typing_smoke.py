@@ -555,3 +555,19 @@ def fx211a_checked_word_element_types(document: Document) -> None:
     section = document.section(0)
     assert_type(section.element.xml, str)
     assert_type(section.element.replace_xml(section.element.xml), None)
+
+
+def fx241_form_types(document: Document) -> None:
+    from rdocx import LegacyFormField
+    assert_type(document.bind_content_controls({"client": "Ada"}), int)
+    assert_type(document.legacy_form_fields(), tuple[LegacyFormField, ...])
+    field = document.set_legacy_form_field_value(None, "value", source_part="/word/document.xml", ordinal=0)
+    assert_type(field, LegacyFormField)
+    assert_type(field.source_part, str)
+    assert_type(field.ordinal, int)
+    assert_type(field.name, str | None)
+    assert_type(field.enabled, bool)
+    assert_type(field.calculate_on_exit, bool)
+    assert_type(field.type, Literal["text", "checkbox", "dropdown"])
+    assert_type(field.value, str | bool | int)
+    assert_type(field.choices, tuple[str, ...])

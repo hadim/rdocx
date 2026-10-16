@@ -341,6 +341,15 @@ never installed, copied into archives or redistributed. Fresh installed Python
 wheels, scoped native rustdoc, WASM and verified package dry runs qualify the
 unchanged public conversion signatures and their bounded semantic expansion.
 
+
+Python form and CLI values changes require matched ordinary release wheel and
+CLI observations before and after implementation. Preserve a permanent copy of
+the prefeature CLI before rebuilding its target, and retain source/profile/hash
+receipts for both artifacts. Wheel and binary size deltas are observations,
+not new publication ceilings. Fresh installations use --no-compile so wheel
+members remain byte-identical. Authentication binds the current source and
+isolated output directory explicitly, preserving the prefeature artifacts.
+
 ## Packaging
 The native bibliography module is ordinary `rdocx` source and belongs in its
 published source archive. Bound Word inputs, UI receipts, native output graphs
