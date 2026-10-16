@@ -54,7 +54,7 @@ __all__ = [
     "EmbeddedFontFace",
     "EmbeddedTypeface",
 
-    "SlideTransition", "HeaderFooter", "PlaceholderFormat", "SlideMaster", "SlideMasterCollection",
+    "NotesSlide", "NotesTextFrame", "SlideTransition", "HeaderFooter", "PlaceholderFormat", "SlideMaster", "SlideMasterCollection",
     "Theme", "ThemeFonts", "ThemeFontSet", "ThemeColors", "MasterTextStyles", "TextStyleList",
     "AppProperties", "CoreProperties", "CustomFileTime", "CustomProperties",
     "CustomProperty", "GradientStop", "GradientStops", "MediaInfo", "Section",
@@ -510,6 +510,10 @@ class Slide:
     @property
     def placeholders(self) -> PlaceholderCollection: ...
     @property
+    def has_notes_slide(self) -> bool: ...
+    @property
+    def notes_slide(self) -> NotesSlide: ...
+    @property
     def notes_text(self) -> str | None: ...
     @notes_text.setter
     def notes_text(self, value: str) -> None: ...
@@ -556,6 +560,20 @@ class Slide:
     def move_comment(self, from_: int, to: int) -> None: ...
     def move_reply(self, comment_id: str, from_: int, to: int) -> None: ...
 
+
+@_final
+class NotesSlide:
+    def __new__(cls, *, _private: _Never) -> NotesSlide: ...
+    @property
+    def notes_text_frame(self) -> NotesTextFrame | None: ...
+
+@_final
+class NotesTextFrame:
+    def __new__(cls, *, _private: _Never) -> NotesTextFrame: ...
+    @property
+    def text(self) -> str: ...
+    @text.setter
+    def text(self, value: str) -> None: ...
 
 @_final
 class SlideCollection:

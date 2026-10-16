@@ -317,6 +317,22 @@ fallback and has no additional paint-parity claim.
 
 ## Python colour inputs and live font formats
 
+Python numeric setters reject bool before conversion. Word font.size accepts
+its existing EMU/Length representation and refuses nonzero values whose
+unchanged native conversion stores zero half-points. The error names EMU,
+0.5 point storage and rdocx.shared.Pt. Explicit zero and None retain their
+existing behavior. Native constructors and imported zero source are unchanged.
+
+Presentation before/after spacing rejects nonzero EMU values that truncate to
+zero centipoints, while explicit zero, None and existing float-line roles
+remain valid. Character spacing applies the same refusal symmetrically to
+small signed values, preserving meaningful negative spacing. Line spacing
+must produce positive stored points or percentage units, with positive line
+multiples and rpptx.util.Pt named by its refusal. Role-specific positivity does
+not change valid zero before/after spacing. Every refusal precedes owner or
+source publication, including warmed wrappers and pre-existing nonzero values.
+
+
 Both families accept `RGBColor`, legacy integer channel triples and exactly
 six ASCII hexadecimal digits with an optional single leading hash at every
 existing scalar RGB setter. Hex values normalize to uppercase. The inventory
@@ -2937,6 +2953,29 @@ mutation. F-220 adds no facade, binding, `rpptx-layout`, or `rpptx-render`
 public surface.
 
 ## Native PowerPoint notes and handout export
+
+Python Slide.has_notes_slide is a pure presence predicate, including existing
+empty notes. Slide.notes_slide lazily creates native notes/master relationships
+only when absent and prepares its returned NotesSlide owner before publication.
+NotesSlide.notes_text_frame returns None for a missing body, or an owner-aware
+NotesTextFrame exposing scalar text. One exact direct effective Body shape is
+required. Ambiguous, grouped or alternate bodies refuse with the existing
+aggregate Slide.notes_text read alternative. Every operation validates the
+physical slide owner, follows surviving moves and rejects retired slides.
+Existing notes are not rewritten by wrapper access.
+
+Notes text writes stage the existing native provider and publish checked owner
+survival. Outside-body placeholders, relationships and opaque source remain
+owned by their original parts. Within the selected body the existing scalar
+setter retains body-level state and first-paragraph/template formatting rather
+than arbitrary rich-run distributions. Actual serialized source equality is a
+no-op, while equal aggregate text alone does not bypass source comparison.
+
+The enum module provides identity alias MSO_THEME_COLOR_INDEX and import-only
+MSO_COLOR_TYPE with pinned RGB1, SCHEME2, HSL101, PRESET102, SCRGB103 and SYSTEM104
+values. ColorFormat.type retains its existing string/None contract. These
+imports do not add color authoring forms or switch getter return types.
+
 
 The published pre-1.0 `rpptx` facade exposes `HandoutLayout::{One, Two, Three,
 Four, Six, Nine}` and four render-feature methods:

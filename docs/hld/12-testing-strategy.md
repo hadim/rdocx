@@ -4383,6 +4383,33 @@ the measurements. A separate fresh debug-guarded opt-level2 wheel executes the
 complete Word Python suite with its existing runtime and font prerequisites.
 Release timing does not replace guarded correctness acceptance.
 
+## Notes owners and unit refusal qualification
+
+Notes controls distinguish absent parts, empty bodies, missing placeholders
+and missing txBody. Direct, duplicate, grouped and alternate-body variants
+qualify exact frame admission, namespace aliases, opaque retention, physical
+slide moves and retirement. Pinned python-pptx1.0.2 comparisons inspect
+expanded body names, scalar text and actual notes/master relationships.
+Existing aggregate notes and first-paragraph formatting limits remain explicit.
+
+The original five-assignment script runs unchanged with authenticated input
+identity. Its self-catching exit is insufficient. Each label must report a
+unit-qualified refusal. Old installed artifacts supply actual accepted-zero
+RED output and independent reopened Word sz and DrawingML spacing values.
+Boundary controls include6350/6349 Word EMU,126/127 PPT EMU, signed character
+spacing, zero and tiny-positive line spacing, bool confusion, None clearing,
+valid zero before/after and subsequent valid assignments through warmed owners.
+Complete package equality and held unrelated owners qualify atomic refusal.
+Valid Word/PPT length controls compare expanded storage against pinned oracles.
+
+The independent PR333 input retains 122 files: 76 Word scripts, 44 Presentation
+scripts and both original runners. Original reports, exits and historical stale merge
+markers remain separate from requirement classification and the100-case metric
+below. Notes/import/refusal qualification does not claim full Issue379 raw
+runner success while other feature surfaces remain unresolved. Fresh actual
+paired wheels, installed RECORD/native/stub identities, strict typing, complete
+Presentation acceptance and focused Word controls qualify changed consumers.
+
 ## Integrated Python compatibility qualification
 
 The immutable corpus contains100 scripts,49 Word and51 PowerPoint, with

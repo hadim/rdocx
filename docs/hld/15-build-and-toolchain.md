@@ -1257,6 +1257,13 @@ PowerPoint repeated references share one decoded physical body.
 Consumer recipes use explicit license authorization and exact identity, and
 exercise source-built current APIs and actual CLI help. Deterministic rendering
 retains caller-first embedded-second selection and entrypoint-specific fallback.
+Notes and unit-consumer qualification pins python-docx1.2.0 and
+python-pptx1.0.2 in fresh isolated installed environments. The exact five-input
+script and122-file PR333 source retain authenticated archive, body, check,
+mode and membership identities. Raw runner output and independent requirement
+classification remain separate. Native read-only notes projection changes
+require actual affected archive verification and measured inventories before
+feature completion, in addition to genuine wheel and consumer checks.
 Fresh paired wheel qualification authenticates every archive member, RECORD
 digest/length, local Python/stub source and native binary before isolated install.
 Affected crate inventories and measured archive tuples come from actual verified

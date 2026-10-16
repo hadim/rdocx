@@ -10672,3 +10672,250 @@ def test_fx246_ppt_malformed_chart_document_is_refused_atomically(trailer):
         with pytest.raises(Exception):
             operation()
         assert deck.to_bytes() == before
+
+
+def _fx239_text_owner():
+    import rpptx
+    from rpptx.util import Inches
+    presentation = rpptx.Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    shape = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
+    shape.text_frame.text = "kept"
+    paragraph = shape.text_frame.paragraphs[0]
+    return presentation, slide, shape, paragraph, paragraph.runs[0].font
+
+
+@pytest.mark.parametrize("initial", [False, True])
+@pytest.mark.parametrize("name,refused", [
+    ("space_before", 6), ("space_before", 126), ("space_before", False),
+    ("space_after", 6), ("space_after", 126), ("space_after", False),
+    ("spacing", 2), ("spacing", 126), ("spacing", -126),
+    ("spacing", True), ("spacing", False),
+    ("line_spacing", 0), ("line_spacing", False), ("line_spacing", 0.000001),
+])
+def test_fx239_quantization_refusals_are_source_and_revision_atomic(initial, name, refused):
+    from rpptx.util import Pt
+    presentation, slide, shape, paragraph, font = _fx239_text_owner()
+    target = font if name == "spacing" else paragraph
+    if initial:
+        setattr(target, name, Pt(12))
+    before_value = getattr(target, name)
+    before = presentation.to_bytes()
+    with pytest.raises((TypeError, ValueError), match="EMU|Pt|positive|bool"):
+        setattr(target, name, refused)
+    assert presentation.to_bytes() == before
+    assert getattr(target, name) == before_value
+    assert shape.text_frame.text == "kept" and slide.notes_text is None
+    setattr(target, name, Pt(12))
+    assert getattr(target, name) == Pt(12)
+
+
+def test_fx239_notes_names_distinguish_absent_empty_and_missing_body():
+    import rpptx
+    presentation, slide, shape, paragraph, font = _fx239_text_owner()
+    before = presentation.to_bytes()
+    assert not slide.has_notes_slide
+    assert not slide.has_notes_slide
+    assert presentation.to_bytes() == before
+    notes = slide.notes_slide
+    assert isinstance(notes, rpptx.NotesSlide) and slide.has_notes_slide
+    frame = notes.notes_text_frame
+    assert isinstance(frame, rpptx.NotesTextFrame) and frame.text == ""
+    frame.text = "speaker\nsecond line"
+    assert frame.text == "speaker\nsecond line" and shape.text_frame.text == "kept"
+    reopened = rpptx.Presentation.from_bytes(presentation.to_bytes())
+    assert reopened.slides[0].notes_slide.notes_text_frame.text == frame.text
+
+
+def test_fx239_theme_alias_and_color_import_scope_are_explicit():
+    import pptx.enum.dml as oracle
+    import rpptx.enum.dml as actual
+    assert importlib.metadata.version("python-pptx") == "1.0.2"
+    assert actual.MSO_THEME_COLOR_INDEX is actual.MSO_THEME_COLOR
+    assert {x.name: x.value for x in actual.MSO_COLOR_TYPE} == {
+        x.name: x.value for x in oracle.MSO_COLOR_TYPE
+    }
+    import rpptx
+    *_, font = _fx239_text_owner()
+    assert font.color.type is None
+    font.color.rgb = rpptx.RGBColor(0x12, 0x34, 0x56)
+    assert font.color.type == "rgb" and not isinstance(font.color.type, actual.MSO_COLOR_TYPE)
+
+
+def _fx239_notes_variant(kind):
+    import rpptx
+    presentation, slide, *_ = _fx239_text_owner()
+    slide.notes_text = "original body"
+    with zipfile.ZipFile(io.BytesIO(presentation.to_bytes())) as package:
+        parts = {name: package.read(name) for name in package.namelist()}
+    name = next(name for name in parts if "/notesSlides/notesSlide" in name and name.endswith(".xml"))
+    xml = parts[name]
+    marker = xml.index(b'type="body"')
+    start = xml.rfind(b"<p:sp>", 0, marker)
+    end = xml.index(b"</p:sp>", marker) + len(b"</p:sp>")
+    assert start >= 0
+    body = xml[start:end]
+    if kind == "missing":
+        replacement = body.replace(b'type="body"', b'type="title"')
+    elif kind == "duplicate":
+        replacement = body + re.sub(rb'(<p:cNvPr id=")\d+', rb'\g<1>9999', body, count=1)
+    elif kind == "group":
+        replacement = b'<p:grpSp><p:nvGrpSpPr><p:cNvPr id="9999" name="group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>' + body + b'</p:grpSp>'
+    elif kind == "alternate":
+        replacement = b'<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Fallback>' + body + b'</mc:Fallback></mc:AlternateContent>'
+    elif kind == "no-txBody":
+        tx_start = body.index(b"<p:txBody")
+        tx_end = body.index(b"</p:txBody>") + len(b"</p:txBody>")
+        replacement = body[:tx_start] + body[tx_end:]
+    else:
+        replacement = body
+    xml = xml[:start] + replacement + xml[end:]
+    opaque = b'<x:opaque xmlns:x="urn:fx239" x:version="1"><!--keep--><x:child/></x:opaque>'
+    xml = xml.replace(b"</p:notes>", b'<p:extLst><p:ext uri="fx239">' + opaque + b'</p:ext></p:extLst></p:notes>')
+    if kind == "alias":
+        xml = re.sub(rb"(<\/?)p:", rb"\g<1>q:", xml).replace(b"xmlns:p=", b"xmlns:q=")
+    elif kind == "default":
+        xml = re.sub(rb"(<\/?)p:", rb"\g<1>", xml).replace(b"xmlns:p=", b"xmlns=")
+    parts[name] = xml
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as package:
+        for part_name, raw in parts.items():
+            package.writestr(part_name, raw)
+    return rpptx.Presentation.from_bytes(stream.getvalue()), name, opaque
+
+
+@pytest.mark.parametrize("kind", ["duplicate", "group", "alternate"])
+def test_fx239_notes_frame_owner_is_exact_or_refused(kind):
+    presentation, _, _ = _fx239_notes_variant(kind)
+    slide = presentation.slides[0]
+    before = presentation.to_bytes()
+    assert slide.has_notes_slide
+    assert "original body" in slide.notes_text
+    with pytest.raises(Exception, match="one direct Body.*Slide.notes_text"):
+        slide.notes_slide.notes_text_frame
+    assert presentation.to_bytes() == before
+
+
+@pytest.mark.parametrize("kind", ["missing", "no-txBody", "alias", "default"])
+def test_fx239_notes_text_preserves_owned_and_opaque_source(kind):
+    presentation, name, opaque = _fx239_notes_variant(kind)
+    slide = presentation.slides[0]
+    before = presentation.to_bytes()
+    notes = slide.notes_slide
+    frame = notes.notes_text_frame
+    assert presentation.to_bytes() == before
+    if kind == "missing":
+        assert frame is None and slide.has_notes_slide
+        return
+    assert frame.text == ("" if kind == "no-txBody" else "original body")
+    frame.text = "new body\nsecond"
+    saved = presentation.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(saved)) as package:
+        assert opaque in package.read(name)
+    assert presentation.slides[0].notes_slide.notes_text_frame.text == "new body\nsecond"
+    frame.text = frame.text
+    assert presentation.to_bytes() == saved
+
+
+def test_fx239_notes_wrappers_follow_physical_slide_owners():
+    import rpptx
+    presentation, slide, shape, paragraph, font = _fx239_text_owner()
+    notes = slide.notes_slide
+    frame = notes.notes_text_frame
+    frame.text = "target"
+    other = presentation.slides.add_slide(presentation.slide_layouts[6])
+    other.notes_text = "other"
+    presentation.slides.move(0, 1)
+    assert frame.text == "target"
+    frame.text = "moved"
+    assert presentation.slides[1].notes_text == "moved"
+    assert paragraph.text == "kept" and shape.text_frame.text == "kept"
+    presentation.slides.remove(slide)
+    with pytest.raises(rpptx.StaleElementError):
+        frame.text = "must not retarget"
+    with pytest.raises(rpptx.StaleElementError):
+        notes.notes_text_frame
+    assert presentation.slides[0].notes_text == "other"
+
+
+def test_fx239_valid_unit_controls_retain_pinned_structure():
+    from rpptx.util import Length
+    presentation, slide, shape, paragraph, font = _fx239_text_owner()
+    paragraph.space_before = 0
+    paragraph.space_after = 127
+    font.spacing = -127
+    paragraph.line_spacing = Length(127)
+    with zipfile.ZipFile(io.BytesIO(presentation.to_bytes())) as package:
+        from xml.etree import ElementTree as ET
+        root = ET.fromstring(package.read("ppt/slides/slide1.xml"))
+    a = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    assert next(root.iter(a + "spcBef"))[0].get("val") == "0"
+    assert next(root.iter(a + "spcAft"))[0].get("val") == "1"
+    assert next(root.iter(a + "lnSpc"))[0].get("val") == "1"
+    assert next(root.iter(a + "rPr")).get("spc") == "-1"
+    for value in [Length(0), Length(126)]:
+        before = presentation.to_bytes()
+        with pytest.raises(ValueError, match="Pt|positive"):
+            paragraph.line_spacing = value
+        assert presentation.to_bytes() == before
+    paragraph.line_spacing = 0.000005
+    assert paragraph.line_spacing == 0.00001
+    for name in ["space_before", "space_after"]:
+        setattr(paragraph, name, None)
+        assert getattr(paragraph, name) is None
+    font.spacing = 0
+    assert font.spacing == 0
+    font.spacing = None
+    assert font.spacing is None
+
+
+def test_fx239_notes_names_match_pinned_python_pptx(tmp_path):
+    import pptx
+    import rpptx
+    from xml.etree import ElementTree as ET
+    assert importlib.metadata.version("python-pptx") == "1.0.2"
+    a = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    p = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    projections = []
+    for index, module in enumerate([rpptx, pptx]):
+        presentation = module.Presentation()
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        assert not slide.has_notes_slide
+        frame = slide.notes_slide.notes_text_frame
+        assert frame is not None and frame.text == "" and slide.has_notes_slide
+        frame.text = "one\ntwo"
+        path = tmp_path / f"notes-{index}.pptx"
+        presentation.save(path)
+        with zipfile.ZipFile(path) as package:
+            notes_name = next(n for n in package.namelist() if "/notesSlides/notesSlide" in n and n.endswith(".xml"))
+            root = ET.fromstring(package.read(notes_name))
+            bodies = [shape for shape in root.iter(p + "sp") if any(ph.get("type") == "body" for ph in shape.iter(p + "ph"))]
+            assert len(bodies) == 1
+            text = ["".join(t.text or "" for t in paragraph.iter(a + "t")) for paragraph in bodies[0].iter(a + "p")]
+            rel_name = notes_name.rsplit("/", 1)[0] + "/_rels/" + notes_name.rsplit("/", 1)[1] + ".rels"
+            relationships = ET.fromstring(package.read(rel_name))
+            projections.append((text, sorted(rel.get("Type").rsplit("/", 1)[1] for rel in relationships)))
+    assert projections[0] == projections[1]
+
+
+def test_fx239_valid_spacing_matches_pinned_python_pptx(tmp_path):
+    import pptx
+    import rpptx
+    from xml.etree import ElementTree as ET
+    projections = []
+    a = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    for index, module in enumerate([rpptx, pptx]):
+        presentation = module.Presentation()
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        from_module = __import__(module.__name__ + ".util", fromlist=["Pt", "Inches"])
+        paragraph = slide.shapes.add_textbox(*(from_module.Inches(x) for x in [1, 1, 4, 1])).text_frame.paragraphs[0]
+        paragraph.text = "spacing"
+        paragraph.space_before = from_module.Pt(6)
+        paragraph.space_after = from_module.Pt(12)
+        paragraph.line_spacing = 1.5
+        path = tmp_path / f"spacing-{index}.pptx"
+        presentation.save(path)
+        with zipfile.ZipFile(path) as package:
+            root = ET.fromstring(package.read("ppt/slides/slide1.xml"))
+        projections.append(tuple((next(root.iter(a + name))[0].tag, next(root.iter(a + name))[0].get("val")) for name in ["spcBef", "spcAft", "lnSpc"]))
+    assert projections[0] == projections[1]

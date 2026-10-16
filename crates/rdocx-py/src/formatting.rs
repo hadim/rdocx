@@ -528,11 +528,19 @@ impl PyFont {
     }
 
     #[setter]
-    fn set_size(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
-        self.apply(
-            py,
-            FontUpdate::Size(value.map(|emu| rdocx::Length::emu(emu).to_pt())),
-        )
+    fn set_size(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let points = value.map(|value| -> PyResult<f64> {
+            if value.is_instance_of::<pyo3::types::PyBool>() {
+                return Err(PyTypeError::new_err("font.size rejects bool as EMU; use rdocx.shared.Pt(12)"));
+            }
+            let emu = value.extract::<i64>()?;
+            let points = rdocx::Length::emu(emu).to_pt();
+            if emu != 0 && (points * 2.0) as u32 == 0 {
+                return Err(PyValueError::new_err("font.size bare int is EMU; Word stores 0.5 point steps; use rdocx.shared.Pt(12) or a Length at least Pt(0.5)"));
+            }
+            Ok(points)
+        }).transpose()?;
+        self.apply(py, FontUpdate::Size(points))
     }
 
     #[getter]

@@ -803,3 +803,19 @@ def fx211c_compatibility_aliases(prs: Presentation, shape: Shape, row: Row, font
     shapes = prs.slides[0].shapes
     shapes.align([shape], "left", relative_to="selection")
     shapes.distribute([shape], "horizontal", relative_to="selection")
+
+
+if TYPE_CHECKING:
+    from rpptx import NotesSlide, NotesTextFrame
+    from rpptx.enum.dml import MSO_COLOR_TYPE, MSO_THEME_COLOR_INDEX
+
+    def fx239_notes_typing(slide: Slide) -> None:
+        present: bool = slide.has_notes_slide
+        notes: NotesSlide = slide.notes_slide
+        frame: NotesTextFrame | None = notes.notes_text_frame
+        if frame is not None:
+            text: str = frame.text
+            frame.text = text
+        color: int = MSO_COLOR_TYPE.RGB
+        theme: int = MSO_THEME_COLOR_INDEX.ACCENT_1
+        assert present or color or theme

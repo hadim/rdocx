@@ -1294,3 +1294,64 @@ def test_fx245_exact_issue382_script_and_independent_package_graph(capsys):
         assert "[FAIL]" not in output, output
         assert graph(os.path.join(scope["TMP"], "accepted.docx")) == graph(edited)
         assert graph(os.path.join(scope["TMP"], "rejected.docx")) == graph(scope["a"])
+
+
+@pytest.mark.parametrize("initial", [None, 127000])
+@pytest.mark.parametrize("refused", [12, 6349, -1, -6350, True, False])
+def test_fx239_word_font_quantization_refuses_before_publication(initial, refused):
+    import rdocx
+    document = rdocx.Document()
+    held = document.add_paragraph("kept")
+    run = held.add_run("size")
+    font = run.font
+    font.size = initial
+    before = document.to_bytes()
+    with pytest.raises((TypeError, ValueError), match="EMU|Pt|bool"):
+        font.size = refused
+    assert document.to_bytes() == before and held.text == "keptsize"
+    assert font.size == initial
+    font.size = rdocx.Pt(12)
+    assert font.size == rdocx.Pt(12)
+
+
+def test_fx239_word_font_storage_boundaries_and_clear():
+    import rdocx
+    from xml.etree import ElementTree as ET
+    import io
+    document = rdocx.Document()
+    font = document.add_paragraph("").add_run("size").font
+    font.size = 6350
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as package:
+        root = ET.fromstring(package.read("word/document.xml"))
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    assert next(root.iter(w + "sz")).get(w + "val") == "1"
+    font.size = 0
+    assert font.size == 0
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.paragraphs[0].runs[0].font.size == 0
+    font.size = None
+    assert font.size is None
+
+
+def test_fx239_valid_font_boundary_matches_pinned_python_docx():
+    import docx
+    import rdocx
+    import io
+    from xml.etree import ElementTree as ET
+    assert importlib.metadata.version("python-docx") == "1.2.0"
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    values = []
+    for module in [rdocx, docx]:
+        document = module.Document()
+        paragraph = document.add_paragraph("")
+        shared = __import__(module.__name__ + ".shared", fromlist=["Pt"])
+        paragraph.add_run("boundary").font.size = shared.Pt(0.5)
+        raw = document.to_bytes() if module is rdocx else None
+        if raw is None:
+            stream = io.BytesIO()
+            document.save(stream)
+            raw = stream.getvalue()
+        with zipfile.ZipFile(io.BytesIO(raw)) as package:
+            root = ET.fromstring(package.read("word/document.xml"))
+        values.append([node.get(w + "val") for node in root.iter(w + "sz")])
+    assert values == [["1"], ["1"]]

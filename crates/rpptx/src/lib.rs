@@ -21219,6 +21219,46 @@ impl<'a> SlideRef<'a> {
             == other.record.notes.as_ref().map(|record| &record.notes)
     }
 
+    /// Returns the one direct writable notes-body text, or no body.
+    ///
+    /// Grouped, alternate and multiple effective bodies refuse this bounded
+    /// frame projection. `notes_text` retains its aggregate-read behavior.
+    pub fn notes_text_frame_text(&self) -> Result<Option<String>> {
+        let Some(notes) = &self.record.notes else {
+            return Ok(None);
+        };
+        let children = &notes.notes.common_slide_data.shape_tree.children;
+        fn effective_bodies(children: &[ShapeTreeChild]) -> usize {
+            children.iter().map(|child| {
+                let body = usize::from(matches!(child, ShapeTreeChild::Shape(shape)
+                    if shape.placeholder.as_ref().is_some_and(|ph| ph.effective_type() == PhType::Body)));
+                body + effective_bodies(shape_ref(child).child_slice())
+            }).sum()
+        }
+        let count = effective_bodies(children);
+        if count == 0 {
+            return Ok(None);
+        }
+        let direct = children.iter().find_map(|child| match child {
+            ShapeTreeChild::Shape(shape)
+                if shape
+                    .placeholder
+                    .as_ref()
+                    .is_some_and(|ph| ph.effective_type() == PhType::Body) =>
+            {
+                Some(shape)
+            }
+            _ => None,
+        });
+        match (count, direct) {
+            (1, Some(shape)) => Ok(Some(shape.text_body.as_ref().map_or_else(String::new, CT_TextBody::plain_text))),
+            _ => Err(Error::InvalidSlideMutation {
+                operation: "notes text frame",
+                message: "notes_text_frame requires one direct Body placeholder without grouped or alternate bodies; use Slide.notes_text for aggregate reads (its existing setter selects the first writable body)".to_owned(),
+            }),
+        }
+    }
+
     /// Returns speaker-note text, distinguishing no notes part from empty notes.
     pub fn notes_text(&self) -> Option<String> {
         self.record

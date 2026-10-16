@@ -36084,3 +36084,76 @@ fn fx246_ppt_legend_settings_roundtrip_and_noops() {
     );
     assert_eq!(presentation.to_bytes().unwrap(), before);
 }
+
+#[test]
+fn fx239_notes_frame_projection_admits_only_one_direct_body() {
+    let mut fresh = Presentation::new().unwrap();
+    fresh.add_slide(6).unwrap();
+    let before = fresh.to_bytes().unwrap();
+    assert_eq!(
+        fresh.slide(0).unwrap().notes_text_frame_text().unwrap(),
+        None
+    );
+    assert_eq!(fresh.to_bytes().unwrap(), before);
+    fresh.set_notes_text(0, "").unwrap();
+    assert_eq!(
+        fresh.slide(0).unwrap().notes_text_frame_text().unwrap(),
+        Some(String::new())
+    );
+
+    let notes_part = "/custom/notes/notes1.xml";
+    let base = String::from_utf8(f226_notes_slide_xml("exact body")).unwrap();
+    let marker = base.find("type=\"body\"").unwrap();
+    let start = base[..marker].rfind("<p:sp>").unwrap();
+    let end = marker + base[marker..].find("</p:sp>").unwrap() + "</p:sp>".len();
+    let body = &base[start..end];
+    let duplicate = format!("{body}{}", body.replacen("id=\"2\"", "id=\"900\"", 1));
+    let grouped = format!("<p:grpSp>{}{body}</p:grpSp>", f226_group_scaffold());
+    let alternate = format!(
+        r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Fallback>{body}</mc:Fallback></mc:AlternateContent>"#
+    );
+    for replacement in [duplicate, grouped, alternate] {
+        let mut package = open_opc(&f226_fixture_bytes(), "notes frame ambiguous body");
+        package.set_part(
+            notes_part,
+            base.replacen(body, &replacement, 1).into_bytes(),
+        );
+        let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+        let before = presentation.to_bytes().unwrap();
+        let error = presentation
+            .slide(0)
+            .unwrap()
+            .notes_text_frame_text()
+            .unwrap_err();
+        assert!(error.to_string().contains("one direct Body"));
+        assert!(error.to_string().contains("Slide.notes_text"));
+        assert_eq!(presentation.to_bytes().unwrap(), before);
+    }
+    let mut package = open_opc(&f226_fixture_bytes(), "notes frame missing body");
+    package.set_part(
+        notes_part,
+        base.replacen("type=\"body\"", "type=\"title\"", 1)
+            .into_bytes(),
+    );
+    let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert_eq!(
+        presentation
+            .slide(0)
+            .unwrap()
+            .notes_text_frame_text()
+            .unwrap(),
+        None
+    );
+    let mut package = open_opc(&f226_fixture_bytes(), "notes frame exact body");
+    package.set_part(notes_part, base.into_bytes());
+    let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert_eq!(
+        presentation
+            .slide(0)
+            .unwrap()
+            .notes_text_frame_text()
+            .unwrap()
+            .as_deref(),
+        Some("exact body")
+    );
+}

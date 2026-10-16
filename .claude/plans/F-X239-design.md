@@ -1,6 +1,6 @@
 # F-X239, python-pptx notes names and refusal of silent zero values
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S94
 **Size**: M
 **Depends on**: none
@@ -154,15 +154,16 @@ All49 existing entries and shared decoded pixel baselines are expected unchanged
 
 ## Implementation checklist
 
-- [ ] Approve all five S94 designs after opening S94, including the root-selected import-only color scope and exact bounded notes-owner projection.
-- [ ] Acquire released F-X238 formatting/slide leases and agree conditional F-X241/F-X247 lanes before claims.
-- [ ] Freeze original122-file corpus and exact five-assignment script identities without a second canonical tracker/corpus.
-- [ ] Add actual old-artifact RED for missing notes names and silent-zero source, plus independent semantic negatives in existing carriers.
-- [ ] Implement pure presence, owner-aware lazy notes/body/text surface and preserved publication boundaries using existing native semantics.
-- [ ] Add identity theme alias and the selected bounded import-only color behavior, preserving existing string ColorFormat.type.
-- [ ] Validate all five refused writes before mutable publication and retain valid zero, negative spacing, None, Length and float policies by role.
-- [ ] Execute original raw corpus/script plus independent requirement classification, complete installed/typing/differential and applicable risk gates.
-- [ ] Obtain zero-defect/zero-smell independent microscope, scoped verify and structured handoff. Integrator owns final full union, ledgers and sprint review.
+- [x] Approve all five S94 designs after opening S94, including the root-selected import-only color scope and exact bounded notes-owner projection.
+- [x] Acquire released F-X238 formatting/slide leases and agree conditional F-X241/F-X247 lanes before claims.
+- [x] Freeze original122-file corpus and exact five-assignment script identities without a second canonical tracker/corpus.
+- [x] Add actual old-artifact RED for missing notes names and silent-zero source, plus independent semantic negatives in existing carriers.
+- [x] Implement pure presence, owner-aware lazy notes/body/text surface and preserved publication boundaries using existing native semantics.
+- [x] Add identity theme alias and the selected bounded import-only color behavior, preserving existing string ColorFormat.type.
+- [x] Validate all five refused writes before mutable publication and retain valid zero, negative spacing, None, Length and float policies by role.
+- [x] Execute original raw corpus/script plus independent requirement classification, complete installed/typing/differential and applicable risk gates.
+- [x] Obtain zero-defect/zero-smell independent microscope, scoped verify and structured handoff. Integrator owns final full union, ledgers and sprint review.
+
 
 ## Open questions
 
