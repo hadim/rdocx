@@ -20,7 +20,7 @@
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X250 | Complete everyday Word chart equation list and note APIs | L | pending | - |
+| F-X250 | Complete everyday Word chart equation list and note APIs | L | in-progress | codex |
 | F-X254 | Refuse invalid PowerPoint values XML and empty edits | L | pending | - |
 | F-X219 | Qualify full-range text watermark interoperability | M | pending | - |
 | F-X223 | Qualify native Word embedded multi-face interoperability | M | pending | - |
