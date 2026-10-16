@@ -3285,6 +3285,20 @@ required, and no binary fixture enters the repository.
 
 ## Binding tests
 
+Word numeric qualification preserves the separate original Issue386 source and
+its four numeric rows. Tiny nonzero bare EMU spacing refuses, explicit lengths
+retain truncation, signed character spacing and intentional zero remain valid,
+and public section geometry requires explicit nonzero lengths. Live section
+EMU controls retain their existing path. Integer and float line multiples,
+absolute Length, exact range boundaries, adjacent quanta, unsupported types,
+nonfinite values and overflow have independent saved-package observations.
+Refusals retain signed bytes, held owners and later valid edits. Pinned
+python-docx1.2.0 structural comparisons distinguish line-multiple agreement,
+explicit refusal policy and off-grid rounding divergence. A Word-only worker
+runs an explicit four-row adapter. The untouched whole script runs against the
+paired final artifacts, with actual row observations rather than caught exit
+status. These rows do not replace the immutable Issue385 twelve-body union.
+
 Word invalid-value controls execute the five immutable original reporter
 bodies separately from their strict XFAIL or XPASS marker outcomes. Refusal
 checks preserve signed bytes, live paragraph/run/section owners and absent or

@@ -1267,44 +1267,46 @@ impl PySectionHandle {
 
     fn geometry(&mut self, py: Python<'_>, name: &str, value: Bound<'_, PyAny>) -> PyResult<()> {
         self.validate(py)?;
-        let value = checked_section_length(Some(&value), name)?;
+        let value = checked_section_length(Some(&value), name)?
+            .map(|emu| crate::length_object(py, rdocx::Length::emu(emu)))
+            .transpose()?;
         let mut document = self.document.borrow_mut(py);
         document.update_section(
             py,
             self.index,
             None,
             if name == "page_width" {
-                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+                value.as_ref().map(|value| value.bind(py).clone())
             } else {
                 None
             },
             if name == "page_height" {
-                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+                value.as_ref().map(|value| value.bind(py).clone())
             } else {
                 None
             },
             if name == "margin_top" {
-                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+                value.as_ref().map(|value| value.bind(py).clone())
             } else {
                 None
             },
             if name == "margin_right" {
-                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+                value.as_ref().map(|value| value.bind(py).clone())
             } else {
                 None
             },
             if name == "margin_bottom" {
-                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+                value.as_ref().map(|value| value.bind(py).clone())
             } else {
                 None
             },
             if name == "margin_left" {
-                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+                value.as_ref().map(|value| value.bind(py).clone())
             } else {
                 None
             },
             if name == "gutter" {
-                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+                value.as_ref().map(|value| value.bind(py).clone())
             } else {
                 None
             },
@@ -1312,12 +1314,12 @@ impl PySectionHandle {
             None,
             None,
             if name == "header_distance" {
-                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+                value.as_ref().map(|value| value.bind(py).clone())
             } else {
                 None
             },
             if name == "footer_distance" {
-                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+                value.as_ref().map(|value| value.bind(py).clone())
             } else {
                 None
             },
@@ -6438,6 +6440,32 @@ pub(crate) fn checked_section_length(
         .transpose()
 }
 
+// Public update_section has an explicit-unit contract. Other consumers of
+// checked_section_length, including live Section setters, keep their EMU API.
+fn checked_update_section_length(
+    py: Python<'_>,
+    value: Option<&Bound<'_, PyAny>>,
+    name: &str,
+) -> PyResult<Option<i64>> {
+    if let Some(value) = value
+        && !value.is_instance_of::<pyo3::types::PyInt>()
+    {
+        return Err(PyTypeError::new_err(format!(
+            "{name} requires Length or zero; use Twips or Emu"
+        )));
+    }
+    let emu = checked_section_length(value, name)?;
+    if let Some(value) = value
+        && emu != Some(0)
+        && !value.is_instance(&py.import("rdocx.shared")?.getattr("Length")?)?
+    {
+        return Err(PyValueError::new_err(format!(
+            "update_section {name} nonzero geometry requires explicit Length; use Twips(1440) or Emu(value)"
+        )));
+    }
+    Ok(emu)
+}
+
 fn section_snapshot(section: rdocx::SectionRef<'_>) -> PySection {
     let (page_width, page_height) = section.page_size().map_or((None, None), |(width, height)| {
         (Some(width.to_emu()), Some(height.to_emu()))
@@ -7873,16 +7901,21 @@ impl PyDocument {
         different_first_page: Option<bool>,
         break_type: Option<&str>,
     ) -> PyResult<PySection> {
-        let page_width = checked_section_length(page_width.as_ref(), "page_width")?;
-        let page_height = checked_section_length(page_height.as_ref(), "page_height")?;
-        let margin_top = checked_section_length(margin_top.as_ref(), "margin_top")?;
-        let margin_right = checked_section_length(margin_right.as_ref(), "margin_right")?;
-        let margin_bottom = checked_section_length(margin_bottom.as_ref(), "margin_bottom")?;
-        let margin_left = checked_section_length(margin_left.as_ref(), "margin_left")?;
-        let gutter = checked_section_length(gutter.as_ref(), "gutter")?;
-        let column_spacing = checked_section_length(column_spacing.as_ref(), "column_spacing")?;
-        let header_distance = checked_section_length(header_distance.as_ref(), "header_distance")?;
-        let footer_distance = checked_section_length(footer_distance.as_ref(), "footer_distance")?;
+        let page_width = checked_update_section_length(py, page_width.as_ref(), "page_width")?;
+        let page_height = checked_update_section_length(py, page_height.as_ref(), "page_height")?;
+        let margin_top = checked_update_section_length(py, margin_top.as_ref(), "margin_top")?;
+        let margin_right =
+            checked_update_section_length(py, margin_right.as_ref(), "margin_right")?;
+        let margin_bottom =
+            checked_update_section_length(py, margin_bottom.as_ref(), "margin_bottom")?;
+        let margin_left = checked_update_section_length(py, margin_left.as_ref(), "margin_left")?;
+        let gutter = checked_update_section_length(py, gutter.as_ref(), "gutter")?;
+        let column_spacing =
+            checked_update_section_length(py, column_spacing.as_ref(), "column_spacing")?;
+        let header_distance =
+            checked_update_section_length(py, header_distance.as_ref(), "header_distance")?;
+        let footer_distance =
+            checked_update_section_length(py, footer_distance.as_ref(), "footer_distance")?;
         let orientation = orientation
             .map(|value| {
                 ST_PageOrientation::from_str(value)

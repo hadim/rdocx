@@ -19,6 +19,9 @@ from rdocx import (
     Hyperlink,
     Inches,
     Length,
+    Pt,
+    Emu,
+    Twips,
     LayoutFragment,
     FieldEvaluation,
     FieldsUpdateReport,
@@ -186,6 +189,15 @@ def exercise_rdocx_types(path: Path) -> None:
         different_first_page=True,
         break_type="continuous",
     )
+    document.update_section(0, margin_top=Twips(1440), margin_left=Emu(635), gutter=0)
+    document.section(0).margin_top = 1440
+    paragraph.paragraph_format.space_after = Pt(6)
+    paragraph.paragraph_format.space_after = 635
+    run.font.character_spacing = Emu(-635)
+    paragraph.paragraph_format.line_spacing = 2
+    paragraph.paragraph_format.line_spacing = 1.75
+    paragraph.paragraph_format.line_spacing = Pt(18)
+    assert_type(document.paragraphs[0].paragraph_format.line_spacing, Length | float | None)
     document.insert_section(1)
     document.remove_section(1)
     styles: tuple[Style, ...] = document.styles

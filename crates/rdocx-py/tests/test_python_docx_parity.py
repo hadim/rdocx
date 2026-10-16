@@ -1,4 +1,5 @@
 import importlib.metadata
+import io
 import hashlib
 import os
 import re
@@ -1681,3 +1682,66 @@ def test_fx238_stream_save_preserves_signed_forms_and_refusal_authority():
     assert not refused.closed and document.to_bytes() == before
     assert paragraph.text == "held stream owner"
     assert document.verify_signatures()[0]["cryptographically_valid"]
+
+
+@pytest.mark.parametrize('value', [2, 2.0, 1.75, 0, -1, None, 'absolute'])
+def test_fx256_numeric_units_match_pinned_python_docx_and_named_refusals(value):
+    import rdocx
+    import docx
+    from xml.etree import ElementTree as ET
+    assert importlib.metadata.version('python-docx') == '1.2.0'
+    observations = []
+    for module in (rdocx, docx):
+        document = module.Document()
+        paragraph = document.add_paragraph('oracle control')
+        shared = __import__(module.__name__+'.shared', fromlist=['Pt'])
+        paragraph.paragraph_format.line_spacing = shared.Pt(18) if value == 'absolute' else value
+        stream = io.BytesIO()
+        document.save(stream)
+        with zipfile.ZipFile(io.BytesIO(stream.getvalue())) as package:
+            root = ET.fromstring(package.read('word/document.xml'))
+        w = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+        spacing = root.find('.//'+w+'spacing')
+        observations.append({} if spacing is None else {k: spacing.get(w+k) for k in ['line', 'lineRule'] if spacing.get(w+k) is not None})
+    assert observations[0] == observations[1]
+
+
+def test_fx256_line_multiple_preserves_named_native_truncation():
+    import rdocx
+    import docx
+    from xml.etree import ElementTree as ET
+    assert importlib.metadata.version('python-docx') == '1.2.0'
+    observed = []
+    for module in (rdocx, docx):
+        document = module.Document()
+        document.add_paragraph('off-grid').paragraph_format.line_spacing = 1.0021
+        stream = io.BytesIO()
+        document.save(stream)
+        with zipfile.ZipFile(io.BytesIO(stream.getvalue())) as package:
+            root = ET.fromstring(package.read('word/document.xml'))
+        w = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+        spacing = root.find('.//'+w+'spacing')
+        assert spacing is not None and spacing.get(w+'lineRule') == 'auto'
+        observed.append(spacing.get(w+'line'))
+    assert observed == ['240', '241'], 'native truncation and pinned oracle rounding are deliberate distinct contracts'
+
+
+def test_fx256_tiny_bare_space_refusal_is_an_explicit_oracle_divergence():
+    import rdocx
+    import docx
+    from xml.etree import ElementTree as ET
+    assert importlib.metadata.version('python-docx') == '1.2.0'
+    document = rdocx.Document()
+    held = document.add_paragraph('held')
+    before = document.to_bytes()
+    with pytest.raises(ValueError, match='Pt|Twips|Emu'):
+        held.paragraph_format.space_after = 6
+    assert document.to_bytes() == before and held.text == 'held'
+    oracle = docx.Document()
+    oracle.add_paragraph('held').paragraph_format.space_after = 6
+    stream = io.BytesIO()
+    oracle.save(stream)
+    with zipfile.ZipFile(io.BytesIO(stream.getvalue())) as package:
+        root = ET.fromstring(package.read('word/document.xml'))
+    w = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    assert root.find('.//'+w+'spacing').get(w+'after') == '0'

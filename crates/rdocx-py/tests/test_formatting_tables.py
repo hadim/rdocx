@@ -1437,8 +1437,13 @@ def test_fx200_tabs_owned_snapshots_stable_insert_delete_and_clear(cell_owned):
     assert document.to_bytes() == before
     retained = tabs.add_tab_stop(Inches(2), WD_TAB_ALIGNMENT.END, WD_TAB_LEADER.MIDDLE_DOT)
     tabs.add_tab_stop(Inches(-1), WD_TAB_ALIGNMENT.START)
-    tabs.add_tab_stop(Inches(2), WD_TAB_ALIGNMENT.LIST, WD_TAB_LEADER.HEAVY)
-    assert [tab.position for tab in tabs] == [Inches(-1), Inches(2), Inches(2)]
+    before_duplicate = document.to_bytes()
+    with pytest.raises(ValueError, match="position"):
+        tabs.add_tab_stop(Inches(2), WD_TAB_ALIGNMENT.LIST, WD_TAB_LEADER.HEAVY)
+    assert document.to_bytes() == before_duplicate
+    assert retained.position == Inches(2) and paragraph.text == ("" if cell_owned else "tabs")
+    tabs.add_tab_stop(Inches(3), WD_TAB_ALIGNMENT.LIST, WD_TAB_LEADER.HEAVY)
+    assert [tab.position for tab in tabs] == [Inches(-1), Inches(2), Inches(3)]
     assert tabs[-1].alignment == WD_TAB_ALIGNMENT.LIST
     del tabs[-1]
     assert retained.position == Inches(2) and retained.alignment == WD_TAB_ALIGNMENT.END

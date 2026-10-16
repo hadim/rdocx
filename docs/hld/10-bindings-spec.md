@@ -323,8 +323,21 @@ is a finite lexical rule, without registry or complete BCP47 validation.
 Imported values and the separate East Asia and bidi setters keep their existing
 contracts. General font name retains its
 established four-slot assignment. `character_spacing` accepts signed integer
-EMU or None and returns Length or None, validating signed twips before
-narrowing with truncation toward zero.
+EMU, explicit Length or None and returns Length or None. `space_after` retains
+nonnegative EMU, Length or None. Both reject bool and unsupported types before
+publication. A nonzero bare integer that truncates to zero twips refuses with
+Pt, Twips or Emu guidance. An explicit Length retains intentional truncation,
+and explicit zero remains valid. The full signed32 twip quotient is checked
+before narrowing. None clears only the selected property.
+
+`ParagraphFormat.line_spacing` distinguishes genuine Length absolute spacing
+from non-bool integer or float line multiples. Integer2 and float2.0 both
+write480with auto rule. Pt(18) writes360with exact rule. None clears both direct
+value and rule. Finite signed values and zero retain the native domain, with
+signed32 range checked on the truncating EMU/635 quotient for absolute lengths
+or the finite multiple-times240 product for multiples. Unsupported types,
+nonfinite products and saturation refuse before mutation. Native off-grid
+multiple truncation remains distinct from python-docx's twip rounding.
 
 `ParagraphFormat.tab_stops` is a live parent-bound collection with length,
 indexing, iteration, indexed deletion, add_tab_stop and clear_all. Returned
@@ -1653,8 +1666,16 @@ behavior.
 Python `Section` values stay frozen snapshots. `Document.update_section(index,
 **values)` edits one section through the checked native setters and returns
 its new snapshot. The keywords are the snapshot's own field names, from
-`orientation` and `page_width` to `break_type`, with EMU lengths and the
-`ST_PageOrientation` and `ST_SectionType` spellings. The native setters write
+`orientation` and `page_width` to `break_type`, with explicit Length values and
+the `ST_PageOrientation` and `ST_SectionType` spellings. Nonzero public geometry
+requires a genuine Length, including Twips or Emu. Bare zero remains subject
+to native field rules, while None or omission leaves that argument unchanged.
+This applies to page dimensions, four margins, gutter, column spacing and
+header/footer distances. Nonzero bare integers refuse with explicit-unit
+guidance. Existing live Section setters retain their integer EMU contract and
+wrap only their already validated internal forwarding values as Length.
+Snapshot lengths remain integer EMU and can be explicitly wrapped with Emu
+when passed back to update_section. The native setters write
 page size, the four margins, equal-width columns and the header and footer
 distances as pairs or quartets, so a value given alone keeps its partners as
 the section already has them. A missing partner takes the native layout

@@ -1,6 +1,6 @@
 # F-X256, Refuse ambiguous Word numeric units and preserve line spacing
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95
 **Size**: M
 **Depends on**: F-X239
@@ -150,13 +150,13 @@ No baseline lease.
 
 ## Implementation checklist
 
-- [ ] Establish actual old-source numeric RED and preserve original input identities.
-- [ ] Implement only the bounded spacing and public section admission changes.
-- [ ] Preserve live section forwarding, explicit truncation and atomicity.
-- [ ] Align stubs and extend existing saved-file, oracle and typing controls.
-- [ ] Reconcile only the named stale installed fixtures against completed F-X249/F-X251 contracts, preserving all deciding assertions.
-- [ ] Pass scoped checks and obtain independent zero-finding microscope.
-- [ ] Update exactly the named HLD sections and prepare validated handoff.
+- [x] Establish actual old-source numeric RED and preserve original input identities.
+- [x] Implement only the bounded spacing and public section admission changes.
+- [x] Preserve live section forwarding, explicit truncation and atomicity.
+- [x] Align stubs and extend existing saved-file, oracle and typing controls.
+- [x] Reconcile only the named stale installed fixtures against completed F-X249/F-X251 contracts, preserving all deciding assertions.
+- [x] Pass scoped checks and obtain independent zero-finding microscope.
+- [x] Update exactly the named HLD sections and prepare validated handoff.
 
 ## Open questions
 

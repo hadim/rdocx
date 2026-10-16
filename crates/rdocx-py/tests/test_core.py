@@ -10,6 +10,210 @@ import zlib
 import pytest
 
 
+@pytest.mark.parametrize('operation', ['space_after', 'character_spacing', 'line_spacing', 'margin_top'])
+def test_fx256_issue386_numeric_rows_are_observed_independently(operation):
+    import rdocx
+    import xml.etree.ElementTree as ET
+    document = rdocx.Document()
+    document.add_paragraph('held numeric owner')
+    document.add_paragraph('unrelated')
+    key, certificate = _fx240_material()
+    document.sign(key, certificate)
+    paragraph, other = document.paragraphs
+    run, section = paragraph.runs[0], document.section(0)
+    before = document.to_bytes()
+    if operation == 'line_spacing':
+        paragraph.paragraph_format.line_spacing = 2
+        root = ET.fromstring(_document_xml(document))
+        spacing = root.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}spacing')
+        word = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+        assert spacing is not None and spacing.get(word+'line') == '480'
+        assert spacing.get(word+'lineRule') == 'auto'
+        assert rdocx.Document.from_bytes(document.to_bytes()).paragraphs[0].paragraph_format.line_spacing == 2.0
+    else:
+        with pytest.raises(ValueError, match='Pt|Twips|Emu'):
+            if operation == 'space_after':
+                paragraph.paragraph_format.space_after = 6
+            elif operation == 'character_spacing':
+                run.font.character_spacing = 2
+            else:
+                document.update_section(0, margin_top=1440)
+        assert document.to_bytes() == before
+        assert document.verify_signatures()[0]['cryptographically_valid']
+    assert paragraph.text == run.text == 'held numeric owner'
+    assert other.text == 'unrelated' and section.xml
+
+
+@pytest.mark.parametrize('operation', ['space_after', 'character_spacing'])
+def test_fx256_spacing_lengths_refuse_quantized_bare_values_atomically(operation):
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph('held')
+    document.add_paragraph('other')
+    key, certificate = _fx240_material()
+    document.sign(key, certificate)
+    paragraph, other = document.paragraphs
+    run, section = paragraph.runs[0], document.section(0)
+    owner = paragraph.paragraph_format if operation == 'space_after' else run.font
+    before = document.to_bytes()
+    invalid = [1, 6, 634, -1, -634, True, False, 1.5, float('nan'),
+               float('inf'), '6', object(), 2**100, rdocx.Emu((2**31)*635)]
+    if operation == 'character_spacing':
+        invalid += [rdocx.Emu((-2**31-1)*635)]
+    else:
+        invalid += [-635, rdocx.Emu(-1), rdocx.Pt(-1)]
+    for value in invalid:
+        with pytest.raises((TypeError, ValueError, OverflowError)):
+            setattr(owner, operation, value)
+        assert document.to_bytes() == before and document.verify_signatures()[0]['cryptographically_valid']
+        assert paragraph.text == run.text == 'held' and other.text == 'other' and section.xml
+    setattr(owner, operation, rdocx.Pt(2))
+    assert getattr(owner, operation) == rdocx.Pt(2)
+
+
+@pytest.mark.parametrize('operation', ['space_after', 'character_spacing'])
+def test_fx256_spacing_explicit_lengths_keep_quantization_and_clear(operation):
+    import rdocx
+    import xml.etree.ElementTree as ET
+    values = [0, 635, rdocx.Emu(1), rdocx.Emu(634), rdocx.Emu(636),
+              rdocx.Pt(6), rdocx.Twips(2**31-1)]
+    if operation == 'character_spacing':
+        values += [-635, rdocx.Emu(-634), rdocx.Emu(-636), rdocx.Twips(-2**31)]
+    for value in values:
+        document = rdocx.Document()
+        paragraph = document.add_paragraph('value')
+        owner = paragraph.paragraph_format if operation == 'space_after' else paragraph.runs[0].font
+        setattr(owner, operation, value)
+        quotient = abs(int(value)) // 635 * (-1 if value < 0 else 1)
+        root = ET.fromstring(_document_xml(document))
+        word = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+        spacing = root.find('.//'+word+('pPr' if operation == 'space_after' else 'rPr')+'/'+word+'spacing')
+        assert spacing is not None and spacing.get(word+('after' if operation == 'space_after' else 'val')) == str(quotient)
+        reopened = rdocx.Document.from_bytes(document.to_bytes())
+        restored = reopened.paragraphs[0].paragraph_format if operation == 'space_after' else reopened.paragraphs[0].runs[0].font
+        assert getattr(restored, operation) == quotient * 635
+        setattr(restored, operation, None)
+        assert getattr(restored, operation) is None
+
+
+@pytest.mark.parametrize('absolute', [False, True])
+def test_fx256_line_spacing_distinguishes_multiples_and_lengths(absolute):
+    import rdocx
+    import xml.etree.ElementTree as ET
+    limits = (-2**31, 2**31-1)
+    values = ([rdocx.Pt(18), rdocx.Emu(634), rdocx.Emu(-634),
+               *[rdocx.Emu(n*635) for n in limits],
+               rdocx.Emu(limits[1]*635+634), rdocx.Emu(limits[0]*635-634)] if absolute else
+              [0, 1, 2, 2.0, 1.75, -1, *[n/240 for n in limits],
+               (limits[1]+0.75)/240, (limits[0]-0.75)/240])
+    for value in values:
+        document = rdocx.Document()
+        paragraph = document.add_paragraph('spacing')
+        paragraph.paragraph_format.line_spacing = value
+        expected = (abs(int(value))//635 * (-1 if value < 0 else 1)) if absolute else int(value*240)
+        word = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+        spacing = ET.fromstring(_document_xml(document)).find('.//'+word+'spacing')
+        assert spacing is not None and spacing.get(word+'line') == str(expected)
+        assert spacing.get(word+'lineRule') == ('exact' if absolute else 'auto')
+        reopened = rdocx.Document.from_bytes(document.to_bytes())
+        formatting = reopened.paragraphs[0].paragraph_format
+        assert formatting.line_spacing == (expected*635 if absolute else expected/240)
+        formatting.line_spacing = None
+        assert formatting.line_spacing is None
+
+
+def test_fx256_line_spacing_refuses_nonfinite_types_and_overflow_atomically():
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph('held')
+    document.add_paragraph('other')
+    key, certificate = _fx240_material()
+    document.sign(key, certificate)
+    held, other = document.paragraphs
+    run, section = held.runs[0], document.section(0)
+    before = document.to_bytes()
+    for value in [True, False, '2', object(), float('nan'), float('inf'), -float('inf'),
+                  1e308, 2**10000, (2**31)/240, (-2**31-1)/240,
+                  rdocx.Emu((2**31)*635), rdocx.Emu((-2**31-1)*635)]:
+        with pytest.raises((TypeError, ValueError, OverflowError)):
+            held.paragraph_format.line_spacing = value
+        assert document.to_bytes() == before and document.verify_signatures()[0]['cryptographically_valid']
+        assert held.text == run.text == 'held' and other.text == 'other' and section.xml
+    held.paragraph_format.line_spacing = 2
+    assert held.paragraph_format.line_spacing == 2.0
+
+
+@pytest.mark.parametrize('name', ['page_width', 'page_height', 'margin_top', 'margin_right',
+                                 'margin_bottom', 'margin_left', 'gutter', 'column_spacing',
+                                 'header_distance', 'footer_distance'])
+def test_fx256_update_section_requires_explicit_nonzero_lengths(name):
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph('held')
+    document.add_paragraph('other')
+    key, certificate = _fx240_material()
+    document.sign(key, certificate)
+    held, other = document.paragraphs
+    run, section = held.runs[0], document.section(0)
+    before = document.to_bytes()
+    for value in [1440, 635, 1, -1, -635, True, 1.5, float('nan'), float('inf'), 2**100]:
+        kwargs = {name: value, 'orientation': 'landscape'}
+        with pytest.raises((TypeError, ValueError, OverflowError)):
+            document.update_section(0, **kwargs)
+        assert document.to_bytes() == before and document.verify_signatures()[0]['cryptographically_valid']
+        assert held.text == run.text == 'held' and other.text == 'other' and section.xml
+    assert document.update_section(0, **{name: None})
+    assert document.to_bytes() == before
+    if name in ('page_width', 'page_height'):
+        with pytest.raises(rdocx.RdocxError):
+            document.update_section(0, **{name: 0})
+        assert document.to_bytes() == before
+    else:
+        assert getattr(document.update_section(0, **{name: 0}), name) == 0
+    valid = rdocx.Inches(8.5 if name == 'page_width' else 11) if name in ('page_width', 'page_height') else rdocx.Twips(1440)
+    updated = document.update_section(0, **{name: valid})
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert getattr(updated, name) == int(valid) == getattr(reopened.sections[0], name)
+
+
+def test_fx256_live_section_keeps_its_existing_emu_contract():
+    import rdocx
+    document = rdocx.Document()
+    paragraph = document.add_paragraph('held')
+    run, section = paragraph.runs[0], document.section(0)
+    for value in [-635, -1, 634, 1440, rdocx.Inches(1)]:
+        section.top_margin = value
+        expected = abs(int(value))//635 * (-1 if value < 0 else 1) * 635
+        assert section.margin_top == expected
+        assert rdocx.Document.from_bytes(document.to_bytes()).sections[0].margin_top == expected
+        assert document.update_section(0, margin_top=rdocx.Emu(value)).margin_top == expected
+    before = document.to_bytes()
+    with pytest.raises(ValueError, match='Twips|Emu'):
+        document.update_section(0, margin_top=1440, margin_left=rdocx.Inches(2))
+    assert document.to_bytes() == before and paragraph.text == run.text == 'held' and section.xml
+    assert document.update_section(0, margin_top=rdocx.Twips(1440)).margin_top == rdocx.Inches(1)
+
+
+@pytest.mark.parametrize('raising', [False, True])
+def test_fx256_update_section_refuses_index_protocol_before_conversion(raising):
+    import rdocx
+    document = rdocx.Document()
+    paragraph = document.add_paragraph('held')
+    run, section = paragraph.runs[0], document.section(0)
+    before = document.to_bytes()
+    calls = []
+    class Unsupported:
+        def __index__(self):
+            calls.append('called')
+            if raising:
+                raise RuntimeError('unsupported index hook escaped')
+            return 1440
+    with pytest.raises(TypeError, match='Length|Twips|Emu'):
+        document.update_section(0, margin_top=Unsupported())
+    assert calls == []
+    assert document.to_bytes() == before and paragraph.text == run.text == 'held' and section.xml
+
+
 @pytest.mark.parametrize('child', [
     '<w:bogus/>', '<x:foo xmlns:x="urn:example"/>',
     '<m:f xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"/>',
@@ -2708,7 +2912,7 @@ def test_update_section_keeps_unnamed_partners_and_rejects_atomically():
     with pytest.raises(ValueError, match="break type"):
         document.update_section(0, break_type="page")
     with pytest.raises(rdocx.RdocxError, match="gutter must be nonnegative"):
-        document.update_section(0, margin_top=Inches(3), orientation="landscape", gutter=-635)
+        document.update_section(0, margin_top=Inches(3), orientation="landscape", gutter=rdocx.Emu(-635))
     with pytest.raises(rdocx.RdocxError, match="page width must be positive"):
         document.update_section(0, page_width=0)
     with pytest.raises(rdocx.RdocxError, match="page-number start must be positive"):
@@ -2827,23 +3031,23 @@ def test_section_edits_write_the_native_body():
     document.update_section(
         0,
         orientation="landscape",
-        margin_top=457200,
-        margin_left=1828800,
+        margin_top=rdocx.Emu(457200),
+        margin_left=rdocx.Emu(1828800),
         page_number_start=3,
-        footer_distance=228600,
+        footer_distance=rdocx.Emu(228600),
         different_first_page=True,
     )
     document.update_section(
         1,
-        page_width=7772400,
-        page_height=10058400,
-        margin_top=914400,
-        margin_right=1143000,
-        margin_bottom=685800,
-        margin_left=1371600,
-        gutter=127000,
+        page_width=rdocx.Emu(7772400),
+        page_height=rdocx.Emu(10058400),
+        margin_top=rdocx.Emu(914400),
+        margin_right=rdocx.Emu(1143000),
+        margin_bottom=rdocx.Emu(685800),
+        margin_left=rdocx.Emu(1371600),
+        gutter=rdocx.Emu(127000),
         column_count=2,
-        column_spacing=457200,
+        column_spacing=rdocx.Emu(457200),
         break_type="continuous",
     )
     document.add_paragraph("second")
@@ -4811,9 +5015,9 @@ def test_fx201_twips_constructor_and_section_length_equivalence():
         with pytest.raises((TypeError, OverflowError, ValueError, rdocx.RdocxError)):
             document.update_section(0, margin_top=bad)
         assert document.to_bytes() == before
-    assert document.update_section(0, margin_top=-635).margin_top == -635
-    assert document.update_section(0, margin_top=-1).margin_top == 0
-    assert document.update_section(0, margin_top=634).margin_top == 0
+    assert document.update_section(0, margin_top=rdocx.Emu(-635)).margin_top == -635
+    assert document.update_section(0, margin_top=rdocx.Emu(-1)).margin_top == 0
+    assert document.update_section(0, margin_top=rdocx.Emu(634)).margin_top == 0
     before = document.to_bytes()
     for name in ("page_width", "page_height", "margin_top", "margin_right", "margin_bottom", "margin_left", "gutter", "header_distance", "footer_distance"):
         with pytest.raises(TypeError):
@@ -5538,7 +5742,8 @@ def test_fx203_content_control_snapshots_atomic_noop_and_duplicate_inventory():
     controls = document.content_controls()
     assert isinstance(controls, tuple) and len(controls) == 2
     before = document.to_bytes()
-    assert document.set_content_control_value_by_tag("absent", "new") == 0
+    with pytest.raises(KeyError, match="absent"):
+        document.set_content_control_value_by_tag("absent", "new")
     assert document.to_bytes() == before
     assert document.set_content_control_value_by_tag("same", "old") == 2
     assert document.to_bytes() == before
@@ -5609,7 +5814,7 @@ def test_fx203_checkbox_late_invalid_state_preserves_package_and_snapshots(inval
     controls = document.content_controls()
     paragraph = document.paragraphs[0]
     before = document.to_bytes()
-    with pytest.raises(rdocx.RdocxError, match="glyph"):
+    with pytest.raises(ValueError, match="glyph"):
         document.set_content_control_value_by_tag("check", "true")
     assert document.to_bytes() == before
     assert paragraph.text == "old"
