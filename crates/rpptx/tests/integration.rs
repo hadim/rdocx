@@ -2613,6 +2613,112 @@ fn tracked_ole_corpus_exposes_layout_and_master_producing_scopes() {
 }
 
 #[test]
+fn fx254_embedded_mutations_keep_imported_xml_diagnostics_report_only() {
+    for duplicate_ids in [false, true] {
+        let mut package = embedded_fixture_package(false);
+        let mut slide = String::from_utf8(package.get_part(SLIDE_ONE_PART).unwrap().to_vec())
+            .unwrap()
+            .replacen(
+                "<p:sld ",
+                &format!(r#"<p:sld xmlns:mc="{MC_NS}" xmlns:x="urn:retained-authority" mc:Ignorable="x" "#),
+                1,
+            )
+            .replace("</p:sld>", "<a:bogus/></p:sld>");
+        if duplicate_ids {
+            let shape = r#"<p:sp><p:nvSpPr><p:cNvPr id="51" name="duplicate"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>"#;
+            slide = slide.replace("</p:spTree>", &format!("{shape}{shape}</p:spTree>"));
+        }
+        // Seed the existing writer's namespace closure once, so subsequent
+        // unrelated mutations can be checked for exact physical slide custody.
+        let original_slide = CT_Slide::from_xml(slide.as_bytes())
+            .unwrap()
+            .to_xml()
+            .unwrap();
+        package.set_part(SLIDE_ONE_PART, original_slide.clone());
+        let source = package_bytes(package);
+        for remove in [false, true] {
+            let mut presentation = Presentation::from_bytes(&source).unwrap();
+            let issues = presentation.validate();
+            assert!(issues.iter().any(|issue| matches!(
+                issue, rpptx::ValidationIssue::InvalidXmlChild { part, .. }
+                    if part == SLIDE_ONE_PART
+            )));
+            assert_eq!(
+                issues.iter().any(|issue| matches!(
+                    issue,
+                    rpptx::ValidationIssue::DuplicateShapeId { id: 51, .. }
+                )),
+                duplicate_ids
+            );
+            let before = presentation.to_bytes().unwrap();
+            // Compare to the existing ordinary-save snapshot, whose writer closes
+            // inherited namespace scopes independently of this embedded mutation.
+            let before_package = open_opc(&before, "F254 pre-mutation save baseline");
+            let before_slide = before_package.get_part(SLIDE_ONE_PART).unwrap();
+            assert!(String::from_utf8_lossy(before_slide).contains("<a:bogus/>"));
+            assert!(String::from_utf8_lossy(before_slide).contains("urn:retained-authority"));
+            assert!(String::from_utf8_lossy(before_slide).contains(r#"mc:Ignorable="x""#));
+            let result = if remove {
+                presentation
+                    .remove_embedded_content(
+                        SLIDE_TWO_PART,
+                        "ole-rel",
+                        EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+                    )
+                    .map(|_| ())
+            } else {
+                presentation
+                    .replace_embedded_content(
+                        SLIDE_TWO_PART,
+                        "ole-rel",
+                        b"replacement payload",
+                        EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+                    )
+                    .map(|_| ())
+            };
+            if duplicate_ids {
+                let error = result.unwrap_err().to_string();
+                assert!(error.contains("DuplicateShapeId"), "{error}");
+                assert_eq!(presentation.to_bytes().unwrap(), before);
+                assert_eq!(
+                    presentation
+                        .extract_embedded_content(SLIDE_TWO_PART, "ole-rel")
+                        .unwrap(),
+                    b"ole-executable"
+                );
+                continue;
+            }
+            result.unwrap();
+            let saved = presentation.to_bytes().unwrap();
+            let package = open_opc(
+                &saved,
+                "F254 report-only imported XML after embedded mutation",
+            );
+            assert_eq!(package.get_part(SLIDE_ONE_PART).unwrap(), before_slide);
+            let reopened = Presentation::from_bytes(&saved).unwrap();
+            assert!(reopened.validate().iter().any(|issue| matches!(
+                issue, rpptx::ValidationIssue::InvalidXmlChild { part, .. }
+                    if part == SLIDE_ONE_PART
+            )));
+            if remove {
+                assert!(
+                    reopened
+                        .extract_embedded_content(SLIDE_TWO_PART, "ole-rel")
+                        .is_err()
+                );
+            } else {
+                assert_eq!(
+                    reopened
+                        .extract_embedded_content(SLIDE_TWO_PART, "ole-rel")
+                        .unwrap(),
+                    b"replacement payload"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn embedded_extract_replace_and_remove_are_atomic_and_never_execute_payloads() {
     let mut presentation =
         Presentation::from_bytes(&package_bytes(embedded_fixture_package(false))).unwrap();
