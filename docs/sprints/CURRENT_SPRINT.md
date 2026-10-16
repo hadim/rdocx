@@ -19,11 +19,11 @@
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X238 | Restore python-docx Word names from the first-draft corpus | L | in-progress | codex |
-| F-X239 | python-pptx notes names and refusal of silent zero values | M | in-progress | codex |
-| F-X240 | Python and CLI signing and signature verification | M | in-progress | codex |
-| F-X241 | Python and CLI form reading and filling | M | in-progress | codex |
-| F-X247 | Preserve the common LaTeX inputs reported in Issue365 | L | in-progress | codex |
+| F-X238 | Restore python-docx Word names from the first-draft corpus | L | done | - |
+| F-X239 | python-pptx notes names and refusal of silent zero values | M | done | - |
+| F-X240 | Python and CLI signing and signature verification | M | done | - |
+| F-X241 | Python and CLI form reading and filling | M | done | - |
+| F-X247 | Preserve the common LaTeX inputs reported in Issue365 | L | done | - |
 
 ## Sequencing note
 
@@ -31,7 +31,7 @@ Rows list the accepted scope. Implementation waves follow dependencies and expli
 
 A blocked worker does not block independent stories without formal dependencies. After F-X238 fully checkpoints and explicitly releases its overlapping source, test, HLD and cache leases, F-X239 may start from clean canonical source while F-X238 stays blocked and unintegrated. It may share disjoint implementation time with F-X247, but the math worker retains the archive/catalog lane until explicit release. Later claims and integration preserve all scoped, microscope and final union gates. F-X238 resumes only after lease return and reconciliation against the current consumers.
 
-Keep installed environments and build caches isolated or exclusively leased. One story per wave may change deterministic baselines. Shared archive observations and delivery totals belong to the integrator. Developer-day estimates describe effort, not elapsed delivery time. S95's eleven-story batch must be split before it opens.
+Keep installed environments and build caches isolated or exclusively leased. One story per wave may change deterministic baselines. Shared archive observations and delivery totals belong to the integrator. Developer-day estimates describe effort, not elapsed delivery time. S95 prioritizes the new repair intake. SPRINT_PLAN.md assigns the remaining repairs and carryovers to the explicit S95.1 through S95.4 boundaries.
 
 ## Definition of done for this sprint
 

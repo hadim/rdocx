@@ -1,6 +1,6 @@
 # F-X240, Python and CLI signing and signature verification
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S94
 **Size**: M
 **Depends on**: none
@@ -215,7 +215,7 @@ Expected unchanged, all49entries and the shared pixel manifest. Signing and veri
 - [x] Complete the explicitly approved ZIP9 compatibility migration and fresh affected runtime/wheel/archive qualification, retaining old8 source/artifacts and attributed raw-container differences.
 - [x] Execute both-family installed/release CLI tamper/partial/unsigned/PEM controls and meaningful negatives.
 - [x] Complete graph/licence/size, WASM, docs, archive and policy riders, independent microscope and scoped verification.
-- [ ] Execute the actual Unified family release workflow at the reviewed remote SHA: twelve installed wheel signing members, twelve selected CLI signing members including both no-default musl routes, two sdist members and the CLI-assets verifier. Preserve manual build-only publication guards. External CI remains pending until all required jobs actually pass.
+- [x] Execute the actual Unified family release workflow at the reviewed remote SHA: twelve installed wheel signing members, twelve selected CLI signing members including both no-default musl routes, two sdist members and the CLI-assets verifier. Preserve manual build-only publication guards. External CI remains pending until all required jobs actually pass.
 - [x] Reconcile HLD and package observations through the integrator and prepare structured handoff without sprint ledgers or worker push.
 
 ## Open questions
