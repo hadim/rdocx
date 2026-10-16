@@ -29,6 +29,8 @@
 
 Rows list the accepted scope. Implementation waves follow dependencies and explicit file leases in the approved plans. Design all five stories before implementation. F-X247 consumes completed S93 F-X234 and F-X235. F-X238 and F-X239 overlap Word formatting and PowerPoint slide bindings and integrate serially. F-X240 and F-X241 share Word binding/CLI entrypoints and also serialize their changes there. Independent math and parity work may share a wave only when their actual source, test and HLD section leases do not overlap.
 
+A blocked worker does not block independent stories without formal dependencies. After F-X238 fully checkpoints and explicitly releases its overlapping source, test, HLD and cache leases, F-X239 may start from clean canonical source while F-X238 stays blocked and unintegrated. It may share disjoint implementation time with F-X247, but the math worker retains the archive/catalog lane until explicit release. Later claims and integration preserve all scoped, microscope and final union gates. F-X238 resumes only after lease return and reconciliation against the current consumers.
+
 Keep installed environments and build caches isolated or exclusively leased. One story per wave may change deterministic baselines. Shared archive observations and delivery totals belong to the integrator. Developer-day estimates describe effort, not elapsed delivery time. S95's eleven-story batch must be split before it opens.
 
 ## Definition of done for this sprint
