@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 261 | 246 | 3 | 8 |
-| **Total** | **592** | **520** | **3** | **65** |
+| X, Cross-cutting | 261 | 246 | 4 | 7 |
+| **Total** | **592** | **520** | **4** | **64** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -809,7 +809,7 @@ HLD14 contract before adopting contributor changes.
 | F-X238 | Restore python-docx Word names from the first-draft corpus | S94 | L | in-progress |
 | F-X239 | python-pptx notes names and refusal of silent zero values | S94 | M | in-progress |
 | F-X240 | Python and CLI signing and signature verification | S94 | M | pending |
-| F-X241 | Python and CLI form reading and filling | S94 | M | pending |
+| F-X241 | Python and CLI form reading and filling | S94 | M | in-progress |
 | F-X242 | Form control geometry and AcroForm field model | S96 | L | pending |
 | F-X243 | Field appearance streams, full-font resources and conformance | S96 | L | pending |
 | F-X244 | Signature field, bindings and CLI option | S96 | M | pending |
