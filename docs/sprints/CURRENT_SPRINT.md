@@ -29,7 +29,7 @@
 | F-X253 | Honor imported chart types and hidden master shapes | M | done | |
 | F-X255 | Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases | L | in-progress | codex |
 | F-X256 | Refuse ambiguous Word numeric units and preserve line spacing | M | done | |
-| F-X257 | Complete remaining Word names and legacy dropdown diagnostics | L | pending | |
+| F-X257 | Complete remaining Word names and legacy dropdown diagnostics | L | in-progress |codex |
 | F-X258 | Complete remaining PowerPoint names color and language contracts | M | done | |
 
 ## Sequencing note
