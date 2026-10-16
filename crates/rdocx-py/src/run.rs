@@ -201,6 +201,22 @@ impl PyRun {
         String::from_utf8(bytes).map_err(|error| PyValueError::new_err(error.to_string()))
     }
 
+    #[getter]
+    fn _r(&self, py: Python<'_>) -> PyResult<()> {
+        self.validate(py)?;
+        Err(pyo3::exceptions::PyNotImplementedError::new_err(
+            "read run.xml and write run.replace_xml(xml) instead of lxml",
+        ))
+    }
+
+    #[getter]
+    fn _element(&self, py: Python<'_>) -> PyResult<()> {
+        self.validate(py)?;
+        Err(pyo3::exceptions::PyNotImplementedError::new_err(
+            "read run.xml and write run.replace_xml(xml) instead of lxml",
+        ))
+    }
+
     fn replace_xml(&self, py: Python<'_>, xml: &str) -> PyResult<()> {
         self.validate(py)?;
         let mut document = self.document.borrow_mut(py);

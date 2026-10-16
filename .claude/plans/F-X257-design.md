@@ -1,6 +1,6 @@
 # F-X257, Complete remaining Word names and legacy dropdown diagnostics
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95
 **Size**: L
 **Depends on**: F-X238, F-X241, F-X252
@@ -125,12 +125,12 @@ No baseline lease.
 ## Implementation checklist
 
 - [x] Resolve color return compatibility and enum module authorization.
-- [ ] Reconcile the completed F-X256 prefix before touching overlapping files.
-- [ ] Establish actual old-source failures and preserve the exact Issue386 input.
-- [ ] Implement bounded diagnostics, mapping operations and approved enum projection.
-- [ ] Pass focused saved-file/atomicity/oracle controls, fresh installed typing and scoped riders.
-- [ ] Obtain independent zero-finding microscope and prepare validated handoff.
-- [ ] Update exactly the named HLD sections with concrete current contracts.
+- [x] Reconcile the completed F-X256 prefix before touching overlapping files.
+- [x] Establish actual old-source failures and preserve the exact Issue386 input.
+- [x] Implement bounded diagnostics, mapping operations and approved enum projection.
+- [x] Pass focused saved-file/atomicity/oracle controls, fresh installed typing and scoped riders.
+- [x] Obtain independent zero-finding microscope and prepare validated handoff.
+- [x] Update exactly the named HLD sections with concrete current contracts.
 
 ## Open questions
 

@@ -4624,6 +4624,27 @@ Presentation acceptance and focused Word controls qualify changed consumers.
 
 ## First-draft Python name qualification
 
+Word compatibility controls independently qualify frozen Section.left_margin
+read and assignment alternatives, immutable tab alignment delete/readd,
+case-sensitive custom-property mapping and ownership-validated private XML
+names. Each refusal checks package bytes and held owners, followed by a saved
+and reopened supported operation. Missing mapping deletion and invalid keys or
+values retain exact checked-provider errors and absent-part behavior. Legacy
+dropdown controls distinguish actual received types from valid integer indices,
+with unchanged identities, bounds, snapshots and source no-ops.
+
+The concrete rdocx.enum.dml.MSO_COLOR_TYPE import and RGB/THEME/AUTO values
+compare against pinned python-docx1.2.0. Shared source packages retain cached
+RGB, theme tint/shade, automatic color and unset source through projection and
+save/reopen. Word type getters return enum members or None while theme_color
+retains its string contract. Mutable oracle section/tab owners and the Word
+custom-property extension remain explicit compatibility differences. Strict
+typing and stubtest qualify the source return migration and mapping operations.
+An explicitly labeled selected-row Issue386 adapter preserves original input
+identities. It does not replace the untouched paired final script or combine
+self-catching exits with saved-file acceptance.
+
+
 The separate PR333 corpus pins commit193819ca0a1dcf3415017c0be1186fe8df6bcb86:
 76 Word scripts,44 Presentation scripts and both original runners. Execution
 authenticates all122 bodies, checks, membership and source identities. Original

@@ -804,19 +804,26 @@ impl PyColorFormat {
     }
 
     #[getter(r#type)]
-    fn color_type(&self, py: Python<'_>) -> PyResult<Option<&'static str>> {
+    fn color_type(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         let snapshot = self.font(py).snapshot(py)?;
-        Ok(if snapshot.color_theme.is_some() {
-            Some("theme")
+        let kind = if snapshot.color_theme.is_some() {
+            Some(2)
         } else {
             snapshot.color.as_deref().map(|value| {
                 if value.eq_ignore_ascii_case("auto") {
-                    "auto"
+                    101
                 } else {
-                    "rgb"
+                    1
                 }
             })
+        };
+        kind.map(|kind| {
+            py.import("rdocx.enum.dml")?
+                .getattr("MSO_COLOR_TYPE")?
+                .call1((kind,))
+                .map(Bound::unbind)
         })
+        .transpose()
     }
 
     #[getter]
@@ -1014,6 +1021,12 @@ impl PyTabStop {
     #[getter]
     fn alignment(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         enum_object(py, "WD_TAB_ALIGNMENT", tab_alignment_to_int(self.alignment))
+    }
+    #[setter]
+    fn set_alignment(&self, _value: &Bound<'_, PyAny>) -> PyResult<()> {
+        Err(pyo3::exceptions::PyNotImplementedError::new_err(
+            "TabStop is a snapshot. First delete tabs[index], then readd with tabs.add_tab_stop(tab.position, alignment, tab.leader), preserving position and leader",
+        ))
     }
     #[getter]
     fn leader(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {

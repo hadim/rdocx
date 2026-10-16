@@ -282,13 +282,16 @@ the supported story or document authoring path.
 Integer indexing, slicing, iteration and equality retain tuple behavior, with
 slices returning ordinary tuples. String indexing raises a first-line
 `set_style` pointer. Exact builtin tuple type identity is outside this contract.
-Frozen Section header/footer/first-page properties name the live
-`document.section(snapshot.ordinal)` alternative. `add_section` names native
+Frozen Section left_margin read and assignment, and header/footer/first-page properties name the live
+`document.section(snapshot.ordinal)` alternative. left_margin names the matching
+live left_margin property, while frozen margin_left remains the stored field. `add_section` names native
 insert/update operations without promising python-docx section cloning.
 Table column compatibility names refuse with `insert_column`,
 `set_column_width`, `grid_widths` and `cell.width` alternatives. Paragraph
 `_element` and Presentation `_sldIdLst` name `remove_content` and
-`slides.remove` respectively, without exposing lxml mutation.
+`slides.remove` respectively, without exposing lxml mutation. Paragraph._p,
+Run._r and Run._element validate current ownership before refusing with their
+xml and replace_xml(xml) alternatives. Retired owners retain stale errors.
 
 The `rdocx.enum.text` module defines bounded `WD_BREAK_TYPE`/`WD_BREAK` and
 `WD_COLOR_INDEX`. The concrete `rdocx.enum.section` module defines
@@ -341,7 +344,9 @@ multiple truncation remains distinct from python-docx's twip rounding.
 
 `ParagraphFormat.tab_stops` is a live parent-bound collection with length,
 indexing, iteration, indexed deletion, add_tab_stop and clear_all. Returned
-TabStop values are immutable position/alignment/leader snapshots. New Python
+TabStop values are immutable position/alignment/leader snapshots. Alignment
+assignment refuses with the delete-then-readd collection route, preserving
+position and leader. Delete the occupied entry before add_tab_stop. New Python
 positions use the existing signed EMU conversion, truncating toward zero at
 635 EMU per twip with signed32-bit bounds. A repeated stored position raises
 ValueError before publication. Distinct positions insert before the first
@@ -433,10 +438,16 @@ Font.color -> ColorFormat
 Font.color = RGBColor | tuple[int, int, int] | str | None
 ColorFormat.rgb -> RGBColor | None
 ColorFormat.rgb = RGBColor | tuple[int, int, int] | str | None
-ColorFormat.type -> str | None
+ColorFormat.type -> MSO_COLOR_TYPE | None
 ColorFormat.theme_color -> str | None
 ColorFormat.theme_color = str | MSO_THEME_COLOR | None
 ```
+
+Word ColorFormat.type returns the concrete rdocx.enum.dml.MSO_COLOR_TYPE values
+RGB=1, THEME=2 and AUTO=101, or None. This replaces the former rgb/theme/auto
+strings, so callers migrate comparisons to enum members despite patch release
+numbering. Theme source takes precedence over cached RGB or auto. Reads retain
+source tint, shade and opaque metadata. Word theme_color remains str or None.
 
 PowerPoint uses the approved enum-valued getters in place of the string getter
 signatures above: ColorFormat.type returns MSO_COLOR_TYPE or None, and
@@ -3982,7 +3993,12 @@ including table-cell descendants and nonstandard part names. Body Page and
 header Line remain admitted. Footer and Column behavior is unchanged. Imported
 breaks remain source-owned through unrelated edits.
 
-CustomFileTime validates explicit RFC3339 text. CustomProperties returns immutable typed snapshots and stages checked set/delete operations. AppProperties and presence-sensitive track_revisions are live document-owned handles. Equations return immutable source snapshots, ordered per-child conversion results and native loss diagnostics. Tag and alias control updates stage all selected qualified values once. Runtime constructors, explicit exports and strict stubs describe the same public classes and defaults.
+CustomFileTime validates explicit RFC3339 text. CustomProperties returns immutable typed snapshots and stages checked set/delete operations. Its mapping
+assignment, deletion and membership reuse checked set, delete and get. Names
+are case-sensitive str without coercion. Empty assignment raises ValueError,
+empty membership is false, and missing or empty deletion raises KeyError.
+Existing delete returns bool and get returns an immutable CustomProperty.
+Membership and failed operations create no properties part. AppProperties and presence-sensitive track_revisions are live document-owned handles. Equations return immutable source snapshots, ordered per-child conversion results and native loss diagnostics. Tag and alias control updates stage all selected qualified values once. Runtime constructors, explicit exports and strict stubs describe the same public classes and defaults.
 
 Python `Document.legacy_form_fields()` returns a tuple of frozen owned
 LegacyFormField snapshots. Each exposes source_part, ordinal, optional name,
@@ -3991,7 +4007,9 @@ value and immutable choices. Snapshots grant no mutation authority and retain
 historical values. The setter resolves current unique names or a complete
 source_part/ordinal pair, with optional matching name. Partial, stale, ambiguous,
 negative or bool identities refuse. Text requires str, checkbox actual bool,
-and drop-down a nonnegative int excluding bool. Native bounds and malformed
+and drop-down a nonnegative int excluding bool. A non-integer dropdown
+refusal names the actual Python type, integer index and legacy_form_fields()
+snapshot choices. It does not select SDT display text or values. Native bounds and malformed
 source checks remain authoritative across supported related legacy stories.
 
 Bind dictionaries validate all keys and values before staging. Both new Python

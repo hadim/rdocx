@@ -2536,6 +2536,14 @@ impl PySection {
 #[pymethods]
 impl PySection {
     #[getter]
+    fn left_margin(&self) -> PyResult<()> {
+        self.live_section_alternative("left_margin")
+    }
+    #[setter]
+    fn set_left_margin(&self, _value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.live_section_alternative("left_margin")
+    }
+    #[getter]
     fn header(&self) -> PyResult<()> {
         self.live_section_alternative("header")
     }
@@ -3277,6 +3285,19 @@ pub struct PyCustomProperties {
 
 #[pymethods]
 impl PyCustomProperties {
+    fn __setitem__(&self, py: Python<'_>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.set(py, name, value)
+    }
+    fn __delitem__(&self, py: Python<'_>, name: &str) -> PyResult<()> {
+        if name.is_empty() || !self.delete(py, name)? {
+            Err(pyo3::exceptions::PyKeyError::new_err(name.to_owned()))
+        } else {
+            Ok(())
+        }
+    }
+    fn __contains__(&self, py: Python<'_>, name: &str) -> bool {
+        !name.is_empty() && self.get(py, name).is_some()
+    }
     fn get(&self, py: Python<'_>, name: &str) -> Option<PyCustomProperty> {
         self.document
             .borrow(py)
@@ -7000,9 +7021,10 @@ impl PyDocument {
             }
             rdocx::LegacyFormFieldKind::DropDownList => {
                 if !value.is_instance_of::<PyInt>() || value.is_instance_of::<PyBool>() {
-                    return Err(PyTypeError::new_err(
-                        "legacy dropdown requires nonnegative int, not bool",
-                    ));
+                    return Err(PyTypeError::new_err(format!(
+                        "legacy dropdown received {}. Use a nonnegative integer index, not bool, from document.legacy_form_fields() snapshot choices",
+                        value.get_type().name()?,
+                    )));
                 }
                 rdocx::LegacyFormFieldValue::SelectedIndex(value.extract::<usize>()?)
             }
