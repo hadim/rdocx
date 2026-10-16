@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 272 | 260 | 1 | 7 |
-| **Total** | **603** | **534** | **1** | **64** |
+| X, Cross-cutting | 272 | 260 | 2 | 6 |
+| **Total** | **603** | **534** | **2** | **63** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -822,7 +822,7 @@ HLD14 contract before adopting contributor changes.
 | F-X251 | Refuse invalid Word values before publication | S95 | M | done |
 | F-X252 | Refuse newly invalid Word raw XML atomically | S95 | M | done |
 | F-X253 | Honor imported chart types and hidden master shapes | S95 | M | done |
-| F-X254 | Refuse invalid PowerPoint values XML and empty edits | S95.11 | L | pending |
+| F-X254 | Refuse invalid PowerPoint values XML and empty edits | S95.11 | L | in-progress |
 | F-X255 | Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases | S95 | L | done |
 | F-X256 | Refuse ambiguous Word numeric units and preserve line spacing | S95 | M | done |
 | F-X257 | Complete remaining Word names and legacy dropdown diagnostics | S95 | L | done |
