@@ -20041,3 +20041,83 @@ Independent feature and integration review is clean. Fresh final ZIP 9 replay at
 **Notes for future sessions.** Final installed and hosted outcomes, exact successor applicability and consolidated full verification are recorded under F-X238.
 
 Shared actual hosted, installed, current 23-package and closed receipts, successor applicability and consolidated native gate are recorded under F-X238 above. Final sprint review and successor verification remain closure requirements.
+
+### F-X248, Validate identified paragraphs inside block content controls
+
+**Sprint.** S95
+**Completed.** 2026-10-16
+**Size.** M, estimated 2 to 3 days, actual not recorded
+
+**What was built.** Carries the selected source namespace scope into the existing SDT validation probe so identified block-control paragraphs validate without stripping paraId or textId. The CLI and both Python validation routes retain actual owner checks and byte-preserved opaque content.
+
+**Non-obvious choices.** Namespace URI values are normalized once. Physical owner mismatches still refuse. No public API or dependency was added.
+
+**Deviations from the design plan.** No unapproved scope expansion. Reviewed numerical archive observations reflect actual final feature source.
+
+**Spec sections touched.** HLD04 checked Word source ownership, HLD10 Python Word operations and HLD12 Word validation qualification.
+
+**Tests.** Regression gate and three focused ordinary installed controls pass. Scoped evidence records 3,563 overlapping native executions with 28 ignored, strict typing and stub checks, both WASM targets, 183 policy passes with two existing skips and two genuine affected publication dry-runs. Scoped receipt `/private/tmp/S95-F-X248-worker-1/scoped-receipt.json`, SHA256 `5cad8051b7f35b202c9c88ae9c452ce349cbb0b870ca2544df05da56ebd334fd`. Independent final feature review reports zero defects and zero smells. Integration `cf70271bb7a21c6b54320a4cff135f9afaa9cbe0` preserves the qualified feature source, with separately authenticated shared documentation and numerical reconciliation.
+
+**Hash harness.** All 49 hashes and seven deterministic pixel buffers unchanged in the scoped evidence. No baseline changed.
+
+**Notes for future sessions.** Completed through the formal dependency-prefix checkpoint for F-X255. Final integrated full verification and sprint review remain due after all six stories. This is scoped feature acceptance, not final sprint acceptance or publication. Clean worker worktree removed after integration without force, branch retained through close. Issue385 remains partial pending the S95.1 acceptance union.
+
+### F-X249, Set typed content control values as Word does
+
+**Sprint.** S95
+**Completed.** 2026-10-16
+**Size.** M, estimated 2 to 3 days, actual not recorded
+
+**What was built.** Filling supported existing Word controls clears the qualified placeholder flag, updates supported fullDate metadata, resolves declared dropdown values to display text and preserves bound custom XML consistency. Missing individual selectors raise KeyError while distinct bulk-bind behavior remains intact.
+
+**Non-obvious choices.** Date/calendar and dropdown admission are finite. Producer lastValue caches remain preserved. Native Word normalization and schema-valid dropdown or absent-mapping divergences are explicit, without claiming complete metadata parity. Three namespace defects found in the first review received actual failing regressions before repair.
+
+**Deviations from the design plan.** No unapproved scope expansion. Reviewed numerical archive observations reflect actual final feature source.
+
+**Spec sections touched.** HLD04 checked Word source ownership, HLD10 typed control operations and HLD12 native and saved-file qualification.
+
+**Tests.** Regression gate passes with 3,466 overlapping rdocx and 101 CLI native executions, 35 ordinary installed/typing/stub controls, 13 public Word artifacts and four actual observer-rejected mutations. Actual Word 16.114 save/reopen evidence is separately sealed. Both WASM targets, 183 policy passes with two skips and three genuine affected publication dry-runs pass. Scoped receipt `/private/tmp/S95-F-X249-worker-2/scoped-receipt.json`, SHA256 `5d095be06d08d3e74acdac972f682f27a8354cff8464269b9b3117827798c5f2`. Independent final feature review reports zero defects and zero smells. Integration `5d092cfa36d66bd4252257f1d9437e013a177232` preserves the qualified feature source, with separately authenticated shared documentation and numerical reconciliation.
+
+**Hash harness.** All 49 hashes and seven deterministic pixel buffers unchanged in the scoped evidence. No baseline changed.
+
+**Notes for future sessions.** Completed through the formal dependency-prefix checkpoint for F-X255. Final integrated full verification and sprint review remain due after all six stories. This is scoped feature acceptance, not final sprint acceptance or publication. Clean worker worktree removed after integration without force, branch retained through close. Issue385 remains partial pending the S95.1 acceptance union.
+
+### F-X251, Refuse invalid Word values before publication
+
+**Sprint.** S95
+**Completed.** 2026-10-16
+**Size.** M, estimated 2 to 3 days, actual not recorded
+
+**What was built.** Refuses DOCX save to a PDF path, duplicate stored-position tab stops, page breaks in physical headers, malformed authored language tags and authored fonts without the sfnt name table before mutation or output. Word font CLI collision errors no longer recommend an unavailable force option.
+
+**Non-obvious choices.** Tab positions retain truncation semantics and imported duplicate behavior. Language admission is a finite ASCII contract. Renamed physical headers and header cells receive the same policy, while valid body and footer break routes remain supported. Licensed Caladea controls use the actual Apache2 licence.
+
+**Deviations from the design plan.** No unapproved scope expansion. Reviewed numerical archive observations reflect actual final feature source.
+
+**Spec sections touched.** HLD03 owned publication, HLD04 physical source ownership, HLD10 Word bindings and font CLI, HLD12 atomic refusal qualification.
+
+**Tests.** Regression gate passes with 3,468 overlapping rdocx and 102 CLI native executions and 28 ignored. Forty-eight focused fresh ordinary installed controls, strict typing/stub, both WASM targets, 183 policy passes with two skips and two genuine affected publication dry-runs pass. The unchanged five reporter bodies pass under runxfail, separately from five strict XPASS failures. Scoped receipt `/private/tmp/S95-F-X251-worker-1/scoped-receipt.json`, SHA256 `6ce4af6b199c3c337a72f44f9927e8d245633b81aa1f6f8baf3d07a85621d6c3`. Independent final feature review reports zero defects and zero smells. Integration `7aa121031b3fcc2159b230af3a3979b8979ac010` preserves the qualified feature source, with separately authenticated shared documentation and numerical reconciliation.
+
+**Hash harness.** All 49 hashes and seven deterministic pixel buffers unchanged in the scoped evidence. No baseline changed.
+
+**Notes for future sessions.** Completed through the formal dependency-prefix checkpoint for F-X255. Final integrated full verification and sprint review remain due after all six stories. This is scoped feature acceptance, not final sprint acceptance or publication. Clean worker worktree removed after integration without force, branch retained through close. Issue385 remains partial pending the S95.1 acceptance union.
+
+### F-X253, Honor imported chart types and hidden master shapes
+
+**Sprint.** S95
+**Completed.** 2026-10-16
+**Size.** M, estimated 2 to 3 days, actual not recorded
+
+**What was built.** Maps the four requested imported chart subtypes through the native and Python chart type projection, with None for genuinely unsupported types. Rendering honors slide and layout master-shape visibility while preserving ordinary layout content, direct slide content and distinct placeholder/template behavior.
+
+**Non-obvious choices.** Chart metadata inspection uses a single index and finite enum admission. Review found enum and repeated-scan defects, then actual regression controls qualified both repairs. No broad native serialization claim is inferred from the LibreOffice-compatible successor fixture.
+
+**Deviations from the design plan.** No unapproved scope expansion. Reviewed numerical archive observations reflect actual final feature source.
+
+**Spec sections touched.** HLD06 shape layers, HLD07 inheritance, HLD08 rendering, HLD09 chart metadata, HLD10 PowerPoint bindings and HLD12 native qualification.
+
+**Tests.** Differential gate passes with four output routes and 16 pages against independently captured PowerPoint and LibreOffice truth controls. Scoped evidence records 906 native passes with 34 ignored, 912 installed passes plus strict typing/stub checks, both WASM targets, 183 policy passes with two skips and four genuine publication dry-runs. Five reporter replays duplicate the sprint twelve-case union and add no unique case credit. Scoped receipt `/private/tmp/S95-F-X253-worker-verification-1/scoped-verification-summary.json`, SHA256 `54a4fc73d167e4b00e36a24d98dd4a7517c38a85e7927f86c539024468023a87`. Independent final feature review reports zero defects and zero smells. Integration `95e3adc242d025df3857306381c19a9dbe3882a7` preserves the qualified feature source, with separately authenticated shared documentation and numerical reconciliation.
+
+**Hash harness.** All 49 hashes and seven deterministic pixel buffers unchanged in the scoped evidence. No baseline changed.
+
+**Notes for future sessions.** Completed through the formal dependency-prefix checkpoint for F-X255. Final integrated full verification and sprint review remain due after all six stories. This is scoped feature acceptance, not final sprint acceptance or publication. Clean worker worktree removed after integration without force, branch retained through close. Issue385 remains partial pending the S95.1 acceptance union.

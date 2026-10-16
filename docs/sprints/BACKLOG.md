@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 269 | 251 | 5 | 9 |
-| **Total** | **600** | **525** | **5** | **66** |
+| X, Cross-cutting | 269 | 255 | 1 | 9 |
+| **Total** | **600** | **529** | **1** | **66** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -816,12 +816,12 @@ HLD14 contract before adopting contributor changes.
 | F-X245 | Preserve chart data changes in Word comparison | S93 | L | done |
 | F-X246 | Honor chart legend position and overlay during rendering | S93 | L | done |
 | F-X247 | Preserve the common LaTeX inputs reported in Issue365 | S94 | L | done |
-| F-X248 | Validate identified paragraphs inside block content controls | S95 | M | in-progress |
-| F-X249 | Set typed content control values as Word does | S95 | M | in-progress |
+| F-X248 | Validate identified paragraphs inside block content controls | S95 | M | done |
+| F-X249 | Set typed content control values as Word does | S95 | M | done |
 | F-X250 | Complete everyday Word chart equation list and note APIs | S95.1 | L | pending |
-| F-X251 | Refuse invalid Word values before publication | S95 | M | in-progress |
+| F-X251 | Refuse invalid Word values before publication | S95 | M | done |
 | F-X252 | Refuse newly invalid Word raw XML atomically | S95 | M | in-progress |
-| F-X253 | Honor imported chart types and hidden master shapes | S95 | M | in-progress |
+| F-X253 | Honor imported chart types and hidden master shapes | S95 | M | done |
 | F-X254 | Refuse invalid PowerPoint values XML and empty edits | S95.1 | L | pending |
 | F-X255 | Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases | S95 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->

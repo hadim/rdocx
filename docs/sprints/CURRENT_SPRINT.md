@@ -22,11 +22,11 @@
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X248 | Validate identified paragraphs inside block content controls | M | in-progress | codex |
-| F-X249 | Set typed content control values as Word does | M | in-progress | codex |
-| F-X251 | Refuse invalid Word values before publication | M | in-progress | codex |
+| F-X248 | Validate identified paragraphs inside block content controls | M | done | |
+| F-X249 | Set typed content control values as Word does | M | done | |
+| F-X251 | Refuse invalid Word values before publication | M | done | |
 | F-X252 | Refuse newly invalid Word raw XML atomically | M | in-progress | codex |
-| F-X253 | Honor imported chart types and hidden master shapes | M | in-progress | codex |
+| F-X253 | Honor imported chart types and hidden master shapes | M | done | |
 | F-X255 | Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases | L | pending | |
 
 ## Sequencing note
