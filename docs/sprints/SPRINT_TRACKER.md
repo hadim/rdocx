@@ -1157,3 +1157,10 @@ Historical S95.1 allocation statements above retain their original date.
 |------|--------|------|---------------|-------------|-----------|----------|
 | F-X256 | S95 | M | 2 to 3 | not recorded | 2026-10-16 | Scoped Word933 and focused33 at successor3, current typing-only applicability and stub checks, clean independent pass5, exact integration f3291339. Policy181pass2skip, worker hash49/pixels7 unchanged. Final sprint gate due |
 | F-X258 | S95 | M | 2 to 3 | not recorded | 2026-10-16 | Scoped complete PPT961 with no skips, selected6 and typing/stub checks, clean independent pass1, exact integration8c9fb137. Policy181pass2skip, worker hash49/pixels7 unchanged. Final sprint gate due |
+
+| F-X257 | S95 | L | 4 to 5 | not recorded | 2026-10-16 | Scoped complete Word947/0skip, focused14, strict typing/stub8modules and selected6 observations. Two clean reviews,27 root-authenticated references, exact integration1afb1006. Policy181pass2skip, hash49/pixels7 unchanged. Final integrated gate remains due |
+
+All eight S95 repairs now complete through scoped dependency-prefix acceptance.
+Release preparation F-X255 remains in-progress for revised design and preserved
+WIP reconciliation. The final nine-story union, actual hosted acceptance and
+sprint review remain due. No publication or measured person-effort credit.

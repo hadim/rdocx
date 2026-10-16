@@ -20289,3 +20289,50 @@ to F-X255 readiness. Final nine-story integrated full verification, native
 four-route observations, paired Issue386 replay and sprint review remain due.
 No whole Issue385/386 closure or Python3.14 qualification claimed. Handoff
 consumed, clean worker directory eligible for removal, branch retained.
+
+### F-X257, Complete remaining Word names and legacy dropdown diagnostics
+
+**Sprint.** S95
+**Completed.** 2026-10-16
+**Size.** L, estimated 4 to 5 days, actual not recorded
+
+**What was built.** Frozen Section.left_margin and TabStop.alignment provide
+explicit supported live or delete/readd alternatives. Custom properties support
+checked mapping assignment, deletion and membership with finite key rules.
+Private paragraph/run XML names validate ownership before naming checked XML
+alternatives. Legacy dropdown diagnostics report the received type and integer
+index route. The approved color getter migration returns the concrete Word
+MSO_COLOR_TYPE enum or None, with theme_color still str or None.
+
+**Non-obvious choices.** No mutable snapshot owner, lxml surface or expanded
+scalar color setter was introduced. Imported empty custom-property names remain
+preserved while empty mapping membership and deletion follow their explicit
+contracts. New AUTO tests import source color rather than widening authoring.
+The actual first focused13-pass/one-failure fixture result remains historical.
+
+**Spec sections touched.** HLD10 Word names, mapping and color contracts,
+HLD12 saved-file, owner, oracle and installed qualification.
+
+**Tests.** Actual nine old-source failures precede the repair. Regression gate,
+947 complete installed Word tests and14 focused controls pass with zero skips.
+Strict mypy, eight-module stubtest and six selected reporter observations pass.
+The genuine wheel built at worker2 is reauthenticated against identical
+production, Python, stub and enum bytes after a test-only correction. Complete
+suite execution is actual successor3. All126 pinned oracle files and4283
+historical font-reference guards remain unchanged. Both independent reviews
+are clean. Scoped clippy, both WASM graphs, formatting, prose and adapters pass.
+Policy183 run,181 passed and two existing skips. Scoped receipt SHA256
+d8fbf9897ae68f336309644f9c53519e8b08ace74d57e7a19f985d0b353f37fa.
+Root authenticated27 references, actual command logs and947/14-test JUnit.
+Integration1afb100645a5388b535d2016d74459cca4e2dac1 preserves all ten changed
+product/test files exactly, without conflict.
+
+**Hash harness.** Worker49 hashes and seven deterministic pixel buffers
+unchanged. No baseline change.
+
+**Notes for future sessions.** All eight repair prerequisites now complete.
+F-X255 may revise and reconcile its preserved release preparation. Final
+nine-story integrated full verification and sprint review remain due, including
+the untouched paired Issue386 replay and independent semantic companion.
+No whole Issue385/386 closure or publication claimed. Handoff consumed and
+clean worker directory removed without force. Branch retained through close.
