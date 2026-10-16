@@ -438,6 +438,15 @@ ColorFormat.theme_color -> str | None
 ColorFormat.theme_color = str | MSO_THEME_COLOR | None
 ```
 
+PowerPoint uses the approved enum-valued getters in place of the string getter
+signatures above: ColorFormat.type returns MSO_COLOR_TYPE or None, and
+theme_color returns MSO_THEME_COLOR. A direct nonscheme color returns
+NOT_THEME_COLOR, an absent direct color raises AttributeError, and an
+unmapped scheme token refuses with preserved-source inspection guidance.
+Existing string setters remain supported. The concrete PowerPoint contract
+and finite language mapping are defined under Native PowerPoint notes and
+handout export.
+
 `None` in these colour-format setter signatures clears only font sources.
 Existing fill, line and shadow colour setters reject it. Word `type` reports
 `rgb`, `theme` or `auto`, while PowerPoint additionally models `preset` and
@@ -3066,10 +3075,35 @@ setter retains body-level state and first-paragraph/template formatting rather
 than arbitrary rich-run distributions. Actual serialized source equality is a
 no-op, while equal aggregate text alone does not bypass source comparison.
 
-The enum module provides identity alias MSO_THEME_COLOR_INDEX and import-only
+The enum module provides identity alias MSO_THEME_COLOR_INDEX and
 MSO_COLOR_TYPE with pinned RGB1, SCHEME2, HSL101, PRESET102, SCRGB103 and SYSTEM104
-values. ColorFormat.type retains its existing string/None contract. These
-imports do not add color authoring forms or switch getter return types.
+values. PowerPoint ColorFormat.type returns the corresponding enum for its
+modeled RGB, scheme, preset or system choice, or None when unset. The approved
+getter migration replaces the earlier string results. ColorFormat.theme_color
+returns MSO_THEME_COLOR for the sixteen supported scheme slots and
+NOT_THEME_COLOR for a direct nonscheme color. Reading theme_color with no
+direct color raises AttributeError. Unknown scheme tokens, including phClr,
+refuse enum projection with an owning element.xml inspection alternative.
+Reads preserve transforms and opaque source. Existing string and enum setter
+inputs and source-specific None clearing remain supported.
+
+Slide.slide_id reads the producer-assigned registration through its current
+physical owner. Reordering preserves that ID, and retired slides retain causal
+stale errors. Shape._element and TextFrame._txBody validate their existing
+owners, then refuse the unsupported lxml graph with shape.element or
+text_frame.element and its xml/replace_xml operations named. They do not
+construct alternate XML owners.
+
+The concrete rpptx.enum.lang.MSO_LANGUAGE_ID defines the 216 literal Office
+numeric/tag declarations pinned to python-pptx 1.0.2. Font.language_id projects
+the same native language slot as Font.language. Missing language returns NONE,
+and None or NONE clears it without creating absent properties. MIXED, bool,
+wrong types and unmapped codes refuse before publication. Known tags use the
+pinned declaration-order mapping. Unknown imported tags refuse enum projection
+while Font.language still exposes the preserved string. The existing string
+setter retains its tag admission. Finite enum assignment also supports the
+pinned es-ES_tradnl tag without broadening that string admission. There is no
+locale inference or normalization.
 
 
 The published pre-1.0 `rpptx` facade exposes `HandoutLayout::{One, Two, Three,

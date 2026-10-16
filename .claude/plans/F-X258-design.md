@@ -1,6 +1,6 @@
 # F-X258, Complete remaining PowerPoint names color and language contracts
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95
 **Size**: M
 **Depends on**: F-X239, F-X211b
@@ -145,12 +145,12 @@ Preserve F-X253 actual master/chart controls through final-source qualification.
 ## Implementation checklist
 
 - [x] Resolve enum getter compatibility and new-module authorization.
-- [ ] Establish actual old-source failures and preserve the original Issue386 input.
-- [ ] Implement registered ID and checked XML diagnostic projections.
-- [ ] Implement only approved color returns and finite language mapping.
-- [ ] Align stubs, existing consumers and independent saved-file/atomicity controls.
-- [ ] Pass focused installed/oracle/scoped checks and independent zero-finding microscope.
-- [ ] Update exactly the named HLD sections and prepare validated handoff.
+- [x] Establish actual old-source failures and preserve the original Issue386 input.
+- [x] Implement registered ID and checked XML diagnostic projections.
+- [x] Implement only approved color returns and finite language mapping.
+- [x] Align stubs, existing consumers and independent saved-file/atomicity controls.
+- [x] Pass focused installed/oracle/scoped checks and independent zero-finding microscope.
+- [x] Update exactly the named HLD sections and prepare validated handoff.
 
 ## Open questions
 

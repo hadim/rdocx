@@ -4271,6 +4271,34 @@ malformed-source controls continue to refuse.
 
 Text controls compare accepted Paragraph and story snapshots across body, tables, controls and related stories. CLI plain and JSON views retain aliases, tabs, direct and simple-field newlines, and closed complex cached-field page and column controls. Nested instruction, deleted and moveFrom content stays suppressed. Malformed related stories retain main text and the existing ordered omission diagnostic. Markdown keeps literal whitespace and physical field, control, revision and hard-break boundaries. Export controls inspect owned ODT space elements and EPUB content rather than relying on lexical XML substrings.
 
+## PowerPoint names and finite language controls
+
+The exact six PowerPoint rows from Issue386 use a selected-row worker adapter
+against its authenticated current wheel. Root runs the unchanged complete
+reporter once against paired final family artifacts. Its caught exceptions and
+exit zero do not decide acceptance. These rows keep their own denominator and
+do not enlarge Issue385's twelve-body union or qualify Python3.14.
+
+Registered slide IDs are checked against imported noncontiguous registrations,
+reorder, save/reopen and retired physical owners. Color getter controls require
+actual enum identity for modeled choices and all sixteen scheme slots across
+fonts, fills, lines, borders, shadows, gradients and patterns. Direct nonscheme
+colors return NOT_THEME_COLOR, unset direct colors raise AttributeError on
+theme_color, and unknown scheme tokens or phClr refuse without changing XML.
+Existing theme string setters, transforms and opaque payload remain covered.
+
+The 216 language declarations match python-pptx 1.0.2 member values and supported
+tag conversion order. Both libraries read each other's en-US and fr-FR saved
+packages. Absent language returns NONE, and None/NONE clears. MIXED, bool,
+wrong types, unknown codes and unknown imported tags have byte and held-owner
+atomicity controls with a later valid assignment. Font.language retains its
+string admission, while finite language_id supports the pinned es-ES_tradnl
+tag. Master, layout, run and paragraph-default/table-cell owners are positive
+controls. Private shape/body XML names must validate their owner and provide
+the actual checked Element route, preserving causal stale errors and working
+Element replacement. Installed strict typing and stubtest consume the new
+module and exact enum returns.
+
 ## PowerPoint master and theme controls
 
 Installed public controls decide every part-owner property and the three branding

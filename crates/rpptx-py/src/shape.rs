@@ -452,6 +452,14 @@ impl PyShape {
 #[pymethods]
 impl PyShape {
     #[getter]
+    fn _element(&self, py: Python<'_>) -> PyResult<()> {
+        self.read(py, |_| ())?;
+        Err(PyNotImplementedError::new_err(
+            "Shape._element does not expose lxml; use shape.element.xml to inspect XML or shape.element.replace_xml(...) for checked replacement",
+        ))
+    }
+
+    #[getter]
     fn element(&self, py: Python<'_>) -> PyResult<Py<crate::presentation::PyPptElement>> {
         self.read(py, |_| ())?;
         let presentation = self.presentation.borrow(py);

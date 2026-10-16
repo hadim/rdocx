@@ -584,7 +584,7 @@ def colour_formats() -> None:
     font = slide.shapes.add_textbox(0, 0, 914400, 914400).text_frame.paragraphs[0].font
     assert_type(font.color, ColorFormat)
     assert_type(font.color.rgb, RGBColor | None)
-    assert_type(font.color.theme_color, str | None)
+    assert_type(font.color.theme_color, MSO_THEME_COLOR)
     assert_type(font.color.brightness, float | None)
     font.color = "#123456"
     font.color = (1, 2, 3)
@@ -850,3 +850,17 @@ def fx253_optional_chart_type(chart: "Chart") -> int:
         return -1
     assert_type(value, int)
     return value
+
+
+def fx258_powerpoint_names(slide: Slide, font: Font) -> None:
+    from rpptx.enum.dml import MSO_COLOR_TYPE, MSO_THEME_COLOR
+    from rpptx.enum.lang import MSO_LANGUAGE_ID
+    assert_type(slide.slide_id, int)
+    assert_type(font.color.type, MSO_COLOR_TYPE | None)
+    assert_type(font.color.theme_color, MSO_THEME_COLOR)
+    assert_type(font.language_id, MSO_LANGUAGE_ID)
+    assert_type(MSO_LANGUAGE_ID(1033), MSO_LANGUAGE_ID)
+    font.language_id = MSO_LANGUAGE_ID.FRENCH
+    font.language_id = 1033
+    font.language_id = None
+    font.language = "en-US"
