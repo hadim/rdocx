@@ -25,7 +25,7 @@ recovery/design checkpoint, not an assumption that the old branch reconstructs i
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-X192 | Complete the remaining Word bibliography catalogue | L | pending | - |
-| F-283 | Complete numbering-aware navigation fields | L | pending | - |
+| F-283 | Complete numbering-aware navigation fields | L | in-progress | codex |
 | F-284 | Stable container-wide template grammar | L | pending | - |
 
 ## Sequencing note
