@@ -401,7 +401,7 @@ fn outline_emits_a_field_only_title_once() {
 }
 
 #[test]
-fn validate_and_text_read_a_paragraph_with_a_second_paragraph_properties_element() {
+fn validate_reports_duplicate_paragraph_properties_while_text_remains_readable() {
     let temp = TempWorkspace::new("second-ppr");
     let deck = temp.path.join("second-ppr.pptx");
     write_deck(&deck, &["One. Two."]);
@@ -426,10 +426,13 @@ fn validate_and_text_read_a_paragraph_with_a_second_paragraph_properties_element
     package.save(&deck).expect("write second pPr fixture");
 
     let validated = cli(&["validate", deck.to_str().unwrap()]);
+    assert!(!validated.status.success());
+    let diagnostic = String::from_utf8(validated.stderr).unwrap();
+    assert!(diagnostic.contains("InvalidXmlChild"), "{diagnostic}");
+    assert!(diagnostic.contains(&slide_part), "{diagnostic}");
     assert!(
-        validated.status.success(),
-        "{}",
-        String::from_utf8_lossy(&validated.stderr)
+        diagnostic.contains("finite XML child order or multiplicity is invalid"),
+        "{diagnostic}"
     );
     let text = cli(&["text", deck.to_str().unwrap()]);
     assert!(
