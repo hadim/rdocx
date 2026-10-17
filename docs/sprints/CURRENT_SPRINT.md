@@ -1,51 +1,88 @@
-# Current Sprint, S95.11
+# Current Sprint, S95.2
 
-**Milestone**: M24, X, remaining everyday APIs and native interoperability.
+**Milestone**: M24, X, bibliography, navigation and template carryovers.
 
-**Goal**: Complete the remaining Issue385 repairs and bounded native font interoperability. Three active stories total 10 to 13 developer-days. F-X219 is explicitly carried unfinished to S96 by user approval. Preserve the completed S95 contracts while qualifying the remaining public API, invalid-input and native application behavior through source-owned transactions and independent observations.
+**Goal**: Resume F-X192 and F-283 and establish the stable template grammar.
+Three stories provisionally total 12 to 15 developer-days. Preserve the existing
+bibliography and numbering providers while completing their exact catalogue and
+navigation contracts and defining consistent template behavior across supported
+containers. F-X192's missing old unstaged implementation requires a bounded
+recovery/design checkpoint, not an assumption that the old branch reconstructs it.
 
 ## Spec references
 
-- `docs/hld/14-development-backlog.md`, F-X250, F-X254, F-X219 and F-X223 define the exact four contracts, provider dependencies and test gates. M24's complete stability boundary remains F-310 in S99.
-- `docs/hld/03-architecture.md`, Owned publication and causal paths defines candidate staging, physical owner proof, allocation before publication and unchanged bytes and authority on refusal.
-- `docs/hld/04-opc-and-packaging.md`, Checked Word operation source ownership, Checked PowerPoint XML transactions and embedded font package contracts govern namespace and relationship ownership, opaque source, schema order, watermark branches and font graph preservation.
-- `docs/hld/06-presentationml-model.md`, Checked shape and relationship authoring, Validation and Checked XML owner replacement constrain dimensions, fixed physical shape kinds, schema admission, retained source and atomic owner replacement.
-- `docs/hld/08-rendering-spec.md`, Word OfficeMath layout, Word watermarks and Authored Word page appearance and note references define inline/display boundaries, marker styling, alpha semantics and deterministic paint. Embedded font rendering and native face-selection limits remain separate from package authoring.
-- `docs/hld/09-charts-spec.md`, The ChartML model and Python authoring and owned replacement define qualified chart source, category and series ordering, supported projections and unknown-family behavior.
-- `docs/hld/10-bindings-spec.md`, Python Word formatting and checked list publication, Python Word document operations, section-aware page authoring and Licensed embedded fonts in Python and CLI define callable surfaces, typing, current owners, existing refusals and safe output publication.
-- `docs/hld/12-testing-strategy.md`, Binding tests, Integrated Python compatibility qualification, authored Word appearance controls and embedded-font native controls require fresh installed artifacts, independent saved-package observations, sensitive negative controls and honest producer attribution.
-- `docs/hld/15-build-and-toolchain.md`, Deterministic rendering and Embedded font inputs and consumer recipes define bundled-font baselines, licensed source inputs, selected face identity and pinned native tools.
+- `docs/hld/14-development-backlog.md`, F-X192, F-283 and F-284 define exact scope, dependencies and differential/regression gates. M24's complete stability boundary remains F-310 in S99.
+- `docs/hld/02-scope-and-non-goals.md`, DOCX-049 bibliography and DOCX-050 navigation define the existing capability boundaries.
+- `docs/hld/03-architecture.md`, native bibliography/physical field ownership, immutable field evaluation, sequence state, native TOC discovery, result-local Word source maps and template/fragment transactions define concrete provider reuse.
+- `docs/hld/04-opc-and-packaging.md`, bibliography source graphs, checked Word publication, owned relationship import and opaque XML preservation govern staged source transactions.
+- `docs/hld/08-rendering-spec.md`, Word field caches, bookmark pagination, accepted revisions, section/page numbering and deterministic script/marker rendering separate result-local layout from physical source identity.
+- `docs/hld/10-bindings-spec.md`, native bibliography and template APIs, existing Python/WASM preservation boundaries and fragment ownership define the present public surfaces. Template grammar expansion requires an approved explicit surface decision, not assumed new bindings.
+- `docs/hld/12-testing-strategy.md`, measured bibliography catalogue, numbered navigation/source-path regressions and container/template preservation controls define independent observations and one final integrated oracle/rider union.
+- `docs/hld/15-build-and-toolchain.md`, deterministic fonts, licensed source provenance and actual oracle/tool identities constrain external qualification. No new dependency, font, module or file follows merely from this sprint opening.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X250 | Complete everyday Word chart equation list and note APIs | L | done | - |
-| F-X254 | Refuse invalid PowerPoint values XML and empty edits | L | done | - |
-| F-X219 | Qualify full-range text watermark interoperability | M | carried to S96 | - |
-| F-X223 | Qualify native Word embedded multi-face interoperability | M | done | - |
+| F-X192 | Complete the remaining Word bibliography catalogue | L | pending | - |
+| F-283 | Complete numbering-aware navigation fields | L | pending | - |
+| F-284 | Stable container-wide template grammar | L | pending | - |
 
 ## Sequencing note
 
-All formal providers are completed in the current backlog. F-X250 depends on F-X200, F-X202, F-X215 and F-X247. F-X254 depends on F-X204, F-X206, F-X211b and F-X220. F-X219 depends on F-X201. F-X223 depends on F-X220. There are no dependency edges between the four stories, so retaining the roadmap's issue-repair-first order is a valid dependency order. Opening must recheck those provider states against the actual merged main source.
+All three rows begin pending and unowned. Recheck completed provider states on
+the actual merged main prefix: F-X192 depends on F-282. F-283 depends on F-248,
+F-279 through F-282 and F-X200. F-284 depends on F-253, F-261 and F-276. There
+is no formal dependency from F-283 onto F-X192's full catalogue. Roadmap order
+is retained without inventing that completion barrier.
 
-F-X250 reuses current ChartML, list, equation and note providers. Preserve F-X247's finite conversion contract and F-X249's typed forms rather than reopening them. F-X254 must preserve the existing PowerPoint checked-owner graph, F-X253's precise chart reads and master visibility, and F-X258's enum and language contracts. Its bounded admission design must cover every named owner and CLI case. Split the story through the normal design workflow if the actual implementation exceeds the estimate, without dropping criteria.
+First revise the existing F-X192 design's stale scheduling and recovery section.
+Its preserved `work/f-x192-codex` branch and partial registered worker are
+historical material, not an empty disposable directory or a reusable active
+claim. The four surviving index blobs equal the committed baseline, not the
+missing later implementation. The exact five unresolved whole-feature findings
+cannot be reconstructed from the available record. Preserve old files, Git
+metadata/index, branch, progress, reviews and native evidence without repair,
+rename, prune, reset, stash or attribution changes. A new current implementation
+must not claim those unknown historical defects resolved.
 
-Word API work, watermark work and Word font work can overlap native document, binding, rendering and HLD files. Serialize any overlapping writes and integrate each reviewed prefix before the next such writer. F-X254 can run alongside a Word story only after approved plans establish disjoint worktrees, source and HLD sections, tests, build caches and output leases. A family name alone does not establish independence. Root owns shared archive measurements, deterministic baselines and final integrated gates. Native Office sessions, uninstalled font identities and source/output captures require explicit exclusive resource ownership.
+After an approved current design/recovery checkpoint, a safe normal route is
+serial `/start-feature F-X192` on canonical `sprint/s95.2`, without `--claimed`.
+It starts a fresh current-source lifecycle and records its actual Base/local
+checks in the canonical progress carrier. Keep the old worker inactive and
+untouched. Do not reuse the stale claim, create an owner alias, or rename the
+preserved branch to obtain a new claim. Its source fragments are reusable only
+when their actual bytes, origin and applicability can be authenticated. A fresh
+whole-feature microscope assesses the actual new implementation against the
+full contract rather than reconstructing a missing old verdict.
 
-F-X219 must retain the temporary half-opacity limitation until actual Word and LibreOffice endpoint and intermediate controls justify its removal. F-X223 investigates the documented one-font-per-name boundary without weakening the already qualified API or own-renderer face selection. Historical failed endpoint and synthetic-bold evidence remain immutable inputs. Neither absence of a repair prompt nor heavier pixels alone proves the requested native semantics.
+F-X192, F-283 and F-284 overlap native document/field/regression and HLD carriers.
+Serialize those writes and integrate each reviewed prefix before a later writer
+uses it. Separate worktree paths alone do not establish independence. Design and
+read-only preparation may proceed without granting concurrent shared source,
+compiler, baseline or native UI ownership. Root owns those leases and final
+archive measurements. F-283 can proceed on its own completed prerequisites if
+F-X192's technical authority remains blocked, with explicit source sequencing.
 
-These four rows are the already scheduled S95.11 scope, not new carries from completed S95. The outgoing S95 has nine completed contracts and zero carries. Open only after S95's main and sprint-tag pushes succeed. This sprint does not grant release-tag or registry publication authority, and later S95.2 through S95.4 boundaries retain their scope.
+F-283 consumes current ResolvedNumbering and one source-qualified layout result.
+F-X250's restart/startOverride and marker-font APIs supply useful mutation inputs,
+not another navigation counter or a full effective-level reader. Its direct-body
+restart scope does not solve table/control headings. Preserve the separate
+cross-instance REF oracle discriminator and explicit unsupported numbering rules.
+F-284 reuses the completed S89 fragment transaction. Its grammar/version,
+formatting hooks, escaping/whitespace, structural ownership and binding choices
+must be settled in its approved design before implementation.
+
+Open only after S95.11 main and sprint-tag pushes actually succeed. This opening
+neither starts S96 nor changes the unfinished F-X219 carry there. Issues 264 and 281
+retain their existing contracts without new repair credit. Later S95.3 and S95.4
+boundaries retain their scope and dependency order.
 
 ## Definition of done for this sprint
 
-- Complete the three retained approved contracts through design, claimed implementation, independent zero-defect and zero-smell microscope, scoped riders, one full integrated gate and clean sprint review. Preserve schema order, unmodelled XML, namespace scope, physical owners, parser/resource limits and exact refusal or no-op authority. Every intentional deterministic paint delta needs independent evidence and a separately labeled reviewed commit before an exclusive baseline update.
-- F-X250 exposes document charts after save/reopen with supported type, categories and owned ordered series names and values. Define physical source scope, unknown imported-family behavior and ordering explicitly. Display equation insertion emits `m:oMathPara`, exposes display state and preserves inline defaults and finite conversion diagnostics. Numbered-list restart creates the correct fresh instance, following items continue it, explicit restart at 5 survives reopen, and list-level fonts persist. Footnote and endnote markers carry their matching reference styles. Document removal by note id still works after an unrelated structural edit retires a held note handle, preserving other notes.
-- F-X250 executes all four exact pinned remaining Word reporter groups against fresh installed Python, with independent expanded chart, math, numbering and note XML inspection and applicable deterministic/native appearance controls. It does not complete F-283 navigation composition or broaden F-X247's conversion scope.
-- F-X254 refuses PPTX saves to PDF paths, dimensions outside 1 to 56 inches, unsupported horizontal and vertical flips on both table and chart graphic frames, and table styles that are neither built in nor actually present. Establish exact accepted boundaries and exception contracts before changing compatibility. Refusals preserve package bytes, existing or absent output, relationships and held owners, while valid and imported source controls remain usable.
-- F-X254 refuses newly invalid unknown or misplaced `p:` and `a:` children through shape, geometry, text-frame and slide checked replacement. Validation also flags the corresponding actual imported schema violations. Preserve unchanged opaque source, applicable Ignorable extensions, qualified namespace context, child order and current owner proofs. A replacement-map pair without `expect` that matches nothing refuses without output, while explicit `expect=0` and valid multi-pair operations retain their contracts. Missing-name PowerPoint font removal exits nonzero without pretend output, and existing-output errors stop recommending unavailable `--force`, preserving staged no-overwrite behavior.
-- F-X254 runs the exact pinned parameterized reporter tests, both frame kinds and flip axes, independent valid schema/native controls and separate CLI failure and atomicity controls. Report the actual new group and case membership instead of inheriting S95's twelve-body denominator or treating a self-catching script exit as acceptance.
-- F-X219 is carried unfinished to S96 with explicit user approval. No faithful shared Word and pinned LibreOffice representation was established by the bounded source investigation. Preserve the0.5-only restriction, failed endpoint evidence and full-range contract. No full-range implementation or native qualification is claimed. Reopen design at S96 rather than repeating the unsuccessful representation investigation. S96 must not start during this authorized S95 loop.
-- F-X223 independently proves whether native Word uses distinct prepared regular, bold, italic and bold-italic embedded faces for an uninstalled family, before and after native save and normal reopen. Use licensed exact font bytes, fresh family and key controls, absent host installation and recorded app/build and normalization. Glyph outlines and metrics from the actual prepared faces must distinguish genuine selection from synthetic bold and fallback. Preserve F-X220 package, API, source ownership and deterministic own-renderer contracts. A workaround must retain document semantics. Do not rename families without an approved design or label synthetic bold as genuine bold. The user accepts the documented Word16.114 native limitation as the bounded investigation outcome: Bold-only is genuine, paired Italic is synthetic, and unsupported observations remain unqualified. Genuine multi-face support is not claimed.
-- Complete applicable fresh ordinary installed suites, strict typing and stub checks, native, WASM, documentation, supply-chain and genuine affected publication/archive checks. Use pinned tool and input identities, retain prior attempts and compare independent saved-package and native outputs. No baseline uses system fonts, and no historical output or mutation execution is relabeled as a new producer.
-- Reconcile the complete Issue385 acceptance union across its completed provider work, S95 and these remaining F-X250/F-X254 groups before claiming full issue resolution. Closure requires evidence on integrated main after the successful main push. Native watermark and multi-face qualification remain separately reported contracts, not shortcuts to whole Issue385 or M24 completion. No Python3.14 or general Word layout/font parity claim follows from bounded controls. M24's final stability gate remains S99.
+- Complete all three approved contracts through normal design/start/implementation, independent zero-defect and zero-smell microscope, actual scoped checks and one integrated final verification/oracle/rider union with clean sprint review. Reuse only authenticated unchanged-source observations. Preserve failed attempts. No native or complete-suite pass is claimed from preparation or metadata adoption alone.
+- F-X192 passes `full_bibliography_catalogue_matches_pinned_word` across all twelve pinned installed style editions, seventeen source kinds and 223 ordinary locale selectors, including all remaining branch/context/citation/contributor/sparse/source-selection/rich-output controls. Exact source identities, ordering, ties, instructions, readable rich results and normal reopened packages require independent actual Word authority. No skipped catalogue row, assumed language alias, cache fallback or guessed ASCII/en-US comparator can satisfy the gate. Preserve opaque source, physical ownership and atomic refusals. A concrete dependency or unavailable comparator authority requires its actual design/risk decision, not silent scope reduction.
+- F-283's one multilevel numbered document remains consistent across actual visible markers, TOC, numbered STYLEREF/REF/PAGEREF, captions, outline results and saved caches. Include source-qualified table/control headings, accepted revisions, suppression distinctions, restart/continuation/start5, physical owner/refusal behavior and refreshed final layout snapshots. Preserve existing public accessors and compose authoritative provider results, without a second counter or presumed bibliography completion.
+- F-284's approved versioned grammar renders the same payload across body, table, header, footer, note and text-box locations without run-split loss. Qualify declared nested paths, filters/formatting hooks, whitespace/escaping/errors and structural expansion with source/relationship ownership and atomic refusals through the existing transaction. No speculative binding/module/file/API expansion is authorized by this row.
+- Run actual complete installed/API, applicable native/oracle, deterministic 49 hash/seven pixel, WASM, documentation, README, policy and genuine affected-package publication/archive riders once over the integrated source, as earned by approved risk routing. Own render comparisons use bundled fonts and predeclared supported observations. Intentional harness deltas require a separate labelled reviewed behavioral commit and the exclusive baseline lease. Published source, parser limits, schema order and exact opaque XML remain protected.
+- Preserve the full provisional 12 to 15 developer-day scope and report any material F-X192 reconstruction/comparator blocker before claiming readiness or changing capacity. Sprint close alone may merge main and tag the sprint. Release tags/publication require separate exact-SHA final approval. Do not start S96 during the authorized S95 loop.
