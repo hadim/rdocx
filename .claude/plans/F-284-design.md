@@ -58,8 +58,9 @@ selection is explicit and independent of the keys present in a payload.
 
 Use dotted object paths and add bracket array indices and quoted object keys.
 Quote parsing must admit delimiter characters in a key without treating them
-as an early tag close. Missing paths and wrong intermediate kinds remain
-errors unless an explicit `default` filter supplies a fallback. Arrays and
+as an early tag close. Missing paths remain errors unless an explicit `default`
+filter supplies a fallback. Wrong intermediate container kinds always refuse,
+including when a later `default` filter is present. Arrays and
 objects remain invalid scalar output unless a filter converts them.
 
 ### Scalar filters and formatting
@@ -131,6 +132,14 @@ text-box representations. Enumerate a shared header/footer once per physical
 part, not once per section reference. Exclude note separators and continuation
 separator records. Preserve chart-label scalar behavior without inventing a
 paragraph/row structural grammar for charts.
+
+Existing qualified equivalent text-box representations form one logical
+template owner. Evaluate its selected source program once, count and invoke
+formatting callbacks once per emitted logical occurrence, then mirror the
+admitted structural edits through the existing paired-representation provider.
+Do not pair owners by displayed text or marker spelling. Asymmetric or
+unqualified representations retain the existing preservation or refusal
+boundary.
 
 Reuse S89's supported fragment/dependency allocation and namespace closure
 inside one staged candidate. Public clone/import methods reopen and commit per
