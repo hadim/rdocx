@@ -20,10 +20,10 @@
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X250 | Complete everyday Word chart equation list and note APIs | L | in-progress | codex |
-| F-X254 | Refuse invalid PowerPoint values XML and empty edits | L | in-progress | codex |
+| F-X250 | Complete everyday Word chart equation list and note APIs | L | done | - |
+| F-X254 | Refuse invalid PowerPoint values XML and empty edits | L | done | - |
 | F-X219 | Qualify full-range text watermark interoperability | M | carried to S96 | - |
-| F-X223 | Qualify native Word embedded multi-face interoperability | M | in-progress | codex |
+| F-X223 | Qualify native Word embedded multi-face interoperability | M | done | - |
 
 ## Sequencing note
 

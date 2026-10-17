@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 272 | 260 | 3 | 5 |
-| **Total** | **603** | **534** | **3** | **62** |
+| X, Cross-cutting | 272 | 263 | 0 | 5 |
+| **Total** | **603** | **537** | **0** | **62** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -791,7 +791,7 @@ HLD14 contract before adopting contributor changes.
 | F-X220 | Embed fonts through both native and public package families | S91 | L | done |
 | F-X221 | Prepare Word 0.16.1 and PowerPoint 0.14.1 patch releases | S91 | L | done |
 | F-X222 | Restore linear Word story range inventory and empty owners | S91 | M | done |
-| F-X223 | Qualify native Word embedded multi-face interoperability | S95.11 | M | in-progress |
+| F-X223 | Qualify native Word embedded multi-face interoperability | S95.11 | M | done |
 | F-X224 | Repair hosted release tool and stack routing | S91.1 | M | done |
 | F-X225 | Keep DrawingML text-style parsing within the default WASM stack | S91.1 | M | done |
 | F-X226 | Release superseded relationships after checked PowerPoint XML edits | S91.1 | M | done |
@@ -818,11 +818,11 @@ HLD14 contract before adopting contributor changes.
 | F-X247 | Preserve the common LaTeX inputs reported in Issue365 | S94 | L | done |
 | F-X248 | Validate identified paragraphs inside block content controls | S95 | M | done |
 | F-X249 | Set typed content control values as Word does | S95 | M | done |
-| F-X250 | Complete everyday Word chart equation list and note APIs | S95.11 | L | in-progress |
+| F-X250 | Complete everyday Word chart equation list and note APIs | S95.11 | L | done |
 | F-X251 | Refuse invalid Word values before publication | S95 | M | done |
 | F-X252 | Refuse newly invalid Word raw XML atomically | S95 | M | done |
 | F-X253 | Honor imported chart types and hidden master shapes | S95 | M | done |
-| F-X254 | Refuse invalid PowerPoint values XML and empty edits | S95.11 | L | in-progress |
+| F-X254 | Refuse invalid PowerPoint values XML and empty edits | S95.11 | L | done |
 | F-X255 | Prepare Word 0.16.2 and PowerPoint 0.14.2 patch releases | S95 | L | done |
 | F-X256 | Refuse ambiguous Word numeric units and preserve line spacing | S95 | M | done |
 | F-X257 | Complete remaining Word names and legacy dropdown diagnostics | S95 | L | done |

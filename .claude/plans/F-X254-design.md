@@ -1,6 +1,6 @@
 # F-X254, Refuse invalid PowerPoint values XML and empty edits
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.11
 **Size**: L
 **Depends on**: F-X204, F-X206, F-X211b, F-X220
@@ -288,8 +288,8 @@ numeric catalog/README reconciliation and shared baseline authority.
 - [x] Run only unique local GREEN regressions and scoped fast checks, reusing applicable observations.
 - [x] Update exactly the HLD impact files before freeze, obtain independent zero-defect/zero-smell microscope.
 - [x] Prepare the explicit sprint-final-acceptance handoff with named pending final checks, no delivery completion.
-- [ ] At integrated final gate, execute original reporter groups, complete installed/typing/stub/native/oracle/rider union once.
-- [ ] After actual final acceptance, write truthful delivery records and compatibility note, complete plan once.
+- [x] At integrated final gate, execute original reporter groups, complete installed/typing/stub/native/oracle/rider union once.
+- [x] After actual final acceptance, write truthful delivery records and compatibility note, complete plan once.
 
 ## Open questions
 

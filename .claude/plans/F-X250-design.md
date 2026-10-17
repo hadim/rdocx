@@ -1,6 +1,6 @@
 # F-X250, Complete everyday Word chart equation list and note APIs
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.11
 **Size**: L
 **Depends on**: F-X200, F-X202, F-X215, F-X247
@@ -118,7 +118,7 @@ Expected unchanged for the existing deterministic49 hash cases and7 pixel cases.
 - [x] Align existing exports/stubs and update exactly the HLD impact sections before source freeze.
 - [x] Obtain independent zero-defect, zero-smell microscope and scoped local verification.
 - [x] Prepare `sprint-final-acceptance` with named actual local checks passed and named final sprint checks pending.
-- [ ] Complete only after the final integrated round-trip/oracle/risk union actually passes.
+- [x] Complete only after the final integrated round-trip/oracle/risk union actually passes.
 
 ## Open questions
 

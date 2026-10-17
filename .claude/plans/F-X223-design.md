@@ -1,6 +1,6 @@
 # F-X223, Qualify native Word embedded multi-face interoperability
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.11
 **Size**: M
 **Depends on**: F-X220
@@ -74,7 +74,7 @@ Expected unchanged for the49 hash and7 deterministic pixel cases. A discovered i
 - [x] Preserve current package/API/renderer contracts and update HLD intent before review.
 - [x] Obtain scoped local evidence and independent microscope, final native debt explicit.
 - [x] Run actual native face-selection matrix once in the integrated sprint union, retaining unsupported observations separately.
-- [ ] Complete only after genuine face proof or a separately explicit native-limit disposition.
+- [x] Complete only after genuine face proof or a separately explicit native-limit disposition.
 
 ## Accepted native-limit disposition
 
