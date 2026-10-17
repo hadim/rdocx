@@ -3074,6 +3074,13 @@ Schedule this unfinished story in S95.2. Close all numbering interactions across
 TOC, STYLEREF, REF, PAGEREF, captions,
 and document outline results, including table-cell headings and suppressed
 paragraphs.
+The native numbered outline retains accepted physical body, cell and nested
+control owners using production cascade and numbering facts. Numbered STYLEREF
+and relative REF share those facts and actual placement. Generated caches do
+not supply source headings or copied sequence events. Explicit cache publication
+retains its transaction and final-pagination boundaries. Native lifecycle
+qualification remains part of the integrated gate, with unavailable historical
+captures requiring fresh observation.
 **Depends on**: F-248, F-279 through F-282, F-X200.
 **Test gate**: regression. One multilevel numbered document stays consistent
 across visible markers, navigation structures, references, and saved caches.

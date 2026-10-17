@@ -78,8 +78,8 @@ impl ResolvedNumbering {
         source: Option<&Self>,
     ) -> std::result::Result<String, String> {
         use rdocx_oxml::text::FieldArgument;
-        if instruction.name != "REF" {
-            return Err("paragraph-number reference formatting requires REF".into());
+        if !matches!(instruction.name.as_str(), "REF" | "STYLEREF") {
+            return Err("paragraph-number reference formatting requires REF or STYLEREF".into());
         }
         let has = |name| {
             instruction
@@ -105,6 +105,9 @@ impl ResolvedNumbering {
         } else {
             return Err("REF paragraph-number formatting requires n, r or w".into());
         };
+        if instruction.name == "STYLEREF" {
+            return Ok(value);
+        }
         let mut delimiters = instruction
             .switches
             .iter()
@@ -194,6 +197,7 @@ pub struct NumberingState {
     consumed_overrides: HashSet<(u32, u32)>,
     pending_sections: HashSet<u32>,
     resolved_by_source: HashMap<SourceNodeId, ResolvedNumbering>,
+    pub(crate) navigation: HashMap<SourceNodeId, crate::ParagraphNavigation>,
     bookmark_sources: HashMap<String, SourceNodeId>,
     resolved_by_bookmark: HashMap<String, (SourceNodeId, ResolvedNumbering)>,
     main_story_sources: HashSet<SourceNodeId>,
@@ -214,6 +218,7 @@ impl NumberingState {
             consumed_overrides: HashSet::new(),
             pending_sections: HashSet::new(),
             resolved_by_source: HashMap::new(),
+            navigation: HashMap::new(),
             bookmark_sources: HashMap::new(),
             resolved_by_bookmark: HashMap::new(),
             main_story_sources: HashSet::new(),
@@ -331,6 +336,29 @@ impl NumberingState {
         self.advance(num_id, level, base_start)
     }
 
+    pub(crate) fn record_navigation(
+        &mut self,
+        source: SourceNodeId,
+        facts: crate::ParagraphNavigation,
+    ) {
+        self.navigation.insert(source, facts);
+    }
+
+    pub(crate) fn remove_navigation(
+        &mut self,
+        source: SourceNodeId,
+    ) -> Option<crate::ParagraphNavigation> {
+        self.navigation.remove(&source)
+    }
+
+    pub(crate) fn take_navigation(&mut self) -> HashMap<SourceNodeId, crate::ParagraphNavigation> {
+        std::mem::take(&mut self.navigation)
+    }
+
+    pub(crate) fn resolved_for_source(&self, source: SourceNodeId) -> Option<&ResolvedNumbering> {
+        self.resolved_by_source.get(&source)
+    }
+
     pub(crate) fn record(&mut self, source: SourceNodeId, numbering: &ResolvedNumbering) {
         self.resolved_by_source.insert(source, numbering.clone());
     }
@@ -347,6 +375,12 @@ impl NumberingState {
 
     pub(crate) fn record_bookmark_source(&mut self, name: &str, source: SourceNodeId) {
         self.bookmark_sources.insert(name.to_owned(), source);
+    }
+
+    pub(crate) fn bookmark_sources(&self) -> impl Iterator<Item = (&str, SourceNodeId)> {
+        self.bookmark_sources
+            .iter()
+            .map(|(name, node)| (name.as_str(), *node))
     }
 
     pub(crate) fn bookmark_source(&self, name: &str) -> Option<SourceNodeId> {
@@ -378,6 +412,12 @@ impl NumberingState {
             consumed_overrides: HashSet::new(),
             pending_sections: HashSet::new(),
             resolved_by_source: HashMap::new(),
+            navigation: self
+                .navigation
+                .iter()
+                .filter(|(_, facts)| facts.suppressed_numbering)
+                .map(|(node, facts)| (*node, facts.clone()))
+                .collect(),
             bookmark_sources: self.bookmark_sources.clone(),
             resolved_by_bookmark: self.resolved_by_bookmark.clone(),
             main_story_sources: self.main_story_sources.clone(),

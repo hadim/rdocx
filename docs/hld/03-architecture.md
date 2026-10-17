@@ -1,5 +1,43 @@
 # 03, Architecture
 
+## Numbering-aware navigation sources
+
+Navigation reads the production paragraph cascade and its resolved numbering
+from one immutable Word layout result. Accepted body, cell and nested-control
+headings retain physical WordSourcePath identity, including unplaced eligible
+headings. Result-local IDs are not interchangeable across snapshots.
+
+The facade's existing generated-table scanner supplies accepted-run exclusion
+facts for owned TOC, figure, authority and bibliography result caches. Ordinary
+CITATION is not an outer generated owner. Private facts travel on the existing
+WordSequenceSnapshot with exact current document and physical main-part stamps.
+Fresh sequence evaluation regenerates values and IDs, transferring only
+validated exclusions. Stale facts refuse instead of changing another source.
+Genuine text beside a same-paragraph result remains eligible. This bridge adds
+no public input fields, second counter, XML parser or navigation registry.
+The scanner's disjoint physical order bounds each paragraph's owner window.
+Per-run end-position search narrows that window to one candidate for the existing
+ownership predicate, including many disjoint owners inside one paragraph.
+
+An ambiguous generated-owner scan becomes a private stamped failure fact on
+WordSequenceSnapshot through the narrow doc-hidden
+`set_navigation_failure(&mut self, &LayoutInput, String) -> Result<()>` bridge.
+Fresh sequence regeneration preserves only the exact-current-document and
+physical-part-qualified failure. Ordinary rendering keeps existing stored cache
+paint and counter behavior and reports an existing layout Diagnostic. The new
+numbered outline refuses through `WordLayoutResult::navigation_failure() ->
+Option<&str>`, and newly supported STYLEREF retains cache with an ordered
+diagnostic. Explicit ambiguous rebuilds retain their existing atomic refusal.
+This is not an empty successful source discovery or a new ordinary REF/SEQ
+policy. Snapshot equality includes the private status and invalidates caches.
+
+TOC selectors reuse the existing source-qualified navigation tuple. Explicit
+custom-style selection remains independent. Heading-style selection without
+u keeps its established rule, while u requires the qualified shared heading
+eligibility, including effective inherited or direct outline9 suppression.
+An unavailable owner is an explicit refusal, not a fabricated suppression fact.
+No additional cascade, flag, counter or per-field source scan is introduced.
+
 ## Owned publication and causal paths
 
 `oxml-py-support` owns captured path authority, owner scopes and prepared

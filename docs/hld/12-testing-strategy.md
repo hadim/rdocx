@@ -1,5 +1,28 @@
 # 12, Testing strategy
 
+## Numbering-aware navigation regression
+
+One source-built multilevel document compares visible markers, TOC, numbered
+STYLEREF/REF/PAGEREF, captions, physical outline sources and saved caches after
+mutation and final pagination. Focused local regressions distinguish body,
+cell and control owners, numbering suppression from outline suppression,
+actual page-local first/last selection, generated cache poison, preserved text
+beside partial caches, stale exclusion refusal and copied SEQ isolation.
+
+The native comparison belongs to the final integrated gate. It pins the actual
+Word build, source and update/save/reopen lifecycle and records per-placement
+painting separately from shared saved caches. Unavailable historical narrative
+is not native output evidence. Package, consumer and deterministic hash/pixel
+riders join that same final union rather than running per worker.
+
+The existing regression carrier optionally writes immutable actual DOCX inputs
+and per-input library-observation records through
+`RDOCX_F283_NATIVE_OUTPUT_DIR`. It shares the local regression fixtures, labels
+all six number modes, and emits real restart and generated-growth mutations.
+It never records an unperformed Word result. Existing malformed imported cache
+painting remains a local positive control beside strict outline and atomic
+rebuild refusal, including source-stamped failure freshness.
+
 ## Test taxonomy
 
 Six categories. Every story's design plan picks the applicable ones and names

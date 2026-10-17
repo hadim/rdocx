@@ -99,6 +99,11 @@ pub struct WordSequenceEvent {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WordSequenceSnapshot {
     source_nodes: Vec<WordSourcePath>,
+    navigation_document: Option<rdocx_oxml::document::CT_Document>,
+    navigation_failure: Option<String>,
+    navigation_part: Option<String>,
+    navigation_exclusions: std::collections::HashMap<WordSourcePath, Vec<usize>>,
+    navigation_owners: std::collections::HashSet<WordSourcePath>,
     source_ids: std::collections::HashMap<WordSourcePath, SourceNodeId>,
     field_source_xml: std::collections::HashMap<oxml_layout::FieldSource, Vec<u8>>,
     field_source_contexts:
@@ -120,6 +125,51 @@ pub struct WordSequenceSnapshot {
 }
 
 impl WordSequenceSnapshot {
+    /// Attach only the facade's checked physical generated-result exclusions.
+    /// Full layout regenerates all counters and validates this complete source stamp.
+    #[doc(hidden)]
+    pub fn set_navigation_exclusions(
+        &mut self,
+        input: &LayoutInput,
+        exclusions: Vec<(WordSourcePath, Vec<usize>)>,
+    ) -> Result<()> {
+        let mut facts = std::collections::HashMap::new();
+        for (path, runs) in exclusions {
+            if facts.insert(path, runs).is_some() {
+                return Err(LayoutError::Layout(
+                    "duplicate navigation exclusion source".into(),
+                ));
+            }
+        }
+        engine::validate_navigation_exclusions(input, &facts)?;
+        let mut owners = std::collections::HashSet::new();
+        for path in facts.keys() {
+            for end in 1..=path.children.len() {
+                owners.insert(WordSourcePath {
+                    story: path.story.clone(),
+                    children: path.children[..end].to_vec(),
+                });
+            }
+        }
+        self.navigation_document = Some(input.document.clone());
+        self.navigation_part = input.story_part_names.get(&WordStory::Document).cloned();
+        self.navigation_failure = None;
+        self.navigation_exclusions = facts;
+        self.navigation_owners = owners;
+        Ok(())
+    }
+
+    /// Retain ambiguous source discovery without changing ordinary cache paint.
+    #[doc(hidden)]
+    pub fn set_navigation_failure(&mut self, input: &LayoutInput, message: String) -> Result<()> {
+        if message.trim().is_empty() {
+            return Err(LayoutError::Layout("empty navigation failure fact".into()));
+        }
+        self.set_navigation_exclusions(input, Vec::new())?;
+        self.navigation_failure = Some(message);
+        Ok(())
+    }
+
     /// Successful counter changes in physical accepted source order.
     pub fn main_events(&self) -> &[WordSequenceEvent] {
         &self.main_events
@@ -275,6 +325,16 @@ impl WordSequenceSnapshot {
     }
 }
 
+/// Effective accepted paragraph facts from the production style cascade.
+#[derive(Debug, Clone)]
+pub(crate) struct ParagraphNavigation {
+    pub level: Option<u32>,
+    pub text: String,
+    pub style: Option<String>,
+    pub suppressed_numbering: bool,
+    pub accepted_runs: usize,
+}
+
 /// Complete layout output plus its result-local Word source map.
 #[derive(Debug)]
 pub struct WordLayoutResult {
@@ -283,7 +343,11 @@ pub struct WordLayoutResult {
     source_nodes: Vec<WordSourcePath>,
     body_fragments: Vec<Vec<WordBodyLayoutFragment>>,
     numbering_by_source: Vec<Option<style_resolver::ResolvedNumbering>>,
+    navigation_failure: Option<String>,
+    navigation_by_source: std::collections::HashMap<SourceNodeId, ParagraphNavigation>,
+    paragraph_pages: std::collections::HashMap<SourceNodeId, usize>,
     bookmark_numbering: std::collections::HashMap<String, style_resolver::ResolvedNumbering>,
+    bookmark_suppressed: std::collections::HashSet<String>,
     page_reference_names: Vec<String>,
     page_sections: Vec<WordPageSection>,
     field_placements: Vec<WordFieldPlacement>,
@@ -360,6 +424,80 @@ impl WordLayoutResult {
         self.source_nodes.get(id.get() as usize - 1)
     }
 
+    /// An exact-input source ambiguity that prevents qualified navigation.
+    #[doc(hidden)]
+    pub fn navigation_failure(&self) -> Option<&str> {
+        self.navigation_failure.as_deref()
+    }
+
+    /// Effective accepted paragraph facts from this exact layout's shared cascade.
+    /// Unplaced paragraphs remain present. IDs belong only to this result.
+    #[doc(hidden)]
+    #[allow(clippy::type_complexity)]
+    pub fn paragraph_navigation(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            SourceNodeId,
+            &WordSourcePath,
+            Option<u32>,
+            &str,
+            Option<&str>,
+            Option<&style_resolver::ResolvedNumbering>,
+            Option<usize>,
+        ),
+    > {
+        self.source_nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, path)| {
+                let node = SourceNodeId::new(u32::try_from(index + 1).ok()?)?;
+                let facts = self.navigation_by_source.get(&node)?;
+                Some((
+                    node,
+                    path,
+                    facts.level,
+                    facts.text.as_str(),
+                    facts.style.as_deref(),
+                    self.paragraph_numbering(node),
+                    self.paragraph_pages.get(&node).copied(),
+                ))
+            })
+    }
+
+    /// Look up one source in the same private navigation facts without a scan.
+    #[doc(hidden)]
+    #[allow(clippy::type_complexity)]
+    pub fn paragraph_navigation_source(
+        &self,
+        node: SourceNodeId,
+    ) -> Option<(
+        &WordSourcePath,
+        Option<u32>,
+        &str,
+        Option<&str>,
+        Option<&style_resolver::ResolvedNumbering>,
+        Option<usize>,
+    )> {
+        let facts = self.navigation_by_source.get(&node)?;
+        Some((
+            self.source_node(node)?,
+            facts.level,
+            facts.text.as_str(),
+            facts.style.as_deref(),
+            self.paragraph_numbering(node),
+            self.paragraph_pages.get(&node).copied(),
+        ))
+    }
+
+    /// Whether the effective paragraph explicitly suppresses its numbering.
+    #[doc(hidden)]
+    pub fn paragraph_numbering_suppressed(&self, source: SourceNodeId) -> bool {
+        self.navigation_by_source
+            .get(&source)
+            .is_some_and(|facts| facts.suppressed_numbering)
+    }
+
     /// Resolve the visible numbering marker assigned to a source paragraph.
     pub fn paragraph_numbering(
         &self,
@@ -374,6 +512,12 @@ impl WordLayoutResult {
     #[doc(hidden)]
     pub fn bookmark_numbering(&self, name: &str) -> Option<&style_resolver::ResolvedNumbering> {
         self.bookmark_numbering.get(name)
+    }
+
+    /// Explicit numbering suppression at a uniquely paired physical bookmark.
+    #[doc(hidden)]
+    pub fn bookmark_numbering_suppressed(&self, name: &str) -> bool {
+        self.bookmark_suppressed.contains(name)
     }
 
     /// Resolve numbering by flattened main-story paragraph order.
@@ -420,6 +564,23 @@ impl WordLayoutResult {
     }
 }
 
+fn paragraph_pages(layout: &LayoutResult) -> std::collections::HashMap<SourceNodeId, usize> {
+    let mut pages = std::collections::HashMap::new();
+    for page in &layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            let source = match element {
+                PositionedElement::Text(run) => run.source,
+                PositionedElement::MultilingualText(run) => run.source,
+                _ => None,
+            };
+            if let Some(source) = source {
+                pages.entry(source.node).or_insert(page.page_number);
+            }
+        });
+    }
+    pages
+}
+
 /// Lay out a complete DOCX document, producing positioned page frames.
 pub fn layout_document(input: &LayoutInput) -> Result<LayoutResult> {
     engine::Engine::new().layout(input)
@@ -432,7 +593,9 @@ pub fn layout_document_with_provenance(input: &LayoutInput) -> Result<WordLayout
     let body_fragments = engine.take_body_fragments();
     let (page_sections, field_placements, bookmark_pages) = engine.take_field_snapshot();
     let numbering_by_source = engine.numbering_by_source(source_nodes.len());
+    let paragraph_pages = paragraph_pages(&layout);
     Ok(WordLayoutResult {
+        paragraph_pages,
         layout,
         revision_view: input.revision_view,
         source_nodes,
@@ -443,7 +606,14 @@ pub fn layout_document_with_provenance(input: &LayoutInput) -> Result<WordLayout
         field_source_xml: engine.take_field_source_xml(),
         text_box_owner_indices: engine.take_text_box_owner_indices(),
         numbering_by_source,
+        navigation_by_source: engine.take_navigation(),
+        navigation_failure: input
+            .sequence_snapshot
+            .as_ref()
+            .filter(|_| input.revision_view == RevisionView::Accepted)
+            .and_then(|snapshot| snapshot.navigation_failure.clone()),
         bookmark_numbering: engine.take_bookmark_numbering(),
+        bookmark_suppressed: engine.take_bookmark_suppressed(),
         page_reference_names: engine::page_reference_names(input),
     })
 }
@@ -461,7 +631,9 @@ pub fn layout_document_with_reusable_engine(
     let body_fragments = engine.take_body_fragments();
     let (page_sections, field_placements, bookmark_pages) = engine.take_field_snapshot();
     let numbering_by_source = engine.numbering_by_source(source_nodes.len());
+    let paragraph_pages = paragraph_pages(&layout);
     Ok(WordLayoutResult {
+        paragraph_pages,
         layout,
         revision_view: input.revision_view,
         source_nodes,
@@ -472,7 +644,14 @@ pub fn layout_document_with_reusable_engine(
         field_source_xml: engine.take_field_source_xml(),
         text_box_owner_indices: engine.take_text_box_owner_indices(),
         numbering_by_source,
+        navigation_by_source: engine.take_navigation(),
+        navigation_failure: input
+            .sequence_snapshot
+            .as_ref()
+            .filter(|_| input.revision_view == RevisionView::Accepted)
+            .and_then(|snapshot| snapshot.navigation_failure.clone()),
         bookmark_numbering: engine.take_bookmark_numbering(),
+        bookmark_suppressed: engine.take_bookmark_suppressed(),
         page_reference_names: engine::page_reference_names(input),
     })
 }
@@ -487,7 +666,9 @@ pub fn layout_document_with_caller_fonts_and_provenance(
     let body_fragments = engine.take_body_fragments();
     let (page_sections, field_placements, bookmark_pages) = engine.take_field_snapshot();
     let numbering_by_source = engine.numbering_by_source(source_nodes.len());
+    let paragraph_pages = paragraph_pages(&layout);
     Ok(WordLayoutResult {
+        paragraph_pages,
         layout,
         revision_view: input.revision_view,
         source_nodes,
@@ -498,7 +679,14 @@ pub fn layout_document_with_caller_fonts_and_provenance(
         field_source_xml: engine.take_field_source_xml(),
         text_box_owner_indices: engine.take_text_box_owner_indices(),
         numbering_by_source,
+        navigation_by_source: engine.take_navigation(),
+        navigation_failure: input
+            .sequence_snapshot
+            .as_ref()
+            .filter(|_| input.revision_view == RevisionView::Accepted)
+            .and_then(|snapshot| snapshot.navigation_failure.clone()),
         bookmark_numbering: engine.take_bookmark_numbering(),
+        bookmark_suppressed: engine.take_bookmark_suppressed(),
         page_reference_names: engine::page_reference_names(input),
     })
 }
@@ -536,7 +724,9 @@ pub fn layout_document_deterministic_with_provenance(
     let body_fragments = engine.take_body_fragments();
     let (page_sections, field_placements, bookmark_pages) = engine.take_field_snapshot();
     let numbering_by_source = engine.numbering_by_source(source_nodes.len());
+    let paragraph_pages = paragraph_pages(&layout);
     Ok(WordLayoutResult {
+        paragraph_pages,
         layout,
         revision_view: input.revision_view,
         source_nodes,
@@ -547,7 +737,14 @@ pub fn layout_document_deterministic_with_provenance(
         field_source_xml: engine.take_field_source_xml(),
         text_box_owner_indices: engine.take_text_box_owner_indices(),
         numbering_by_source,
+        navigation_by_source: engine.take_navigation(),
+        navigation_failure: input
+            .sequence_snapshot
+            .as_ref()
+            .filter(|_| input.revision_view == RevisionView::Accepted)
+            .and_then(|snapshot| snapshot.navigation_failure.clone()),
         bookmark_numbering: engine.take_bookmark_numbering(),
+        bookmark_suppressed: engine.take_bookmark_suppressed(),
         page_reference_names: engine::page_reference_names(input),
     })
 }

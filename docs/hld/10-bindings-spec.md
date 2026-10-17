@@ -3,6 +3,31 @@
 Owners: `oxml-py-support`, `rdocx-py`, `rpptx-py`, `rdocx-wasm`, `rpptx-wasm`,
 `oxml-cli-support`, `rdocx-cli`, `rpptx-cli`.
 
+## Native numbered outline
+
+The additive Rust `Document::numbered_document_outline(&self) ->
+Result<Vec<NumberedOutlineNode>>` retains accepted heading level, title-only
+text, optional visible marker, display text, physical WordSourcePath and child
+nodes. Display text separates a nonempty marker and title with one readable
+space. Existing `headings` and `document_outline` retain their signatures and
+legacy title-only scope. No new Python or WASM navigation surface is implied.
+
+Doc-hidden layout hooks expose private production paragraph facts and the
+validated generated-result exclusions used by the facade. They add no public
+struct fields. The iterator `paragraph_navigation()` and direct
+`paragraph_navigation_source(SourceNodeId)` read the same private facts. The
+latter returns `Option<(&WordSourcePath, Option<u32>, &str, Option<&str>,
+Option<&ResolvedNumbering>, Option<usize>)>`. Neither creates a second heading
+tree or counter. The source stamp binds exclusions to the current parsed main
+input and physical part, while every sequence counter is regenerated.
+
+Ambiguous generated-owner discovery travels as a private source-stamped failure,
+not an empty successful navigation inventory. The narrow doc-hidden
+`WordSequenceSnapshot::set_navigation_failure(&mut self, &LayoutInput, String)`
+uses existing types. `WordLayoutResult::navigation_failure() -> Option<&str>`
+lets the new outline refuse without making ordinary cached painting fatal.
+Ordinary REF/SEQ counter semantics remain unchanged.
+
 ## The PyO3 lifetime problem
 
 A `#[pyclass]` must be `'static`. The facade is built on borrow handles:

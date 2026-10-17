@@ -36537,7 +36537,7 @@ impl Document {
             }
         }
 
-        Ok(LayoutInput {
+        let mut input = LayoutInput {
             sequence_snapshot: None,
             revision_view: rdocx_layout::RevisionView::Accepted,
             revision_style: rdocx_layout::RevisionStyle::Plain,
@@ -36612,7 +36612,16 @@ impl Document {
             theme,
             fonts,
             embedded_fonts,
-        })
+        };
+        input.sequence_snapshot = match self.navigation_exclusions_for_input(&input) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                let mut snapshot = rdocx_layout::WordSequenceSnapshot::default();
+                snapshot.set_navigation_failure(&input, error.to_string())?;
+                Some(Arc::new(snapshot))
+            }
+        };
+        Ok(input)
     }
 
     /// Prepare distinct owned font bodies and all aliases before layout allocation.
@@ -36764,6 +36773,53 @@ impl Document {
     pub fn document_outline(&self) -> Vec<OutlineNode> {
         let headings = self.headings();
         build_outline_tree(&headings)
+    }
+
+    /// Accepted source-qualified headings, including tables and nested controls.
+    /// Legacy title-only heading accessors retain their established scope.
+    pub fn numbered_document_outline(&self) -> Result<Vec<NumberedOutlineNode>> {
+        let layout = self.layout_deterministic()?;
+        if let Some(failure) = layout.navigation_failure() {
+            return Err(Error::Other(format!(
+                "numbering-aware navigation unavailable: {failure}"
+            )));
+        }
+        let mut roots: Vec<NumberedOutlineNode> = Vec::new();
+        let mut stack: Vec<(u32, usize)> = Vec::new();
+        for (_, source, level, text, _, numbering, _) in layout.paragraph_navigation() {
+            let Some(level) = level.filter(|_| source.story == rdocx_layout::WordStory::Document)
+            else {
+                continue;
+            };
+            let number = numbering
+                .filter(|number| number.marker_rpr.vanish != Some(true))
+                .map(|number| number.marker_text.clone())
+                .filter(|v| !v.is_empty());
+            let display_text = match number.as_deref() {
+                Some(number) if !text.is_empty() => format!("{number} {text}"),
+                Some(number) => number.to_owned(),
+                None => text.to_owned(),
+            };
+            let node = NumberedOutlineNode {
+                level,
+                text: text.to_owned(),
+                number,
+                display_text,
+                source: source.clone(),
+                children: Vec::new(),
+            };
+            while stack.last().is_some_and(|(parent, _)| *parent >= level) {
+                stack.pop();
+            }
+            let mut children = &mut roots;
+            for &(_, index) in &stack {
+                children = &mut children[index].children;
+            }
+            let index = children.len();
+            children.push(node);
+            stack.push((level, index));
+        }
+        Ok(roots)
     }
 
     /// Get information about all images in the document.
@@ -38661,6 +38717,17 @@ pub struct AccessibilityIssue {
     pub severity: IssueSeverity,
     /// Human-readable description of the issue.
     pub message: String,
+}
+
+/// One accepted heading with its resolved visible marker and physical source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumberedOutlineNode {
+    pub level: u32,
+    pub text: String,
+    pub number: Option<String>,
+    pub display_text: String,
+    pub source: rdocx_layout::WordSourcePath,
+    pub children: Vec<NumberedOutlineNode>,
 }
 
 /// Build a hierarchical outline tree from a flat list of (level, text) headings.
@@ -57021,4 +57088,130 @@ fn fx204_checked_regex_counts_and_mismatch_are_atomic() {
             .unwrap(),
         vec![0]
     );
+}
+
+#[test]
+fn f283_navigation_exclusion_stamp_rejects_stale_sources_and_bad_runs() {
+    let mut document = Document::new();
+    document
+        .add_paragraph("")
+        .add_run("")
+        .add_field("SEQ Figure", "OLD")
+        .unwrap();
+    let mut input = document.build_layout_input().unwrap();
+    let path = rdocx_layout::WordSourcePath {
+        story: rdocx_layout::WordStory::Document,
+        children: vec![0],
+    };
+    let mut snapshot = rdocx_layout::WordSequenceSnapshot::default();
+    assert!(
+        snapshot
+            .set_navigation_exclusions(&input, vec![(path.clone(), vec![99])])
+            .is_err()
+    );
+    snapshot
+        .set_navigation_exclusions(&input, vec![(path.clone(), vec![0])])
+        .unwrap();
+    input.sequence_snapshot = Some(std::sync::Arc::new(snapshot));
+    let current = rdocx_layout::engine::evaluate_sequence_fields(&input).unwrap();
+    assert!(
+        current.main_events().is_empty(),
+        "copied cache SEQ cannot increment"
+    );
+    input
+        .document
+        .body
+        .content
+        .push(rdocx_oxml::document::BodyContent::Paragraph(
+            rdocx_oxml::text::CT_P::new(),
+        ));
+    assert!(rdocx_layout::engine::evaluate_sequence_fields(&input).is_err());
+    assert!(rdocx_layout::layout_document_deterministic_with_provenance(&input).is_err());
+}
+
+#[test]
+fn f283_navigation_facts_only_snapshot_is_validated_without_fields() {
+    let mut document = Document::new();
+    document
+        .set_style(crate::StyleBuilder::paragraph("Heading1", "Heading 1"))
+        .unwrap();
+    document
+        .add_paragraph("GENUINE HEADING")
+        .set_style("Heading1");
+    let mut input = document.build_layout_input().unwrap();
+    assert_eq!(
+        rdocx_layout::layout_document_deterministic_with_provenance(&input)
+            .unwrap()
+            .layout
+            .outlines
+            .len(),
+        1
+    );
+    let path = rdocx_layout::WordSourcePath {
+        story: rdocx_layout::WordStory::Document,
+        children: vec![0],
+    };
+    let mut facts = rdocx_layout::WordSequenceSnapshot::default();
+    facts
+        .set_navigation_exclusions(&input, vec![(path, vec![0])])
+        .unwrap();
+    input.sequence_snapshot = Some(std::sync::Arc::new(facts));
+    let result = rdocx_layout::layout_document_deterministic_with_provenance(&input).unwrap();
+    assert!(result.layout.outlines.is_empty());
+    input
+        .document
+        .body
+        .content
+        .push(rdocx_oxml::document::BodyContent::Paragraph(
+            rdocx_oxml::text::CT_P::new(),
+        ));
+    assert!(rdocx_layout::layout_document_deterministic_with_provenance(&input).is_err());
+}
+
+#[test]
+fn f283_navigation_failure_is_stamped_and_preserves_sequence_values() {
+    let mut document = Document::new();
+    document
+        .add_paragraph("")
+        .add_run("")
+        .add_field("SEQ Figure", "OLD")
+        .unwrap();
+    let mut input = document.build_layout_input().unwrap();
+    let mut failure = rdocx_layout::WordSequenceSnapshot::default();
+    assert!(
+        failure
+            .set_navigation_failure(&input, String::new())
+            .is_err()
+    );
+    failure
+        .set_navigation_failure(&input, "ambiguous generated owner".into())
+        .unwrap();
+    input.sequence_snapshot = Some(std::sync::Arc::new(failure));
+    let sequences = rdocx_layout::engine::evaluate_sequence_fields(&input).unwrap();
+    assert_eq!(
+        sequences.main_events().len(),
+        1,
+        "ordinary SEQ behavior remains authoritative"
+    );
+    let result = rdocx_layout::layout_document_deterministic_with_provenance(&input).unwrap();
+    assert_eq!(
+        result.navigation_failure(),
+        Some("ambiguous generated owner")
+    );
+    assert!(
+        result
+            .layout
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("ambiguous generated owner"))
+    );
+    input
+        .document
+        .body
+        .content
+        .push(rdocx_oxml::document::BodyContent::Paragraph(
+            rdocx_oxml::text::CT_P::new(),
+        ));
+    assert!(rdocx_layout::engine::evaluate_sequence_fields(&input).is_err());
+    assert!(rdocx_layout::layout_document_deterministic_with_provenance(&input).is_err());
 }

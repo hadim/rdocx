@@ -74,6 +74,62 @@ existing source registry and batch any required path join once per operation,
 not a full source scan for each field. Keep that join in the existing provider
 files, without a new registry abstraction.
 
+The existing-file provider clarification adds
+`WordLayoutResult::paragraph_navigation(&self) -> impl Iterator<Item =
+(SourceNodeId, &WordSourcePath, Option<u32>, &str, Option<&str>,
+Option<&ResolvedNumbering>, Option<usize>)>` as a doc-hidden facade hook. It reads private
+facts captured by the production paragraph cascade, including unplaced
+eligible paragraphs. The final optional value is the first actual physical page
+from positioned source spans, absent for unplaced content. It adds no public
+struct fields, counter or font resolver.
+The companion doc-hidden
+`paragraph_navigation_source(SourceNodeId) -> Option<(&WordSourcePath,
+Option<u32>, &str, Option<&str>, Option<&ResolvedNumbering>, Option<usize>)>`
+reads the same private facts by key. Evaluators batch style aliases, source joins,
+field placements and per-style first/last page records once per operation.
+Candidate selection uses ordered source/page indexes, with no per-field full
+paragraph scan or duplicate navigation tree.
+The existing paginator records tab-alignment metadata for physical field
+sources. Only source-qualified STYLEREF value replacements use it through the
+established width-change realignment. Unsupported fields retain their values
+and positions. Rich multilingual runs preserve the existing absence of
+alignment metadata, without adding public output fields.
+Placement continues to use the same result's actual positioned source spans
+and existing field placements. This is the same private-owned-facts boundary
+as the established source/numbering hooks.
+
+Generated-range ownership is supplied by the existing facade
+`scan_dynamic_table_spans` and `TocRunPosition` once per current input. The
+narrow doc-hidden bridge is
+`WordSequenceSnapshot::set_navigation_exclusions(&mut self,
+input: &LayoutInput, exclusions: Vec<(WordSourcePath, Vec<usize>)>) -> Result<()>`.
+Indices identify accepted runs inside each exact physical paragraph. Private
+snapshot fields retain the complete current input document model, its physical
+main part identity and these exclusion facts. Registration validates unique
+main-story paths and accepted-run bounds. Ordinary CITATION is not an outer
+cache owner. The existing TOC/INDEX/TOA/BIBLIOGRAPHY scanner qualifies only its
+result ranges and preserves genuine text before and after a same-paragraph
+cache. Exclusion applies to navigation discovery and cached SEQ events. It does
+not suppress visible list-counter advancement from a valid cache paragraph
+numPr. That established numbering provider remains authoritative. No second
+XML parser is introduced. The scanner's disjoint physical order drives one
+monotonic paragraph window. Per accepted run, binary search of result-end
+positions narrows that window to one candidate before reusing the existing
+ownership predicate. Many owners in one paragraph must not reintroduce a full
+window scan. Test-only comparison counts bound both dispersed and packed owners.
+Suppressed numbering supplies the base zero value, then follows the same
+STYLEREF position switch and cross-story refusal as other numbering values.
+
+Full layout still regenerates sequence values and source IDs. Only exclusions
+whose complete document and physical owner stamp match current input transfer
+into that fresh snapshot. Counter events, values and unrelated old metadata
+never transfer. Stale or malformed stamped facts return an error. Facts-only
+inputs also regenerate a snapshot, and private facts participate in existing
+snapshot/cache equality. The facade prepares this bridge from its actual input.
+Detached lower layout callers without facade facts keep their established
+projection and do not gain a claimed physical generated-range inference.
+Focused stale-input, partial-paragraph and cached-SEQ controls must pass locally.
+
 Preserve the previously approved additive compatibility choice. Existing
 `headings` and `document_outline` signatures and text semantics remain unchanged.
 Add and re-export beside the existing `OutlineNode`:
@@ -153,6 +209,37 @@ pre-insertion snapshot. Stale paths, ambiguous targets or invalid dependencies c
 - Existing outline API changes would break consumers when additive results suffice.
 - One full-context STYLEREF result for every switch loses Word semantics.
 
+Unplaced eligible headings are limited to sources admitted by the existing
+shared effective-paragraph provider. Raw storage in vertical-merge continuation
+cells remains outside that provider, as in established table layout. No skipped
+cell traversal or counter is added. An actually unplaced admitted source has no
+invented page, and unsupported STYLEREF source selection retains its cache.
+
+Direct resolved numbering-level `marker_rpr.vanish=true` suppresses marker ink
+and the outline's visible marker only. The numbering counter, suffix layout,
+accepted heading and counter-derived REF/STYLEREF values remain independent.
+No paragraph-mark or ordinary-text hidden property is inferred as marker
+formatting. Actual Word hidden-marker field parity remains final native debt.
+
+An ambiguous generated-owner scan becomes a private stamped failure fact on
+WordSequenceSnapshot through the narrow doc-hidden
+`set_navigation_failure(&mut self, &LayoutInput, String) -> Result<()>` bridge.
+Fresh sequence regeneration preserves only the exact-current-document and
+physical-part-qualified failure. Ordinary rendering keeps existing stored cache
+paint and counter behavior and reports an existing layout Diagnostic. The new
+numbered outline refuses through `WordLayoutResult::navigation_failure() ->
+Option<&str>`, and newly supported STYLEREF retains cache with an ordered
+diagnostic. Explicit ambiguous rebuilds retain their existing atomic refusal.
+This is not an empty successful source discovery or a new ordinary REF/SEQ
+policy. Snapshot equality includes the private status and invalidates caches.
+
+TOC selectors reuse the existing source-qualified navigation tuple. Explicit
+custom-style selection remains independent. Heading-style selection without
+u keeps its established rule, while u requires the qualified shared heading
+eligibility, including effective inherited or direct outline9 suppression.
+An unavailable owner is an explicit refusal, not a fabricated suppression fact.
+No additional cascade, flag, counter or per-field source scan is introduced.
+
 ## Test plan
 
 **Test gate**: regression. One multilevel numbered document stays consistent
@@ -183,8 +270,12 @@ construction confined to that discriminator and retain the actual package and
 source path. Never fake a counter or compare duplicated text alone. Assert
 positioned marker glyph/text provenance as well as scalar field values.
 
-Historical evidence is at the paths in `.claude/scratch/F-283-progress.md`,
-including `/private/tmp/S90-F283-evidence-map.md`. Initial/mutated captures
+Historical evidence was described at the paths in `.claude/scratch/F-283-progress.md`,
+including `/private/tmp/S90-F283-evidence-map.md`. Current custody inspection
+finds that map, the navigation checkpoint/source records and PR336 assessment
+absent. The surviving narrative is historical only, not an authenticated native
+packet. Reconstruct and capture the declared discriminators at final acceptance.
+The historical account says initial/mutated captures
 already distinguish H3 REF n/r/w/wt, numId-zero REF from markerless outline,
 TOC selection, restart 4 to 7, table/control/direct-outline sources and three
 page furniture placement. Equal H2 n/r/w values are nondiscriminating.
@@ -219,6 +310,14 @@ zero-smell microscope. Use the integrator's exclusive existing build lease,
 `CARGO_INCREMENTAL=0` and deterministic font mode. No worker whole-suite,
 publication, WASM, hash/pixel or native rider replay. Final debt remains named
 in progress and handoff until the single integrated union actually passes.
+
+The optional `RDOCX_F283_NATIVE_OUTPUT_DIR` hook in the existing regression
+carrier writes each shared real fixture's baseline or actual mutation once,
+using fresh immutable DOCX and JSON names. Field labels distinguish all six
+REF/STYLEREF modes and concrete context cases. Records separate the expected
+library observation from the unmeasured Word result. No second generator,
+new product file or early native oracle is introduced. Input generation can
+join the final workspace run instead of replaying a complete suite.
 
 ## HLD impact
 
@@ -269,7 +368,8 @@ Expected unchanged. The seven samples are fixed at `scripts/hash_harness.py:33` 
 - `crates/rdocx-layout/src/engine.rs`
 - `crates/rdocx-layout/src/style_resolver.rs`, only if a shared representation gap is demonstrated
 - `crates/rdocx-layout/src/table.rs`, for heading metadata propagation
-- `crates/rdocx-layout/src/paginator.rs`, for actual table-heading placement
+- `crates/rdocx-layout/src/paginator.rs`, if actual table-heading placement requires it
+- `crates/rdocx-layout/src/notes.rs`, one existing private paragraph-call argument to retain physical navigation identity
 - `crates/rdocx/tests/regression_test.rs`
 - HLD files listed above
 
@@ -281,14 +381,14 @@ F-X192 formatter cases or F-284 template grammar as navigation work.
 ## Implementation checklist
 
 - [x] Approve this revised design and reconcile current completed providers.
-- [ ] Retain actual old-source RED for each new focused regression group.
-- [ ] Extend numbering demand and STYLEREF using authoritative source facts.
-- [ ] Add the source-qualified outline without changing legacy accessors.
-- [ ] Carry effective table/control heading metadata to actual pagination.
-- [ ] Prove distinct suppression, revision, physical ownership and cache rules.
-- [ ] Exercise public mutation, continuation, restart-to-5 and final layout refresh.
-- [ ] Pass the named local GREEN, fast scoped checks and independent microscope.
-- [ ] Handoff with explicit final Word, package, consumer and harness debt.
+- [x] Retain actual old-source RED for each new focused regression group.
+- [x] Extend numbering demand and STYLEREF using authoritative source facts.
+- [x] Add the source-qualified outline without changing legacy accessors.
+- [x] Carry effective table/control heading metadata to actual pagination.
+- [x] Prove distinct suppression, revision, physical ownership and cache rules.
+- [x] Exercise public mutation, continuation, restart-to-5 and final layout refresh.
+- [x] Pass the named local GREEN, fast scoped checks and independent microscope.
+- [x] Handoff with explicit final Word, package, consumer and harness debt.
 - [ ] Integrator runs the final union once before final completion ledgers.
 
 ## Open questions
