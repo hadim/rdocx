@@ -1,17 +1,17 @@
 # F-X192, Complete the remaining Word bibliography catalogue
 
-**Status**: approved
-**Sprint**: S95.2
+**Status**: draft
+**Sprint**: S96
 **Size**: L
 **Depends on**: F-282
 
 ## Recovery and scheduling
 
-S95.2 resumes this unfinished contract after S95.11 closed. F-282 is done in
-BACKLOG. The sprint's three-story12 to15 developer-day estimate remains
-provisional while this story's recovery and comparator authority are unresolved.
-No old partial worker or preparation review establishes current implementation
-acceptance.
+The user explicitly carried this unfinished full contract from S95.2 to S96.
+It is not complete and S96 has not started. Reset the design before any later
+implementation, reassessing evidence custody, the actual comparator/runtime
+observation route and sprint capacity. F-282 remains done. The retained S95.2
+recovery analysis establishes neither reconstructed source nor full acceptance.
 
 Preserve the partial registered worker at `/private/tmp/rdocx-f-x192-codex`,
 `work/f-x192-codex`, its Git metadata/index, surviving files, progress, numbered
@@ -25,8 +25,8 @@ verdict.
 
 The retained recovery decision is
 `/private/tmp/S95.2-F192-recovery-decision-preflight-2.md`. It authorizes no
-Git repair. After this revised plan is approved, use the normal serial
-`/start-feature F-X192` on canonical `sprint/s95.2`, without `--claimed`.
+Git repair. After the S96 recovery design is approved, use the normal serial
+`/start-feature F-X192` on canonical `sprint/s96`, without `--claimed`.
 Record a fresh actual current-source Base and scoped readiness in the existing
 canonical progress carrier. Keep the old worker inactive as history. Do not
 rename its branch, reuse its stale claim, create an owner alias or copy old

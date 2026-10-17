@@ -2,12 +2,11 @@
 
 **Milestone**: M24, X, bibliography, navigation and template carryovers.
 
-**Goal**: Resume F-X192 and F-283 and establish the stable template grammar.
-Three stories provisionally total 12 to 15 developer-days. Preserve the existing
-bibliography and numbering providers while completing their exact catalogue and
-navigation contracts and defining consistent template behavior across supported
-containers. F-X192's missing old unstaged implementation requires a bounded
-recovery/design checkpoint, not an assumption that the old branch reconstructs it.
+**Goal**: Complete numbering-aware navigation and the stable template grammar.
+The original three-story estimate was12 to15 developer-days. The user carries
+F-X192 unfinished to S96, leaving two implementation contracts provisionally
+estimated at8 to10 developer-days. Preserve the existing numbering and fragment
+providers and qualify the integrated result once.
 
 ## Spec references
 
@@ -30,39 +29,21 @@ recovery/design checkpoint, not an assumption that the old branch reconstructs i
 
 ## Sequencing note
 
-All three rows begin pending and unowned. Recheck completed provider states on
-the actual merged main prefix: F-X192 depends on F-282. F-283 depends on F-248,
-F-279 through F-282 and F-X200. F-284 depends on F-253, F-261 and F-276. There
-is no formal dependency from F-283 onto F-X192's full catalogue. Roadmap order
-is retained without inventing that completion barrier.
+The completed prerequisites permit F-283 first, then F-284. F-283 depends on
+F-248, F-279 through F-282 and F-X200. F-284 depends on F-253, F-261 and F-276.
+Their document, field, test and HLD carriers overlap, so serialize those writes
+and integrate each reviewed prefix before the next source writer. Root owns
+compiler, baseline, native UI and final archive leases. Independent read-only
+preparation and review retain their own bounded scope.
 
-First revise the existing F-X192 design's stale scheduling and recovery section.
-Its preserved `work/f-x192-codex` branch and partial registered worker are
-historical material, not an empty disposable directory or a reusable active
-claim. The four surviving index blobs equal the committed baseline, not the
-missing later implementation. The exact five unresolved whole-feature findings
-cannot be reconstructed from the available record. Preserve old files, Git
-metadata/index, branch, progress, reviews and native evidence without repair,
-rename, prune, reset, stash or attribution changes. A new current implementation
-must not claim those unknown historical defects resolved.
-
-After an approved current design/recovery checkpoint, a safe normal route is
-serial `/start-feature F-X192` on canonical `sprint/s95.2`, without `--claimed`.
-It starts a fresh current-source lifecycle and records its actual Base/local
-checks in the canonical progress carrier. Keep the old worker inactive and
-untouched. Do not reuse the stale claim, create an owner alias, or rename the
-preserved branch to obtain a new claim. Its source fragments are reusable only
-when their actual bytes, origin and applicability can be authenticated. A fresh
-whole-feature microscope assesses the actual new implementation against the
-full contract rather than reconstructing a missing old verdict.
-
-F-X192, F-283 and F-284 overlap native document/field/regression and HLD carriers.
-Serialize those writes and integrate each reviewed prefix before a later writer
-uses it. Separate worktree paths alone do not establish independence. Design and
-read-only preparation may proceed without granting concurrent shared source,
-compiler, baseline or native UI ownership. Root owns those leases and final
-archive measurements. F-283 can proceed on its own completed prerequisites if
-F-X192's technical authority remains blocked, with explicit source sequencing.
+F-X192 is explicitly carried unfinished to S96. Its pending, unowned row records
+the original sprint scope, not active implementation. Missing old source and
+native evidence plus unresolved sorting/runtime authority prevent full catalogue
+qualification. Preserve its partial worker, index, branch and surviving records.
+Its S96 design is reset to draft. A future recovery lifecycle must authenticate
+actual inputs and earn a fresh whole-feature review without claiming the five
+unknown historical findings resolved. No carry counts as catalogue completion,
+and there is no formal dependency from F-283 onto that catalogue.
 
 F-283 consumes current ResolvedNumbering and one source-qualified layout result.
 F-X250's restart/startOverride and marker-font APIs supply useful mutation inputs,
@@ -80,9 +61,9 @@ boundaries retain their scope and dependency order.
 
 ## Definition of done for this sprint
 
-- Complete all three approved contracts through normal design/start/implementation, independent zero-defect and zero-smell microscope, actual scoped checks and one integrated final verification/oracle/rider union with clean sprint review. Reuse only authenticated unchanged-source observations. Preserve failed attempts. No native or complete-suite pass is claimed from preparation or metadata adoption alone.
-- F-X192 passes `full_bibliography_catalogue_matches_pinned_word` across all twelve pinned installed style editions, seventeen source kinds and 223 ordinary locale selectors, including all remaining branch/context/citation/contributor/sparse/source-selection/rich-output controls. Exact source identities, ordering, ties, instructions, readable rich results and normal reopened packages require independent actual Word authority. No skipped catalogue row, assumed language alias, cache fallback or guessed ASCII/en-US comparator can satisfy the gate. Preserve opaque source, physical ownership and atomic refusals. A concrete dependency or unavailable comparator authority requires its actual design/risk decision, not silent scope reduction.
+- Complete the two retained approved contracts through normal design/start/implementation, independent zero-defect and zero-smell microscope, actual scoped checks and one integrated final verification/oracle/rider union with clean sprint review. Reuse only authenticated unchanged-source observations. Preserve failed attempts. No native or complete-suite pass is claimed from preparation or metadata adoption alone.
+- Carry F-X192 unfinished to S96 with the complete catalogue contract, missing-source/evidence and runtime-authority reason preserved. It is excluded from this sprint's implementation acceptance and remains open.
 - F-283's one multilevel numbered document remains consistent across actual visible markers, TOC, numbered STYLEREF/REF/PAGEREF, captions, outline results and saved caches. Include source-qualified table/control headings, accepted revisions, suppression distinctions, restart/continuation/start5, physical owner/refusal behavior and refreshed final layout snapshots. Preserve existing public accessors and compose authoritative provider results, without a second counter or presumed bibliography completion.
 - F-284's approved versioned grammar renders the same payload across body, table, header, footer, note and text-box locations without run-split loss. Qualify declared nested paths, filters/formatting hooks, whitespace/escaping/errors and structural expansion with source/relationship ownership and atomic refusals through the existing transaction. No speculative binding/module/file/API expansion is authorized by this row.
 - Run actual complete installed/API, applicable native/oracle, deterministic 49 hash/seven pixel, WASM, documentation, README, policy and genuine affected-package publication/archive riders once over the integrated source, as earned by approved risk routing. Own render comparisons use bundled fonts and predeclared supported observations. Intentional harness deltas require a separate labelled reviewed behavioral commit and the exclusive baseline lease. Published source, parser limits, schema order and exact opaque XML remain protected.
-- Preserve the full provisional 12 to 15 developer-day scope and report any material F-X192 reconstruction/comparator blocker before claiming readiness or changing capacity. Sprint close alone may merge main and tag the sprint. Release tags/publication require separate exact-SHA final approval. Do not start S96 during the authorized S95 loop.
+- Report the original three planned stories, two retained contracts and one explicit carry. Preserve the original12 to15 and retained8 to10 provisional developer-day estimates without claiming actual person effort. Sprint close alone may merge main and tag the sprint. Release tags/publication require separate exact-SHA final approval. Do not start S96 during the authorized S95 loop.

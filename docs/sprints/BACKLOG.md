@@ -754,7 +754,7 @@ HLD14 contract before adopting contributor changes.
 | F-X187 | Scoped paragraph and cell text replacement | S90 | M | done |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | S90 | L | done |
 | F-X190 | Preserve cached text in multi-run complex field story snapshots | S90 | M | done |
-| F-X192 | Complete the remaining Word bibliography catalogue | S95.2 | L | pending |
+| F-X192 | Complete the remaining Word bibliography catalogue | S96 | L | pending |
 | F-X191 | Ignore namespace declarations in numbering reader completeness | S90 | S | done |
 | F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | S90 | L | done |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S91 | S | done |
