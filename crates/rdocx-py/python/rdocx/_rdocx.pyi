@@ -78,7 +78,7 @@ __all__ = [
     "validate_bytes",
     "validate_file",
     "Bookmark", "BoundingBox", "Cell", "CellCollection", "CellParagraphCollection",
-    "Comment", "ComparisonDiagnostic", "ContentFragment", "CoreProperties", "Document", "Font", "ColorFormat",
+    "Chart", "Comment", "ComparisonDiagnostic", "ContentFragment", "CoreProperties", "Document", "Font", "ColorFormat",
     "FootnoteEndnote", "HeaderFooter", "SectionHandle", "Settings",
     "HeaderFooterVariant", "Hyperlink", "FieldEvaluation", "FieldsUpdateReport", "LayoutBackedFieldUpdateReport", "LayoutFragment", "LayoutPage", "ListLevel", "Paragraph", "ParagraphCollection",
     "ParagraphFormat", "Revision", "Row", "RowCollection", "Run", "RunCollection", "RunPosition",
