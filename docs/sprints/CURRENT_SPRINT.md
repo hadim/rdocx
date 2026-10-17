@@ -25,7 +25,7 @@ providers and qualify the integrated result once.
 |------|-------|------|--------|-------|
 | F-X192 | Complete the remaining Word bibliography catalogue | L | pending | - |
 | F-283 | Complete numbering-aware navigation fields | L | in-progress | codex |
-| F-284 | Stable container-wide template grammar | L | pending | - |
+| F-284 | Stable container-wide template grammar | L | in-progress | codex |
 
 ## Sequencing note
 
