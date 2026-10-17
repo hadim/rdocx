@@ -26,6 +26,8 @@ it again. Record exact source, command/configuration, tools, inputs and results.
 A later failed attempt invalidates an older green result for the same check.
 After a source fix rerun affected checks, preserving earlier failures. Never
 call an unperformed final oracle a passed local gate.
+Record in-flight evidence and pending checks in the feature's existing
+`.claude/scratch/<F-ID>-progress.md` before handing over.
 
 ## Steps
 
