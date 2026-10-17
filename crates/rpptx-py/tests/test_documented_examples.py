@@ -2008,7 +2008,7 @@ def test_slide_size_reads_and_writes_keep_the_other_dimension(tmp_path):
     assert (prs.slide_width, prs.slide_height) == (rpptx.Inches(10), 6_858_000)
     assert len(held) == 0
     before = prs.to_bytes()
-    with pytest.raises(rpptx.RpptxError):
+    with pytest.raises(ValueError, match=r"^slide_height must be between 1 and 56 inches$"):
         prs.slide_height = 0
     assert prs.to_bytes() == before
     path = tmp_path / "sized.pptx"
@@ -9558,6 +9558,8 @@ def test_fx211b_element_qualified_alias_and_default_roots_preserve_actual_source
     fully_modeled = kind in ("body", "paragraph", "run", "cell")
     xml = element.xml
     opaque = '<corpus:keep xmlns:corpus="urn:fx211b:opaque" value="corpus:QName">&#65;</corpus:keep>'
+    if kind in ("shape", "slide"):
+        opaque = f'<p:extLst><p:ext uri="urn:fx211b:opaque">{opaque}</p:ext></p:extLst>'
     if not fully_modeled:
         head, closing = xml.rsplit("</", 1)
         element.replace_xml(head + opaque + "</" + closing)
