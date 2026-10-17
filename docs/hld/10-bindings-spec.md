@@ -4225,8 +4225,12 @@ The four face kinds describe authored package entries and the native-backed
 API. They are not a promise that every external application selects every
 embedded face. PowerPoint has independently qualified actual regular and bold
 use. Native Word's documented one-font-per-name behavior remains explicit,
-including synthetic bold and changed or empty saved parts, with multi-face
-interoperability owned by F-X223. A proper bold-slot control uses the existing
+including synthetic bold and changed or empty saved parts. Word16.114
+build26101123 uses a genuine prepared Bold face in the qualified bold-only
+control, but uses Regular outlines with synthetic slant in the paired Italic
+control and empties that Italic part on native save. Broader native multi-face
+support remains unqualified under the accepted documented-limit outcome.
+A proper bold-slot control uses the existing
 bold kind, explicit font key and ordinary bold run without a regular face.
 It needs no family alias, new API or rewrite of the run's document semantics.
 API inputs, exact license authorization, immutable snapshots and own-renderer

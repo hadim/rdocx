@@ -73,9 +73,40 @@ Expected unchanged for the49 hash and7 deterministic pixel cases. A discovered i
 - [x] Retain Base/local graph evidence and add focused regressions only for an actual source repair.
 - [x] Preserve current package/API/renderer contracts and update HLD intent before review.
 - [x] Obtain scoped local evidence and independent microscope, final native debt explicit.
-- [ ] Run actual native face-selection matrix once in the integrated sprint union.
+- [x] Run actual native face-selection matrix once in the integrated sprint union, retaining unsupported observations separately.
 - [ ] Complete only after genuine face proof or a separately explicit native-limit disposition.
+
+## Accepted native-limit disposition
+
+On17October2026 the user chose to document the Word limitation after the
+concrete carry-or-accept question. This accepts the bounded investigation
+outcome. It does not claim genuine multi-face support or carry F-X223 to S96.
+
+Word16.114 build26101123 uses the prepared Bold body in the proper Bold-only
+control initially, after native save and after normal disk reopen. The paired
+Italic control uses Regular outlines and advances with a shear transform in
+all three phases. Native saving leaves its Italic font part empty. No source
+representation defect or semantics-preserving writer correction was established.
+The existing package/API/renderer contracts remain unchanged.
+
+All27 actual native phase captures remain retained. Thirteen observations
+completed, including those genuine-Bold and synthetic-Italic results. Fourteen
+refused unsupported PDF stroke colour-space state, so they have no face verdict.
+Missing-font and raw-storage controls matched no prepared face. This accepted
+scope does not turn unsupported observations into passes.
+
+Evidence: `/private/tmp/S95.11-F223-native-d65f2c06-1/observer4-matrix-triage.json`,
+SHA256 `2778c91d6a885f52613ec99522ecad4fdf5202513d06874b7d87eec7005a017c`,
+and the proper-Bold summary, SHA256
+`78fb0fa53a2b6b2bde991f2819fd509daeb200689b572afc488e9c39cf784b44`.
+These retain actual producer d65f2c068695ae53de0af9b1ca9fd4e88c1d1403.
+Current source correspondence and the standard verification union are in
+`/private/tmp/S95.11-final-evidence-applicability-audit-1/receipt.json`, SHA256
+`9ab365b4dbd2d99fb291ff3d45570d7866595c543eff108800f1fe66bfb048e6`.
+The former pending user decision is settled by this explicit disposition.
 
 ## Open questions
 
-No new semantics decision is needed for the bounded investigation. Family aliases or run rewrites remain prohibited. A demonstrated native implementation limit will require a concrete user acceptance disposition before claiming this story complete.
+None. The documented native limitation is accepted. Family aliases and run
+rewrites remain prohibited. Final completion records follow the integrated
+verification and review workflow.

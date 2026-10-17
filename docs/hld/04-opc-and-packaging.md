@@ -2108,6 +2108,10 @@ opaque source or reinterpret missing decoded bytes as a successfully used font.
 Four authored relationship slots describe the package graph, not a guarantee
 that native Word consumes all four faces. Initial, native-saved and normally
 reopened graph observations remain separate from PDF face-selection evidence.
+Word16.114 build26101123 can also empty the Italic part of a regular-plus-italic
+family on save. The corresponding native PDFs use Regular outlines with an
+affine slant before save and after normal reopen. This native normalization
+is not permission for the library to drop an authored face or its source bytes.
 
 ## Presentation semantic export resources
 

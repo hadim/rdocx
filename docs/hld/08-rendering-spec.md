@@ -2749,7 +2749,18 @@ bold before any native save, and native saving can leave its bold part empty.
 A separate bold-body control in the regular slot proves that body can load,
 without proving bold-slot or multi-face family selection. A proper embedBold-only
 control has no embedRegular entry and uses an ordinary bold run. Its native
-selection is a separate discriminator, not an already qualified result. Word
-multi-face interoperability belongs to F-X223, with the bounded comparison
-method in HLD12. Neither that boundary nor native fallback weakens genuine
-regular, bold, italic and bold-italic selection in our renderer or caller overrides.
+selection is qualified for the tested Word16.114 build26101123 control:
+its actual glyph outlines and advances match the prepared Bold body initially,
+after native save and after normal disk reopen.
+
+The same Word build does not select the prepared Italic face in the tested
+regular-plus-italic family. All three phases use Regular outlines and advances
+with a shear transform, producing synthetic slant. Native save leaves the
+Italic font part empty. Genuine multi-face family support remains unqualified.
+The accepted investigation outcome documents this native limitation. It does
+not rename families, rewrite run semantics or change font-table serialization.
+Other controls whose PDF paint state is unsupported by the observer supply no
+face-selection verdict. HLD12 defines the evidence boundary.
+
+Neither that native limit nor fallback weakens genuine regular, bold, italic
+and bold-italic selection in our renderer or caller overrides.

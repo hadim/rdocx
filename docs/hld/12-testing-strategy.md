@@ -4534,6 +4534,19 @@ Genuine multi-face acceptance requires the actual intended positive faces or
 an explicit separately accepted native-limit disposition. Preparation and
 historical observations do not grant that acceptance.
 
+The accepted Word16.114 build26101123 qualification is bounded. The proper
+Bold-only control has a unique genuine prepared-Bold match in all three
+phases. The paired Italic control has a unique Regular-outline match with
+shear and matching Regular advances in all three phases. Its saved Italic
+part is empty. These actual glyph facts distinguish synthetic slant from
+genuine Italic use. All27 phase captures retain custody. Thirteen observations
+completed, while14 refused unsupported PDF stroke colour-space state and
+therefore have no face verdict. Missing-font and raw-storage observations do
+not match a prepared face. Accepting this documented native limit completes
+the bounded investigation without qualifying the unsupported cells or genuine
+multi-face support. Native application resave normalization remains separate
+from unchanged library package and renderer contracts.
+
 Native application normalization remains separate from the library's exact
 unrelated-edit preservation controls. Known absent historical movie and PNG
 oracles remain unqualified under their S94 disposition. Original failed
