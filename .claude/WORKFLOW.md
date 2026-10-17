@@ -28,7 +28,11 @@ defects and zero smells, iterating in numbered passes until it reaches that.
 
 Keep each F-ID implementation limited to its approved design. The worker runs
 unique local RED/GREEN regressions, F-ID-bound fast `/verify --scoped`,
-and a zero-finding `/microscope`. External oracles, complete suites and risk
+and a zero-finding `/microscope`. Batch related local regressions that share a
+test binary when practical, preserving each case's actual RED/GREEN outcome.
+Use scoped checks between edits and rerun affected cases after meaningful
+source changes. Do not repeatedly compile a large binary solely to add one
+more case. External oracles, complete suites and risk
 riders run once in the final integrated union, with pending checks explicit.
 Run `/verify --full` and `/sprint-review` once over the final integrated
 sprint result. A formal dependency-prefix checkpoint completes its reviewed

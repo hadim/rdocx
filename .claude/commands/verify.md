@@ -48,6 +48,11 @@ Record in-flight evidence and pending checks in the feature's existing
    suite already covers the same tests and configuration. Retain a distinct
    focused configuration only when the broader suite does not cover it.
 
+   Batch related local cases sharing a test binary when practical, using exact
+   libtest filters or a bounded named group. Retain per-case outcomes and check
+   the selected membership. A successful batch does not cover filtered-out
+   cases. Reuse unaffected observations without another binary invocation.
+
 4. **Test the workspace.**
    `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py`.
    `--full` only.

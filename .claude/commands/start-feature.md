@@ -36,6 +36,11 @@ the stub-creation half of the command.
    function that **fails for the right reason**, not `todo!()`. A stub that
    passes vacuously is worse than no stub.
 
+   Prepare related cases sharing a test binary together when practical, then
+   retain their individual outcomes from one focused baseline batch. A new API's
+   absence at compile time is not a semantic RED. Use existing public providers
+   to expose the underlying failure and keep additive API checks distinct.
+
 6. **Update the trackers.** Set `in-progress` in both
    `docs/sprints/BACKLOG.md` and `docs/sprints/CURRENT_SPRINT.md`, and
    regenerate the AUTOGEN counts.
