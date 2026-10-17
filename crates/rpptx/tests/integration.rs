@@ -21016,7 +21016,10 @@ fn inserted_group_transform_precedes_preserved_group_properties() {
     let bytes = presentation.to_bytes().unwrap();
     let package = open_opc(&bytes, "F-109 group transform insertion");
     let xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
-    let group_start = xml.find("<p:grpSp>").unwrap();
+    let group_start = owned_xml_starts(&xml, P_NS, "grpSp")
+        .first()
+        .unwrap()
+        .offset;
     let transform = xml[group_start..].find("<a:xfrm").unwrap() + group_start;
     let preserved = xml[group_start..]
         .find("<a:solidFill><a:srgbClr val=\"112233\"/></a:solidFill>")
