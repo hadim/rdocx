@@ -28840,7 +28840,9 @@ fn field_paragraph(template: Option<&CT_TextBody>, mut field: CT_TextField) -> C
     if field.run_properties.is_none() {
         field.run_properties = properties;
     }
-    paragraph.set_text("");
+    // Any one-run text leaves the single run slot the field takes, with
+    // preserved content in place around it. Empty text would leave none.
+    paragraph.set_text(" ");
     if let Some(first) = paragraph.runs.first_mut() {
         *first = TextRun::Field(Box::new(field));
     }

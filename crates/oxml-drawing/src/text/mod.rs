@@ -435,11 +435,11 @@ impl CT_TextBody {
         let old_paragraph_count = self.paragraphs.len();
         let mut first = self.paragraphs.drain(..).next().unwrap_or_default();
         let mut lines = text.split("\r\n").flat_map(|part| part.split('\n'));
-        first.set_text(lines.next().unwrap_or_default());
         let mut template = CT_TextParagraph::default();
         template.properties = first.properties.clone();
         template.runs = first.runs.iter().take(1).cloned().collect();
         template.end_properties = first.end_properties.clone();
+        first.set_text(lines.next().unwrap_or_default());
         self.paragraphs.push(first);
         for line in lines {
             let mut paragraph = template.clone();
@@ -735,7 +735,7 @@ mod tests {
                 r#"<a:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:x"><a:bodyPr/>"#,
                 r#"<a:p xmlns:x="urn:x"><a:pPr algn="ctr"/><a:r><a:rPr b="1"/><a:t>one</a:t></a:r><x:in-paragraph/><a:endParaRPr sz="1200"/></a:p>"#,
                 r#"<a:p><a:pPr algn="ctr"/><a:r><a:rPr b="1"/><a:t>two</a:t></a:r><a:br><a:rPr b="1"/></a:br><a:r><a:rPr b="1"/><a:t>soft</a:t></a:r><a:br><a:rPr b="1"/></a:br><a:endParaRPr sz="1200"/></a:p>"#,
-                r#"<a:p><a:pPr algn="ctr"/><a:r><a:rPr b="1"/><a:t/></a:r><a:endParaRPr sz="1200"/></a:p>"#,
+                r#"<a:p><a:pPr algn="ctr"/><a:endParaRPr sz="1200"/></a:p>"#,
                 r#"<x:after-paragraphs/></a:txBody>"#,
             )
         );
@@ -745,6 +745,16 @@ mod tests {
         assert_eq!(
             CT_TextBody::from_xml(&saved).unwrap().to_xml().unwrap(),
             saved
+        );
+
+        body.set_text("");
+        assert_eq!(
+            String::from_utf8(body.to_xml().unwrap()).unwrap(),
+            concat!(
+                r#"<a:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:x"><a:bodyPr/>"#,
+                r#"<a:p xmlns:x="urn:x"><a:pPr algn="ctr"/><x:in-paragraph/><a:endParaRPr sz="1200"/></a:p>"#,
+                r#"<x:after-paragraphs/></a:txBody>"#,
+            )
         );
 
         let mut plain = CT_TextBody::new();

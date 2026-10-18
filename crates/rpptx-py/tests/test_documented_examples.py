@@ -11821,3 +11821,20 @@ def test_issue392_up_arrow_is_an_authorable_preset():
     assert reopened.slides[0].shapes[0].auto_shape_type == MSO_SHAPE.UP_ARROW
     by_name.auto_shape_type = MSO_SHAPE.DOWN_ARROW
     assert by_name.auto_shape_type == MSO_SHAPE.DOWN_ARROW
+
+
+def test_issue392_empty_text_writes_a_paragraph_without_runs():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    frame = slide.shapes.add_textbox(0, 0, 2743200, 914400).text_frame
+    frame.text = "old"
+    frame.text = ""
+    assert "<a:r>" not in frame.element.xml and "<a:t" not in frame.element.xml
+    frame.paragraphs[0].add_run("new")
+    assert [run.text for run in frame.paragraphs[0].runs] == ["new"]
+    frame.paragraphs[0].text = ""
+    assert len(frame.paragraphs[0].runs) == 0
+    frame.paragraphs[0].text = "again"
+    assert frame.text == "again"
