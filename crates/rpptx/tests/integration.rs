@@ -36458,4 +36458,37 @@ fn issue389_staged_copies_share_slides_and_compare_serialization() {
         deck.serializes_like(&reopened).unwrap(),
         reopened.to_bytes().unwrap() == before
     );
+    // A checked XML edit reopens its staged package and reuses the slides it
+    // left alone. The result matches the same edit on records never parsed.
+    let edit = |presentation: &mut Presentation, shape: usize| {
+        let xml = String::from_utf8(
+            presentation
+                .shape_xml_at(ShapeOwner::Slide(1), &[shape])
+                .unwrap(),
+        )
+        .unwrap()
+        .replacen(" name=\"", " descr=\"reopened\" name=\"", 1);
+        presentation
+            .replace_shape_xml_at(ShapeOwner::Slide(1), &[shape], &xml)
+            .unwrap();
+    };
+    let mut parsed = Presentation::from_bytes(&before).unwrap();
+    edit(&mut parsed, 2);
+    let mut built = deck.clone();
+    edit(&mut built, 2);
+    let edited = parsed.to_bytes().unwrap();
+    assert_eq!(edited, built.to_bytes().unwrap());
+    assert_ne!(edited, before);
+    for index in [0, 2] {
+        assert_eq!(
+            parsed.slide_xml(index).unwrap(),
+            deck.slide_xml(index).unwrap()
+        );
+    }
+    let again = Presentation::from_bytes(&edited).unwrap();
+    assert_eq!(again.to_bytes().unwrap(), edited);
+    // A second edit on the reopened copy changes only its own slide again.
+    edit(&mut parsed, 3);
+    edit(&mut built, 3);
+    assert_eq!(parsed.to_bytes().unwrap(), built.to_bytes().unwrap());
 }
