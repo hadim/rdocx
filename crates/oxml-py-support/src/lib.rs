@@ -433,6 +433,13 @@ impl RevisionCounter {
             .try_reserve_exact(scopes.len() + 1)
             .map_err(|_| RevisionError::Allocation)?;
         retired.push(self.document.clone());
+        // Identity is the shared allocation, as `same_state` compares it. A
+        // set keeps the duplicate check linear in the number of scopes.
+        let mut identities = std::collections::HashSet::new();
+        identities
+            .try_reserve(scopes.len() + 1)
+            .map_err(|_| RevisionError::Allocation)?;
+        identities.insert(std::sync::Arc::as_ptr(&self.document.0));
         for scope in scopes {
             if !self.owns(scope) {
                 return Err(RevisionError::ForeignOwner);
@@ -440,7 +447,7 @@ impl RevisionCounter {
             if scope.first_cause().is_some() {
                 return Err(RevisionError::Retired);
             }
-            if retired.iter().any(|old| old.same_state(scope)) {
+            if !identities.insert(std::sync::Arc::as_ptr(&scope.0)) {
                 return Err(RevisionError::DuplicateScope);
             }
             retired.push(scope.clone());
@@ -1380,6 +1387,21 @@ mod tests {
             clock.prepare_scopes("Shape.remove", &[owner.clone(), owner.clone()], &[]),
             Err(RevisionError::DuplicateScope)
         ));
+        // The document scope is retired once, so naming it again is a duplicate.
+        assert!(matches!(
+            clock.prepare_scopes("Shape.remove", &[clock.current_document_scope()], &[]),
+            Err(RevisionError::DuplicateScope)
+        ));
+        // A long scope list keeps a duplicate found far from its first entry.
+        let mut wide = RevisionCounter::new();
+        let many = wide.initialize_scopes(&[RevisionScope::Owner; 64]).unwrap();
+        let mut repeated = many.clone();
+        repeated.push(many[3].clone());
+        assert!(matches!(
+            wide.prepare_scopes("Shape.remove", &repeated, &[]),
+            Err(RevisionError::DuplicateScope)
+        ));
+        assert!(wide.prepare_scopes("Shape.remove", &many, &[]).is_ok());
         assert_eq!(clock.current(), 0);
         assert!(owner.first_cause().is_none());
         let generation = owner.generation();

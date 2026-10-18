@@ -2410,12 +2410,11 @@ impl PyPptElement {
             .owner_generation()
             .ok_or_else(|| PyValueError::new_err("Element owner is absent"))?;
         let mut survivors = owner.unchanged_owners()?;
+        // `unchanged_owners` lists one proof per current owner, in order.
+        let mut in_order = owner.owners.iter();
         survivors.retain_mut(|proof| {
-            let old = owner
-                .owners
-                .iter()
-                .find(|item| item.owner.generation() == proof.generation)
-                .expect("unchanged owner proof");
+            let old = in_order.next().expect("unchanged owner proof");
+            debug_assert_eq!(old.owner.generation(), proof.generation);
             let old_path = if let Some(index) = old.address.layout_index {
                 smallvec![PathSeg::Layout(index)]
             } else {
@@ -2463,7 +2462,7 @@ pub(crate) enum SlideOwnerEdit {
     Move { from: usize, to: usize },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum PartIdentity {
     Slide(u32),
     Layout(String),
@@ -3236,23 +3235,42 @@ impl PyPresentation {
         retained.try_reserve_exact(preserved.len()).map_err(|_| {
             pyo3::exceptions::PyMemoryError::new_err("survival proof allocation failed")
         })?;
+        // Hash the first owner of each generation and the first candidate
+        // address of each destination, so one edit costs a single pass over
+        // the inventory rather than one pass per surviving owner.
+        let mut current = std::collections::HashMap::new();
+        current.try_reserve(self.owners.len()).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("current owner index allocation failed")
+        })?;
+        for owner in &self.owners {
+            current.entry(owner.owner.generation()).or_insert(owner);
+        }
+        let mut addresses = std::collections::HashMap::new();
+        addresses.try_reserve(next.len()).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("candidate address index allocation failed")
+        })?;
+        for (index, address) in next.iter().enumerate() {
+            addresses
+                .entry((
+                    address.path.as_slice(),
+                    address.layout_index,
+                    std::mem::discriminant(&address.physical),
+                ))
+                .or_insert(index);
+        }
         for proof in preserved {
             if !seen.insert(proof.generation) {
                 return Err(fail("duplicate owner survival proof"));
             }
-            let old = self
-                .owners
-                .iter()
-                .find(|owner| owner.owner.generation() == proof.generation)
+            let old = *current
+                .get(&proof.generation)
                 .ok_or_else(|| fail("survival proof has no current owner"))?;
-            let index = next
-                .iter()
-                .position(|address| {
-                    address.path == proof.destination
-                        && address.layout_index == proof.layout_index
-                        && std::mem::discriminant(&address.physical)
-                            == std::mem::discriminant(&old.address.physical)
-                })
+            let index = *addresses
+                .get(&(
+                    proof.destination.as_slice(),
+                    proof.layout_index,
+                    std::mem::discriminant(&old.address.physical),
+                ))
                 .ok_or_else(|| fail("survival destination is absent"))?;
             if !destinations.insert(index) {
                 return Err(fail("two owners claim one destination"));
@@ -3272,6 +3290,24 @@ impl PyPresentation {
         if structural {
             // A mutation cannot disambiguate imported missing/duplicate IDs by
             // merely finding the same number again in a candidate tree.
+            fn shape_id_counts<'a>(
+                physical: impl Iterator<Item = &'a PhysicalOwner>,
+            ) -> std::collections::HashMap<(&'a PartIdentity, u32), usize> {
+                let mut counts = std::collections::HashMap::new();
+                for owner in physical {
+                    if let PhysicalOwner::Shape {
+                        slide,
+                        id: Some(id),
+                        ..
+                    } = owner
+                    {
+                        *counts.entry((slide, *id)).or_insert(0) += 1;
+                    }
+                }
+                counts
+            }
+            let original = shape_id_counts(self.owners.iter().map(|owner| &owner.address.physical));
+            let candidate = shape_id_counts(next.iter().map(|address| &address.physical));
             for (_, old, _) in &retained {
                 if let PhysicalOwner::Shape { slide, id, kind } = &old.address.physical {
                     if *kind == rpptx::ShapeKind::AlternateContent {
@@ -3280,10 +3316,8 @@ impl PyPresentation {
                     let Some(id) = id else {
                         return Err(fail("structural owner proof requires a shape id"));
                     };
-                    let original_count = self.owners.iter().filter(|owner| matches!(&owner.address.physical,
-                        PhysicalOwner::Shape { slide: at, id: Some(value), .. } if at == slide && value == id)).count();
-                    let candidate_count = next.iter().filter(|address| matches!(&address.physical,
-                        PhysicalOwner::Shape { slide: at, id: Some(value), .. } if at == slide && value == id)).count();
+                    let original_count = original.get(&(slide, *id)).copied().unwrap_or(0);
+                    let candidate_count = candidate.get(&(slide, *id)).copied().unwrap_or(0);
                     if original_count != 1 || candidate_count != 1 {
                         return Err(fail("structural owner proof has an ambiguous shape id"));
                     }
@@ -3389,11 +3423,29 @@ impl PyPresentation {
         owners.try_reserve_exact(next.len()).map_err(|_| {
             pyo3::exceptions::PyMemoryError::new_err("candidate owner inventory allocation failed")
         })?;
+        // Each destination index is claimed at most once (checked above), so
+        // these maps hold the same entries the ordered searches would find.
+        let survivors = retained
+            .iter()
+            .map(|(at, old, _)| (*at, *old))
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut replaced = std::collections::HashMap::<usize, Vec<_>>::new();
+        for (at, scope, successor) in &replacements {
+            replaced.entry(*at).or_default().push((*scope, *successor));
+        }
+        let mut xml_replaced = std::collections::HashMap::new();
+        for (at, successor) in &xml_replacements {
+            xml_replaced.entry(*at).or_insert(*successor);
+        }
+        let mut birth_starts = std::collections::HashMap::new();
+        for (at, start) in &birth_offsets {
+            birth_starts.entry(*at).or_insert(*start);
+        }
         for (index, address) in next.into_iter().enumerate() {
-            if let Some((_, old, _)) = retained.iter().find(|(at, _, _)| *at == index) {
+            if let Some(old) = survivors.get(&index) {
                 let mut owner = (**old).clone();
                 owner.address = address;
-                for (_, scope, at) in replacements.iter().filter(|(at, _, _)| *at == index) {
+                for (scope, at) in replaced.get(&index).into_iter().flatten() {
                     let successor = revision
                         .successor(*at)
                         .expect("affected scope successor exists");
@@ -3403,17 +3455,15 @@ impl PyPresentation {
                         _ => unreachable!(),
                     }
                 }
-                if let Some((_, at)) = xml_replacements.iter().find(|(at, _)| *at == index) {
+                if let Some(at) = xml_replaced.get(&index) {
                     owner.xml_children =
                         revision.successor(*at).expect("XML child successor exists");
                 }
                 owners.push(owner);
             } else {
-                let start = birth_offsets
-                    .iter()
-                    .find(|(at, _)| *at == index)
-                    .expect("every unclaimed address has birth scopes")
-                    .1;
+                let start = *birth_starts
+                    .get(&index)
+                    .expect("every unclaimed address has birth scopes");
                 let grid = address
                     .table
                     .then(|| revision.born(start + 3).expect("table birth exists"));
@@ -3752,12 +3802,11 @@ impl PyPresentation {
                 changed.push(owner.address.path.as_slice());
             }
         }
+        // `unchanged_owners` lists one proof per current owner, in order.
+        let mut in_order = self.owners.iter();
         proofs.retain(|proof| {
-            let owner = self
-                .owners
-                .iter()
-                .find(|owner| owner.owner.generation() == proof.generation)
-                .expect("unchanged owner proof");
+            let owner = in_order.next().expect("unchanged owner proof");
+            debug_assert_eq!(owner.owner.generation(), proof.generation);
             !matches!(
                 owner.address.physical,
                 PhysicalOwner::Paragraph { .. } | PhysicalOwner::Run { .. }
@@ -3789,12 +3838,11 @@ impl PyPresentation {
             .copied()
             .collect::<smallvec::SmallVec<[PathSeg; 5]>>();
         let mut proofs = self.unchanged_owners()?;
+        // `unchanged_owners` lists one proof per current owner, in order.
+        let mut in_order = self.owners.iter();
         proofs.retain_mut(|proof| {
-            let owner = self
-                .owners
-                .iter()
-                .find(|owner| owner.owner.generation() == proof.generation)
-                .expect("unchanged owner proof");
+            let owner = in_order.next().expect("unchanged owner proof");
+            debug_assert_eq!(owner.owner.generation(), proof.generation);
             if owner.address.layout_index.is_some() || !owner.address.path.starts_with(&table_path)
             {
                 return true;
@@ -3842,12 +3890,11 @@ impl PyPresentation {
             .ok_or_else(|| PyValueError::new_err("text append owner is absent"))?;
         let base = &selected.address.path;
         let mut proofs = self.unchanged_owners()?;
+        // `unchanged_owners` lists one proof per current owner, in order.
+        let mut in_order = self.owners.iter();
         proofs.retain_mut(|proof| {
-            let old = self
-                .owners
-                .iter()
-                .find(|owner| owner.owner.generation() == proof.generation)
-                .expect("unchanged owner proof");
+            let old = in_order.next().expect("unchanged owner proof");
+            debug_assert_eq!(old.owner.generation(), proof.generation);
             if matches!(
                 old.address.physical,
                 PhysicalOwner::Paragraph { .. } | PhysicalOwner::Run { .. }
@@ -3904,12 +3951,11 @@ impl PyPresentation {
             return Ok(proofs);
         }
 
+        // `unchanged_owners` lists one proof per current owner, in order.
+        let mut in_order = self.owners.iter();
         proofs.retain_mut(|proof| {
-            let old = self
-                .owners
-                .iter()
-                .find(|owner| owner.owner.generation() == proof.generation)
-                .expect("unchanged owner proof");
+            let old = in_order.next().expect("unchanged owner proof");
+            debug_assert_eq!(old.owner.generation(), proof.generation);
             let removed = if paragraph {
                 matches!(old.address.physical, PhysicalOwner::Run { .. })
                     && old.address.path.starts_with(&current.segs)
