@@ -1556,23 +1556,43 @@ def test_paragraph_bullet_reads_each_choice_and_a_character_replaces_a_picture_b
     assert '<a:buFontTx/><a:buChar char="-"/>' in body
 
 
-def test_add_run_returns_a_live_run_and_stales_the_paragraph_handle_once():
+def test_add_run_returns_a_live_run_and_keeps_the_paragraph_handle():
     import rpptx
 
     presentation = _textbox_presentation(rpptx)
     paragraph = presentation.slides[0].shapes[0].text_frame.paragraphs[0]
+    first = paragraph.runs[0]
+    runs = paragraph.runs
     run = paragraph.add_run(" world")
     assert run.text == " world"
     run.font.bold = True
     assert run.font.bold is True
-    _assert_stale_after_exactly_one_bump(rpptx, lambda: paragraph.text)
-
-    paragraph = presentation.slides[0].shapes[0].text_frame.paragraphs[0]
     assert paragraph.text == "hello world"
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: len(runs))
+
     assert [current.font.bold for current in paragraph.runs] == [None, True]
     empty = paragraph.add_run()
     assert empty.text == ""
+    first.text = "Hello"
+    run.text = " World"
+    assert paragraph.text == "Hello World"
     assert len(presentation.slides[0].shapes[0].text_frame.paragraphs[0].runs) == 3
+
+
+def test_text_frame_add_paragraph_keeps_earlier_paragraph_and_run_handles():
+    import rpptx
+
+    presentation = _textbox_presentation(rpptx)
+    frame = presentation.slides[0].shapes[0].text_frame
+    paragraph = frame.paragraphs[0]
+    run = paragraph.runs[0]
+    added = frame.add_paragraph()
+    added.add_run("second")
+    added.add_run(" line")
+    run.text = "first"
+    paragraph.add_run(" line")
+    assert frame.text == "first line\nsecond line"
+    assert [current.text for current in frame.paragraphs] == ["first line", "second line"]
 
 
 def test_invalid_text_property_values_raise_before_changing_the_package():
@@ -4797,8 +4817,7 @@ def test_cell_text_frame_structural_edits_stale_every_earlier_nested_handle():
     retired_runs = new_paragraph.runs
     new_run = new_paragraph.add_run("new run")
     assert new_run.text == "new run"
-    with pytest.raises(StaleElementError, match=r"First invalidated by Paragraph.add_run at committed revision"):
-        _ = new_paragraph.text
+    assert new_paragraph.text == "new run"
     with pytest.raises(StaleElementError, match=r"First invalidated by Paragraph.add_run at committed revision"):
         len(retired_runs)
     assert fresh_frame.paragraphs[1].text == "new run"

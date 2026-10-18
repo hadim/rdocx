@@ -3826,8 +3826,10 @@ impl PyPresentation {
         Ok(proofs)
     }
 
-    /// Preserve the existing append contract: the body survives, while
-    /// prior paragraph/run views retire on collection topology changes.
+    /// An append adds one paragraph after the last paragraph, or one regular
+    /// run or field after the last text choice. No earlier paragraph or regular
+    /// run changes its ordinal, so every owner survives at its address and only
+    /// the appended-to owner's text views retire.
     pub(crate) fn appended_text_owners(
         &self,
         path: &oxml_py_support::ContentPath,
@@ -3835,31 +3837,19 @@ impl PyPresentation {
         let generation = path
             .owner_generation()
             .ok_or_else(|| PyValueError::new_err("text append needs a bound owner"))?;
-        let selected = self
+        if !self
             .owners
             .iter()
-            .find(|owner| owner.owner.generation() == generation)
-            .ok_or_else(|| PyValueError::new_err("text append owner is absent"))?;
-        let base = &selected.address.path;
+            .any(|owner| owner.owner.generation() == generation)
+        {
+            return Err(PyValueError::new_err("text append owner is absent"));
+        }
         let mut proofs = self.unchanged_owners()?;
-        proofs.retain_mut(|proof| {
-            let old = self
-                .owners
-                .iter()
-                .find(|owner| owner.owner.generation() == proof.generation)
-                .expect("unchanged owner proof");
-            if matches!(
-                old.address.physical,
-                PhysicalOwner::Paragraph { .. } | PhysicalOwner::Run { .. }
-            ) && old.address.path.starts_with(base)
-            {
-                return false;
-            }
+        for proof in &mut proofs {
             if proof.generation == generation {
                 proof.text_changed = true;
             }
-            true
-        });
+        }
         Ok(proofs)
     }
 
