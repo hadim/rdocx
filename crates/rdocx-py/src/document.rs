@@ -4889,6 +4889,45 @@ fn indexed_inventory_matches(
 }
 
 impl WordOwner {
+    /// The same physical owner at a possibly shifted raw index path: the
+    /// inventory shape, story owner, item kind and path depth all agree.
+    fn relocates_to(&self, address: &WordOwnerAddress) -> bool {
+        fn same_depth(a: &rdocx::ContentLocation, b: &rdocx::ContentLocation) -> bool {
+            same_story_owner(a.story(), b.story())
+                && a.item_kind() == b.item_kind()
+                && a.index_path().len() == b.index_path().len()
+        }
+        self.parent == address.parent
+            && self.body_slot == address.body_slot
+            && self.projection_ordinal == address.projection_ordinal
+            && match (&self.location, &address.location) {
+                (WordOwnerLocation::Paragraph(a), WordOwnerLocation::Paragraph(b))
+                | (WordOwnerLocation::Table(a), WordOwnerLocation::Table(b)) => same_depth(a, b),
+                (WordOwnerLocation::Run(a, left), WordOwnerLocation::Run(b, right)) => {
+                    same_depth(a, b) && left == right
+                }
+                (
+                    WordOwnerLocation::Cell {
+                        table: a,
+                        row: ar,
+                        cell: ac,
+                        story: as_,
+                    },
+                    WordOwnerLocation::Cell {
+                        table: b,
+                        row: br,
+                        cell: bc,
+                        story: bs,
+                    },
+                ) => same_depth(a, b) && ar == br && ac == bc && same_story_owner(as_, bs),
+                (WordOwnerLocation::Section(a), WordOwnerLocation::Section(b)) => a == b,
+                (WordOwnerLocation::Hyperlink(a, ai), WordOwnerLocation::Hyperlink(b, bi)) => {
+                    same_depth(a, b) && ai == bi
+                }
+                _ => false,
+            }
+    }
+
     fn states(&self) -> Vec<RevisionState> {
         let mut states = vec![self.owner.clone()];
         if let Some(content) = &self.content {
@@ -5781,6 +5820,39 @@ impl PyDocument {
             return Ok(());
         }
         let prepared = self.prepare_word_revision(py, &candidate, operation, publication)?;
+        self.commit_word_revision(prepared)?;
+        self.inner = candidate;
+        Ok(())
+    }
+
+    /// Adopt a property edit that moves no content, so every live handle
+    /// stays valid. Creating a `w:tcPr` still shifts the raw child index of
+    /// each item in that cell story, so the inventory takes the candidate's
+    /// addresses when they pair one to one with the current owners. Any other
+    /// inventory change publishes conservatively instead.
+    pub(crate) fn adopt_property_edit(
+        &mut self,
+        py: Python<'_>,
+        candidate: rdocx::Document,
+        operation: &'static str,
+    ) -> PyResult<()> {
+        let locations =
+            word_owner_locations(&candidate, None).map_err(|error| rdocx_to_pyerr(py, error))?;
+        let relocated = locations.len() == self.owners.len()
+            && self
+                .owners
+                .iter()
+                .zip(&locations)
+                .all(|(owner, address)| owner.relocates_to(address));
+        if relocated {
+            for (owner, address) in self.owners.iter_mut().zip(locations) {
+                owner.location = address.location;
+            }
+            self.inner = candidate;
+            return Ok(());
+        }
+        let prepared =
+            self.prepare_word_revision(py, &candidate, operation, WordPublication::Conservative)?;
         self.commit_word_revision(prepared)?;
         self.inner = candidate;
         Ok(())

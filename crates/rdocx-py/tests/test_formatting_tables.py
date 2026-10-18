@@ -438,6 +438,56 @@ def test_cell_shading_borders_and_margins_round_trip():
     assert cell.margins == (0, Pt(5), 0, Pt(5))
 
 
+_CELL_PROPERTY_EDITS = {
+    "cell.shading": lambda table: setattr(table.cell(0, 0), "shading", "DBE5F1"),
+    "cell.width": lambda table: setattr(table.cell(0, 0), "width", 914400),
+    "cell.vertical_alignment": lambda table: setattr(table.cell(0, 0), "vertical_alignment", 1),
+    "cell.set_border": lambda table: table.cell(0, 0).set_border("top", "single", size=4, color="000000"),
+    "cell.set_margins": lambda table: table.cell(0, 0).set_margins(top=0, right=40, bottom=0, left=40),
+    "table.set_column_width": lambda table: table.set_column_width(0, 914400),
+    "table.grid_widths": lambda table: setattr(table, "grid_widths", [914400, 1828800]),
+    "table.set_cell_vertical_merge": lambda table: table.set_cell_vertical_merge(0, 0, "restart"),
+    "table.set_cell_grid_span": lambda table: table.set_cell_grid_span(0, 0, 1),
+}
+
+
+@pytest.mark.parametrize("edit", sorted(_CELL_PROPERTY_EDITS))
+@pytest.mark.parametrize("nested", [False, True])
+def test_cell_property_edit_keeps_cell_runs_and_handles_live(edit, nested):
+    # Issue 388: creating w:tcPr shifted the cell story's raw child indexes
+    # without moving the owner inventory, so the cell's runs had no owner.
+    from rdocx import Document
+
+    document = Document()
+    table = document.add_table(rows=2, cols=2)
+    if nested:
+        table = table.cell(1, 1).add_table(2, 2)
+    for row in range(2):
+        for column in range(2):
+            table.cell(row, column).text = f"{row}{column}"
+    if not nested:
+        table.cell(0, 0).add_table(1, 1).cell(0, 0).text = "inner"
+        table = document.tables[-1]
+    cell = table.cell(0, 0)
+    run = cell.paragraphs[0].runs[0]
+
+    _CELL_PROPERTY_EDITS[edit](table)
+
+    fresh = document.tables[-1] if not nested else document.tables[-1].cell(1, 1).tables[0]
+    assert [fresh.cell(row, 0).paragraphs[0].runs[0].text for row in range(2)] == ["00", "10"]
+    assert cell.paragraphs[0].runs[0].text == "00"
+    assert run.text == "00"
+    if not nested:
+        assert fresh.cell(0, 0).tables[0].cell(0, 0).paragraphs[0].runs[0].text == "inner"
+    fresh.cell(0, 0).paragraphs[0].runs[0].font.bold = True
+    run.text = "AA"
+    reopened = Document.from_bytes(document.to_bytes()).tables[-1]
+    if nested:
+        reopened = reopened.cell(1, 1).tables[0]
+    assert reopened.cell(0, 0).paragraphs[0].runs[0].text == "AA"
+    assert reopened.cell(0, 0).paragraphs[0].runs[0].font.bold is True
+
+
 def test_invalid_table_formatting_changes_nothing_and_keeps_handles_live():
     from rdocx import Document, RdocxError, WD_ROW_HEIGHT_RULE
 
