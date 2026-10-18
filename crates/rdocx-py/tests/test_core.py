@@ -8946,3 +8946,54 @@ def test_f284_wrong_intermediate_default_and_inserted_text_are_literal():
     literal.add_paragraph("{{name}} / {{other}}")
     assert literal.render_template({"name": "{{other}}\ue000rdocx-template-0\ue001", "other": "DATA"}, grammar_version=1) == 2
     assert literal.paragraphs[0].text == "{{other}}\ue000rdocx-template-0\ue001 / DATA"
+
+
+_ISSUE_391_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_ISSUE_391_W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
+
+
+@pytest.mark.parametrize("attribute_first", [False, True])
+def test_issue_391_replace_xml_binds_a_declared_w14_root_attribute(attribute_first):
+    import xml.etree.ElementTree as ET
+    import rdocx
+
+    W, W14 = _ISSUE_391_W, _ISSUE_391_W14
+    declarations = f'xmlns:w="{W}" xmlns:w14="{W14}"'
+    attributes = 'w14:paraId="0000005C"'
+    root = f"{attributes} {declarations}" if attribute_first else f"{declarations} {attributes}"
+    document = rdocx.Document()
+    document.add_paragraph("x")
+    document.paragraphs[0].replace_xml(f"<w:p {root}><w:r><w:t>y</w:t></w:r></w:p>")
+    assert document.paragraphs[0].text == "y"
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    paragraph = reopened.paragraphs[0]
+    assert ET.fromstring(paragraph.xml).get(f"{{{W14}}}paraId") == "0000005C"
+    # A paragraph's own XML re-serialized by another writer is accepted.
+    paragraph.replace_xml(ET.tostring(ET.fromstring(paragraph.xml), encoding="unicode").replace(">y<", ">z<"))
+    assert rdocx.Document.from_bytes(reopened.to_bytes()).paragraphs[0].text == "z"
+    # The safety rules still refuse an element Word would refuse.
+    before = reopened.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        reopened.paragraphs[0].replace_xml(f'<w:p {root}><w:unknownChild/></w:p>')
+    assert reopened.to_bytes() == before
+
+
+def test_issue_391_table_and_cell_replace_xml_bind_declared_w14_attributes():
+    import xml.etree.ElementTree as ET
+    import rdocx
+
+    W, W14 = _ISSUE_391_W, _ISSUE_391_W14
+    ET.register_namespace("w", W)
+    ET.register_namespace("w14", W14)
+    document = rdocx.Document()
+    table = document.add_table(1, 1)
+    table.cell(0, 0).text = "cell"
+    root = ET.fromstring(table.xml)
+    root.find(f"{{{W}}}tr").set(f"{{{W14}}}paraId", "00000011")
+    table.replace_xml(ET.tostring(root, encoding="unicode"))
+    cell = document.tables[0].cell(0, 0)
+    root = ET.fromstring(cell.xml)
+    root.find(f"{{{W}}}p").set(f"{{{W14}}}paraId", "00000012")
+    cell.replace_xml(ET.tostring(root, encoding="unicode").replace(">cell<", ">edited<"))
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.tables[0].cell(0, 0).text == "edited"

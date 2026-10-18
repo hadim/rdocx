@@ -25689,3 +25689,26 @@ fn fx246_both_formats_render_three_distinct_legend_positions() {
         }
     }
 }
+
+#[test]
+fn issue_391_replace_paragraph_xml_binds_a_declared_w14_root_attribute() {
+    let w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
+    let mut document = Document::new();
+    document.add_paragraph("x");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let xml = format!(
+        r#"<w:p xmlns:w="{w}" xmlns:w14="{w14}" w14:paraId="0000005C"><w:r><w:t>y</w:t></w:r></w:p>"#
+    );
+    document.replace_paragraph_xml(&location, &xml).unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.paragraph(0).unwrap().text(), "y");
+    let location = reopened.paragraph_story_location(0).unwrap().unwrap();
+    let element = reopened.paragraph_element_xml(&location).unwrap();
+    assert!(
+        String::from_utf8(element)
+            .unwrap()
+            .contains(r#"w14:paraId="0000005C""#)
+    );
+}
+

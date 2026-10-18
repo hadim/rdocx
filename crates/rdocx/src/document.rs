@@ -23202,16 +23202,13 @@ impl Document {
             selected.xml(),
             xml.as_bytes(),
         )?;
-        let mut replacement = Vec::new();
-        paragraph.to_xml(&mut Writer::new(&mut replacement))?;
-        let fragment = ContentFragment {
-            kind: StoryItemKind::Paragraph,
-            xml: replacement,
-            namespace_scope: BTreeMap::new(),
-            source_part_name: Some(location.story.part_name.clone()),
-            source_story_kind: Some(location.story.kind),
-            source_owner_index: Some(location.story.owner_index),
-        };
+        // A retained root attribute such as `w14:paraId` relies on its part
+        // root to bind the prefix. The serialized fragment declares what the
+        // part root would, so the spliced paragraph parses in any part.
+        let mut fragment = ContentFragment::paragraph(paragraph)?;
+        fragment.source_part_name = Some(location.story.part_name.clone());
+        fragment.source_story_kind = Some(location.story.kind);
+        fragment.source_owner_index = Some(location.story.owner_index);
         self.replace_checked_element_content(location, fragment)
     }
 
