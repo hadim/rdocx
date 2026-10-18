@@ -890,6 +890,15 @@ Every operation publishes only after the staged package serializes and reopens.
 The typed `w:evenAndOddHeaders` setting reads namespace aliases and writes a
 fixed `w:` prefix in its schema slot.
 
+`remove_content` drops each image relationship of the main document that the
+removed content named and that no attribute of the remaining document names,
+and then the media part that no internal relationship of the package reaches
+any more. Any attribute value counts as a name, so `r:embed`, `r:id`,
+`r:link`, and VML `o:relid` all keep their relationship. A producer orphan,
+which the document did not name before the removal either, an image added by
+`embed_image`, and every other relationship type stay. `pop_content` keeps the
+relationship, since the returned fragment may be inserted back.
+
 Section removal preserves the following section's effective header and footer
 behavior before deleting a non-final boundary. For each default, first, and even
 variant, resolution takes the first reference whose relationship has the exact

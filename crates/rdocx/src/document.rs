@@ -5838,6 +5838,35 @@ fn hdr_ftr_type_order(value: HdrFtrType) -> u8 {
     }
 }
 
+/// Every attribute value of an XML part, whatever its namespace, so that a
+/// relationship named by `r:embed`, `r:id`, `o:relid` or any producer
+/// attribute counts as referenced.
+fn xml_attribute_values(xml: &[u8]) -> Result<HashSet<String>> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut values = HashSet::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                for attribute in element.attributes() {
+                    let attribute = attribute
+                        .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+                    let value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+                    values.insert(value.into_owned());
+                }
+            }
+            Event::Eof => return Ok(values),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
 pub(crate) fn xml_relationship_ids_in_order(xml: &[u8]) -> Result<Vec<String>> {
     xml_relationship_ids_in_order_with_bindings(xml, &[])
 }
@@ -26763,7 +26792,14 @@ impl Document {
             return Ok(false);
         }
         let mut candidate = self.clone_for_staging();
+        let referenced_before = xml_attribute_values(&candidate.document.to_xml()?)?;
         candidate.document.body.remove(index);
+        let referenced_after = xml_attribute_values(&candidate.document.to_xml()?)?;
+        candidate.release_unreferenced_images(
+            &candidate.doc_part_name.clone(),
+            &referenced_before,
+            &referenced_after,
+        );
         candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
@@ -28741,6 +28777,70 @@ impl Document {
             part_name,
             removed.iter().map(|relationship| relationship.id.clone()),
         );
+        self.remove_unreachable_image_parts(part_name, &removed);
+    }
+
+    /// Drop the image relationships of `owner` that the removed content named
+    /// and that no attribute of the owner names any more, with the media parts
+    /// they leave unreachable. A producer orphan, which the owner did not name
+    /// before the removal either, and every other relationship type stay.
+    fn release_unreferenced_images(
+        &mut self,
+        owner: &str,
+        referenced_before: &HashSet<String>,
+        referenced_after: &HashSet<String>,
+    ) {
+        let Some(relationships) = self.package.get_part_rels_mut(owner) else {
+            return;
+        };
+        let mut removed = Vec::new();
+        relationships.items.retain(|relationship| {
+            let released = relationship.rel_type == rel_types::IMAGE
+                && relationship_is_internal(relationship)
+                && referenced_before.contains(&relationship.id)
+                && !referenced_after.contains(&relationship.id);
+            if released {
+                removed.push(relationship.clone());
+            }
+            !released
+        });
+        if removed.is_empty() {
+            return;
+        }
+        if relationships.items.is_empty() {
+            self.package.remove_part_rels(owner);
+        }
+        if let Some(preserved) = self
+            .identifiers
+            .preserved_relationship_ids
+            .get_mut(&relationship_owner_identity(owner))
+        {
+            for relationship in &removed {
+                preserved.remove(&relationship.id);
+            }
+        }
+        self.identifiers.retire_authored_story_relationships(
+            owner,
+            removed.iter().map(|relationship| relationship.id.clone()),
+        );
+        for relationship in &removed {
+            self.identifiers
+                .preserved_part_names
+                .remove(&part_name_identity(&OpcPackage::resolve_rel_target(
+                    owner,
+                    &relationship.target,
+                )));
+        }
+        self.remove_unreachable_image_parts(owner, &removed);
+    }
+
+    /// Remove the internal image targets of removed relationships that no
+    /// relationship of the package reaches any more.
+    fn remove_unreachable_image_parts(
+        &mut self,
+        part_name: &str,
+        removed: &[oxml_opc::relationship::Relationship],
+    ) {
         let mut image_parts = removed
             .iter()
             .filter(|relationship| {

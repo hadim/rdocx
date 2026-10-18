@@ -4247,6 +4247,137 @@ fn repeated_drawing_ids_in_one_part_do_not_block_document_open() {
     }
 }
 
+fn issue_390_media_state(document: &mut Document) -> (Vec<String>, Vec<String>) {
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let mut media = package
+        .parts
+        .keys()
+        .filter(|part| part.starts_with("/word/media/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    media.sort();
+    let mut relationships = package
+        .part_rels
+        .iter()
+        .flat_map(|(owner, relationships)| {
+            relationships
+                .items
+                .iter()
+                .map(move |relationship| format!("{owner} {}", relationship.rel_type))
+        })
+        .filter(|relationship| relationship.ends_with("/image"))
+        .collect::<Vec<_>>();
+    relationships.sort();
+    (media, relationships)
+}
+
+#[test]
+fn issue_390_remove_content_drops_the_image_relationship_and_media_of_its_picture() {
+    let picture = f_x204_picture_fixture(b"issue-390");
+    let mut document = Document::new();
+    document.add_paragraph("before");
+    document.add_picture(&picture, "a.png", Length::cm(2.0), Length::cm(2.0));
+    document.add_paragraph("after");
+    // embed_image keeps an image no element names yet, and keeps it.
+    document.embed_image(b"kept unused image", "unused.png");
+    let (media, relationships) = issue_390_media_state(&mut document);
+    assert_eq!(media.len(), 2, "{media:?}");
+    assert_eq!(relationships.len(), 2, "{relationships:?}");
+
+    // A popped picture keeps its relationship for its reinsertion.
+    let body = f254_story(&document, StoryKind::Body);
+    let popped = document
+        .remove_content_at(&f254_item(&document, &body, 1))
+        .unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_content(&ContentLocation::end(body), popped)
+        .unwrap();
+    assert_eq!(
+        issue_390_media_state(&mut document),
+        (media.clone(), relationships.clone())
+    );
+
+    document.set_header_image(&picture, "h.png", Length::cm(1.0), Length::cm(1.0));
+    assert!(document.remove_content(2));
+    let (kept_media, kept) = issue_390_media_state(&mut document);
+    assert_eq!(kept_media.len(), 2, "{kept_media:?}");
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    assert!(
+        kept.iter().any(|kept| kept.starts_with("/word/header")),
+        "{kept:?}"
+    );
+    let saved =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    assert!(
+        saved
+            .parts
+            .values()
+            .any(|part| part.as_slice() == b"kept unused image")
+    );
+    // Only the header picture and the unused image remain.
+    assert!(
+        saved
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .iter()
+            .filter(|relationship| {
+                relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE
+            })
+            .all(|relationship| {
+                saved.get_part(&oxml_opc::OpcPackage::resolve_rel_target(
+                    "/word/document.xml",
+                    &relationship.target,
+                )) == Some(b"kept unused image".as_slice())
+            })
+    );
+    let relationships = saved.get_part_rels("/word/document.xml").unwrap();
+    for kept in [
+        oxml_opc::relationship::rel_types::STYLES,
+        oxml_opc::relationship::rel_types::HEADER,
+    ] {
+        assert!(relationships.get_by_type(kept).is_some(), "{kept}");
+    }
+    Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+}
+
+#[test]
+fn issue_390_remove_content_keeps_an_image_another_attribute_names() {
+    let picture = f_x204_picture_fixture(b"issue-390-vml");
+    let mut document = Document::new();
+    document.add_picture(&picture, "a.png", Length::cm(2.0), Length::cm(2.0));
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let id = package
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .get_by_type(oxml_opc::relationship::rel_types::IMAGE)
+        .unwrap()
+        .id
+        .clone();
+    // A second paragraph names the same image through VML o:relid only.
+    let main = word_part_xml(&package, "/word/document.xml");
+    let vml = format!(
+        r#"<w:p><w:r><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" style="width:10pt;height:10pt"><v:imagedata o:relid="{id}"/></v:shape></w:pict></w:r></w:p><w:sectPr"#
+    );
+    package.set_part(
+        "/word/document.xml",
+        main.replacen("<w:sectPr", &vml, 1).into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut reopened = Document::from_bytes(bytes.get_ref()).unwrap();
+    assert!(reopened.remove_content(0));
+    let (media, relationships) = issue_390_media_state(&mut reopened);
+    assert_eq!(media.len(), 1);
+    assert_eq!(relationships.len(), 1);
+}
+
 #[test]
 fn an_edit_may_not_add_an_occurrence_of_a_repeated_drawing_id() {
     let mut document = Document::from_bytes(&repeated_drawing_id_package("7", false)).unwrap();
