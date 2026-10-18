@@ -1352,7 +1352,7 @@ impl PyParagraph {
                         "bullet size must be from 0.25 to 4.0",
                     ));
                 }
-                TextBulletSize::percent(((value * 100_000.0).trunc() as i64).to_string()).map_err(
+                TextBulletSize::percent(((value * 100_000.0).round_ties_even() as i64).to_string()).map_err(
                     |_| {
                         PyValueError::new_err(format!(
                             "bullet size must be from 0.25 to 4.0, got {value}"
@@ -2310,7 +2310,7 @@ impl PyFont {
         let baseline = value
             .map(|value| {
                 if (-1.0..=1.0).contains(&value) {
-                    Ok(((value * 100_000.0).trunc() as i32).to_string())
+                    Ok(((value * 100_000.0).round_ties_even() as i32).to_string())
                 } else {
                     Err(PyValueError::new_err(format!(
                         "baseline must be from -1.0 to 1.0, got {value}"

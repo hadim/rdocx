@@ -11770,3 +11770,38 @@ def test_issue392_slide_placeholders_iterate_in_idx_order_as_python_pptx():
     slide = prs.slides[0]
     assert [shape.placeholder_format.idx for shape in slide.shapes if shape.is_placeholder] == [0, 2, 1]
     assert [shape.placeholder_format.idx for shape in slide.placeholders] == [0, 1, 2]
+
+
+@pytest.mark.parametrize(
+    ("value", "alpha"),
+    [(0.8, "20000"), (0.3, "70000"), (0.15, "85000"), (0.000004, "100000")],
+)
+def test_issue392_fill_transparency_rounds_to_the_nearest_alpha(value, alpha):
+    import rpptx
+    from rpptx.enum.shapes import MSO_SHAPE
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_shape(MSO_SHAPE.OVAL, 0, 0, 914400, 914400)
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = rpptx.RGBColor.from_string("2F4E8F")
+    shape.fill.transparency = value
+    found = re.search(r'<a:alpha val="(\d+)"/>', shape.element.xml)
+    assert (found.group(1) if found else "100000") == alpha
+
+
+def test_issue392_percentage_setters_round_instead_of_truncating():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_shape(rpptx.MSO_SHAPE.RECTANGLE, 0, 0, 914400, 914400)
+    shape.fill.gradient()
+    shape.fill.gradient_stops[1].position = 0.57
+    assert 'pos="57000"' in shape.element.xml
+    paragraph = shape.text_frame.paragraphs[0]
+    paragraph.bullet = "-"
+    paragraph.bullet_size = 0.29
+    assert '<a:buSzPct val="29000"/>' in paragraph.element.xml
+    shape.text_frame.paragraphs[0].add_run("x").font.baseline = 0.29
+    assert 'baseline="29000"' in shape.text_frame.paragraphs[0].element.xml
