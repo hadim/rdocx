@@ -11481,6 +11481,48 @@ fn issue_243_both_reporter_style_packages_accept_every_style_mutator() {
 }
 
 #[test]
+fn issue_390_style_mutators_keep_latent_styles() {
+    const LATENT: &str = concat!(
+        r#"<w:latentStyles w:defLockedState="0" w:count="276">"#,
+        r#"<w:lsdException w:name="heading 1" w:uiPriority="9" w:qFormat="1"/></w:latentStyles>"#,
+    );
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+        Document::new().to_bytes().unwrap(),
+    ))
+    .unwrap();
+    let styles = word_part_xml(&package, "/word/styles.xml").replacen(
+        "</w:docDefaults>",
+        &format!("</w:docDefaults>{LATENT}"),
+        1,
+    );
+    assert!(styles.contains(LATENT));
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let mut source = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut source).unwrap();
+    let source = source.into_inner();
+
+    let mut added = Document::from_bytes(&source).unwrap();
+    added
+        .add_style(StyleBuilder::paragraph("Spare", "Spare").based_on("Normal"))
+        .unwrap();
+    let mut updated = Document::from_bytes(&source).unwrap();
+    updated
+        .set_style(StyleBuilder::paragraph("Normal", "Normal").priority(1))
+        .unwrap();
+    for (label, mut document) in [("add_style", added), ("set_style", updated)] {
+        let saved =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        let styles = word_part_xml(&saved, "/word/styles.xml");
+        let latent = styles
+            .find(LATENT)
+            .unwrap_or_else(|| panic!("{label}: {styles}"));
+        assert!(styles.find("</w:docDefaults>").unwrap() < latent, "{label}");
+        assert!(latent < styles.find("<w:style ").unwrap(), "{label}");
+    }
+}
+
+#[test]
 fn style_mutations_retain_repeated_style_ids_and_edit_the_first_definition() {
     let mut document = document_with_producer_styles(ONE_HEADING_TOC_BODY, REPEATED_STYLE_IDS);
     let defect = "invalid style graph: duplicate style ID 'Normal'";
