@@ -8463,3 +8463,48 @@ Qualify every named row individually, with before/after bytes and held-owner
 checks for assignments and explicit supported controls.
 
 The acceptance source is [Issue386](https://github.com/tensorbee/rdocx/issues/386), reported against main d44a69af. Pin its original body and script separately from the existing Issue385 twelve-case union. Its self-catching script exit status is not acceptance. Report actual row outcomes and independent saved-package observations. A reported Python3.14 environment is not a new runtime qualification claim. This story is included in active S95 at the user's explicit request and gates F-X255 final release preparation. Completion alone does not authorize issue closure.
+
+
+### F-X259, Repair reviewed consistency defects and strengthen acceptance gates
+
+**Size**: M
+**Depends on**: F-283, F-284, F-X254
+**Test gate**: regression
+**Spec reference**: `08-rendering-spec.md`, Numbering-aware heading placement, `03-architecture.md`, structured template evaluation, `02-scope-and-non-goals.md`, Modern DOCX capability matrix, and `12-testing-strategy.md`, Numbering-aware navigation regression and template controls.
+
+Own B1, S1, S2 and N1 from `.claude/reviews/S95.11-S95.2-code-quality-evaluation.md`. Share unnumbered STYLEREF caller semantics in the existing numbering formatter, retaining REF full-context behavior. Compare multilevel n/r/w and t values across evaluation, actual positioned rendering, update and save/reopen. Preserve implicit and explicit template lexical scopes for empty, single and multiple records in both grammars, while still rejecting malformed syntax, wrong intermediate kinds and known missing root properties. Keep late-error rollback and opaque XML ownership intact. Simplify the reviewed XML traversal predicate without changing its acceptance grammar.
+
+Reconcile completed capability rows and enforce their live-owner invariant during metadata adoption. Strengthen the canonical design, implementation, review, verification, integration and completion commands and their existing reference skills with consumer maps, measurable acceptance, discriminating cases and final-state checks. Regenerate adapters. Process changes remain separate from behavioral commits. No new public API, crate, module or dependency is required. Final sprint full/hash/pixel/rider acceptance and independent review remain due, without rewriting historical acceptance records.
+
+### F-X260, Restore live handles and bound structural edit cost
+
+**Size**: L
+**Depends on**: F-X211c, F-X237
+**Test gate**: regression
+**Spec reference**: `10-bindings-spec.md`, Python handle ownership and checked XML mutation, `03-architecture.md`, owned publication, and `12-testing-strategy.md`, Binding tests and Integrated Python compatibility qualification.
+
+Resolve [Issue388](https://github.com/tensorbee/rdocx/issues/388) and [Issue389](https://github.com/tensorbee/rdocx/issues/389), reviewing [PR393](https://github.com/tensorbee/rdocx/pull/393) at beb9c448d0d99636a799d95f718acccb9ea55646 as a candidate, not accepted code. Cover Word cell shading, widths and related table/row/cell property setters with fresh and held paragraph/run handles, flat and nested tables, and in-memory behavior before reopen. Cover repeated PowerPoint add_run/add_field/add_paragraph calls, earlier live owners and stale collections separately.
+
+Measure the exact Issue389 small/large-package release-build workload for add_textbox, alt_text, position, fill, checked replacement, Word replacement and removal. Establish deterministic work bounds alongside elapsed ratios, preserving transaction safety, namespace ownership and alias generations. Design an actual range-removal API and its refusal/relationship policy before adding it. PR393's extra whole-document owner pass is not acceptance for Issue389. Do not loosen stale-owner checks or skip validation to win a benchmark. Qualify both issues in the integrated installed products, with existing renderer and save/reopen controls.
+
+### F-X261, Resolve Word package preservation and inspection contributions
+
+**Size**: L
+**Depends on**: F-X238, F-X220, F-X241
+**Test gate**: regression
+**Spec reference**: `04-opc-and-packaging.md`, checked Word source ownership and embedded fonts, `10-bindings-spec.md`, Word properties and checked XML owners, and `12-testing-strategy.md`, Binding tests and Word checked XML qualification.
+
+Resolve [Issue387](https://github.com/tensorbee/rdocx/issues/387), [Issue390](https://github.com/tensorbee/rdocx/issues/390) and [Issue391](https://github.com/tensorbee/rdocx/issues/391). Review candidate [PR395](https://github.com/tensorbee/rdocx/pull/395) at 5d481eb53f00926896f9de632115f4cb245fc941 and [PR396](https://github.com/tensorbee/rdocx/pull/396) at c71708541397f96128dea2dc8b9c1a21c7da498a. Each head is one archive-measurement commit ahead of functional parents c36bc80c1c23a7fa32c02ba7f1d26ef53b666939 and 7d573cc67c6ca7e7884608224a89bba9bbb4a587. Qualify each acceptance row independently, including custom-property iteration/items/length, latentStyles and other root XML custody, removed-picture relationship/media reachability, plain embedded fonts and diagnostics, invalid header targets, unknown/open/resolved comment states, declared root-attribute namespaces, standalone StoryItem XML, read-only part access, default paragraph properties and actual text-box paragraph formatting.
+
+Approve exact public signatures and compatibility before importing proposed surfaces. Preserve unknown style-child order and opaque namespace context, pop/reinsert asset behavior, shared targets, caller-embedded unused images, live handles and paired text-box representations. PR396 excludes the unreduced control-owner case. Retain a named diagnostic/qualification criterion rather than claiming full Issue390 closure from six reduced checks. Also triage its disclosed remove/reinsert/set_header_image relationship regression. Pin licensed fonts and actual tool identities. The contribution scripts and reports are inputs, not proof on the sprint union.
+
+### F-X262, Resolve PowerPoint authoring and table-render contributions
+
+**Size**: L
+**Depends on**: F-X205, F-X206, F-X258
+**Test gate**: regression
+**Spec reference**: `06-presentationml-model.md`, shape and text models, `08-rendering-spec.md`, preset geometry and Tables, `10-bindings-spec.md`, Python PowerPoint surfaces, and `12-testing-strategy.md`, Binding tests and render fidelity controls.
+
+Resolve all nine rows of [Issue392](https://github.com/tensorbee/rdocx/issues/392), reviewing candidate [PR394](https://github.com/tensorbee/rdocx/pull/394) at e9f9fbe7b86388b8702af5757bdfa7e4e4fc6596. That head is one archive-measurement commit ahead of functional parent f9d165e77392b57a58223046d8cd551220c61a3a. Cover placeholder gaps and iteration order on slide/layout/master, precise percentage rounding without changing deliberate truncation elsewhere, generated upArrow provenance and generator drift, table row minimum heights including spans/margins/vertical text, text clearing and empty-run behavior, cell-run relationship-scoped hyperlinks, absolute and relative bullet sizes, and style removal on supported shape kinds.
+
+Settle proposed public names and mixed return types before implementation. Distinguish stored dimensions from rendered growth and test fills, text, borders and background together. Use both deterministic native layout and an independent pinned viewer with sensitive short/long-text controls. Intentional PowerPoint paint deltas require separate labeled commits and the applicable corpus, not the Word-only hash harness alone. Preserve paragraph/run formatting and held owners through clear/append and hyperlink operations. Do not accept unavailable corpus, WASM or installed controls as passed.

@@ -2804,11 +2804,21 @@ S96 work. Continue the authorized S95.3 and S95.4 boundaries before publication.
 
 #### Sprint S95.3, Content control foundations and typed values
 
-**Goal**: author the control lifecycle before typed values and XML bindings.
-Three stories total 12 to 15 developer-days.
+**Goal**: repair the reviewed consistency defects, resolve current contributions,
+then author the control lifecycle before typed values and XML bindings. The
+original three-story estimate remains 12 to 15 developer-days. User expansion
+on 2026-10-18 adds F-X259 through F-X262, provisionally 16 to 24 developer-days,
+for seven stories and 28 to 39 developer-days total. This is an expanded scope,
+not measured effort or an unchanged capacity promise. Current intake and exact
+acceptance ownership live in CURRENT_SPRINT and HLD14. Grok implements through
+`/run-sprint --reviewer codex`, then Codex independently reviews the union.
 
 | F-ID | Title | Size |
 |------|-------|------|
+| F-X259 | Repair reviewed consistency defects and strengthen acceptance gates | M |
+| F-X260 | Restore live handles and bound structural edit cost | L |
+| F-X261 | Resolve Word package preservation and inspection contributions | L |
+| F-X262 | Resolve PowerPoint authoring and table-render contributions | L |
 | F-285 | Content control creation and lifecycle | L |
 | F-286 | Rich, repeating, and typed content controls | L |
 | F-287 | Custom XML stores and data binding authoring | L |

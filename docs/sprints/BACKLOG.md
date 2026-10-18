@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 26 | 0 | 28 |
-| X, Cross-cutting | 272 | 263 | 0 | 5 |
-| **Total** | **603** | **539** | **0** | **60** |
+| X, Cross-cutting | 276 | 263 | 1 | 8 |
+| **Total** | **607** | **539** | **1** | **63** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -827,4 +827,8 @@ HLD14 contract before adopting contributor changes.
 | F-X256 | Refuse ambiguous Word numeric units and preserve line spacing | S95 | M | done |
 | F-X257 | Complete remaining Word names and legacy dropdown diagnostics | S95 | L | done |
 | F-X258 | Complete remaining PowerPoint names color and language contracts | S95 | M | done |
+| F-X259 | Repair reviewed consistency defects and strengthen acceptance gates | S95.3 | M | in-progress |
+| F-X260 | Restore live handles and bound structural edit cost | S95.3 | L | pending |
+| F-X261 | Resolve Word package preservation and inspection contributions | S95.3 | L | pending |
+| F-X262 | Resolve PowerPoint authoring and table-render contributions | S95.3 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->
