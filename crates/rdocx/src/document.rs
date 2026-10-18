@@ -11100,7 +11100,7 @@ fn prepare_template_source_programs(
         });
     }
     let table_children = template_direct_table_children(&source.xml)?;
-    let item_scopes = story_namespace_scopes_at(
+    let mut item_scopes = story_namespace_scopes_at(
         &source.xml,
         inventories
             .iter()
@@ -11136,7 +11136,40 @@ fn prepare_template_source_programs(
     let mut prepared = Vec::new();
     for &owner_index in &active {
         let story = &qualified[owner_index].0;
-        let items = &inventories[owner_index];
+        // A block control is its own grammar container. Its direct paragraphs
+        // are not story items of the enclosing owner, so the container would
+        // otherwise publish with no scalar occurrences.
+        let mut items = inventories[owner_index].clone();
+        let mut extra_starts = Vec::new();
+        for item in &inventories[owner_index] {
+            if item.kind != StoryItemKind::ContentControl
+                || item.sdt_context != Some(StorySdtContext::Block)
+            {
+                continue;
+            }
+            let scope = item_scopes
+                .get(&item.full.start)
+                .ok_or_else(|| Error::Other("template block control scope missing".to_owned()))?;
+            for paragraph in scan_story_control_paragraphs_with_scope(&source.xml, item, scope)? {
+                if items.iter().any(|existing| existing.full == paragraph) {
+                    continue;
+                }
+                extra_starts.push(paragraph.start);
+                items.push(StoryItemSpan {
+                    kind: StoryItemKind::Paragraph,
+                    full: paragraph.clone(),
+                    scan: paragraph,
+                    direct_owner_child: false,
+                    complex_field: false,
+                    complex_ancestors: Vec::new(),
+                    sdt_context: None,
+                });
+            }
+        }
+        if !extra_starts.is_empty() {
+            item_scopes.extend(story_namespace_scopes_at(&source.xml, extra_starts)?);
+        }
+        items.sort_by_key(|item| (item.full.start, item.full.end));
         let fields = &template_fields[owner_index];
         let mut blocked_until = 0;
         for (index, item) in items.iter().enumerate() {
@@ -35551,11 +35584,24 @@ impl Document {
         set_story_source_xml(self, &part, xml)
     }
 
-    pub(crate) fn template_raw_parts(&self) -> Vec<(String, Vec<u8>)> {
-        self.raw_text_bearing_part_names()
-            .into_iter()
-            .filter_map(|(part, _)| self.package.get_part(&part).map(|xml| (part, xml.to_vec())))
-            .collect()
+    pub(crate) fn template_raw_parts(&self) -> Result<Vec<(String, Vec<u8>)>> {
+        let mut parts = Vec::new();
+        for (part, _) in self.raw_text_bearing_part_names() {
+            // Body program ranges are offsets into `document.to_xml()`. A
+            // flush keeps the stored part when the typed model still compares
+            // equal, and that part is shorter than the canonical serialization
+            // for a document opened from bytes.
+            let xml = if part == self.doc_part_name {
+                self.document.to_xml()?
+            } else {
+                let Some(xml) = self.package.get_part(&part) else {
+                    continue;
+                };
+                xml.to_vec()
+            };
+            parts.push((part, xml));
+        }
+        Ok(parts)
     }
 
     pub(crate) fn template_chart_parts(&self) -> Vec<(String, Vec<u8>)> {
@@ -35571,7 +35617,19 @@ impl Document {
         original: &[u8],
         replacement: Vec<u8>,
     ) -> Result<()> {
-        if self.package.get_part(part) != Some(original) {
+        let current = if part == self.doc_part_name {
+            self.document.to_xml()?
+        } else {
+            self.package
+                .get_part(part)
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "template chart source changed during staging: {part}"
+                    ))
+                })?
+                .to_vec()
+        };
+        if current.as_slice() != original {
             return Err(Error::Other(format!(
                 "template chart source changed during staging: {part}"
             )));

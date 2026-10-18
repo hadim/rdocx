@@ -784,21 +784,24 @@ fn replay_program_blocks(
                                     template_error("template child ends outside its item")
                                 })?;
                         let alias_source;
+                        let original_alias;
                         let selected = if alias == 0 {
+                            original_alias = None;
                             actual
                         } else {
-                            let source = raw.get(relative.clone()).ok_or_else(|| {
+                            let source_bytes = raw.get(relative.clone()).ok_or_else(|| {
                                 template_error("paired template child source is stale")
                             })?;
+                            original_alias = Some(source_bytes.to_vec());
                             alias_source = Document::template_fragment_program(
                                 &current.part,
-                                source,
+                                source_bytes,
                                 &item.scope,
                                 actual.story.kind(),
                             )?;
                             &alias_source
                         };
-                        let replacement = replay_program(
+                        let mut replacement = replay_program(
                             source,
                             &execution.blocks,
                             selected,
@@ -808,6 +811,11 @@ fn replay_program_blocks(
                             pending_drawings,
                             false,
                         )?;
+                        if let Some(original_alias) = original_alias.as_deref() {
+                            // Parsing the copy declares inherited namespaces on
+                            // its root. The stored copy keeps the root it had.
+                            replacement = restore_paired_copy_root(original_alias, &replacement)?;
+                        }
                         nested.push((relative, replacement));
                     }
                 }
@@ -933,6 +941,34 @@ fn replay_program_blocks(
         }
     }
     Ok(output)
+}
+
+/// Drop namespace declarations added so a paired copy could be parsed alone.
+/// The copy's original root start tag stays, and the rendered interior stays.
+fn restore_paired_copy_root(original: &[u8], rendered: &[u8]) -> Result<Vec<u8>> {
+    let original_end = fragment_root_start_tag_end(original)?;
+    let rendered_end = fragment_root_start_tag_end(rendered)?;
+    let mut output = Vec::with_capacity(original_end + rendered.len().saturating_sub(rendered_end));
+    output.extend_from_slice(&original[..original_end]);
+    output.extend_from_slice(&rendered[rendered_end..]);
+    Ok(output)
+}
+
+fn fragment_root_start_tag_end(xml: &[u8]) -> Result<usize> {
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_) | Event::Empty(_)) => return Ok(reader.buffer_position() as usize),
+            Ok(Event::Eof) => {
+                return Err(template_error("paired template copy has no root element"));
+            }
+            Ok(_) => {}
+            Err(error) => return Err(template_xml_error(error)),
+        }
+        buffer.clear();
+    }
 }
 
 fn replay_program(
@@ -1151,7 +1187,7 @@ fn prepare_unowned_textbox_edits(
     }
     let mut edits = Vec::new();
     let mut count = 0;
-    for (part, original) in document.template_raw_parts() {
+    for (part, original) in document.template_raw_parts()? {
         let ranges = excluded.entry(part.clone()).or_default();
         // Word writes one text box twice, and a box can contain another.
         // Those physical ranges overlap. The raw walker accepts only a
