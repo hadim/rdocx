@@ -1088,6 +1088,11 @@ place and do not advance the revision. `rpptx` and `rpptx.enum.text` export
   `auto_number` selects the concrete scheme and optional start instead.
   `bullet_char` is a checked alias with the same str, bool or None contract,
   including clear/no-op behavior and atomic invalid-value refusal.
+- `TextFrame.clear()` keeps the first paragraph with its `a:pPr` and
+  `a:endParaRPr`, removes its runs, breaks and fields, and removes every other
+  paragraph, as python-pptx does. Assigning empty text to a text frame or a
+  paragraph likewise leaves a paragraph without runs, so the next appended run
+  is the first one.
 - `Paragraph.add_run(text="")` stages an append and allocates the new returned
   run against prepared successor scopes before publication. The owning
   paragraph and text frame remain live, while prior affected run descendants

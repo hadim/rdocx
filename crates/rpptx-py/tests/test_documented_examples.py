@@ -11823,6 +11823,37 @@ def test_issue392_up_arrow_is_an_authorable_preset():
     assert by_name.auto_shape_type == MSO_SHAPE.DOWN_ARROW
 
 
+def test_issue392_text_frame_clear_leaves_one_paragraph_without_runs():
+    import rpptx
+    from rpptx.enum.text import PP_ALIGN
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    frame = slide.shapes.add_textbox(0, 0, 2743200, 914400).text_frame
+    frame.text = "old\nolder"
+    frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+    frame.clear()
+    assert len(frame.paragraphs) == 1 and frame.text == ""
+    body = frame.element.xml.split("<a:lstStyle/>")[-1]
+    assert "<a:r>" not in body and '<a:pPr algn="ctr"/>' in body
+    frame.paragraphs[0].add_run("new")
+    assert [run.text for run in frame.paragraphs[0].runs] == ["new"]
+    reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
+    assert reopened.slides[0].shapes[0].text_frame.text == "new"
+
+
+def test_issue392_text_frame_clear_works_on_a_table_cell():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    cell = slide.shapes.add_table(1, 1, 0, 0, 2743200, 914400).table.cell(0, 0)
+    cell.text = "a\nb"
+    cell.text_frame.clear()
+    assert cell.text == "" and len(cell.text_frame.paragraphs) == 1
+    assert cell.text_frame.paragraphs[0].runs.__len__() == 0
+
+
 def test_issue392_empty_text_writes_a_paragraph_without_runs():
     import rpptx
 

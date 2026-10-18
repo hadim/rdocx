@@ -449,6 +449,17 @@ impl CT_TextBody {
         self.reconcile_paragraph_raw_children(old_paragraph_count, self.paragraphs.len());
     }
 
+    /// Removes every paragraph but the first and every run of that one,
+    /// keeping its paragraph and end-of-paragraph properties, as python-pptx
+    /// `TextFrame.clear` does.
+    pub fn clear(&mut self) {
+        let old_paragraph_count = self.paragraphs.len();
+        let mut first = self.paragraphs.drain(..).next().unwrap_or_default();
+        first.clear_runs();
+        self.paragraphs.push(first);
+        self.reconcile_paragraph_raw_children(old_paragraph_count, 1);
+    }
+
     /// Returns an empty body that keeps this body's properties and list style
     /// and the formatting of its first paragraph, as PowerPoint fills the
     /// cells of a new table row or column.
@@ -761,6 +772,24 @@ mod tests {
         plain.set_text("single line");
         assert_eq!(plain.paragraph_count(), 1);
         assert_eq!(plain.plain_text(), "single line");
+    }
+
+    #[test]
+    fn clear_keeps_one_paragraph_with_its_properties_and_no_runs() {
+        let mut body = CT_TextBody::from_xml(
+            br#"<a:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:x"><a:bodyPr/><a:p><a:pPr algn="ctr"/><a:r><a:rPr b="1"/><a:t>old</a:t></a:r><a:br/><a:fld id="{00000000-0000-0000-0000-000000000001}" type="slidenum"><a:t>1</a:t></a:fld><x:in-paragraph/><a:endParaRPr sz="1200"/></a:p><a:p><a:r><a:t>gone</a:t></a:r></a:p><x:after-paragraphs/></a:txBody>"#,
+        )
+        .unwrap();
+        body.clear();
+        assert_eq!(
+            String::from_utf8(body.to_xml().unwrap()).unwrap(),
+            concat!(
+                r#"<a:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:x"><a:bodyPr/>"#,
+                r#"<a:p xmlns:x="urn:x"><a:pPr algn="ctr"/><x:in-paragraph/><a:endParaRPr sz="1200"/></a:p>"#,
+                r#"<x:after-paragraphs/></a:txBody>"#,
+            )
+        );
+        assert_eq!(body.plain_text(), "");
     }
 
     #[test]

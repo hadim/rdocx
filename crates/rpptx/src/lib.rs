@@ -23757,6 +23757,12 @@ impl<'a> TextFrame<'a> {
         self.body.set_text(text);
     }
 
+    /// Leaves one paragraph without runs, as [`CT_TextBody::clear`]
+    /// describes.
+    pub fn clear(&mut self) {
+        self.body.clear();
+    }
+
     /// Replaces literal text in this text body only and returns the count.
     ///
     /// Matching and formatting are those of

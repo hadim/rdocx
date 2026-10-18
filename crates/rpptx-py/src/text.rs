@@ -423,6 +423,32 @@ impl PyTextFrame {
         Ok(())
     }
 
+    /// Removes every paragraph but the first and every run of that one, as
+    /// python-pptx `TextFrame.clear` does. The paragraph keeps its
+    /// paragraph and end-of-paragraph properties.
+    fn clear(&self, py: Python<'_>) -> PyResult<()> {
+        self.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let mut candidate = presentation.inner.clone();
+        native_text_frame_mut_at(&mut candidate, &current)
+            .map(|mut frame| frame.clear())
+            .ok_or_else(|| PyValueError::new_err("shape has no text frame"))?;
+        let survivors = presentation.text_changed_owners(&self.path)?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "TextFrame.clear",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)?;
+        Ok(())
+    }
+
     /// Formats one checked owner without changing text topology.
     #[pyo3(signature=(font_family=None,max_size=18,*,fonts=None,font_dir=None,font_dirs=None))]
     fn fit_text<'py>(
