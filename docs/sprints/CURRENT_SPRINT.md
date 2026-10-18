@@ -24,7 +24,7 @@ developer-days, not an unchanged sprint-capacity promise.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-X259 | Repair reviewed consistency defects and strengthen acceptance gates | M | in-progress | codex |
-| F-X260 | Restore live handles and bound structural edit cost | L | pending | - |
+| F-X260 | Restore live handles and bound structural edit cost | L | in-progress | grok |
 | F-X261 | Resolve Word package preservation and inspection contributions | L | pending | - |
 | F-X262 | Resolve PowerPoint authoring and table-render contributions | L | pending | - |
 | F-285 | Content control creation and lifecycle | L | pending | - |
