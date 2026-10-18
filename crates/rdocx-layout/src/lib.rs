@@ -21,7 +21,7 @@ pub use oxml_layout::{
 use rdocx_oxml::document::BodyContent;
 
 /// Word story containing a source paragraph.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WordStory {
     Document,
     Header {
@@ -344,16 +344,16 @@ pub struct WordLayoutResult {
     body_fragments: Vec<Vec<WordBodyLayoutFragment>>,
     numbering_by_source: Vec<Option<style_resolver::ResolvedNumbering>>,
     navigation_failure: Option<String>,
-    navigation_by_source: std::collections::HashMap<SourceNodeId, ParagraphNavigation>,
-    paragraph_pages: std::collections::HashMap<SourceNodeId, usize>,
-    bookmark_numbering: std::collections::HashMap<String, style_resolver::ResolvedNumbering>,
-    bookmark_suppressed: std::collections::HashSet<String>,
+    navigation_by_source: std::collections::BTreeMap<SourceNodeId, ParagraphNavigation>,
+    paragraph_pages: std::collections::BTreeMap<SourceNodeId, usize>,
+    bookmark_numbering: std::collections::BTreeMap<String, style_resolver::ResolvedNumbering>,
+    bookmark_suppressed: std::collections::BTreeSet<String>,
     page_reference_names: Vec<String>,
     page_sections: Vec<WordPageSection>,
     field_placements: Vec<WordFieldPlacement>,
-    bookmark_pages: std::collections::HashMap<usize, WordPageSection>,
-    field_source_xml: std::collections::HashMap<oxml_layout::FieldSource, Vec<u8>>,
-    text_box_owner_indices: std::collections::HashMap<WordStory, usize>,
+    bookmark_pages: std::collections::BTreeMap<usize, WordPageSection>,
+    field_source_xml: std::collections::BTreeMap<oxml_layout::FieldSource, Vec<u8>>,
+    text_box_owner_indices: std::collections::BTreeMap<WordStory, usize>,
 }
 
 impl WordLayoutResult {
@@ -564,8 +564,16 @@ impl WordLayoutResult {
     }
 }
 
-fn paragraph_pages(layout: &LayoutResult) -> std::collections::HashMap<SourceNodeId, usize> {
-    let mut pages = std::collections::HashMap::new();
+fn ordered<K: Ord, V>(map: std::collections::HashMap<K, V>) -> std::collections::BTreeMap<K, V> {
+    map.into_iter().collect()
+}
+
+fn ordered_set<T: Ord>(set: std::collections::HashSet<T>) -> std::collections::BTreeSet<T> {
+    set.into_iter().collect()
+}
+
+fn paragraph_pages(layout: &LayoutResult) -> std::collections::BTreeMap<SourceNodeId, usize> {
+    let mut pages = std::collections::BTreeMap::new();
     for page in &layout.pages {
         oxml_layout::walk(&page.elements, &mut |element, _| {
             let source = match element {
@@ -602,18 +610,18 @@ pub fn layout_document_with_provenance(input: &LayoutInput) -> Result<WordLayout
         body_fragments,
         page_sections,
         field_placements,
-        bookmark_pages,
-        field_source_xml: engine.take_field_source_xml(),
-        text_box_owner_indices: engine.take_text_box_owner_indices(),
+        bookmark_pages: ordered(bookmark_pages),
+        field_source_xml: ordered(engine.take_field_source_xml()),
+        text_box_owner_indices: ordered(engine.take_text_box_owner_indices()),
         numbering_by_source,
-        navigation_by_source: engine.take_navigation(),
+        navigation_by_source: ordered(engine.take_navigation()),
         navigation_failure: input
             .sequence_snapshot
             .as_ref()
             .filter(|_| input.revision_view == RevisionView::Accepted)
             .and_then(|snapshot| snapshot.navigation_failure.clone()),
-        bookmark_numbering: engine.take_bookmark_numbering(),
-        bookmark_suppressed: engine.take_bookmark_suppressed(),
+        bookmark_numbering: ordered(engine.take_bookmark_numbering()),
+        bookmark_suppressed: ordered_set(engine.take_bookmark_suppressed()),
         page_reference_names: engine::page_reference_names(input),
     })
 }
@@ -640,18 +648,18 @@ pub fn layout_document_with_reusable_engine(
         body_fragments,
         page_sections,
         field_placements,
-        bookmark_pages,
-        field_source_xml: engine.take_field_source_xml(),
-        text_box_owner_indices: engine.take_text_box_owner_indices(),
+        bookmark_pages: ordered(bookmark_pages),
+        field_source_xml: ordered(engine.take_field_source_xml()),
+        text_box_owner_indices: ordered(engine.take_text_box_owner_indices()),
         numbering_by_source,
-        navigation_by_source: engine.take_navigation(),
+        navigation_by_source: ordered(engine.take_navigation()),
         navigation_failure: input
             .sequence_snapshot
             .as_ref()
             .filter(|_| input.revision_view == RevisionView::Accepted)
             .and_then(|snapshot| snapshot.navigation_failure.clone()),
-        bookmark_numbering: engine.take_bookmark_numbering(),
-        bookmark_suppressed: engine.take_bookmark_suppressed(),
+        bookmark_numbering: ordered(engine.take_bookmark_numbering()),
+        bookmark_suppressed: ordered_set(engine.take_bookmark_suppressed()),
         page_reference_names: engine::page_reference_names(input),
     })
 }
@@ -675,18 +683,18 @@ pub fn layout_document_with_caller_fonts_and_provenance(
         body_fragments,
         page_sections,
         field_placements,
-        bookmark_pages,
-        field_source_xml: engine.take_field_source_xml(),
-        text_box_owner_indices: engine.take_text_box_owner_indices(),
+        bookmark_pages: ordered(bookmark_pages),
+        field_source_xml: ordered(engine.take_field_source_xml()),
+        text_box_owner_indices: ordered(engine.take_text_box_owner_indices()),
         numbering_by_source,
-        navigation_by_source: engine.take_navigation(),
+        navigation_by_source: ordered(engine.take_navigation()),
         navigation_failure: input
             .sequence_snapshot
             .as_ref()
             .filter(|_| input.revision_view == RevisionView::Accepted)
             .and_then(|snapshot| snapshot.navigation_failure.clone()),
-        bookmark_numbering: engine.take_bookmark_numbering(),
-        bookmark_suppressed: engine.take_bookmark_suppressed(),
+        bookmark_numbering: ordered(engine.take_bookmark_numbering()),
+        bookmark_suppressed: ordered_set(engine.take_bookmark_suppressed()),
         page_reference_names: engine::page_reference_names(input),
     })
 }
@@ -733,18 +741,18 @@ pub fn layout_document_deterministic_with_provenance(
         body_fragments,
         page_sections,
         field_placements,
-        bookmark_pages,
-        field_source_xml: engine.take_field_source_xml(),
-        text_box_owner_indices: engine.take_text_box_owner_indices(),
+        bookmark_pages: ordered(bookmark_pages),
+        field_source_xml: ordered(engine.take_field_source_xml()),
+        text_box_owner_indices: ordered(engine.take_text_box_owner_indices()),
         numbering_by_source,
-        navigation_by_source: engine.take_navigation(),
+        navigation_by_source: ordered(engine.take_navigation()),
         navigation_failure: input
             .sequence_snapshot
             .as_ref()
             .filter(|_| input.revision_view == RevisionView::Accepted)
             .and_then(|snapshot| snapshot.navigation_failure.clone()),
-        bookmark_numbering: engine.take_bookmark_numbering(),
-        bookmark_suppressed: engine.take_bookmark_suppressed(),
+        bookmark_numbering: ordered(engine.take_bookmark_numbering()),
+        bookmark_suppressed: ordered_set(engine.take_bookmark_suppressed()),
         page_reference_names: engine::page_reference_names(input),
     })
 }

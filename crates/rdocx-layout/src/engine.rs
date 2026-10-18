@@ -4209,6 +4209,9 @@ impl Engine {
                             }
                         });
                         facts.level = paragraph.heading_level;
+                        // Cache hits return before layout records this count.
+                        facts.accepted_runs =
+                            project_paragraph_runs(para, input.revision_view).len();
                         if !excluded_owner_for_source(input, source) {
                             facts.text = projected_paragraph_text(para, input.revision_view);
                             facts.style = para.properties.as_ref().and_then(|p| p.style_id.clone());
