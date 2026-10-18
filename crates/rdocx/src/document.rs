@@ -29231,6 +29231,34 @@ impl Document {
         Ok(())
     }
 
+    /// The document default paragraph properties, `w:pPrDefault`.
+    ///
+    /// Every paragraph inherits them beneath its styles, so a refreshed table
+    /// of contents follows them too.
+    pub fn default_paragraph_properties(&self) -> Option<&CT_PPr> {
+        self.styles.doc_defaults.as_ref()?.ppr.as_ref()
+    }
+
+    /// Replace the document default paragraph properties, `w:pPrDefault`.
+    ///
+    /// The run defaults and the unmodelled content of `w:docDefaults` are
+    /// kept. `None` removes the paragraph defaults.
+    pub fn set_default_paragraph_properties(&mut self, properties: Option<CT_PPr>) -> Result<()> {
+        if self.default_paragraph_properties() == properties.as_ref() {
+            return Ok(());
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.reserve_styles_bundle()?;
+        candidate
+            .styles
+            .doc_defaults
+            .get_or_insert_with(Default::default)
+            .ppr = properties;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
     /// Add a bullet list item at the given indentation level (0-based).
     ///
     /// If no bullet list definition exists yet, one is created automatically.

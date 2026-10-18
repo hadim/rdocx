@@ -25755,3 +25755,25 @@ fn issue_391_part_xml_serializes_the_current_model() {
     assert!(document.part_xml("word/absent.xml").unwrap().is_none());
 }
 
+#[test]
+fn issue_391_default_paragraph_properties_round_trip() {
+    let mut document = Document::new();
+    let properties = CT_PPr {
+        space_after: Some(rdocx::Twips(60)),
+        line_spacing: Some(rdocx::Twips(276)),
+        line_rule: Some("auto".to_owned()),
+        ..document
+            .default_paragraph_properties()
+            .cloned()
+            .unwrap_or_default()
+    };
+    document
+        .set_default_paragraph_properties(Some(properties.clone()))
+        .unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let read = reopened.default_paragraph_properties().unwrap();
+    assert_eq!(read.space_after, Some(rdocx::Twips(60)));
+    assert_eq!(read.line_spacing, Some(rdocx::Twips(276)));
+    assert_eq!(read.line_rule.as_deref(), Some("auto"));
+    assert_eq!(reopened.default_font_name(), document.default_font_name());
+}

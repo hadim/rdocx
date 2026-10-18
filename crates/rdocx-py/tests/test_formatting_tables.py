@@ -2090,3 +2090,32 @@ def test_fx202_table_look_setter_preserves_default_banding():
     assert table.first_row is True
     assert table.banded_rows is True
     assert table.banded_columns is True
+
+
+def test_issue_391_default_paragraph_format_reads_and_sets_ppr_default():
+    from xml.etree import ElementTree as ET
+    from rdocx import Document
+    from rdocx.shared import Pt
+
+    W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    document = Document()
+    paragraph = document.add_paragraph("unchanged")
+    document.set_default_paragraph_format(space_before=Pt(6), space_after=Pt(3), line_spacing=1.15)
+    defaults = document.default_paragraph_format
+    assert defaults.space_before == Pt(6) and defaults.space_after == Pt(3)
+    assert defaults.line_spacing == 1.15
+    assert paragraph.text == "unchanged"
+    reopened = Document.from_bytes(document.to_bytes())
+    with ZipFile(BytesIO(reopened.to_bytes())) as package:
+        root = ET.fromstring(package.read("word/styles.xml"))
+    spacing = root.find(f"{W}docDefaults/{W}pPrDefault/{W}pPr/{W}spacing")
+    assert spacing.get(f"{W}before") == "120" and spacing.get(f"{W}after") == "60"
+    assert spacing.get(f"{W}line") == "276" and spacing.get(f"{W}lineRule") == "auto"
+    assert root.find(f"{W}docDefaults/{W}rPrDefault") is not None
+    # Unspecified keywords keep their values. A length is an exact pitch.
+    reopened.set_default_paragraph_format(line_spacing=Pt(14))
+    defaults = reopened.default_paragraph_format
+    assert defaults.line_spacing == Pt(14) and defaults.space_after == Pt(3)
+    before = reopened.to_bytes()
+    reopened.set_default_paragraph_format()
+    assert reopened.to_bytes() == before

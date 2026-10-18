@@ -402,7 +402,10 @@ outline_level and bidi, with checked input and retained foreign payload.
 
 `Document.default_font_name` and `default_font_size` edit docDefaults without
 restyling Normal. Size uses Length or integer EMU and returns Length or None.
-`Document.part_names` lists the package parts and `part_xml(name)` returns
+`Document.set_default_paragraph_format` edits `w:pPrDefault` with the
+`space_before`, `space_after` and `line_spacing` keywords of `set_style`, and
+`default_paragraph_format` returns a frozen `DefaultParagraphFormat` snapshot of
+them. `Document.part_names` lists the package parts and `part_xml(name)` returns
 one part's XML as a save would write it now, read-only.
 `add_style` and `set_style` accept alignment, line_spacing, underline,
 keep_with_next, keep_together, page_break_before, borders, shading and tab_stops
