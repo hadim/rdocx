@@ -1507,7 +1507,11 @@ parity in that format.
 
 Relationship-resolved embedded font faces enter `LayoutInput.embedded_fonts` under the
 font-table record name. Their OOXML font key deobfuscates the package bytes
-before shaping. This explicit document input has priority over bundled fallback
+before shaping. A face stored as a plain TrueType or OpenType part, under a
+content type such as `application/x-font-ttf` as Google Docs and LibreOffice
+write it, is read as it is whatever its key. A face of any other content type
+is left out of layout, so its text uses the fallback face, while the font
+listing still refuses it. This explicit document input has priority over bundled fallback
 and needs no system-font discovery. Authored major and minor theme typefaces
 therefore resolve to the embedded face in deterministic layout. Theme or font
 mutation invalidates completed normal and deterministic layouts while reusable
