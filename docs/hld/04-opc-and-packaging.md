@@ -1731,6 +1731,13 @@ document identities before insertion. Any value-kind, marker, relationship,
 identity, callback, allocation, serialization, or reopen failure discards the
 entire prospective result.
 
+Versioned template expansion uses that same staged fragment transaction for a
+repeated range in any checked physical owner. Each copy receives fresh
+bookmark, control, drawing, note, comment and relationship identities before
+publication. Drawing ids reserved for those copies stay occupied across the
+prepare that refreshes note and comment companions, so the next copy cannot
+reuse them. The live package is published once after every owner succeeds.
+
 Cross-document block fragments carry their source package so retained XML stays
 authoritative across every supported owner. Local namespace declarations and
 unrelated destination XML survive insertion. The closure starts at selected

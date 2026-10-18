@@ -3,6 +3,31 @@
 Owners: `oxml-py-support`, `rdocx-py`, `rpptx-py`, `rdocx-wasm`, `rpptx-wasm`,
 `oxml-cli-support`, `rdocx-cli`, `rpptx-cli`.
 
+## Native numbered outline
+
+The additive Rust `Document::numbered_document_outline(&self) ->
+Result<Vec<NumberedOutlineNode>>` retains accepted heading level, title-only
+text, optional visible marker, display text, physical WordSourcePath and child
+nodes. Display text separates a nonempty marker and title with one readable
+space. Existing `headings` and `document_outline` retain their signatures and
+legacy title-only scope. No new Python or WASM navigation surface is implied.
+
+Doc-hidden layout hooks expose private production paragraph facts and the
+validated generated-result exclusions used by the facade. They add no public
+struct fields. The iterator `paragraph_navigation()` and direct
+`paragraph_navigation_source(SourceNodeId)` read the same private facts. The
+latter returns `Option<(&WordSourcePath, Option<u32>, &str, Option<&str>,
+Option<&ResolvedNumbering>, Option<usize>)>`. Neither creates a second heading
+tree or counter. The source stamp binds exclusions to the current parsed main
+input and physical part, while every sequence counter is regenerated.
+
+Ambiguous generated-owner discovery travels as a private source-stamped failure,
+not an empty successful navigation inventory. The narrow doc-hidden
+`WordSequenceSnapshot::set_navigation_failure(&mut self, &LayoutInput, String)`
+uses existing types. `WordLayoutResult::navigation_failure() -> Option<&str>`
+lets the new outline refuse without making ordinary cached painting fatal.
+Ordinary REF/SEQ counter semantics remain unchanged.
+
 ## The PyO3 lifetime problem
 
 A `#[pyclass]` must be `'static`. The facade is built on borrow handles:
@@ -1336,7 +1361,8 @@ F-248 also adds public fields to the pre-1.0 native Rust projections.
 `ResolvedNumbering` exposes `number_current`, `number_level`,
 `number_level_without_text`, `number_level_has_ancestor`, `number_full`,
 `number_full_without_text`,
-`number_context`, `number_suffixes_without_text`, `num_id`, and the hidden
+`number_context`, `number_suffixes_without_text`, `num_id`,
+`definition_id`, `has_start_override`, and the hidden
 `relative_to` method. `CT_PPr` exposes
 `num_ilvl_raw`, `num_id_raw`, `num_pr_extra_attributes`, `num_pr_extra_xml`,
 `numbering_revision_xml_positions`, and `numbering_revision_position` so typed
@@ -2466,6 +2492,17 @@ kinds, dimensions, XML text, fragments, relationships, or callback results fail
 atomically. These types and methods are additive native Rust APIs. The flat
 methods and Python, WASM, and CLI surfaces remain unchanged.
 
+Template occurrence staging uses the existing accepted-run mapper through the
+doc-hidden `replace_prepared_occurrences(&mut CT_P,
+&[(usize, Range<usize>, String, Option<CT_RPr>)]) -> Result<()>` provider.
+Prepared original stretch/ranges are validated together before publication.
+A run-property override affects only inserted text, preserving source prefix
+and suffix properties. This helper adds no binding surface or public carrier.
+The same placeholder carrier exposes doc-hidden
+`replace_original_literals_in_xml_part`. It rewrites original literal stretches
+outside checked physical text-box ranges and does not admit an unknown
+structural owner.
+
 Native Word callers render templates with
 `Document::render_template(&serde_json::Value)`. Scalar tags use
 `{{ path.to.value }}` syntax and may cross ordinary Word run boundaries.
@@ -2473,16 +2510,28 @@ Dedicated marker paragraphs and rows use `{% for item in path %}` with
 `{% endfor %}`, or `{% if path %}` with `{% endif %}`. Blocks nest within one
 container. Loops require arrays and introduce lexical variables. Conditions
 treat false, null, zero, empty strings, empty arrays, and empty objects as
-false. Other JSON values are true. Structural generation is limited to the
-main body and its tables, while other stories retain scalar rendering. Missing
-paths, malformed markers, invalid scalar leaves, invalid numbering references,
-and crossed container boundaries fail without mutation. One row loop may own
-several adjacent template rows. Each iteration retains table banding, grid and
-merge properties, and preserved row and cell XML. Repeated list items retain
-one source numbering identity and level, so their sequence continues across
-iterations. The existing method remains additive on the pre-1.0 native facade.
-Python, WASM, and CLI surfaces gain no template method and continue to preserve
-a document rendered by native code.
+false. Other JSON values are true. Grammar 1 pairs structural controls inside
+one physical owner. That owner may be the main body, a table cell, a header, a
+footer, one normal note, or one checked text box. Markers do not pair across
+those boundaries. Chart labels stay scalar. Missing paths, malformed markers,
+invalid scalar leaves, invalid numbering references, and crossed container
+boundaries fail without mutation. One row loop may own several adjacent
+template rows. Each iteration retains table banding, grid and merge properties,
+and preserved row and cell XML. Repeated list items retain one source numbering
+identity and level, so their sequence continues across iterations.
+`Document::render_template_versioned(&Value, u32)` admits only grammar 1.
+`Document::render_template` keeps the legacy grammar.
+`Document::render_template_with_formatter` selects grammar 1 and invokes the
+existing `MailMergeFormattedText` carrier once per scalar occurrence, in final
+physical order, with the original paragraph location. Callback text and run
+properties are validated before commit. Chart text and unqualified raw text
+boxes have no original paragraph location, so formatter mode refuses those
+active scalars before any callback. Built-in chart and raw text-box
+substitution remains available without the formatter. The existing Python
+`render_template` method takes optional `grammar_version`. `None` keeps the
+legacy grammar and `1` selects grammar 1. Other versions and malformed values
+refuse without publishing. Python has no formatter callback. WASM and CLI gain
+no template surface.
 
 Native Word callers can also inspect content controls through
 `Document::content_controls` and the tag or alias lookup methods.

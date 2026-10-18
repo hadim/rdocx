@@ -8882,3 +8882,67 @@ def test_fx250_effective_numbering_override_restart_and_continuation(abstract_fo
         concrete = tree.find(f"{w}num[@{w}numId='{new_id}']/{w}lvlOverride")
         assert concrete.find(w + 'startOverride').get(w + 'val') == '5'
         assert concrete.find(w + 'lvl/' + w + 'numFmt').get(w + 'val') == 'decimal'
+
+
+
+def test_f284_versioned_paths_filters_escapes_and_legacy_selection():
+    import rdocx
+    legacy = rdocx.Document()
+    legacy.add_paragraph("{{a|upper}}")
+    assert legacy.render_template({"a|upper": "legacy", "a": "versioned"}) == 1
+    assert legacy.paragraphs[0].text == "legacy"
+    versioned = rdocx.Document()
+    versioned.add_paragraph('{{ person["full.name"]|trim|upper }} / {{values|join(";")}} / {{missing|default("guest")}} / {{{{name}}}}')
+    assert versioned.render_template({"person": {"full.name": " Ada "}, "values": [0, False, None]}, grammar_version=1) == 3
+    assert versioned.paragraphs[0].text == "ADA / 0;false; / guest / {{name}}"
+    assert rdocx.Document.from_bytes(versioned.to_bytes()).paragraphs[0].text == versioned.paragraphs[0].text
+
+
+def test_f284_container_expansion_uses_existing_native_transaction():
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph("{% for item in items %}")
+    document.add_paragraph("BODY {{item.name|upper}}")
+    document.add_table(1, 1).cell(0, 0).text = "CELL {{item.name|lower}}"
+    document.add_paragraph("{% endfor %}")
+    document.set_header("HEADER {{title|trim}}")
+    document.set_footer("FOOTER {{title|trim}}")
+    assert document.render_template({"items": [{"name": "One"}, {"name": "Two"}], "title": " Ada "}, grammar_version=1) == 6
+    assert [p.text for p in document.paragraphs] == ["BODY ONE", "BODY TWO"]
+    assert [t.cell(0, 0).text for t in document.tables] == ["CELL one", "CELL two"]
+    assert document.section(0).header.paragraphs[0].text == "HEADER Ada"
+    assert document.section(0).footer.paragraphs[0].text == "FOOTER Ada"
+    assert rdocx.Document.from_bytes(document.to_bytes()).text() == document.text()
+
+
+def test_f284_version_and_data_refusals_preserve_bytes_and_held_owners():
+    import rdocx
+    document = rdocx.Document()
+    held = document.add_paragraph("{{name}}")
+    for version, error in [(0, ValueError), (2, ValueError), (-1, OverflowError), ("1", TypeError), (1.0, TypeError)]:
+        before = document.to_bytes()
+        with pytest.raises(error):
+            document.render_template({"name": "Ada"}, grammar_version=version)
+        assert document.to_bytes() == before
+        assert held.text == "{{name}}"
+    for payload in [{"name": float("nan")}, {"name": 2**64}, {1: "bad"}]:
+        before = document.to_bytes()
+        with pytest.raises((ValueError, TypeError)):
+            document.render_template(payload, grammar_version=1)
+        assert document.to_bytes() == before
+        assert held.text == "{{name}}"
+
+
+def test_f284_wrong_intermediate_default_and_inserted_text_are_literal():
+    import rdocx
+    document = rdocx.Document()
+    held = document.add_paragraph('{{wrong.child|default("fallback")}}')
+    before = document.to_bytes()
+    with pytest.raises(ValueError):
+        document.render_template({"wrong": 3}, grammar_version=1)
+    assert document.to_bytes() == before
+    assert held.text == '{{wrong.child|default("fallback")}}'
+    literal = rdocx.Document()
+    literal.add_paragraph("{{name}} / {{other}}")
+    assert literal.render_template({"name": "{{other}}\ue000rdocx-template-0\ue001", "other": "DATA"}, grammar_version=1) == 2
+    assert literal.paragraphs[0].text == "{{other}}\ue000rdocx-template-0\ue001 / DATA"

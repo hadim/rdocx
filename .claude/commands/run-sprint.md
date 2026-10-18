@@ -19,6 +19,10 @@ checkpoint uses actual scoped local evidence and focused reconciliation checks.
 External oracles, complete suites and risk riders run only in the final union.
 Subcommands consume the same evidence instead of repeating its execution.
 
+Workers batch related local cases sharing a test binary when practical, with
+individual RED/GREEN outcomes retained. Compilation and linking cost matter
+alongside runtime. Preserve checkpoints needed to resolve real uncertainty.
+
 **`scripts/sprint_workflow.py` is the state authority.** Everything below is
 resumable through `.claude/scratch/SNN-run.json`. Reuse it rather than starting
 over.

@@ -2099,6 +2099,71 @@ bounded 16-byte index record per frame, and appends `idx1` after `movi`. Every
 codec write is capped before growth. Neither format invokes a subprocess or a
 system codec.
 
+## Numbering-aware heading placement
+
+Heading level follows the shared effective paragraph cascade, including table
+styles and direct outline suppression. Number suppression does not erase an
+otherwise eligible heading. Physical accepted order supplies numbering, while
+actual positioned source spans supply navigation pages. Repeated table-header
+painting contributes one navigation source. Unplaced headings have no invented
+page. Existing direct-paragraph outline destinations retain their coordinates.
+
+The facade's qualified generated-result exclusions suppress cache-only heading
+and copied SEQ sources, retaining genuine accepted runs before and after partial
+paragraph caches. Valid visible numPr list advancement retains its established
+provider behavior. Only exact current-input facts survive fresh sequence
+snapshot regeneration. Lower detached layout inputs without those facade facts
+do not infer generated-range ownership. Header/footer STYLEREF rendering selects
+from actual page placements, independently from one shared part's saved cache.
+Style aliases and physical page candidates are indexed once per operation.
+The paginator retains alignment metadata for physical fields. Only qualified
+STYLEREF replacements consume that metadata through existing tab realignment.
+Unsupported fields are not reinterpreted. Rich multilingual runs retain the
+existing limitation that they carry no tab-alignment metadata.
+
+Unplaced eligible headings are limited to sources admitted by the existing
+shared effective-paragraph provider. Raw storage in vertical-merge continuation
+cells remains outside that provider, as in established table layout. No skipped
+cell traversal or counter is added. An actually unplaced admitted source has no
+invented page, and unsupported STYLEREF source selection retains its cache.
+
+Direct resolved numbering-level `marker_rpr.vanish=true` suppresses marker ink
+and the outline's visible marker only. The numbering counter, suffix layout,
+accepted heading and counter-derived REF/STYLEREF values remain independent.
+No paragraph-mark or ordinary-text hidden property is inferred as marker
+formatting. The captured Word 16.114 hidden-marker result matches those
+counters. REF returns 1 and STYLEREF returns 2.
+
+REF and STYLEREF `\w` keep each level's literal level text. A level whose
+text already contains every ancestor placeholder replaces the accumulated
+path. Any other formatted level is appended, and one trailing full stop is
+removed. `\w` with `\t` keeps the literal-free full context. An unnumbered
+STYLEREF caller has no list context, so `\r` returns the current level, the
+same result as `\n`. REF `\r` with no caller numbering keeps the full
+context. `\r` shares context across concrete instances of one abstract
+definition when neither instance has a start override. A different
+definition, or any instance start override, keeps the full context. The
+same concrete instance still omits only its shared prefix.
+
+An ambiguous generated-owner scan becomes a private stamped failure fact on
+WordSequenceSnapshot through the narrow doc-hidden
+`set_navigation_failure(&mut self, &LayoutInput, String) -> Result<()>` bridge.
+Fresh sequence regeneration preserves only the exact-current-document and
+physical-part-qualified failure. Ordinary rendering keeps existing stored cache
+paint and counter behavior and reports an existing layout Diagnostic. The new
+numbered outline refuses through `WordLayoutResult::navigation_failure() ->
+Option<&str>`, and newly supported STYLEREF retains cache with an ordered
+diagnostic. Explicit ambiguous rebuilds retain their existing atomic refusal.
+This is not an empty successful source discovery or a new ordinary REF/SEQ
+policy. Snapshot equality includes the private status and invalidates caches.
+
+TOC selectors reuse the existing source-qualified navigation tuple. Explicit
+custom-style selection remains independent. Heading-style selection without
+u keeps its established rule, while u requires the qualified shared heading
+eligibility, including effective inherited or direct outline9 suppression.
+An unavailable owner is an explicit refusal, not a fabricated suppression fact.
+No additional cascade, flag, counter or per-field source scan is introduced.
+
 ## Word bookmark field pagination
 
 INDEX, caption-selected TOC and TOA rebuilding creates provisional entries

@@ -452,6 +452,8 @@ def fx203_owned_document_operations(document: Document, paragraph: Paragraph, pa
         FragmentConflictPolicy, OdtExportResult, RtfExportResult, EpubExportResult,
         TextReport, ValidationReport, validate_bytes, validate_file,
     )
+    assert_type(document.render_template({"name": "Ada"}, grammar_version=1), int)
+    assert_type(document.render_template({"name": "Ada"}, grammar_version=None), int)
     assert_type(document.text_report(), TextReport)
     assert_type(document.validate(), ValidationReport)
     assert_type(validate_bytes(document.to_bytes()), ValidationReport)

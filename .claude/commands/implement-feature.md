@@ -15,8 +15,12 @@ against the design plan as the contract.
 2. **Confirm the state.** The F-ID is `in-progress`, the branch is `sprint/sNN`,
    and the stubs exist and fail.
 
-3. **Work the checklist in order.** After each item, run the narrowest useful
-   test: `cargo test -p <crate> --test <file>`. Not the workspace.
+3. **Work the checklist in order.** Use scoped `cargo check` between edits.
+   Batch related focused regressions sharing a test binary when practical,
+   rather than compiling the same large binary separately for each added case.
+   Retain individual outcomes and rerun the cases affected by each source fix.
+   Run the narrowest useful test target, not the workspace. Never defer a check
+   needed to resolve an actual implementation uncertainty merely to batch it.
 
 4. **Keep the progress file current.** Update
    `.claude/scratch/F-XXX-progress.md` whenever you stop, using the shape below.

@@ -1,5 +1,43 @@
 # 03, Architecture
 
+## Numbering-aware navigation sources
+
+Navigation reads the production paragraph cascade and its resolved numbering
+from one immutable Word layout result. Accepted body, cell and nested-control
+headings retain physical WordSourcePath identity, including unplaced eligible
+headings. Result-local IDs are not interchangeable across snapshots.
+
+The facade's existing generated-table scanner supplies accepted-run exclusion
+facts for owned TOC, figure, authority and bibliography result caches. Ordinary
+CITATION is not an outer generated owner. Private facts travel on the existing
+WordSequenceSnapshot with exact current document and physical main-part stamps.
+Fresh sequence evaluation regenerates values and IDs, transferring only
+validated exclusions. Stale facts refuse instead of changing another source.
+Genuine text beside a same-paragraph result remains eligible. This bridge adds
+no public input fields, second counter, XML parser or navigation registry.
+The scanner's disjoint physical order bounds each paragraph's owner window.
+Per-run end-position search narrows that window to one candidate for the existing
+ownership predicate, including many disjoint owners inside one paragraph.
+
+An ambiguous generated-owner scan becomes a private stamped failure fact on
+WordSequenceSnapshot through the narrow doc-hidden
+`set_navigation_failure(&mut self, &LayoutInput, String) -> Result<()>` bridge.
+Fresh sequence regeneration preserves only the exact-current-document and
+physical-part-qualified failure. Ordinary rendering keeps existing stored cache
+paint and counter behavior and reports an existing layout Diagnostic. The new
+numbered outline refuses through `WordLayoutResult::navigation_failure() ->
+Option<&str>`, and newly supported STYLEREF retains cache with an ordered
+diagnostic. Explicit ambiguous rebuilds retain their existing atomic refusal.
+This is not an empty successful source discovery or a new ordinary REF/SEQ
+policy. Snapshot equality includes the private status and invalidates caches.
+
+TOC selectors reuse the existing source-qualified navigation tuple. Explicit
+custom-style selection remains independent. Heading-style selection without
+u keeps its established rule, while u requires the qualified shared heading
+eligibility, including effective inherited or direct outline9 suppression.
+An unavailable owner is an explicit refusal, not a fabricated suppression fact.
+No additional cascade, flag, counter or per-field source scan is introduced.
+
 ## Owned publication and causal paths
 
 `oxml-py-support` owns captured path authority, owner scopes and prepared
@@ -1086,11 +1124,23 @@ and keeps its revision-save identities. Numbered paragraphs in a
 loop retain their source `numId` and level, which keeps one continuous list
 without allocating definitions. Numbering references are validated before
 evaluation. Loop variables form lexical scopes, and dotted lookup searches the
-innermost scope before the root value. Structural controls are limited to the
-main body and its tables. Headers, footers, footnotes, endnotes, text boxes, and
-chart labels retain scalar-only replacement through the existing Word
-placeholder mapper. A successful render commits the staged document and package
-together and invalidates both layout caches once.
+innermost scope before the root value. Grammar 1 is selected by `render_template_versioned` and by the native
+formatter. `render_template` keeps the legacy property-key grammar. Structural
+controls pair inside one physical owner. That owner may be the main body, a
+table cell, a header, a footer, one normal footnote or endnote, or one checked
+text box. Markers do not pair across owners, notes, cells, field boundaries or
+alternate text-box representations. A shared header or footer is evaluated once
+per physical part. Note separators and continuation separators are excluded.
+Qualified equivalent text-box representations form one logical program and are
+evaluated once. Chart labels stay scalar. Template preparation may ask the
+existing story-item scan for owner-scoped field intervals. Ordinary callers do
+not. Structural programs inside or crossing those intervals refuse before
+callbacks, and the paragraph-local field projection stays unchanged. Repeated
+ranges reuse the staged fragment transaction so copied bookmarks, controls,
+drawings, notes, comments and relationship operands stay unique. Original
+callback locations remain the provenance. Fresh physical ranges are the edit
+authority. A successful render commits the staged document and package together
+and invalidates both layout caches once.
 
 The content-control model owns one recursive `CT_Sdt` grammar at block, row,
 cell, paragraph, and run placement boundaries. It reports tag, alias, numeric

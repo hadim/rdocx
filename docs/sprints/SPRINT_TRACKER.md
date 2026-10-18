@@ -114,6 +114,8 @@ defended.
 
 | S95.11 | M24, X | 4 | 3 | 1 | 12 to 16 | 2 | F-X250/F-X254 repairs and F-X223 bounded native investigation completed. User accepted documenting Word's native limit, broader genuine multi-face use remains unqualified and fourteen observer refusals remain unsupported. F-X219 full-range opacity remains unfinished and is carried to S96, which has not started. Retained three-story estimate10 to13 developer-days. Actual source-bound verification at 05ba6cc8461a896fa751ca7dc1fe209a8fa70045 joins H3/H5/836/H7 observations, with6616 unique native passes/73ignored,11doctests,955Word/1007PPT installed plus typing/stubs,27 distinct Issue385 bodies,49hashes/7pixels and22verified package union. Actual developer effort not recorded. Close actuals count worked dates2026-10-16and17. No release or new version |
 
+| S95.2 | M24, X | 3 | 2 | 1 | 12 to 15 | 2 | F-283 numbering-aware navigation and F-284 versioned template grammar completed. F-X192 stays unfinished and is carried to S96, which has not started. Retained two-story estimate is 8 to 10 developer-days. Original three-story estimate was 12 to 15. Actual days are the worked dates 2026-10-17 and 2026-10-18, not person-effort. Full verification at b240cb3509a9641fe265ebfc605c987a3f35e143 passed with 49 unchanged hashes, seven pixel cases, 22 package inventories under 10 MiB, both WASM targets, installed Python typing and stubs, and pinned Word 16.114 plus LibreOffice 26.2.5.2 oracles. Actual developer effort not recorded. Issues 264 and 281 stay open. No release prepared. M24 continues through S99. |
+
 ## Completed features
 
 | F-ID | Sprint | Size | Est. days | Actual days | Completed | Notes |
@@ -592,6 +594,9 @@ defended.
 | F-X254 | S95.11 | L | 4 to 5 | not recorded | 2026-10-17 | Atomic PowerPoint value/XML/CLI refusals, ten unchanged reporter cases, native PowerPoint save/reopen and independent XML, affected native/CLI GREEN, explicit user-approved ValidationIssue enum exhaustive-match compatibility boundary. Shared 05ba6cc8461a896fa751ca7dc1fe209a8fa70045 verification and current H7 CLI genuine archive proof, no release |
 | F-X223 | S95.11 | M | 2 to 3 | not recorded | 2026-10-17 | User accepted documented Word limit after27 actual phases,13 finite observations/14unsupported refusals. Genuine properBold in3phases, pairedItalic Regular outlines with shear, native normalization and sensitivities retained. Bounded investigation complete, broader genuine paired/four-face consumption unqualified. No speculative writer repair or F-X223 carry |
 
+| F-283 | S95.2 | L | 4 to 5 | not recorded | 2026-10-18 | Numbered REF and STYLEREF follow the captured Word 16.114 context rules, including literal full context, unnumbered STYLEREF level results, and cross-instance sharing only for one definition without a start override. Clean microscope pass 2. 49 hashes unchanged |
+| F-284 | S95.2 | L | 4 to 5 | not recorded | 2026-10-18 | Opt-in grammar 1 renders one payload across body, table, header, footer, note, and text box, with legacy calls unchanged. Clean microscope pass 1. Word 16.114 and LibreOffice 26.2.5.2 preserved the declared text. 49 hashes unchanged |
+
 ## Velocity
 
 Recalculated at each sprint close. The backlog assumes about 2 stories per week
@@ -703,6 +708,9 @@ five working days.
 | S94 | 5 | 1 | 25.00 |
 | S95 | 9 | 1 | 45.00 |
 | S95.11 | 3 | 2 | 7.50 |
+| S95.2 | 2 | 2 | 5.00 |
+
+S95.2 records two worked dates, 2026-10-17 and 2026-10-18. Its 5.00 stories per week counts two completed stories over those dates. It is calendar throughput, not person effort. F-X192 remains carried and is not counted as completed.
 
 S90 velocity measures calendar throughput for a parallel team. It does not
 measure person effort or establish a sustainable single-developer forecast.

@@ -9079,6 +9079,7 @@ Pedro Assumpcao and the rdocx maintainers.
             "style": "styles",
             "svg": "drawing",
             "table": "tables",
+            "template": "stories",
         }
         facade = (workflow.REPO / "crates/rdocx/src/lib.rs").read_text(
             encoding="utf-8"
