@@ -6675,6 +6675,24 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
+    /// The names of the package parts, each absolute, sorted.
+    #[getter]
+    fn part_names<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let names = self
+            .inner
+            .part_names()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        PyTuple::new(py, names)
+    }
+
+    /// The XML of one package part as a save would write it now.
+    fn part_xml(&self, py: Python<'_>, part_name: &str) -> PyResult<String> {
+        self.inner
+            .part_xml(part_name)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .ok_or_else(|| PyKeyError::new_err(format!("no package part named '{part_name}'")))
+    }
+
     #[new]
     #[pyo3(signature = (path = None))]
     fn new(path: Option<&Bound<'_, PyAny>>, py: Python<'_>) -> PyResult<Self> {

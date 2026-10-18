@@ -8839,6 +8839,15 @@ pub(crate) fn package_authoritative_body_fragment(
     Ok(output)
 }
 
+fn decode_utf16_part(name: &str, body: &[u8], unit: fn([u8; 2]) -> u16) -> Result<String> {
+    if !body.len().is_multiple_of(2) {
+        return Err(Error::Other(format!("part {name} is not UTF-16 XML")));
+    }
+    char::decode_utf16(body.chunks_exact(2).map(|pair| unit([pair[0], pair[1]])))
+        .collect::<std::result::Result<String, _>>()
+        .map_err(|_| Error::Other(format!("part {name} is not UTF-16 XML")))
+}
+
 pub(crate) fn close_content_fragment_namespaces(
     xml: &[u8],
     scope: &BTreeMap<String, String>,
@@ -18736,6 +18745,64 @@ impl Document {
             Some(class) => self.to_bytes_as(class),
             None => self.to_bytes(),
         }
+    }
+
+    /// The package a save would write now, staged on a copy.
+    fn staged_output_package(&self) -> Result<OpcPackage> {
+        self.validate_model_resource_limits()?;
+        let mut candidate = self.clone_for_staging();
+        candidate.prepare_staged_output()?;
+        crate::embedded::persist_invalidated_package_signature(
+            &mut candidate.package,
+            candidate.package_signatures_invalidated,
+        )?;
+        Ok(candidate.package)
+    }
+
+    /// The names of the package parts a save would write now, sorted.
+    ///
+    /// Each name is absolute, as `/word/styles.xml`. Relationship parts and
+    /// `[Content_Types].xml` describe the package and are not listed.
+    pub fn part_names(&self) -> Result<Vec<String>> {
+        let mut names = self
+            .staged_output_package()?
+            .parts
+            .into_keys()
+            .collect::<Vec<_>>();
+        names.sort();
+        Ok(names)
+    }
+
+    /// The XML of one package part as a save would write it now.
+    ///
+    /// This is read-only. It serializes the current model, so it reflects
+    /// every edit made since the document was opened. The name may omit its
+    /// leading slash and matches case-insensitively, as OPC part names do.
+    /// Returns `None` when no such part exists and an error when the part is
+    /// not XML, such as an image.
+    pub fn part_xml(&self, part_name: &str) -> Result<Option<String>> {
+        let name = format!("/{}", part_name.strip_prefix('/').unwrap_or(part_name));
+        let package = self.staged_output_package()?;
+        let Some(data) = package.get_part(&name) else {
+            return Ok(None);
+        };
+        if !package
+            .content_types
+            .content_type_for(&name)
+            .is_some_and(|content_type| content_type.to_ascii_lowercase().ends_with("xml"))
+        {
+            return Err(Error::Other(format!("part {name} is not XML")));
+        }
+        let text = if let Some(body) = data.strip_prefix(&[0xFF, 0xFE]) {
+            decode_utf16_part(&name, body, u16::from_le_bytes)?
+        } else if let Some(body) = data.strip_prefix(&[0xFE, 0xFF]) {
+            decode_utf16_part(&name, body, u16::from_be_bytes)?
+        } else {
+            let body = data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(data);
+            String::from_utf8(body.to_vec())
+                .map_err(|_| Error::Other(format!("part {name} is not UTF-8 XML")))?
+        };
+        Ok(Some(text))
     }
 
     /// The class a save to `path` converts to, or `None` to keep the opened class.

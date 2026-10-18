@@ -25734,3 +25734,24 @@ fn issue_391_standalone_story_item_snapshots_declare_their_scope() {
     );
 }
 
+#[test]
+fn issue_391_part_xml_serializes_the_current_model() {
+    let mut document = Document::new();
+    document.add_paragraph("hello");
+    let names = document.part_names().unwrap();
+    assert!(names.iter().any(|name| name == "/word/styles.xml"));
+    assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
+    document
+        .paragraph_mut(0)
+        .unwrap()
+        .set_text("changed")
+        .unwrap();
+    let xml = document.part_xml("word/document.xml").unwrap().unwrap();
+    assert!(xml.contains("changed") && !xml.contains("hello"));
+    assert_eq!(
+        document.part_xml("/WORD/document.xml").unwrap().unwrap(),
+        xml
+    );
+    assert!(document.part_xml("word/absent.xml").unwrap().is_none());
+}
+

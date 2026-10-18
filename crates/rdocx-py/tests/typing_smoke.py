@@ -337,6 +337,8 @@ def exercise_rdocx_types(path: Path) -> None:
         xml=None,
     )
     assert_type(compatible_story_item.xml, bytes)
+    part_names: tuple[str, ...] = document.part_names
+    styles_xml: str = document.part_xml("word/styles.xml")
     text_content_index: int = document.find_content_index("typed")
     text_content_indices: tuple[int, ...] = document.find_content_indices("typed")
     page_fields_updated: int = document.update_page_fields()

@@ -975,6 +975,19 @@ class Document:
     def default_font_size(self) -> _shared.Length | None: ...
     @default_font_size.setter
     def default_font_size(self, value: _shared.Length | int | None) -> None: ...
+    @property
+    def part_names(self) -> tuple[str, ...]:
+        """The names of the package parts, each absolute, sorted.
+
+        Relationship parts and `[Content_Types].xml` are not listed.
+        """
+    def part_xml(self, part_name: str) -> str:
+        """The XML of one package part as a save would write it now.
+
+        Read-only. It reflects every edit since the document was opened.
+        `part_name` may omit its leading slash. Raises `KeyError` when no
+        such part exists and `RdocxError` when the part is not XML.
+        """
     def __new__(cls, path: _Path | _BinaryIO | None = None) -> Document: ...
     @staticmethod
     def open(path: _Path | _BinaryIO) -> Document: ...

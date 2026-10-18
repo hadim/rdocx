@@ -9018,3 +9018,36 @@ def test_issue_391_story_item_xml_is_standalone_like_paragraph_xml():
     assert comment.anchor.start.item == body
 
 
+def test_issue_391_part_xml_reads_the_current_model_of_a_named_part():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("hello")
+    names = document.part_names
+    assert "/word/document.xml" in names and "/word/styles.xml" in names
+    assert list(names) == sorted(names)
+    assert not any(name.endswith(".rels") or "Content_Types" in name for name in names)
+    assert "hello" in document.part_xml("word/document.xml")
+    document.paragraphs[0].text = "changed"
+    document.default_font_name = "Gelasio"
+    assert "changed" in document.part_xml("/word/document.xml")
+    assert "Gelasio" in document.part_xml("word/styles.xml")
+    document.add_comment_on_text("changed", author="me", text="remark")
+    assert "/word/comments.xml" in document.part_names
+    assert "remark" in document.part_xml("word/comments.xml")
+    with pytest.raises(KeyError):
+        document.part_xml("word/absent.xml")
+    document.add_picture(_tiny_png(), "tiny.png", rdocx.Inches(1), rdocx.Inches(1))
+    media = next(name for name in document.part_names if name.startswith("/word/media/"))
+    with pytest.raises(rdocx.RdocxError, match="not XML"):
+        document.part_xml(media)
+
+
+def _tiny_png():
+    header = b"\x89PNG\r\n\x1a\n"
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+    return header + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00")) + chunk(b"IEND", b"")
+
+
