@@ -1036,9 +1036,15 @@ order. Focused tests cover dotted and lexical lookup, loop shadowing and scope
 restoration, every JSON truthiness case, malformed and crossed controls, and
 atomic rejection. The round-trip test clones section-ending paragraphs and
 table rows, then proves their section properties and unmodelled XML remain in
-schema order after saving and reopening. Headers, footers, footnotes, endnotes,
-text boxes, and chart labels retain the scalar-only coverage shared with literal
-placeholder replacement. The repeating-table regression gate expands three
+schema order after saving and reopening. Grammar 1 regressions render the
+same payload in the body, a table cell, a header, a footer, a footnote, an
+endnote and a text box, including split-run formatting, filters, escapes and
+one evaluation of a shared header or footer. Repeated ranges keep unique
+drawing, bookmark, note, comment and relationship identities through the
+existing fragment transaction. Chart labels and unknown raw text boxes stay on
+the scalar boundary, and formatter mode refuses them before callbacks. Word,
+LibreOffice and the full native gates remain the integrated union. The
+repeating-table regression gate expands three
 adjacent template rows over ten records and compares all thirty rows in order.
 It also checks banding, grid spans, vertical merge restarts and continuations,
 and atomic rejection of an invalid repeated numbering reference. The continuous

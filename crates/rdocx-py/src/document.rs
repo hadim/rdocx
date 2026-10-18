@@ -6972,7 +6972,13 @@ impl PyDocument {
         })
         .map_err(|error| rdocx_to_pyerr(py, error))
     }
-    fn render_template(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<usize> {
+    #[pyo3(signature = (data, *, grammar_version=None))]
+    fn render_template(
+        &mut self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        grammar_version: Option<u32>,
+    ) -> PyResult<usize> {
         if !data.is_instance_of::<PyDict>() {
             return Err(PyTypeError::new_err(
                 "render_template data must be a dict with string keys",
@@ -6985,8 +6991,11 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         let mut candidate = self.inner.clone_for_staging();
         let count = py
-            .detach(|| candidate.render_template(&data))
-            .map_err(|error| rdocx_to_pyerr(py, error))?;
+            .detach(|| match grammar_version {
+                None => candidate.render_template(&data),
+                Some(version) => candidate.render_template_versioned(&data, version),
+            })
+            .map_err(|error| template_render_pyerr(py, error))?;
         let after = candidate
             .to_bytes()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
@@ -11097,6 +11106,18 @@ fn is_mapping(value: &Bound<'_, PyAny>) -> PyResult<bool> {
 
 /// The deepest nesting of dicts and lists template data may use.
 const MAX_TEMPLATE_DATA_DEPTH: usize = 256;
+
+/// Caller-facing template refusals are `ValueError`. Other native failures
+/// keep the shared error class.
+fn template_render_pyerr(py: Python<'_>, error: rdocx::Error) -> PyErr {
+    if let rdocx::Error::Other(message) = &error
+        && (message.starts_with("invalid template:")
+            || message.starts_with("unsupported template grammar version "))
+    {
+        return PyValueError::new_err(message.clone());
+    }
+    rdocx_to_pyerr(py, error)
+}
 
 /// Convert template data to JSON. `path` names the value in error messages,
 /// and `open` holds the containers being converted, to refuse a cycle and

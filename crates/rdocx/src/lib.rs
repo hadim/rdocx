@@ -44,6 +44,7 @@ pub mod style;
 mod svg;
 pub mod table;
 mod template;
+pub use template::{TEMPLATE_GRAMMAR_VERSION, TemplateFormatContext};
 
 pub use bibliography::{
     BibliographyAuthor, BibliographyContributor, BibliographyContributorRole, BibliographyOptions,

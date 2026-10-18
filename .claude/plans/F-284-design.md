@@ -63,6 +63,74 @@ filter supplies a fallback. Wrong intermediate container kinds always refuse,
 including when a later `default` filter is present. Arrays and
 objects remain invalid scalar output unless a filter converts them.
 
+### Prepared occurrence bridge
+
+The existing accepted-run placeholder mapper owns split-run and wrapper
+boundaries. Add only the narrow doc-hidden existing-type helper in
+`crates/rdocx-oxml/src/placeholder.rs`:
+
+```rust
+pub fn replace_prepared_occurrences(
+    paragraph: &mut CT_P,
+    occurrences: &[(usize, std::ops::Range<usize>, String, Option<CT_RPr>)],
+) -> rdocx_oxml::Result<()>;
+```
+
+The tuple identifies an original replaceable stretch, its UTF8 byte range,
+literal replacement text and optional replacement-only run-property override.
+Validate all bounds, character boundaries, nonoverlap and XML-safe results
+before publishing a cloned paragraph. Reuse the substantive existing accepted
+mapper and run-splitting providers, preserving unmatched prefix and suffix
+formatting even inside one original run. Inserted text is never rescanned or
+subject to global sentinel restoration. No new public carrier, generic matcher,
+module or trait is introduced. This is an approved internal provider bridge,
+not another template grammar. Scoped checks include the changed oxml crate and
+focused mapper controls. Final publication/API/archive riders include that
+crate's additive doc-hidden existing-type function.
+
+### Original raw textbox scalar preservation
+
+Retain the established unknown-wrapper raw textbox scalar boundary through the
+existing placeholder rewriter, excluding actual checked physical textbox
+ranges and all their qualified aliases. Add only this doc-hidden existing-type
+bridge in the same placeholder.rs:
+
+```rust
+pub fn replace_original_literals_in_xml_part(
+    xml: &[u8],
+    excluded: &[std::ops::Range<usize>],
+    replacements: &[(&str, &str)],
+) -> rdocx_oxml::Result<(Vec<u8>, usize, Vec<String>)>;
+```
+
+Empty operands discover original logical source texts. Resolve source-local
+operands before edits, then match simultaneously against original stretches,
+with leftmost longest-match precedence including escapes. Reuse the prepared
+mapper, never sequential substitution or inserted-data restoration. Existing
+AlternateContent counting and copy policy remain. Propagate original offsets
+through that existing rewriter rather than infer aliases from displayed text.
+Formatter mode preflights unqualified active raw textbox scalars before any
+callback and names the missing authentic original paragraph context. It does
+not invent ContentLocation or admit unknown structural owners.
+
+Normalize the staged clone once before execution facts. Pair original callback
+locations to normalized fresh physical programs through checked part, owner,
+item count and kind correspondence. Only original locations are callback
+provenance. Fresh physical ranges remain edit authority. Reuse exact original
+numbering identities only in this private same-document range import mode,
+after proving original definitions and instances still agree. Existing public
+fragment/equivalence policies and normal generated-ID canonicalization remain.
+
+### Chart formatter context boundary
+
+Existing chart text and cached-value carriers remain supported for legacy and
+versioned built-in substitution. They do not establish an original Word
+paragraph ContentLocation. Formatter mode therefore preflights active chart
+scalar occurrences and refuses atomically before invoking any callback, naming
+the chart part and recommending render_template_versioned. Literal escapes do
+not invoke callbacks or cause this refusal. No fake paragraph or chart story
+kind is introduced, and no new ownership resolver is added solely for the hook.
+
 ### Scalar filters and formatting
 
 Add ordered `| trim`, `| upper`, `| lower`, `| default("literal")` and
@@ -121,6 +189,22 @@ existing sentinel staging. Matching closing escapes are `}}}}` for `}}` and `%}%
 Scan escapes before tag openers, left to right, with delimiters inside quoted
 strings protected. Restore sentinels once. Escapes must cross ordinary run boundaries
 with the same first-run formatting rule as scalar tags.
+
+### Qualified field boundary admission
+
+The existing private scan_story_items and scan_story_items_with_scope functions
+accept an additional template_field_ranges: Option<&mut Vec<Range<usize>>>
+argument. Only template preparation supplies Some. All ordinary callers supply
+None and retain identical typed inventory semantics. During that same qualified
+marker event traversal, template-only open/depth facts survive paragraph ends.
+They reuse complex_field_marker, complex_field_scan_context and the existing
+opaque/nested-physical-owner guards. Exact intervals and unmatched boundary
+intervals mark only structural admission, with a bounded sorted interval join.
+The existing paragraph-local typed Field projection still clears its parser
+state at each paragraph end. No field opcode parser, new scanner, ownership
+registry, public field or source type is added. Marker programs inside or
+crossing those intervals refuse before callbacks. Ordinary scalar field-cache
+replacement remains on its established accepted-run boundary.
 
 ### Container-wide structural expansion
 
@@ -213,14 +297,29 @@ and appearance observations, not a new exact-font-lineage acceptance engine.
 Expected unchanged for the 49 existing documents and seven pixel cases. Template
 rendering remains opt-in. Any unexpected output delta blocks completion.
 
+### Prepared related-note occurrence bridge
+
+Structural replay leaves original scalar operands intact. Existing staged
+fragment import records ordered private tuples
+`(StoryKind, source_part, old_id, destination_part, new_id)` through a mutable
+`Vec` argument. Ordinary import callers discard those facts. Template rendering
+joins each actual allocation to its original checked note program and already
+evaluated execution. No tag or data evaluation occurs again. The private
+`template_note_identities(&self) -> Result<Vec<(StoryKind, String, i32, usize)>>`
+validates normal-note ID uniqueness and physical owner count/order against the
+existing provider. Fresh checked inventory after structural expansion determines
+callback order, including original and appended notes. Original paragraph
+locations remain callback provenance. Prepared scalar edits are applied only
+after this physical-order callback phase. All work remains on the staged clone.
+
 ## Implementation checklist
 
 - [x] Settle the concrete public grammar, compatibility and formatter decisions.
-- [ ] Implement grammar parsing/evaluation and occurrence-local formatting in existing carriers.
-- [ ] Extend structural evaluation through checked existing physical story owners and fragment transactions.
-- [ ] Add actual named local RED/GREEN and atomic preservation controls.
-- [ ] Update exactly the named HLD intent, including the existing Python method.
-- [ ] Consume focused scoped checks and a fresh independent zero-finding microscope.
+- [x] Implement grammar parsing/evaluation and occurrence-local formatting in existing carriers.
+- [x] Extend structural evaluation through checked existing physical story owners and fragment transactions.
+- [x] Add actual named local RED/GREEN and atomic preservation controls.
+- [x] Update exactly the named HLD intent, including the existing Python method.
+- [x] Consume focused scoped checks and a fresh independent zero-finding microscope.
 - [ ] Qualify the final integrated native/oracle/full/rider union and complete records once.
 
 ## Open questions

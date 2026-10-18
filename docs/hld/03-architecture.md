@@ -1124,11 +1124,23 @@ and keeps its revision-save identities. Numbered paragraphs in a
 loop retain their source `numId` and level, which keeps one continuous list
 without allocating definitions. Numbering references are validated before
 evaluation. Loop variables form lexical scopes, and dotted lookup searches the
-innermost scope before the root value. Structural controls are limited to the
-main body and its tables. Headers, footers, footnotes, endnotes, text boxes, and
-chart labels retain scalar-only replacement through the existing Word
-placeholder mapper. A successful render commits the staged document and package
-together and invalidates both layout caches once.
+innermost scope before the root value. Grammar 1 is selected by `render_template_versioned` and by the native
+formatter. `render_template` keeps the legacy property-key grammar. Structural
+controls pair inside one physical owner. That owner may be the main body, a
+table cell, a header, a footer, one normal footnote or endnote, or one checked
+text box. Markers do not pair across owners, notes, cells, field boundaries or
+alternate text-box representations. A shared header or footer is evaluated once
+per physical part. Note separators and continuation separators are excluded.
+Qualified equivalent text-box representations form one logical program and are
+evaluated once. Chart labels stay scalar. Template preparation may ask the
+existing story-item scan for owner-scoped field intervals. Ordinary callers do
+not. Structural programs inside or crossing those intervals refuse before
+callbacks, and the paragraph-local field projection stays unchanged. Repeated
+ranges reuse the staged fragment transaction so copied bookmarks, controls,
+drawings, notes, comments and relationship operands stay unique. Original
+callback locations remain the provenance. Fresh physical ranges are the edit
+authority. A successful render commits the staged document and package together
+and invalidates both layout caches once.
 
 The content-control model owns one recursive `CT_Sdt` grammar at block, row,
 cell, paragraph, and run placement boundaries. It reports tag, alias, numeric

@@ -3379,6 +3379,8 @@ fn import_rich_fragment(
         FragmentConflictPolicy::rename_all().with_style_reuse(true),
         &document.doc_part_name.clone(),
         identity_state,
+        false,
+        &mut Vec::new(),
     )
     .map(|imported| imported.typed)
 }
@@ -3389,6 +3391,8 @@ pub(crate) fn import_document_fragment_content(
     include_final_section_properties: bool,
     policy: FragmentConflictPolicy,
     destination_part: &str,
+    source_owned_numbering: bool,
+    note_copy_sources: &mut Vec<(StoryKind, String, i32, String, i32)>,
 ) -> Result<Vec<u8>> {
     let mut identity_state = BodyIdentityState::from_documents(std::slice::from_ref(document))?;
     import_fragment_content_with_state(
@@ -3399,6 +3403,8 @@ pub(crate) fn import_document_fragment_content(
         policy,
         destination_part,
         &mut identity_state,
+        source_owned_numbering,
+        note_copy_sources,
     )
     .map(|imported| imported.xml)
 }
@@ -3423,6 +3429,8 @@ fn import_fragment_content_with_state(
     policy: FragmentConflictPolicy,
     destination_part: &str,
     identity_state: &mut BodyIdentityState,
+    source_owned_numbering: bool,
+    note_copy_sources: &mut Vec<(StoryKind, String, i32, String, i32)>,
 ) -> Result<ImportedFragmentContent> {
     let mut fragment = Document::from_bytes(bytes)
         .map_err(|error| Error::Other(format!("invalid document fragment: {error}")))?;
@@ -3469,12 +3477,16 @@ fn import_fragment_content_with_state(
         }
     }
     validate_fragment_identity_ownership(&fragment_identity_values)?;
+    if source_owned_numbering {
+        document.source_owned_numbering_remap(&fragment)?;
+    }
     remap_fragment_style_collisions(
         document,
         &mut fragment,
         &mut fragment_xml,
         policy.reuse_styles(),
         policy.reuse_numbering(),
+        source_owned_numbering,
     )?;
     let dependency_xml =
         wrap_fragment_companion(&crate::document::package_authoritative_body_fragment(
@@ -3672,6 +3684,13 @@ fn import_fragment_content_with_state(
             })?;
         }
         used.insert(new_id);
+        note_copy_sources.push((
+            kind,
+            source_part.clone(),
+            old_id,
+            destination_note_part.clone(),
+            new_id,
+        ));
         note_id_maps
             .entry(kind)
             .or_default()
@@ -4121,6 +4140,7 @@ fn import_fragment_content_with_state(
         insert_at,
         &fragment,
         policy.reuse_numbering(),
+        source_owned_numbering,
     )?;
     let typed = document.document.body.content.drain(insert_at..).collect();
     let numbering_values = numbering_remap
@@ -4442,6 +4462,7 @@ fn remap_fragment_style_collisions(
     fragment_xml: &mut Vec<u8>,
     reuse_equivalent: bool,
     reuse_equivalent_numbering: bool,
+    source_owned_numbering: bool,
 ) -> Result<bool> {
     let mut replacements = BTreeMap::new();
     let mut used = destination
@@ -4458,7 +4479,13 @@ fn remap_fragment_style_collisions(
         let source_num_id = style.ppr.as_ref().and_then(|properties| properties.num_id);
         let reusable_num_id = source_num_id
             .filter(|_| reuse_equivalent_numbering)
-            .and_then(|num_id| destination.equivalent_numbering_dependency_id(fragment, num_id));
+            .and_then(|num_id| {
+                if source_owned_numbering {
+                    Some(num_id)
+                } else {
+                    destination.equivalent_numbering_dependency_id(fragment, num_id)
+                }
+            });
         let numbering_is_reusable = source_num_id.is_none() || reusable_num_id.is_some();
         // Compare the source-owned projection with only the selected numbering
         // reference remapped. Preservation snapshots and generated namespace
@@ -17276,7 +17303,8 @@ mod tests {
                 &mut source,
                 &mut Vec::new(),
                 true,
-                true
+                true,
+                false,
             )
             .unwrap()
         );
@@ -17289,7 +17317,8 @@ mod tests {
                 &mut changed,
                 &mut Vec::new(),
                 true,
-                true
+                true,
+                false,
             )
             .unwrap()
         );
