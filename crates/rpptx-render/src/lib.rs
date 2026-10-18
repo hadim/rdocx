@@ -1053,7 +1053,13 @@ fn lower_table(
         physical_column_widths.reverse();
     }
     let column_offsets = cumulative_offsets(&physical_column_widths);
-    let row_heights = table.rows.iter().map(|row| row.height).collect::<Vec<_>>();
+    let row_heights = grown_row_heights(
+        table,
+        &column_offsets,
+        font_manager,
+        page_number,
+        text_directions,
+    )?;
     let row_offsets = cumulative_offsets(&row_heights);
     let mut fills = Vec::new();
     if let Some(background) = &table.background {
@@ -1079,27 +1085,10 @@ fn lower_table(
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
             cell_index += 1;
-            if cell.horizontal_merge
-                || cell.vertical_merge
-                || column_index >= table.column_widths.len()
-            {
+            let Some((row_span, column_span, visual_column)) =
+                table_cell_span(table, row_index, column_index)
+            else {
                 continue;
-            }
-            let row_span = usize::try_from(cell.row_span)
-                .unwrap_or(usize::MAX)
-                .max(1)
-                .min(table.rows.len().saturating_sub(row_index));
-            let column_span = usize::try_from(cell.grid_span)
-                .unwrap_or(usize::MAX)
-                .max(1)
-                .min(table.column_widths.len().saturating_sub(column_index));
-            let visual_column = if table.right_to_left {
-                table
-                    .column_widths
-                    .len()
-                    .saturating_sub(column_index + column_span)
-            } else {
-                column_index
             };
             let rectangle = Rect {
                 x: column_offsets[visual_column],
@@ -1115,27 +1104,14 @@ fn lower_table(
                 }));
             }
             if let Some(text_body) = &cell.text {
-                let mut text_body = text_body.clone();
-                text_body.insets = cell.margins;
-                let content = Rect {
-                    x: rectangle.x + text_body.insets.left,
-                    y: rectangle.y + text_body.insets.top,
-                    width: (rectangle.width - text_body.insets.left - text_body.insets.right)
-                        .max(0.0),
-                    height: (rectangle.height - text_body.insets.top - text_body.insets.bottom)
-                        .max(0.0),
-                };
-                let (content, transform) = text::oriented_content_box(content, text_body.vertical);
-                let stacked = text::stack_text_for_page_with_directions(
+                let (stacked, transform, _) = stack_table_cell_text(
+                    cell,
+                    text_body,
+                    rectangle,
                     font_manager,
-                    content,
-                    &text_body,
                     page_number,
                     paragraph_directions,
-                )
-                .map_err(|error| RenderInputError::TextLayout {
-                    detail: error.to_string(),
-                })?;
+                )?;
                 diagnostics.extend(stacked.diagnostics.iter().cloned());
                 if let Some(transform) = transform {
                     texts.push(PositionedElement::Group(GroupElement {
@@ -1247,6 +1223,134 @@ fn lower_table(
     fills.extend(texts);
     fills.extend(border_elements);
     Ok(fills)
+}
+
+/// Returns the clamped row span, column span and physical first column of a
+/// table cell that owns its box, or `None` for a merge continuation or a cell
+/// outside the grid.
+fn table_cell_span(
+    table: &ResolvedTable,
+    row_index: usize,
+    column_index: usize,
+) -> Option<(usize, usize, usize)> {
+    let cell = table.rows.get(row_index)?.cells.get(column_index)?;
+    if cell.horizontal_merge || cell.vertical_merge || column_index >= table.column_widths.len() {
+        return None;
+    }
+    let row_span = usize::try_from(cell.row_span)
+        .unwrap_or(usize::MAX)
+        .max(1)
+        .min(table.rows.len().saturating_sub(row_index));
+    let column_span = usize::try_from(cell.grid_span)
+        .unwrap_or(usize::MAX)
+        .max(1)
+        .min(table.column_widths.len().saturating_sub(column_index));
+    let visual_column = if table.right_to_left {
+        table
+            .column_widths
+            .len()
+            .saturating_sub(column_index + column_span)
+    } else {
+        column_index
+    };
+    Some((row_span, column_span, visual_column))
+}
+
+/// Stacks a cell's text in its box less the cell margins. Returns the
+/// stacked text, the transform of vertical text, and the height the text
+/// needs with its top and bottom margins, `None` for vertical text.
+fn stack_table_cell_text(
+    cell: &rpptx_layout::ResolvedTableCell,
+    text_body: &ResolvedTextBody,
+    rectangle: Rect,
+    font_manager: &mut FontManager,
+    page_number: usize,
+    paragraph_directions: &[oxml_layout::TextDirection],
+) -> Result<(text::StackedText, Option<Transform>, Option<f64>), RenderInputError> {
+    let mut text_body = text_body.clone();
+    text_body.insets = cell.margins;
+    let insets = text_body.insets;
+    let content = Rect {
+        x: rectangle.x + insets.left,
+        y: rectangle.y + insets.top,
+        width: (rectangle.width - insets.left - insets.right).max(0.0),
+        height: (rectangle.height - insets.top - insets.bottom).max(0.0),
+    };
+    let (content, transform) = text::oriented_content_box(content, text_body.vertical);
+    let stacked = text::stack_text_for_page_with_directions(
+        font_manager,
+        content,
+        &text_body,
+        page_number,
+        paragraph_directions,
+    )
+    .map_err(|error| RenderInputError::TextLayout {
+        detail: error.to_string(),
+    })?;
+    let needed = transform
+        .is_none()
+        .then_some(stacked.height + insets.top + insets.bottom);
+    Ok((stacked, transform, needed))
+}
+
+/// Returns each row's drawn height. A stored `a:tr/@h` is a minimum:
+/// PowerPoint and LibreOffice grow a row to its tallest cell's laid-out text
+/// and margins, and the table grows with it. A cell spanning rows grows the
+/// last row it covers by whatever the spanned rows still lack. Vertical text
+/// keeps the stored heights.
+fn grown_row_heights(
+    table: &ResolvedTable,
+    column_offsets: &[f64],
+    font_manager: &mut FontManager,
+    page_number: usize,
+    text_directions: &[Vec<oxml_layout::TextDirection>],
+) -> Result<Vec<f64>, RenderInputError> {
+    let mut heights = table.rows.iter().map(|row| row.height).collect::<Vec<_>>();
+    let mut spanning = Vec::new();
+    let mut cell_index = 0usize;
+    for (row_index, row) in table.rows.iter().enumerate() {
+        for (column_index, cell) in row.cells.iter().enumerate() {
+            let paragraph_directions = text_directions
+                .get(cell_index)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            cell_index += 1;
+            let (Some((row_span, column_span, visual_column)), Some(text_body)) =
+                (table_cell_span(table, row_index, column_index), &cell.text)
+            else {
+                continue;
+            };
+            let rectangle = Rect {
+                x: column_offsets[visual_column],
+                y: 0.0,
+                width: column_offsets[visual_column + column_span] - column_offsets[visual_column],
+                height: heights[row_index..row_index + row_span].iter().sum(),
+            };
+            let (_, _, needed) = stack_table_cell_text(
+                cell,
+                text_body,
+                rectangle,
+                font_manager,
+                page_number,
+                paragraph_directions,
+            )?;
+            let Some(needed) = needed.filter(|needed| needed.is_finite()) else {
+                continue;
+            };
+            if row_span == 1 {
+                heights[row_index] = heights[row_index].max(needed);
+            } else {
+                spanning.push((row_index, row_span, needed));
+            }
+        }
+    }
+    for (row_index, row_span, needed) in spanning {
+        let covered: f64 = heights[row_index..row_index + row_span].iter().sum();
+        if needed > covered {
+            heights[row_index + row_span - 1] += needed - covered;
+        }
+    }
+    Ok(heights)
 }
 
 struct TableBorderCandidate {
@@ -2690,6 +2794,86 @@ mod tests {
 
         assert!(run.origin.x >= 2.0);
         assert!(run.origin.y >= 3.0);
+    }
+
+    #[test]
+    fn table_rows_grow_to_their_tallest_cell_text_and_margins() {
+        let margins = TextInsets {
+            left: 1.0,
+            top: 2.0,
+            right: 1.0,
+            bottom: 3.0,
+        };
+        let cell = |text: &str, color: &str| ResolvedTableCell {
+            text: Some(table_text(text)),
+            margins,
+            fill: Some(Paint::Solid(Color::from_hex(color))),
+            ..ResolvedTableCell::default()
+        };
+        let table = ResolvedTable {
+            right_to_left: false,
+            background: None,
+            column_widths: vec![20.0, 20.0],
+            rows: vec![
+                ResolvedTableRow {
+                    height: 5.0,
+                    cells: vec![
+                        cell("a", "FF0000"),
+                        cell("a long text that wraps over several lines", "00FF00"),
+                    ],
+                },
+                ResolvedTableRow {
+                    height: 40.0,
+                    cells: vec![cell("b", "0000FF"), cell("c", "0000FF")],
+                },
+            ],
+        };
+        let page = layout_slide(
+            &render_input(vec![slide((40.0, 80.0), vec![table_shape(table)])]),
+            0,
+        )
+        .unwrap();
+        let group = only_group(&page.elements[0]);
+        let fill_box = |hex: &str| {
+            group
+                .children
+                .iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Path(path)
+                        if path.fill == Some(Paint::Solid(Color::from_hex(hex))) =>
+                    {
+                        path.path.bounds()
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let lowest_first_row_baseline = group
+            .children
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) if run.origin.x >= 20.0 && run.text != "c" => {
+                    Some(run.origin.y)
+                }
+                _ => None,
+            })
+            .fold(f64::MIN, f64::max);
+        let [wrapped] = fill_box("00FF00")[..] else {
+            panic!("one wrapped cell fill");
+        };
+        let [short] = fill_box("FF0000")[..] else {
+            panic!("one short cell fill");
+        };
+        assert!(wrapped.height > 15.0, "the first row grew: {wrapped:?}");
+        assert_eq!(short.height, wrapped.height, "the whole row grew");
+        assert!(lowest_first_row_baseline + 3.0 <= wrapped.y + wrapped.height);
+        let second = fill_box("0000FF");
+        assert_eq!(second.len(), 2);
+        assert!(
+            second
+                .iter()
+                .all(|fill| fill.y == wrapped.height && fill.height == 40.0)
+        );
     }
 
     fn slide(size: (f64, f64), shapes: Vec<ResolvedShape>) -> ResolvedSlide {

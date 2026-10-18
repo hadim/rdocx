@@ -910,6 +910,15 @@ cannot cover them. Table cells retain stored normal-autofit scale and line
 spacing reduction in their resolved text. Shape-to-fit cannot resize an
 independently owned cell extent and is not applied to cell rendering.
 
+A slide table's stored `a:tr/@h` is a minimum, as PowerPoint and LibreOffice
+draw it. Before placing cells, the renderer stacks each horizontal cell's text
+in its column width less the cell margins and grows the row to the tallest
+text plus top and bottom margins. A cell spanning rows grows the last row it
+covers by whatever the spanned rows still lack. The fills, text, borders and
+table background then use the grown rows, so the drawn table is taller than
+its frame when text wraps. Vertical cell text keeps the stored heights. The
+stored rows and frame are not rewritten.
+
 **Vertical Word text.** `w:tcPr/w:textDirection` and `w:sectPr/w:textDirection`
 lower onto the same transposed box and `Group` rotation the shape path uses.
 `lrTb` is the horizontal path, unchanged and with no group. `tbRl` and `tbRlV`
