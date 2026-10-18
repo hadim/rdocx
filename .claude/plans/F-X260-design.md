@@ -16,7 +16,7 @@ Issue 389 is separate. On a release build, seven operations cost more as the unr
 
 PR393 head `beb9c448d0d99636a799d95f718acccb9ea55646` is unchanged by the 2026-10-18 refresh. It is a candidate, not accepted code. Its Word half relocates owners when the candidate inventory pairs one to one with the current owners and otherwise keeps the conservative publication. Its PowerPoint half keeps earlier paragraph and run owners and marks only the appended owner's text views changed. The PR body says the Word repair still walks the whole document on each property setter. That walk is not acceptance for Issue 389.
 
-Current sprint source is `67423b6b` plus the uncommitted F-X259 diff. F-X259 does not edit the Python owner files this story owns. It does edit `crates/rdocx/src/document.rs` and `crates/rpptx/src/lib.rs`, so this story starts only after that diff is integrated.
+Integrated sprint source includes F-X259 at `4879e58a`. The claim base is `c776041c`. F-X259 does not edit the Python owner files this story owns. It does edit `crates/rdocx/src/document.rs` and `crates/rpptx/src/lib.rs`, and that diff is already an ancestor of this claim.
 
 ## Spec reference
 
@@ -47,6 +47,19 @@ No new crate, module or file. Python changes stay in `crates/rdocx-py/src/docume
 | PowerPoint append keeps earlier owners | `Paragraph.add_run`, `Paragraph.add_field`, `TextFrame.add_paragraph` | Existing generation proof in `appended_text_owners` | Held handle, earlier collection, new run identity, stale view |
 | Local edits do not scan the unrelated package | The seven Issue 389 operations | Existing publication and OPC transaction | Release timing plus a visit or allocation bound |
 | One range removal is one transaction | Native `Document` and Python `Document.remove_content_range` | Existing direct-body fragment boundary. Picture pruning policy shared with F-X261 | Empty, one, many, invalid, save and reopen |
+
+## Behavior contracts and evidence
+
+| Surface or placement | Exact behavior and boundary examples | Primary source identity and location | Local discriminator or pending evidence |
+|---|---|---|---|
+| Word cell, row and table property setters | A property edit that keeps the same cells rewrites owner addresses and keeps fresh and held paragraph and run handles. A real insert, removal or replacement keeps conservative retirement. Flat and nested cells use the same rule. | Issue 388 on main `7496a81c`. Current publication assigns the candidate without an owner revision. `PyDocument::adopt_property_edit` is not on this branch. | A1 and A2. Old source raises `element has no current checked physical owner`. |
+| PowerPoint append | `add_run`, `add_field` and `add_paragraph` keep earlier paragraph and run handles. Only the appended owner's cached text view is retired. A list already taken from `frame.paragraphs` does not grow. A later iteration sees the new paragraph. | Issue 388. `appended_text_owners` in `crates/rpptx-py/src/presentation.rs`. Paragraph collection capture binds the text scope. | A3 and A4. |
+| Seven release operations | Ratio below 3. PowerPoint small package is an empty deck. Large package is 40 slides with 40 text boxes. Operations are `add_textbox`, alt text, `left`, `fill.solid` and `replace_xml`. Word small package is 50 paragraphs. Large package is 800 paragraphs. Operations are `replace_xml` and `remove_content`. A visit counter fails when the edit reads an unrelated slide or body block. Debug timings do not pass. | Issue 389 body, the release-build table on main `7496a81c`. | A5. The ratio is final-sprint evidence. The visit counter is the local gate. |
+| Direct body range removal | `Document::remove_content_range(start: usize, end: usize) -> Result<usize>` and Python `Document.remove_content_range(start, end) -> int`. Half-open over direct body children. Empty range returns 0 and does not stage. `start > end` or `end > len` returns `Error::Other("content range is reversed or out of range")` and does not publish. Python surfaces that as `RdocxError`. The call does not enter a table. Picture pruning calls the F-X261 reachability rule. | Q8. The error variant matches `Error::Other` already used by checked story edits. `try_remove_content` is `crates/rdocx/src/document.rs` around line 26748. | A6 and A7. |
+
+## Dependency readiness
+
+`BACKLOG.md` records F-X211c and F-X237 as `done`. Those are the formal edges. F-X259 is not a formal dependency. Its integrated head `4879e58a` is an ancestor of claim base `c776041c`. This story is implementation-ready on those edges. The file lease still places it before F-X261 and F-X262. Approval of this plan does not complete the story.
 
 ## Acceptance criteria
 
@@ -126,10 +139,12 @@ Unchanged. A Word or PowerPoint byte change that is not required by the owner re
 - [ ] Update the HLD impact list and obtain a zero-finding microscope.
 - [ ] Leave the release ratio and installed suites for the final sprint union.
 
-## Approved decisions
+## Open questions
 
-- Q8. `Document::remove_content_range(start: usize, end: usize) -> Result<usize>` and Python `Document.remove_content_range(start, end) -> int`. The range is half-open over direct body children. An empty range returns 0. A reversed or out-of-bounds range returns an error and does not publish. The call is the counterpart of inserting many blocks at once. It does not recurse into tables. Picture pruning uses the F-X261 reachability policy.
-- Q9. Earlier paragraph and run handles stay live across `add_run`, `add_field` and `add_paragraph`. An already-materialised collection of paragraphs keeps its earlier members and gains no silent refresh. Callers iterate again to see the appended paragraph. Word run retirement outside these property setters stays as documented.
-- Q10. All seven named Issue 389 release-build operations keep a large-to-small ratio below 3. A visit or allocation counter fails a whole-package scan. Debug timings do not pass the story. Range removal is A6 and is not one of those seven operations.
+| ID | Affected F-IDs and A-IDs | Decision and recommendation | Status and answer/source |
+|---|---|---|---|
+| Q8 | F-X260 A6 and A7 | Half-open `remove_content_range` on direct body children. Empty returns 0. Reversed or out-of-bounds does not publish. No table recursion. Picture pruning uses the F-X261 rule. | Answered 2026-10-18 by the user. Rust `Result<usize>`, Python `int`, error `Error::Other("content range is reversed or out of range")`. |
+| Q9 | F-X260 A3 and A4 | Keep earlier PowerPoint paragraph and run handles across append. An already-materialised paragraph list is not refreshed. Word run retirement outside these setters stays as documented. | Answered 2026-10-18 by the user. |
+| Q10 | F-X260 A5 | All seven Issue 389 release operations keep a large-to-small ratio below 3. A visit counter fails a whole-package scan. Debug timings do not pass. Range removal is not one of the seven rows. | Answered 2026-10-18 by the user. Workload sizes are the Issue 389 release table: empty deck versus 40 by 40, and 50 versus 800 paragraphs. |
 
 No issue or pull request closes from this plan.

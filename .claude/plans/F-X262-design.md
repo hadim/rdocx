@@ -58,12 +58,28 @@ No new crate or module. The preset generator is the existing tool. New public na
 | Bullet size keeps both units | Getter and setter on the paragraph | Percentage range stays 0.25 to 4.0 | Points, percent, `None`, invalid |
 | Style removal is kind-checked | Shape and connector `remove_style` | Theme style element only | Present, absent, unsupported kind |
 
+## Behavior contracts and evidence
+
+| Surface or placement | Exact behavior and boundary examples | Primary source identity and location | Local discriminator or pending evidence |
+|---|---|---|---|
+| Placeholder iteration | Slide iteration is ascending `idx` and does not stop at a gap. Layout, master and notes iteration is document order. `placeholders[idx]` stays idx lookup on every owner. `shapes` stays tree order. | python-pptx 1.0.2 `src/pptx/shapes/shapetree.py`. `SlidePlaceholders.__iter__` sorts by `ph_idx` at lines 793 to 796. Layout and master inherit `_BaseShapes.__iter__` document order at lines 97 to 100. `NotesSlidePlaceholders` subclasses `MasterPlaceholders`. Our `PyPlaceholderCollection.__getitem__` is idx lookup at `crates/rpptx-py/src/shape.rs` lines 2399 to 2422, and the class has no `__iter__`, so Python stops at the first gap. Layout `__getitem__` in python-pptx is positional. Q4 keeps our idx lookup. | A1. Fixture tree order differs from idx order. |
+| Percentage fields | Storage is thousandths of a percent. The helper is `int(round(value * 100000.0))`, Python 3 ties-to-even. Transparency stores `(1 - value) * 100000`. `0.8` writes alpha `20000`. `0.998085` writes `192`, and half-away-from-zero also writes `192`. `0.994255` writes `574`, while half-away-from-zero writes `575`. Gradient position `0.000015` writes `2` and `0.000025` writes `2` against half-away `3`. Bullet percent `0.250015` writes `25002` and `0.250025` writes `25002` against half-away `25003`. Baseline `-0.000015` writes `-2` and `-0.000025` writes `-2` against half-away `-3`. `0.57` scales to `56999.99999999999` and both rules write `57000`, so it is not a tie proof. Non-finite values fail the existing range checks. These setters do not accept Python `bool`. | python-pptx 1.0.2 `ST_Percentage.convert_to_xml` and `ST_TextSpacingPercentOrPercentString.convert_to_xml` in `src/pptx/oxml/simpletypes.py`. Current transparency truncates at `crates/rpptx-py/src/dml.rs` line 676. Crop already uses `round_ties_even` at `crates/rpptx-py/src/shape.rs` line 420. Adjustments still truncate at line 2469. | A2. Measured with Python 3 `round` on 2026-10-18. EMU, twips and time stay truncating. |
+| `upArrow` | `MSO_SHAPE.UP_ARROW` is python-pptx value 35. The generator output and the checked-in table gain `upArrow` and lose the duplicate that displaced it. Any other preset name emitted by python-pptx 1.0.2 and dropped by the generator is the same row. Adjustment defaults are the generator output, not hand-written numbers. | Issue 392. `crates/rpptx-py/python/rpptx/enum/shapes.py` has no `upArrow`. | A3. |
+| Table row paint | Stored `a:tr/@h` stays. Painted height grows to the tallest cell, including wrap, spans, margins and vertical text. Fills, borders, background and text are observed together. The following row moves with that height. | Issue 392. Q7. | A4. This story owns the PowerPoint paint baseline. |
+| Clear and empty text | `clear` leaves one paragraph, keeps its properties and drops runs. Held runs of that frame go stale. Other shapes stay live. Empty text writes a paragraph with no runs. | Q5 and Issue 392. | A5 and A6. |
+| Bullet size | Float from 0.25 to 4.0 writes `buSzPct` through the percentage helper. `Length` writes `buSzPts`, and `Pt(17.85)` is `1785`. `None` removes the size element. The getter returns the stored kind. `0.1` still refuses. | Q2 and Issue 392. | A8. |
+| Style removal | Shapes and connectors only. Rust returns `bool`, `false` when `p:style` is already absent. Python returns `None`. An unsupported kind raises and does not publish. | Q6. | A9. |
+
+## Dependency readiness
+
+`BACKLOG.md` records F-X205, F-X206 and F-X258 as `done`. The formal edges are met. This story still waits for the F-X260 and F-X261 file lease on `crates/rpptx/src/lib.rs` and `docs/hld/10-bindings-spec.md`. Its own questions are answered, so the plan stays approved. Approval is not implementation readiness while those files are leased.
+
 ## Acceptance criteria
 
 | ID | Input or setup | Expected observation or refusal | Consumers | Local test | Final gate or pending evidence |
 |---|---|---|---|---|---|
 | A1 | Slide, layout and master with an idx gap, plus one fixture whose tree order differs from idx order | Slide iteration yields every placeholder in ascending idx. Layout and master iteration yield document order. `placeholders[idx]` still addresses that idx | Python placeholders and shapes | `issue392_placeholder_iteration_crosses_index_gaps` | Installed `rpptx` suite |
-| A2 | Transparency `0.8`, one genuine halfway tie that lands even, one genuine halfway tie that half-away-from-zero would send odd, and one exact percentage | Alpha is `20000` for `0.8`. Both ties match python-pptx 1.0.2 ties-to-even. EMU, twips, time and adjustment constructors still truncate | Fill, gradient, bullet percent, baseline | `issue392_percentage_rounding_has_explicit_boundaries` | Final wasm check. No Word hash delta |
+| A2 | Transparency `0.8`, `0.998085` and `0.994255`. Gradient position `0.000015` and `0.000025`. Bullet percent `0.250015` and `0.250025`. Baseline `-0.000015` and `-0.000025`. `0.57` is present only to show it does not separate the tie rule | Alpha `20000`, `192` and `574`. Positions `2` and `2`. Bullet values `25002` and `25002`. Baselines `-2` and `-2`. Half-away-from-zero differs on `0.994255`, `0.000025`, `0.250025` and `-0.000025`. EMU, twips, time and adjustments still truncate | Fill, gradient, bullet percent, baseline | `issue392_percentage_rounding_has_explicit_boundaries` | Final wasm check. No Word hash delta |
 | A3 | `MSO_SHAPE.UP_ARROW`, `add_shape("upArrow")`, and an imported `upArrow` | The geometry matches the regenerated table. Reopen keeps the type. Adjustments are the generated pair | Enum, preset parser, render | `issue392_up_arrow_has_reproducible_geometry` | Generator rerun is local. Paint of a new shape is not a corpus delta unless a fixture already draws it |
 | A4 | Short text, wrapped text, a span, and vertical text | Painted row height fits the text. The next row does not overlap. Stored `h` is unchanged | Render geometry, PDF and PNG | `issue392_table_rows_grow_without_overlapping_following_rows` | Pinned viewer or pixel baseline, owned by this story |
 | A5 | Text box and table cell with paragraph properties and two runs | `clear` leaves one empty paragraph and those properties. Held runs of that frame are stale | Python text frame | `issue392_text_frame_clear_preserves_approved_properties` | Installed suite |
@@ -124,6 +140,7 @@ Do not add a test binary. The generator output is reviewed in the same commit as
 - A generated artefact. Rerun `tools/gen-presets` and commit only the `upArrow` delta it produces.
 - Shared semantic behavior with multiple consumers. Cell and text-box hyperlinks, and slide, layout and master placeholders.
 - Unit conversion. EMU, twips, time and adjustment values still truncate. The percentage helper is ties-to-even and is a different function.
+- Compatibility, numeric conversion or collection ordering. The percentage rows and the per-class placeholder order above are the check.
 
 Theme tint stays on the naive Word helper. This story does not call it.
 
@@ -140,13 +157,15 @@ Word 49 hash and the Word seven-pixel baseline stay unchanged. PowerPoint paint 
 - [ ] Update the HLD list and obtain a zero-finding microscope.
 - [ ] Leave the pixel baseline, viewer and wasm check for the final union.
 
-## Approved decisions
+## Open questions
 
-- Q2. The bullet-size setter accepts `float | Length | None`. A float stays a percentage from 0.25 to 4.0 and writes `buSzPct`. A `Length` writes `buSzPts`, with `Pt(17.85)` stored as `1785`. `None` clears it. The getter returns `float | Length | None` matching the stored element.
-- Q3. Percentage rounding matches pinned python-pptx 1.0.2 ties-to-even for transparency, gradient-stop position, percentage bullet size and baseline. `0.8` transparency writes `20000`. Genuine tie cases are required, including one that lands even and one that half-away-from-zero would send odd. EMU, twips, time and adjustment values keep truncation.
-- Q4. Slide placeholder iteration is ascending `idx`. Layout and master iteration is document order. `shapes` keeps tree order. `placeholders[idx]` remains the existing idx lookup, documented separately from iteration. The test fixture's tree order differs from idx order.
-- Q5. `TextFrame.clear` leaves one paragraph, keeps its properties, and drops runs. Empty text writes a paragraph with no runs. Held runs of that frame become stale. Other shapes stay live.
-- Q6. `remove_style` applies to shapes and connectors only. Rust returns `bool`. Python returns `None`. A missing `p:style` is success and returns `false` from Rust. An unsupported kind raises and does not publish.
-- Q7. Stored row height stays. Rendered height grows so the next row does not overlap. This story exclusively owns the PowerPoint baseline update. The Word 49 hash and seven-pixel baseline stay unchanged.
+| ID | Affected F-IDs and A-IDs | Decision and recommendation | Status and answer/source |
+|---|---|---|---|
+| Q2 | F-X262 A8 | Bullet size accepts `float`, `Length` or `None`. A float from 0.25 to 4.0 writes `buSzPct`. A `Length` writes `buSzPts`. `Pt(17.85)` is `1785`. `None` clears the element. The getter returns the stored kind. | Answered 2026-10-18 by the user. |
+| Q3 | F-X262 A2 | Percentage rounding matches python-pptx 1.0.2 ties-to-even for transparency, gradient-stop position, percentage bullet size and baseline. `0.8` writes `20000`. One tie lands even under both rules and one tie is sent odd by half-away-from-zero. Unrelated truncation stays. | Answered 2026-10-18 by the user. The integers above were measured from `int(round(value * 100000.0))` on 2026-10-18. |
+| Q4 | F-X262 A1 | Slide placeholders iterate by ascending idx. Layout and master placeholders iterate in document order. Idx lookup stays a separate compatibility decision. Notes follow the master class, so they use document order. | Answered 2026-10-18 by the user. Notes order is the python-pptx 1.0.2 subclass fact, not a new choice. |
+| Q5 | F-X262 A5 and A6 | `TextFrame.clear` leaves one paragraph, keeps its properties and drops runs. Empty text writes a paragraph with no runs. Held runs of that frame become stale. Other shapes stay live. | Answered 2026-10-18 by the user. |
+| Q6 | F-X262 A9 | `remove_style` applies to shapes and connectors. Rust returns `bool`. Python returns `None`. A missing `p:style` returns `false`. An unsupported kind raises and does not publish. | Answered 2026-10-18 by the user. |
+| Q7 | F-X262 A4 | Stored row height stays. Painted height grows so the next row does not overlap. This story owns the PowerPoint baseline. The Word 49 hash and seven-pixel baseline stay unchanged. | Answered 2026-10-18 by the user. |
 
 No issue or pull request closes from this plan.

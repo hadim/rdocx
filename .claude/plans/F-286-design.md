@@ -54,6 +54,20 @@ Local tests construct the replacement and repetition observations in source. The
 | Repeating section grows by cloning the template | Section and item shells from F-285's transaction | Fresh id, dropped `w14:paraId` | Zero, one and many items |
 | Picture uses an owned relationship | Picture payload and the existing image embed | No new media allocator | Present relationship, missing relationship, text value |
 
+## Behavior contracts and evidence
+
+| Surface or placement | Exact behavior and boundary examples | Primary source identity and location | Local discriminator or pending evidence |
+|---|---|---|---|
+| Type setter | `set_content_control_type(location, payload)` replaces the type element and keeps tag, alias, id, lock, appearance, placeholder and unmodelled raw slots. An invalid payload does not publish. Citation, equation, bibliography and document-part kinds stay refused. | Q17. Backlog F-286 sentence. `SdtType` names in `crates/rdocx-oxml/src/content_control.rs` lines 55 to 77. | A1. Local tests do not claim a Word match. |
+| Checkbox vocabulary | `true`, `1` and `yes` check. `false`, `0` and `no` uncheck. `maybe` refuses and does not publish. | `prepare_control_value` at `crates/rdocx/src/content_control.rs` lines 81 to 88. | A3. |
+| Date, lists, picture and group | Date uses the existing Gregorian `yyyy-MM-dd` and `dd/MM/yyyy` forms. Lists reject duplicate, unknown and ambiguous values. Picture requires an already-owned relationship and refuses text. Group refuses text. | Q17. Existing `prepare_text_value` and the picture and group refusal at lines 102 to 106. | A2, A4, A5 and A6. |
+| Repeating section and item | A repeating section carries one template item. Zero items refuses. One item repeats to two. Removing the last item refuses. `w15:repeatingSectionItem` is authored as that template child. | Q17. The element names are `w15:repeatingSection` and `w15:repeatingSectionItem`. | A7. |
+| Word differential | Every supported control must match pinned Word structure and behaviour under replacement and repetition. A package this workspace generates is not that evidence. | Backlog test gate. `.claude/skills/differential-testing.md`, native provenance rules. | Pending. No authentic Word producer, version or input identity is in the repo. |
+
+## Dependency readiness
+
+The formal edge is F-285. Its provider contract is approved. `BACKLOG.md` still records F-285 as `pending`, so this story is not implementation-ready until the F-285 prefix checkpoint is integrated. Reviewed status on F-285 does not unblock this story. The Word differential stays pending after implementation and is not a local gate.
+
 ## Acceptance criteria
 
 | ID | Input or setup | Expected observation or refusal | Consumers | Local test | Final gate or pending evidence |
@@ -114,6 +128,7 @@ Tests join the F-285 module in the existing `rdocx` integration entrypoint.
 ## Risk routing
 
 - Any parser or serialiser. Type-element child order and raw-slot retention.
+- XML creation in multiple parent contexts. A type payload uses the F-285 placement row. An unsupported pairing still publishes nothing.
 - Public API of a published crate. Additive payload setter. Final publish dry run.
 - WASM or PyO3 bindings. Python is included. Same rider as F-285.
 - An external oracle comparison. Authentic Word provenance, version and input identity are required. Missing evidence stays pending. Generated output is not the oracle. Do not add a binary fixture.
@@ -136,9 +151,12 @@ Unchanged.
 - [ ] Update the HLD list and obtain a zero-finding microscope.
 - [ ] Leave the live Word compare, if the pin must change, to the final union.
 
-## Approved decisions
+## Open questions
 
-- Q17. `set_content_control_type(location, payload)` on a shell from F-285. Kinds are rich text, plain text, date, checkbox, picture, combo, drop-down, group, repeating section and repeating item. Citation, equation, bibliography and document-part kinds stay refused. Date uses the existing Gregorian `yyyy-MM-dd` and `dd/MM/yyyy` forms. Checkbox uses the existing true, false, yes, no, 1 and 0 vocabulary. Lists reject duplicate, unknown and ambiguous values. Picture requires an already-owned relationship and refuses text. Group refuses text. Repeating clones the one template item, refuses an empty section and refuses removing the last item. Replacement and repetition observations stay required. Differential evidence needs authentic Word provenance, version and input identity. Generated output is not a Word oracle. Missing evidence stays pending. Python follows the F-285 methods and keeps the frozen snapshot.
-- Q19. This story starts after the F-285 prefix checkpoint and finishes before F-287 starts.
+| ID | Affected F-IDs and A-IDs | Decision and recommendation | Status and answer/source |
+|---|---|---|---|
+| Q17 | F-286 A1 to A7 | `set_content_control_type(location, payload)` on an F-285 shell. The supported kinds are rich text, plain text, date, checkbox, picture, combo, drop-down, group, repeating section and repeating item. Citation, equation, bibliography and document-part kinds stay refused. Replacement and repetition observations stay required. Generated output is not a Word oracle. | Answered 2026-10-18 by the user. Checkbox mapping is the code at `content_control.rs` lines 81 to 88. |
+| Q19 | F-285, F-286 and F-287 | This story starts after the F-285 prefix checkpoint and finishes before F-287. | Answered 2026-10-18 by the user. |
+| Q21 | F-285, and this story's approval | The F-285 method names. This plan has no separate product choice. | Answered 2026-10-18 on F-285. This plan adopts those names. |
 
 No external issue closes from this plan.

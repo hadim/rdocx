@@ -47,6 +47,19 @@ Python adds `Document.add_custom_xml_store` and `Document.set_content_control_bi
 | Unknown item bytes survive | Value update on a store with an unmodelled sibling | Byte compare of the unrelated span | Update, save, reopen |
 | Display and store commit together | Existing tag fill on a newly bound control | One staged package | Success and one rejected sibling control |
 
+## Behavior contracts and evidence
+
+| Surface or placement | Exact behavior and boundary examples | Primary source identity and location | Local discriminator or pending evidence |
+|---|---|---|---|
+| Store creation | `add_custom_xml_store(item_xml, schema_uris) -> Result<String>` returns the new item id. Part names come from the existing preferred-name allocator. An occupied conventional name is not overwritten. The properties root is `ds:datastoreItem` with `ds:itemID`, then `ds:schemaRefs`, then one `ds:schemaRef` per URI. Schema URIs are stored and not fetched. The id shape is the braced uppercase form already allocated by bibliography, `{00000000-0000-4000-8000-############}`. | Q18. `create_collection` in `crates/rdocx/src/bibliography.rs` lines 1795 to 1846 writes the same relationship and content-type steps and an empty `ds:schemaRefs`. | A1. |
+| Shared helper | The relationship steps match bibliography, so one private helper in `rdocx` allocates the item part, properties part, relationships and content types. Bibliography keeps its own item bytes. The helper does not move into `oxml-*`. | Q18, resolved by reading both call shapes. | C5. Bibliography bytes stay unchanged. |
+| Binding xpath | Absolute child paths only. A leading `//`, an empty step, a function, a wildcard, a descendant axis or a predicate other than a one-based index refuses and publishes nothing. `/ns:root/ns:child` and `/ns:root/ns:child[1]` are accepted when the prefix is mapped. | `parse_xpath` and `parse_xpath_segment` at `crates/rdocx/src/content_control.rs` lines 910 to 990. | A4. |
+| Value update | Existing tag and bind setters update the store and the display together. A failed sibling rolls both back. Unknown sibling bytes stay byte-identical. An ambiguous store id and an other-namespace decoy refuse. | Q18. | A2, A3, A5 and A6. |
+
+## Dependency readiness
+
+The formal edge is F-285. Its provider contract is approved. `BACKLOG.md` still records F-285 as `pending`, so this story is not implementation-ready until the F-285 prefix checkpoint is integrated. The file lease also waits until F-286 leaves `content_control.rs`. Q18's helper fact is resolved and is not an open choice.
+
 ## Acceptance criteria
 
 | ID | Input or setup | Expected observation or refusal | Consumers | Local test | Final gate or pending evidence |
@@ -121,9 +134,12 @@ Unchanged.
 - [ ] Update the HLD list and obtain a zero-finding microscope.
 - [ ] Leave the hash harness for the final union.
 
-## Approved decisions
+## Open questions
 
-- Q18. `add_custom_xml_store` returns a new item id and writes the item, properties, relationships and content types through the existing graph. It does not use a fixed filename or `count + 1`, and it does not overwrite an occupied conventional name. `set_content_control_binding` accepts only the current absolute child-path subset. Functions, wildcards, descendant axes and general predicates stay refused. Schema references are stored and not fetched. Unknown item bytes stay byte-identical. Two-way updates stay on the existing staged setters. An ambiguous store id and an other-namespace decoy refuse. Python follows the F-285 methods. WASM and CLI stay unchanged. Bibliography stays in place unless the relationship steps are actually the same, in which case one private helper in `rdocx` serves both. That helper does not live in `oxml-*`.
-- Q19. This story starts after F-286, which starts after the F-285 prefix checkpoint.
+| ID | Affected F-IDs and A-IDs | Decision and recommendation | Status and answer/source |
+|---|---|---|---|
+| Q18 | F-287 A1 to A6 | `add_custom_xml_store` returns a new item id through the existing graph. Binding accepts only the current absolute child-path subset. Unknown bytes stay byte-identical. Bibliography shares a private `rdocx` helper because the relationship steps match. The helper does not live in `oxml-*`. | Answered 2026-10-18 by the user. The helper fact was confirmed from `bibliography.rs` lines 1795 to 1846. |
+| Q19 | F-285, F-286 and F-287 | This story starts after F-286, which starts after the F-285 prefix checkpoint. | Answered 2026-10-18 by the user. |
+| Q21 | F-285, and this story's approval | The F-285 method names. This plan has no separate product choice. | Answered 2026-10-18 on F-285. This plan adopts those names. |
 
 No external issue closes from this plan.

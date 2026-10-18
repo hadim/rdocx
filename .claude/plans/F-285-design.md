@@ -27,11 +27,11 @@ The story starts after F-X259, F-X260, F-X261 and F-X262, because those stories 
 
 Add creation and metadata edits to the existing facade and the existing `content_control.rs` model. Do not add a crate, module or file.
 
-`Document::insert_content_control(destination, spec) -> Result<()>` inserts one shell at a checked `ContentLocation`. `ContentControlPlacement` is `Block`, `Row`, `Cell`, `Paragraph` or `Inline`, and it must match the destination parent. Block and cell parents accept a block control. A table accepts a row control. A row accepts a cell control. A paragraph accepts an inline control. A mismatched placement refuses before publication.
+Python `Document.insert_content_control(destination, placement, kind, tag=None, alias=None, lock=None, appearance=None, placeholder=None)` inserts one shell. Rust `Document::insert_content_control(&mut self, destination: &ContentLocation, spec: ContentControlSpec) -> Result<()>` takes those same fields in `ContentControlSpec`. Python does not expose that spec type. `ContentControlPlacement` is `Block`, `Row`, `Cell`, `Paragraph` or `Inline`, and it must match the destination parent. Block and cell parents accept a block control. A table accepts a row control. A row accepts a cell control. A paragraph accepts an inline control. A mismatched placement returns `Error::Other` and does not publish.
 
-The spec is `ContentControlSpec { placement, kind, tag, alias, lock, appearance, placeholder }`. `kind` is `SdtType::RichText` or `SdtType::PlainText`. Any other kind returns an error that names F-286, so this story cannot create a checkbox or date with an empty payload. `tag` and `alias` are optional strings and reject non-XML characters. The facade allocates the smallest positive `i32` id that no surviving control uses. Lock, appearance and placeholder are location-addressed edits on the existing property model. A value that the model cannot store refuses and does not publish.
+`kind` is `SdtType::RichText` or `SdtType::PlainText`. Any other kind returns an error that names F-286 and does not publish. `tag` and `alias` are optional strings and reject non-XML characters. The facade allocates the smallest positive `i32` id that no surviving control uses. Lock, appearance and placeholder are location-addressed edits on the existing property model. A value that the model cannot store returns `Error::Other` and does not publish.
 
-Property edits address an existing control by `ContentLocation` and change tag, alias, lock, appearance or placeholder without replacing its content or its type payload. A missing control, a stale location or an invalid value leaves the package unchanged.
+The metadata methods are `set_content_control_tag`, `set_content_control_alias`, `set_content_control_lock`, `set_content_control_appearance` and `set_content_control_placeholder`. Each takes a `ContentLocation` and an `Option`. `None` clears that field. `remove_content_control(location)` deletes the shell and its content. `unwrap_content_control(location)` leaves the content only when the parent can hold it. Python uses the same names. Rust returns `Result<()>`. A missing control, a stale location or an invalid value returns `Error::Other` and leaves the package unchanged.
 
 Move, clone and remove use the existing fragment transaction once the control bytes are selected. Block controls that are direct children keep `move_content`, `clone_content` and `remove_content_at`. Row, cell, paragraph and inline controls get location-aware wrappers on that same transaction. Clone drops `w14:paraId` and `w14:textId` through the existing freshen path and allocates a new sdt id. Move keeps the id. Remove deletes the shell and its content. A separate unwrap mode drops the shell and leaves the content in place, and refuses when that content is illegal in the parent.
 
@@ -51,6 +51,22 @@ The existing `SdtOwner` grammar is that check. A block parent or a cell parent a
 | Value fill still addresses the new shell | Existing tag and alias setters | F-285 does not change fill semantics | Create, fill, reopen |
 
 Layout reads controls it can already see. This story does not change paint for a document that never calls the new API.
+
+## Behavior contracts and evidence
+
+| Surface or placement | Exact behavior and boundary examples | Primary source identity and location | Local discriminator or pending evidence |
+|---|---|---|---|
+| Block or cell parent | A block control whose content is a paragraph or a table. The default shell is one empty paragraph. A plain-text paragraph in that shell contains one empty run. | Q16. Existing `SdtOwner` grammar. Child order on write is `w:sdtPr`, then `w:sdtEndPr` when present, then `w:sdtContent`. | A1. An inline payload in this parent returns the original package. |
+| Table parent | A row control whose content is one schema-valid row. | Q16. | A1. |
+| Row parent | A cell control whose content is one schema-valid cell, and that cell's block content is one empty paragraph. | Q16. | A1. |
+| Paragraph parent | An inline control whose content is runs. The default shell is one empty run. A nested paragraph refuses and publishes nothing. | Q16. The user correction requires inline content to be runs. | A1. |
+| Kind and identity | Kind is `SdtType::RichText` or `SdtType::PlainText`. Any other kind returns an error that names F-286 and publishes nothing. The id is the smallest unused positive `i32`. Tag and alias reject non-XML characters. | Q16. `SdtType` already names the later kinds in `crates/rdocx-oxml/src/content_control.rs`. | A6. |
+| Metadata, remove and unwrap | `set_content_control_tag`, `set_content_control_alias`, `set_content_control_lock`, `set_content_control_appearance` and `set_content_control_placeholder` each take a location and an `Option`. `None` clears that field and does not replace content. `remove_content_control` deletes the shell and its content. `unwrap_content_control` leaves the content only when the parent can hold it. A refusal returns `Error::Other` and the original package. Foreign-namespace `showingPlcHdr` lookalikes stay. | Q16 and Q21. Placeholder preservation is covered near `crates/rdocx-oxml/src/content_control.rs` around the placeholder fixture. | A2 and A4. |
+| Python, WASM and CLI | Python receives the same document methods and keeps the frozen `ContentControl` snapshot. Destination is the existing `ContentLocation`. WASM and CLI gain no method. | Q16. `PyContentLocation` is `crates/rdocx-py/src/document.rs` line 4989. `PyContentControl` is frozen at line 5126. | A1. |
+
+## Dependency readiness
+
+`BACKLOG.md` records F-253 and F-254 as `done`. The formal edges are met. Q21 is answered, so this provider contract is approved. The file lease still waits for F-X259 through F-X262 to leave `document.rs` and the bindings spec. Approval is not the prefix checkpoint. F-286 and F-287 may consume this contract and stay unready until that checkpoint is integrated.
 
 ## Acceptance criteria
 
@@ -105,6 +121,7 @@ Python tests go in `crates/rdocx-py/tests/test_core.py`. No new test binary.
 ## Risk routing
 
 - Any parser or serialiser. Schema child order, fixed write prefix, and a round-trip that keeps an unmodelled `sdtPr` child byte for byte.
+- XML creation in multiple parent contexts. The five placement rows above are the check. A block payload in an inline parent refuses.
 - Public API of a published crate. The new methods are additive. Final publish dry run and crate size check.
 - WASM or PyO3 bindings. Python is included. Final `rdocx-wasm` check. Python tests stay excluded from the workspace binary.
 - Shared semantic behavior with multiple consumers. Create, list, fill and reopen see the same tag and text.
@@ -125,9 +142,12 @@ Unchanged. Creation must not alter the bytes of a document that does not call th
 - [ ] Update the HLD list and obtain a zero-finding microscope.
 - [ ] Complete this story through the dependency-prefix checkpoint before F-286 or F-287 starts. Leave the full hash harness for final sprint closure, and record it as rider debt at the prefix.
 
-## Approved decisions
+## Open questions
 
-- Q16. Native `insert_content_control` and location-addressed metadata edits. Kind is rich text or plain text only. Other kinds refuse and name F-286. Proposed content is validated against the actual placement schema. Inline controls contain valid inline content, not nested paragraphs. Unsupported placement and type combinations refuse atomically. Python gets the same methods and keeps a frozen `ContentControl` snapshot. WASM and CLI stay unchanged. Remove deletes the shell and its content. A separate unwrap mode refuses a result the parent cannot hold. Ids are the smallest unused positive `i32`.
-- Q19. F-285 completes its dependency-prefix checkpoint before F-286 and F-287. Those two then run serially, F-286 and then F-287, because both edit `CT_SdtPr` and the facade.
+| ID | Affected F-IDs and A-IDs | Decision and recommendation | Status and answer/source |
+|---|---|---|---|
+| Q16 | F-285 A1 to A6. F-286 and F-287 consume the shell. | Create rich and plain shells at the five placements. Validate each placement's content model. Inline content is runs. Unsupported combinations publish nothing. Python keeps a frozen snapshot. WASM and CLI stay unchanged. Remove deletes the shell and content. Unwrap refuses a result the parent cannot hold. Ids are the smallest unused positive `i32`. | Answered 2026-10-18 by the user. |
+| Q19 | F-285, F-286 and F-287 | F-285 completes its dependency-prefix checkpoint before F-286. F-287 starts after F-286 leaves the shared files. | Answered 2026-10-18 by the user. |
+| Q21 | F-285 A2 and A4. F-286 and F-287 consume the names. | Python `insert_content_control(destination, placement, kind, tag=None, alias=None, lock=None, appearance=None, placeholder=None)`. Rust takes the same fields in `ContentControlSpec`. The setters are `set_content_control_tag`, `set_content_control_alias`, `set_content_control_lock`, `set_content_control_appearance` and `set_content_control_placeholder`. Each takes a location and `Option`, and `None` clears that field. `remove_content_control(location)` and `unwrap_content_control(location)` use the same names in Python. Rust returns `Result<()>`. A refusal returns `Error::Other` and does not publish. | Answered 2026-10-18 by the user. |
 
 No external issue closes from this plan.
