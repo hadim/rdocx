@@ -91,6 +91,15 @@ comparing consumers, and record intentional differences explicitly.
 
 ## Compatibility facts and oracle provenance
 
+When exposing existing imported data through a new API, enumerate the parser's
+accepted variants and absence states first. Cover read, untouched preservation,
+assignment and clearing where applicable. Do not derive the reader's entire
+domain from the new setter's accepted values. Include a discriminator for each
+different projection or preservation rule, using bounded cases rather than
+repeating equivalent fixtures. For unit conversions, record both the stored
+value and its public value so a correctly typed but incorrectly scaled getter
+cannot pass.
+
 Before claiming parity, pin the primary reference version and exact source
 file/function or schema clause. Trace the specific getter, setter and collection
 class. Similar names do not imply identical ordering or conversion behavior.

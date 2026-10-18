@@ -84,6 +84,17 @@ ownership and schema-valid placement where applicable. Every unresolved
 decision has a stable sprint-wide ID and appears in the consolidated question
 round. Improving instructions does not approve existing draft recommendations.
 
+Approval also requires `/design`'s contract closure pass: every promised
+operation has a callable API and evidence, supported kinds match payloads,
+repeated signatures agree, and imported states have explicit read/preserve/edit
+behavior. A populated template and answered decisions are insufficient.
+
+An active worker may predate a canonical contract revision. Before continuing,
+its owner acknowledges the applicable plan and instruction revisions and their
+effect on local work in the existing progress record. Preserve dirty work and
+keep shared trackers on the canonical branch. Integration reconciles against
+the latest approved contract without replacing it with an older worker copy.
+
 Plan in dependency order without pretending the providers are implemented.
 Dependent drafts may use proposed in-sprint contracts. Dependent approval
 requires approved provider contracts. Implementation still requires actual

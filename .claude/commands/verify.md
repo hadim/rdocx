@@ -31,6 +31,17 @@ Record in-flight evidence and pending checks in the feature's existing
 
 ## Acceptance applicability
 
+For scoped Python checks, select the A-ID tests and their affected controls
+before launching a broad file. Preflight only their required dependencies,
+oracle pins, installed extension identity and environment configuration. Avoid
+running a large known-unready suite to rediscover missing imports or settings.
+Final installed-product and oracle suites remain mandatory at their scheduled
+boundary. If a selected run fails for an environment reason, retain its failure
+and repair the environment or leave that check pending. Do not turn a required
+case into a skip. A broader failed command is still failed even when selected
+cases passed inside it. Cite those cases individually, and do not infer
+correctness from the absence of AssertionError or a particular error class.
+
 Before choosing commands, map each A-ID to the observation that proves it.
 Check selected test membership and discriminators, not just exit status. Cases
 that promise consumer agreement compare the same input across those paths.

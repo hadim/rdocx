@@ -158,6 +158,11 @@ entry for a validation-only sprint.
    contracts before dependent contracts, and leave actual implementation
    readiness pending until dependencies are done. If answers or source
    inspection change a shared contract, reconcile all dependent plans first.
+   Run the semantic contract closure pass, including operation/variant coverage
+   and imported states, before treating answered questions as approval. If a
+   revised contract affects a running worker, report the exact canonical
+   revision and require its owner's acknowledgment before affected work resumes.
+   Do not silently change that worker's files or reset its recorded Base.
 7. Commit all approved plans together:
 
    ```

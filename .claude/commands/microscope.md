@@ -49,6 +49,10 @@ Without it, review the F-ID's commits on the sprint branch.
    omission versus clearing, and collection/handle lifetime where applicable.
    A self-produced fixture cannot discharge native parity. Confirm no promised
    issue row or gate disappeared when a reduced example passed.
+   Check `/design`'s contract closure as well as implementation conformance.
+   Following a contradictory or incomplete plan is a contract finding, not a
+   reason to approve. Verify callable operation and variant coverage, imported
+   states and the worker's acknowledgment of applicable canonical revisions.
 
 5. **Classify every finding.**
 

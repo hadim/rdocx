@@ -91,5 +91,6 @@ exact command the worker runs first:
   attempt is not reused. Completed workers are removed by `/close-sprint` after
   the integrated sprint is pushed. Any other stale worker requires an explicit
   recovery decision.
-- **Claiming an F-ID whose dependencies are not `done`.** `/design` already
-  refused that. If the state changed since, stop.
+- **Claiming an F-ID whose dependencies are not `done`.** An approved design
+  may rely on approved provider contracts. A claim requires actual dependency
+  completion, including any required dependency-prefix checkpoint.

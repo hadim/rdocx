@@ -17,6 +17,16 @@ against the design plan as the contract.
    material decisions before proceeding. Do not code around a flawed plan or
    silently weaken its acceptance gate.
 
+   On resume, compare the local plan and applicable canonical commands/skills
+   with the current canonical sprint revisions. Read the authoritative files
+   from the canonical worktree or Git objects. Record their commit or content
+   identity, the material differences and applicability to existing work in
+   the existing progress file. A claim Base alone does not identify a later
+   approved contract. An unresolved semantic difference pauses only affected
+   work. Do not reset, force-checkout or rebase a dirty worker, copy sprint
+   trackers into it, or edit another owner's worktree. Its owner reconciles
+   source safely through the normal workflow. Reuse unaffected local evidence.
+
 2. **Confirm the state.** The F-ID is `in-progress`, the branch is `sprint/sNN`,
    and the stubs exist and fail.
 

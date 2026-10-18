@@ -93,6 +93,40 @@ and outstanding decisions in the sections below. Do not approve merely because
 all template headings exist. Before implementation, recheck that source pins,
 provider contracts and actual dependency completion still apply.
 
+### Contract closure pass
+
+After drafting or revising, read the whole plan as an implementer. This is a
+semantic check, not a check that headings and answered Q-IDs exist.
+
+1. Inventory every promised operation from the backlog, decisions, approach,
+   acceptance rows and dependent plans. Each must name its existing or proposed
+   callable entry point, concrete Rust/Python arguments and returns where
+   exposed, and a proving A-ID. Do not promise repeat, remove, clone or unwrap
+   behavior without saying how a caller invokes it.
+2. Compare every supported kind against its payload variants and valid parent
+   contexts. Explain any kind created only as a child of another operation.
+   An umbrella statement such as "all supported kinds" is not coverage.
+3. Reconcile repeated signatures, parameter names, defaults and representations
+   across the approach, tables, decisions and consumer plans. Keep one complete
+   definition and refer back to it rather than maintaining divergent copies.
+   "Same methods" does not define a new binding payload representation.
+4. For a new projection of existing data, inventory the states the parser
+   already accepts. Specify reading, preservation without assignment, explicit
+   assignment and clearing for applicable variants and absence. A narrower
+   setter does not authorize dropping imported states. Distinguish a schema
+   default from an application fallback. Give a concrete stored-to-public unit
+   conversion example when their scales differ.
+5. Recheck source claims against the current integrated Base. Label historical
+   observations as historical. Name affected running workers when a contract
+   changes and require the revision acknowledgment in `/implement-feature`
+   before they continue. Retain applicable evidence and invalidate only the
+   observations affected by the actual change.
+
+Record the closure result and any unresolved items in the existing plan.
+Answered questions alone do not discharge these checks. Revisions preserve
+approved user decisions. Resolve source facts directly, use routine judgment
+for implementation detail, and ask only when a material product choice remains.
+
 ## Template
 
 ```markdown

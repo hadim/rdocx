@@ -22,6 +22,12 @@ compose. Keep unmet native, installed and corpus criteria pending in the
 existing records. A contributed patch's test count never substitutes for its
 linked issue's whole acceptance inventory.
 
+Compare the worker's acknowledged plan/instruction revisions with the current
+canonical contract before squash integration. If they differ, reconcile the
+material changes and affected evidence with the owner first. Do not let an
+older worker plan overwrite a newer approved plan merely because Git merges it
+without a conflict. Preserve current decisions and re-review semantic changes.
+
 ## Preconditions
 
 1. **Clean tree on `sprint/sNN`**, matching `docs/sprints/CURRENT_SPRINT.md`.
