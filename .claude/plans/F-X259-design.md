@@ -102,3 +102,13 @@ Expected unchanged for all49documents and sevenpixel cases. These inputs do not 
 ## Open questions
 
 None for the bounded reviewed fixes and instruction updates. Contribution API choices belong to the separate draft F-X260 through F-X262 plans. The user already requests Grok implementation and independent Codex sprint review. No remaining sprint authoring or contribution implementation starts in this preparation.
+
+## Sprint-final acceptance
+
+**Checkpoint**: sprint-final-acceptance
+**Verify**: local scoped checks consumed from `.claude/scratch/F-X259-progress.md`, pass. Those checks are fmt, clippy for `rdocx`, `rdocx-layout` and `rpptx`, the named `reviewed_` regressions, template and numbering units, seven fx254 frontier tests, prose and adapter drift. They were not rerun after `527a3ca5` because these sources did not change. `/verify --full` is pending.
+**Test gate**: `reviewed_styleref_relative_fields_render_the_evaluated_number`, `reviewed_template_empty_implicit_scopes_match_populated_scopes`, `reviewed_template_empty_scopes_still_refuse_known_invalid_roots`, and the metadata-adoption owner refusal, pass
+**Final checks**: 49-hash, seven-pixel, installed products, native Word comparison, WASM, docs, archive and the sprint risk union, pending
+**Hash harness**: deferred to the final sprint gate, expected unchanged
+
+The final checklist item stays open. This marker is not feature completion.
