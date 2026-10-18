@@ -1361,7 +1361,8 @@ F-248 also adds public fields to the pre-1.0 native Rust projections.
 `ResolvedNumbering` exposes `number_current`, `number_level`,
 `number_level_without_text`, `number_level_has_ancestor`, `number_full`,
 `number_full_without_text`,
-`number_context`, `number_suffixes_without_text`, `num_id`, and the hidden
+`number_context`, `number_suffixes_without_text`, `num_id`,
+`definition_id`, `has_start_override`, and the hidden
 `relative_to` method. `CT_PPr` exposes
 `num_ilvl_raw`, `num_id_raw`, `num_pr_extra_attributes`, `num_pr_extra_xml`,
 `numbering_revision_xml_positions`, and `numbering_revision_position` so typed

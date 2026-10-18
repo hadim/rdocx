@@ -2131,7 +2131,19 @@ Direct resolved numbering-level `marker_rpr.vanish=true` suppresses marker ink
 and the outline's visible marker only. The numbering counter, suffix layout,
 accepted heading and counter-derived REF/STYLEREF values remain independent.
 No paragraph-mark or ordinary-text hidden property is inferred as marker
-formatting. Actual Word hidden-marker field parity remains final native debt.
+formatting. The captured Word 16.114 hidden-marker result matches those
+counters. REF returns 1 and STYLEREF returns 2.
+
+REF and STYLEREF `\w` keep each level's literal level text. A level whose
+text already contains every ancestor placeholder replaces the accumulated
+path. Any other formatted level is appended, and one trailing full stop is
+removed. `\w` with `\t` keeps the literal-free full context. An unnumbered
+STYLEREF caller has no list context, so `\r` returns the current level, the
+same result as `\n`. REF `\r` with no caller numbering keeps the full
+context. `\r` shares context across concrete instances of one abstract
+definition when neither instance has a start override. A different
+definition, or any instance start override, keeps the full context. The
+same concrete instance still omits only its shared prefix.
 
 An ambiguous generated-owner scan becomes a private stamped failure fact on
 WordSequenceSnapshot through the narrow doc-hidden

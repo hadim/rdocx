@@ -404799,7 +404799,7 @@ fn multilevel_navigation_remains_consistent_after_mutation() {
 fn relative_ref_uses_physical_caller_context() {
     for (case, (other_instance, different_parent, expected)) in [
         (false, false, "2"),
-        (true, false, "1.2"),
+        (true, false, "2"),
         (false, true, "2.1"),
     ]
     .into_iter()
@@ -404876,7 +404876,7 @@ fn relative_ref_uses_physical_caller_context() {
             &mut document,
             &format!("relative-case-{case}-baseline"),
             &format!(
-                "six REF modes library values {expected_values:?}; concrete instance cases are not native parity"
+                "six REF modes library values {expected_values:?}. Word 16.114 shares one definition without a start override"
             ),
         );
         document
@@ -404907,6 +404907,26 @@ fn relative_ref_uses_physical_caller_context() {
                 .number_current,
             "5"
         );
+        let restarted_full = if different_parent { "2.5" } else { "1.5" };
+        let restarted = [
+            "5",
+            restarted_full,
+            restarted_full,
+            "5",
+            restarted_full,
+            restarted_full,
+        ];
+        let restarted_fields = document
+            .evaluate_fields(&FieldEvaluationContext::default())
+            .unwrap();
+        for (field, value) in restarted_fields.iter().zip(restarted) {
+            assert_eq!(
+                field.outcome,
+                FieldOutcome::Resolved(value.into()),
+                "restart case {case}: {}",
+                field.instruction
+            );
+        }
         f283_export_native_input(
             &mut document,
             &format!("relative-case-{case}-restart-five"),
@@ -405121,9 +405141,9 @@ fn styleref_modes_reuse_numbering_literals_and_context() {
     let fields = [
         (r#"STYLEREF "Heading 3" \n"#, "Clause 1"),
         (r#"STYLEREF "Heading 3" \n \t"#, "1"),
-        (r#"STYLEREF "Heading 3" \r"#, "1.1.Clause 1"),
-        (r#"STYLEREF "Heading 3" \r \t"#, "1.1.1"),
-        (r#"STYLEREF "Heading 3" \w"#, "1.1.Clause 1"),
+        (r#"STYLEREF "Heading 3" \r"#, "Clause 1"),
+        (r#"STYLEREF "Heading 3" \r \t"#, "1"),
+        (r#"STYLEREF "Heading 3" \w"#, "Chapter 1.Section 1.Clause 1"),
         (r#"STYLEREF "Heading 3" \w \t"#, "1.1.1"),
     ];
     for (index, (instruction, _)) in fields.iter().enumerate() {
@@ -405148,7 +405168,7 @@ fn styleref_modes_reuse_numbering_literals_and_context() {
     f283_export_native_input(
         &mut document,
         "style-modes-baseline",
-        "six labelled modes distinguish Clause1, literal-free1 and full1.1.Clause1/1.1.1",
+        "six labelled modes distinguish Clause 1, literal-free 1, Chapter 1.Section 1.Clause 1 and literal-free 1.1.1",
     );
 }
 

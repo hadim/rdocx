@@ -26357,6 +26357,8 @@ mod tests {
                 "2".to_owned(),
             ],
             num_id: 7,
+            definition_id: 1,
+            has_start_override: false,
             marker_rpr: CT_RPr::default(),
             suffix: ST_LvlSuffix::Tab,
         };
