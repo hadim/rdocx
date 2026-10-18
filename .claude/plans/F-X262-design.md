@@ -14,7 +14,7 @@ Placeholder iteration stops at the first missing `idx`. After idx 1 is removed, 
 
 PR394 head `e9f9fbe7b86388b8702af5757bdfa7e4e4fc6596` is the refreshed identity. It is one archive-measurement commit ahead of functional parent `f9d165e77392b57a58223046d8cd551220c61a3a`. The extra commit edits README files and `scripts/readme_doctests.py` only. The functional diff is about twenty files, including `tools/gen-presets/generate.py`, `crates/oxml-drawing/src/preset_shape_data.rs`, `crates/rpptx-render/src/lib.rs` and `crates/rpptx/src/lib.rs`. It is a candidate. Its PowerPoint corpus and wasm gate were not run here.
 
-Current source is `67423b6b` plus the uncommitted F-X259 diff. That diff edits `crates/rpptx/src/lib.rs` and rendering docs. This story starts after F-X259 is integrated. It also shares `docs/hld/10-bindings-spec.md` with F-X260 and F-X261, so it follows them.
+F-X259 is integrated at `4879e58a`, which is an ancestor of this sprint branch. That commit edits `crates/rpptx/src/lib.rs` and rendering docs. This story still shares `docs/hld/10-bindings-spec.md` with F-X260 and F-X261, so it follows them.
 
 ## Spec reference
 
@@ -156,6 +156,10 @@ Word 49 hash and the Word seven-pixel baseline stay unchanged. PowerPoint paint 
 - [ ] Regenerate presets and implement the nine rows in the existing crates.
 - [ ] Update the HLD list and obtain a zero-finding microscope.
 - [ ] Leave the pixel baseline, viewer and wasm check for the final union.
+
+## Contract closure
+
+R4's stale source sentence is corrected in Problem. F-X259 is integrated at `4879e58a`. This story's own questions stay answered. It still waits on the F-X260 and F-X261 file lease. No product contract changed in this pass.
 
 ## Open questions
 

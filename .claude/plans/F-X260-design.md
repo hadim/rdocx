@@ -59,7 +59,7 @@ No new crate, module or file. Python changes stay in `crates/rdocx-py/src/docume
 
 ## Dependency readiness
 
-`BACKLOG.md` records F-X211c and F-X237 as `done`. Those are the formal edges. F-X259 is not a formal dependency. Its integrated head `4879e58a` is an ancestor of claim base `c776041c`. This story is implementation-ready on those edges. The file lease still places it before F-X261 and F-X262. Approval of this plan does not complete the story.
+`BACKLOG.md` records F-X211c and F-X237 as `done`. Those are the formal edges. F-X259 is not a formal dependency. Its integrated head `4879e58a` is an ancestor of claim base `c776041c`. This story is implementation-ready on those edges. The file lease still places it before F-X261 and F-X262. Approval of this plan does not complete the story. The running worker `work/f-x260-grok` predates the behavior-contract revision. Its owner records that revision in the worker progress file before further implementation. Dirty worker files stay in the worker. A5, the HLD update and the microscope stay open.
 
 ## Acceptance criteria
 
@@ -138,6 +138,10 @@ Unchanged. A Word or PowerPoint byte change that is not required by the owner re
 - [ ] Implement through the existing inventories and publication path.
 - [ ] Update the HLD impact list and obtain a zero-finding microscope.
 - [ ] Leave the release ratio and installed suites for the final sprint union.
+
+## Contract closure
+
+R4 in `.claude/reviews/S95.3-design-quality-pass-1.md` does not change A1 through A7. The running worker acknowledges the canonical plan, including the behavior contracts added after claim base `c776041c`, in its progress file before further implementation. A5, the HLD update and the microscope stay explicit and unfinished. The release ratio of 3 stays final evidence.
 
 ## Open questions
 

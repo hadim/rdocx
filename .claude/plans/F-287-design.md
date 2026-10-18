@@ -26,17 +26,19 @@ F-286 does not have to land first. The binding sits on `CT_SdtPr`, which F-285 a
 
 Add store and binding methods on `Document`. Do not add a package-surgery API, a crate or a file.
 
-`add_custom_xml_store(item_xml, properties) -> Result<String>` stages a new item part, a properties part, both relationships and the content-type overrides. The item id is a new GUID. The properties root is `ds:datastoreItem` with that `ds:itemID`, schema references from the argument, and no other invented children. Part names use the existing suffix allocator. A conventional name that is already taken is not overwritten. The method returns the store item id.
+Rust `Document::add_custom_xml_store(&mut self, item_xml: &[u8], schema_uris: &[&str]) -> Result<String>`. Python `Document.add_custom_xml_store(item_xml: bytes, schema_uris: Sequence[str] = ()) -> str`. The method stages a new item part, a properties part, both relationships and the content-type overrides through the same steps as `create_collection`. Part names use `reserve_preferred_part_name`. An occupied conventional name is not overwritten. The returned value is the new item id, not the part name. `create_collection` itself still returns the part name.
 
-`set_content_control_binding(location, binding) -> Result<()>` writes `w:dataBinding` on an existing control from F-285. `binding` carries the store item id, an absolute xpath and optional prefix mappings. The xpath is rejected when it contains a function, a wildcard, a descendant axis or a predicate other than a one-based index. The store must already resolve. The selected element must exist or be creatable by the current updater's empty-element rule. A failed check does not publish.
+`item_xml` must be one well-formed XML element. Empty bytes, a fragment, or bytes that are not XML return `Error::Other` and do not publish. `schema_uris` is a list of attribute values. An empty list writes `<ds:schemaRefs/>`, which is what bibliography writes. Each URI must be non-empty. Caller order is kept, including a repeated URI. The properties root is `ds:datastoreItem` with attribute `ds:itemID`, then child `ds:schemaRefs`, then one `ds:schemaRef` per URI. URIs are stored and not fetched. The id is the braced uppercase form `{00000000-0000-4000-8000-############}` from the existing allocator.
+
+Rust `Document::set_content_control_binding(&mut self, location: &ContentLocation, store_item_id: &str, xpath: &str, prefix_mappings: Option<&str>) -> Result<()>`. Python `Document.set_content_control_binding(location, store_item_id: str, xpath: str, prefix_mappings: str | None = None) -> None`. The three strings are the fields of the existing `CT_DataBinding`. There is no new binding object. `None` and `""` mean no prefix mappings. The mapping text uses `parse_prefix_mappings`. The xpath uses `parse_xpath`. The store must resolve to one part through `resolve_custom_xml_part`. The selected element must already exist or be an empty element `select_xml_element` can expand. A failed check returns `Error::Other` and does not publish.
 
 Value updates stay on `set_content_control_value_by_tag` and `bind_content_controls`. This story does not grow a second evaluator. After a public bind, those methods must update the new store and the display together, and a failed control must roll back both.
 
 Unknown sibling bytes in the item stay byte-identical across a value update and across save and reopen. Schema references round-trip and are not resolved against a network or a second schema engine. Prefix mappings are stored and used by the existing path walker.
 
-Bibliography keeps its private writer unless both call sites would copy the same relationship steps. A shared helper is justified only then, because bibliography exists today and this API would be the second caller. If the steps are not the same, this story inlines the public sequence and leaves bibliography alone.
+The relationship steps match bibliography, so one private helper in `rdocx` allocates the item part, the properties part, the relationships and the content types. The caller supplies the item bytes and the schema URIs. Bibliography keeps its own item bytes. The helper does not move into `oxml-*`.
 
-Python adds `Document.add_custom_xml_store` and `Document.set_content_control_binding` and keeps the frozen content-control snapshot from F-285. WASM and CLI gain none.
+Python uses the signatures above and keeps the frozen content-control snapshot from F-285. WASM and CLI gain none.
 
 ## Consumer map
 
@@ -51,9 +53,9 @@ Python adds `Document.add_custom_xml_store` and `Document.set_content_control_bi
 
 | Surface or placement | Exact behavior and boundary examples | Primary source identity and location | Local discriminator or pending evidence |
 |---|---|---|---|
-| Store creation | `add_custom_xml_store(item_xml, schema_uris) -> Result<String>` returns the new item id. Part names come from the existing preferred-name allocator. An occupied conventional name is not overwritten. The properties root is `ds:datastoreItem` with `ds:itemID`, then `ds:schemaRefs`, then one `ds:schemaRef` per URI. Schema URIs are stored and not fetched. The id shape is the braced uppercase form already allocated by bibliography, `{00000000-0000-4000-8000-############}`. | Q18. `create_collection` in `crates/rdocx/src/bibliography.rs` lines 1795 to 1846 writes the same relationship and content-type steps and an empty `ds:schemaRefs`. | A1. |
+| Store creation | Rust `add_custom_xml_store(&mut self, item_xml: &[u8], schema_uris: &[&str]) -> Result<String>` and Python `add_custom_xml_store(item_xml: bytes, schema_uris: Sequence[str] = ()) -> str`. The return is the braced item id. Empty or ill-formed item bytes, and an empty URI, return `Error::Other` and do not publish. An empty URI list writes `<ds:schemaRefs/>`. | Q18. `create_collection` in `crates/rdocx/src/bibliography.rs` lines 1795 to 1846. That private function returns the part name. This public function returns the id. | A1. |
 | Shared helper | The relationship steps match bibliography, so one private helper in `rdocx` allocates the item part, properties part, relationships and content types. Bibliography keeps its own item bytes. The helper does not move into `oxml-*`. | Q18, resolved by reading both call shapes. | C5. Bibliography bytes stay unchanged. |
-| Binding xpath | Absolute child paths only. A leading `//`, an empty step, a function, a wildcard, a descendant axis or a predicate other than a one-based index refuses and publishes nothing. `/ns:root/ns:child` and `/ns:root/ns:child[1]` are accepted when the prefix is mapped. | `parse_xpath` and `parse_xpath_segment` at `crates/rdocx/src/content_control.rs` lines 910 to 990. | A4. |
+| Binding | Rust `set_content_control_binding(&mut self, location, store_item_id, xpath, prefix_mappings: Option<&str>) -> Result<()>` and the same Python arguments, with `prefix_mappings` defaulting to `None`. Absolute child paths only. A leading `//`, an empty step, a function, a wildcard, a descendant axis or a predicate other than a one-based index refuses and publishes nothing. `/ns:root/ns:child` and `/ns:root/ns:child[1]` are accepted when the prefix is mapped. | `CT_DataBinding` at `crates/rdocx-oxml/src/content_control.rs` lines 87 to 90. `parse_xpath` at `crates/rdocx/src/content_control.rs` lines 910 to 990. `resolve_custom_xml_part` at lines 710 to 718. | A2 and A4. |
 | Value update | Existing tag and bind setters update the store and the display together. A failed sibling rolls both back. Unknown sibling bytes stay byte-identical. An ambiguous store id and an other-namespace decoy refuse. | Q18. | A2, A3, A5 and A6. |
 
 ## Dependency readiness
@@ -64,8 +66,8 @@ The formal edge is F-285. Its provider contract is approved. `BACKLOG.md` still 
 
 | ID | Input or setup | Expected observation or refusal | Consumers | Local test | Final gate or pending evidence |
 |---|---|---|---|---|---|
-| A1 | Create a store with one element and one schema reference | Reopen resolves the same item id. The schema reference is unchanged. A second create does not overwrite the first part | Native `Document` and Python `Document` | `custom_xml_store_round_trips_item_and_schema` | Hash harness unchanged for documents that do not call the API |
-| A2 | Bind a rich-text control to that store with prefix mappings and `/ns:root/ns:child` | Fill updates the element text and the control display. Reopen shows both | Binding setter and existing fill | `custom_xml_binding_updates_the_addressed_store` | Round-trip suite |
+| A1 | Create a store with one element and one schema reference. Also pass empty item bytes, a fragment, and an empty URI | Reopen resolves the same item id. The schema reference is unchanged. A second create does not overwrite the first part. The three invalid inputs return `Error::Other` and publish nothing | Native `add_custom_xml_store(&[u8], &[&str]) -> Result<String>` and Python `add_custom_xml_store(bytes, Sequence[str]) -> str` | `custom_xml_store_round_trips_item_and_schema` | Hash harness unchanged for documents that do not call the API |
+| A2 | Bind a rich-text control with `store_item_id`, xpath `/ns:root/ns:child` and a prefix-mapping string | Fill updates the element text and the control display. Reopen shows `w:dataBinding` with those three fields | `set_content_control_binding` and the existing fill | `custom_xml_binding_updates_the_addressed_store` | Round-trip suite |
 | A3 | The same item with an unknown sibling and a comment in the unmodelled span | After fill, that span is byte-identical | Store writer | `custom_xml_unknown_bytes_stay_identical` | Round-trip suite |
 | A4 | XPath with a function, a wildcard, a descendant axis, and a one-based index | The first three refuse and publish nothing. The index form updates that child | Binding setter | `custom_xml_xpath_stays_inside_the_existing_subset` | None beyond local refusal |
 | A5 | Two controls, one path missing | The successful control does not remain half-updated. Document and item match the input | Existing staged fill | `custom_xml_bind_failure_rolls_back_display_and_store` | Round-trip suite |
@@ -133,6 +135,17 @@ Unchanged.
 - [ ] Implement the store and binding methods on the existing resolver.
 - [ ] Update the HLD list and obtain a zero-finding microscope.
 - [ ] Leave the hash harness for the final union.
+
+## Contract closure
+
+Reviewed against `.claude/reviews/S95.3-design-quality-pass-1.md` R2 on 2026-10-19.
+
+| Finding | Corrected section | Acceptance and test |
+|---|---|---|
+| R2 `properties` versus `schema_uris` | Approach and the store-creation behavior row. The argument is `schema_uris` | A1 |
+| R2 binding representation was unnamed | Approach and the binding behavior row. Three `CT_DataBinding` strings, not a new object | A2 and A4 |
+
+No new product choice. Q18, Q19 and Q21 stay answered. The private helper fact stays the bibliography relationship match.
 
 ## Open questions
 

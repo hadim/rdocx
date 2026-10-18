@@ -23,25 +23,32 @@ DOCX-053 is still partial. The differential gate is a final observation against 
 
 ## Approach
 
-Add `Document::set_content_control_type(location, payload)` on a shell from F-285. F-285's create signature does not grow a payload enum.
+Add one type setter on a shell from F-285. F-285 `insert_content_control` does not grow a payload argument.
 
-`ContentControlTypePayload` is one of:
+Rust `Document::set_content_control_type(&mut self, location: &ContentLocation, payload: ContentControlTypePayload) -> Result<()>`. Python `Document.set_content_control_type(location, payload) -> None`. A refusal returns `Error::Other` and does not publish. Python surfaces that as `RdocxError`. WASM and CLI gain no method. The frozen `ContentControl` snapshot stays a read of tag, alias, id, type and text.
 
-- `RichText` and `PlainText`, with no children.
-- `Date { format }`, where `format` is `yyyy-MM-dd` or `dd/MM/yyyy`, calendar is Gregorian, and storage is the existing `storeMappedDataAs` text mapping.
-- `CheckBox`, using the existing checked and unchecked glyph slots.
-- `ComboBox { items }` and `DropDownList { items }`, each item a display and value pair.
-- `Picture { relationship_id }`, one image relationship the document already owns.
-- `Group`.
-- `RepeatingSection`, which requires one child repeating item that holds the template content.
+`ContentControlTypePayload` is the whole supported list from Q17:
 
-The setter replaces the type element and keeps tag, alias, id, lock, appearance, placeholder and unmodelled raw slots. An invalid payload, a duplicate list value, an unknown date format or a picture relationship the part does not own refuses and does not publish.
+- `RichText` and `PlainText`. The type element is empty `w:richText` or `w:text`.
+- `Date { format }`. `format` is `yyyy-MM-dd` or `dd/MM/yyyy`. The writer emits `w:dateFormat`, then `w:storeMappedDataAs` with `text`, then `w:calendar` with `gregorian`, and omits `w:lid`. That is the `CT_SdtDate` child order with `lid` skipped. Any other format refuses.
+- `CheckBox`. The type element is `w14:checkbox` with `w14:checked` `0`, then `w14:checkedState` `2612` in `MS Gothic`, then `w14:uncheckedState` `2610` in `MS Gothic`. Those defaults are the ones `checkbox_state` already uses when the slots are absent.
+- `ComboBox { items }` and `DropDownList { items }`. Each item is one display string and one value string, written as `w:listItem` in caller order. An empty list, a duplicate value, or a non-XML character refuses.
+- `Picture { relationship_id }`. The type element is empty `w:picture`. The shell content must already contain a drawing whose embed id is that relationship, and the part must already own it. This call does not allocate media. Missing content or a missing relationship refuses.
+- `Group`. The type element is empty `w:group`.
+- `RepeatingSection`. The type element is empty `w15:repeatingSection`. The shell content must already be one repeating item, or one block sequence that this call wraps in one nested `w15:repeatingSectionItem`. Empty content is zero items and refuses.
+- `RepeatingSectionItem`. The type element is empty `w15:repeatingSectionItem`. Q17 authors this kind on the template shell inside a repeating section. The addressed control's parent must already be a repeating section. Any other parent refuses and publishes nothing.
 
-Replacement uses the existing value methods. This story adds the cases those methods cannot see until the payload exists. Repeating a section clones the template item with a fresh id and appends it inside the section. Zero items refuses. One item repeats to two. Many items append one more. Removing the last item refuses, so a section never becomes empty.
+Citation, equation, bibliography, document-part list and document-part object are not variants. A call that asks for one refuses.
 
-Picture replacement, if any, changes the relationship id and refuses a text string. Group still refuses text. Those rules stay in `prepare_control_value`.
+The setter replaces the type element and keeps tag, alias, id, lock, appearance, placeholder and unmodelled raw slots. The F-285 placement of the shell stays. The type element does not move a block shell into an inline parent.
 
-No new file. Python adds the payload argument on the same document methods F-285 exposes and keeps the frozen `ContentControl` snapshot. WASM and CLI stay out.
+Value replacement uses the existing `set_content_control_value_by_tag`, `set_content_control_value_by_alias`, `fill_content_control_tags` and `bind_content_controls`. This story does not add a second value engine. Picture and group still refuse a text value in `prepare_control_value`.
+
+`Document::repeat_content_control(&mut self, location: &ContentLocation) -> Result<()>` and Python `Document.repeat_content_control(location) -> None` address a repeating section. The call clones its first `w15:repeatingSectionItem`, assigns a new sdt id, drops `w14:paraId` and `w14:textId` through the F-285 freshen path, and appends the clone. Zero items refuses and does not publish. One item becomes two. Many items append one more.
+
+Removing an item uses F-285 `remove_content_control(location)` and the same Python name. When that location is the only repeating item in its parent section, the call returns `Error::Other` and does not publish. Removing one item from several uses the ordinary F-285 delete.
+
+No new file. Python payload constructors mirror the Rust variants: `rich_text`, `plain_text`, `date(format)`, `checkbox`, `combo_box(items)`, `drop_down_list(items)`, `picture(relationship_id)`, `group`, `repeating_section` and `repeating_section_item`. `items` is a sequence of `(display, value)` pairs.
 
 Local tests construct the replacement and repetition observations in source. They do not add a binary fixture. Those observations are not the Word differential. Differential evidence needs authentic Word provenance, the Word version and the input identity. A package this workspace writes, including a checked-in copy of its own output, is not a Word oracle. Until that evidence exists, the differential gate stays pending.
 
@@ -51,17 +58,17 @@ Local tests construct the replacement and repetition observations in source. The
 |---|---|---|---|
 | Type payload and value fill agree | `set_content_control_type` and the existing tag, alias and bind setters | `CT_SdtPr::prepare_text_value` and `checkbox_state` | Set type, fill, save, reopen |
 | Lists reject an unknown choice | Combo and drop-down fill | One item table. Display and value are both accepted as the caller key | Known value, unknown value, ambiguous value |
-| Repeating section grows by cloning the template | Section and item shells from F-285's transaction | Fresh id, dropped `w14:paraId` | Zero, one and many items |
+| Repeating section grows by cloning the template | `repeat_content_control` on the section. `remove_content_control` on an item | F-285 freshen path and F-285 remove. Fresh id, dropped `w14:paraId` | Zero, one and many items |
 | Picture uses an owned relationship | Picture payload and the existing image embed | No new media allocator | Present relationship, missing relationship, text value |
 
 ## Behavior contracts and evidence
 
 | Surface or placement | Exact behavior and boundary examples | Primary source identity and location | Local discriminator or pending evidence |
 |---|---|---|---|
-| Type setter | `set_content_control_type(location, payload)` replaces the type element and keeps tag, alias, id, lock, appearance, placeholder and unmodelled raw slots. An invalid payload does not publish. Citation, equation, bibliography and document-part kinds stay refused. | Q17. Backlog F-286 sentence. `SdtType` names in `crates/rdocx-oxml/src/content_control.rs` lines 55 to 77. | A1. Local tests do not claim a Word match. |
+| Type setter | Rust `set_content_control_type(&mut self, location: &ContentLocation, payload: ContentControlTypePayload) -> Result<()>` and Python `set_content_control_type(location, payload) -> None`. The payload variants are rich text, plain text, date, checkbox, combo, drop-down, picture, group, repeating section and repeating item. The call replaces the type element and keeps tag, alias, id, lock, appearance, placeholder and unmodelled raw slots. An invalid payload returns `Error::Other` and does not publish. Citation, equation, bibliography and document-part kinds stay refused. | Q17. `SdtType` names in `crates/rdocx-oxml/src/content_control.rs` lines 24 to 82. Checkbox child order is the fixture in `crates/rdocx-cli/tests/integration.rs` around line 6786. Date child order is `dateFormat`, `storeMappedDataAs`, `calendar`. | A1 and A8. Local tests do not claim a Word match. |
 | Checkbox vocabulary | `true`, `1` and `yes` check. `false`, `0` and `no` uncheck. `maybe` refuses and does not publish. | `prepare_control_value` at `crates/rdocx/src/content_control.rs` lines 81 to 88. | A3. |
 | Date, lists, picture and group | Date uses the existing Gregorian `yyyy-MM-dd` and `dd/MM/yyyy` forms. Lists reject duplicate, unknown and ambiguous values. Picture requires an already-owned relationship and refuses text. Group refuses text. | Q17. Existing `prepare_text_value` and the picture and group refusal at lines 102 to 106. | A2, A4, A5 and A6. |
-| Repeating section and item | A repeating section carries one template item. Zero items refuses. One item repeats to two. Removing the last item refuses. `w15:repeatingSectionItem` is authored as that template child. | Q17. The element names are `w15:repeatingSection` and `w15:repeatingSectionItem`. | A7. |
+| Repeating section and item | `repeat_content_control(location)` clones the first item inside a repeating section. Zero items refuses. One item becomes two. `remove_content_control(location)` deletes one item of several. The same method refuses when the item is the last one in its section. `RepeatingSectionItem` is its own payload and is legal only on a shell whose parent is already a repeating section. | Q17. Element names are `w15:repeatingSection` and `w15:repeatingSectionItem` at `content_control.rs` lines 76 and 77. Removal is the F-285 method. | A7 and A8. |
 | Word differential | Every supported control must match pinned Word structure and behaviour under replacement and repetition. A package this workspace generates is not that evidence. | Backlog test gate. `.claude/skills/differential-testing.md`, native provenance rules. | Pending. No authentic Word producer, version or input identity is in the repo. |
 
 ## Dependency readiness
@@ -72,13 +79,14 @@ The formal edge is F-285. Its provider contract is approved. `BACKLOG.md` still 
 
 | ID | Input or setup | Expected observation or refusal | Consumers | Local test | Final gate or pending evidence |
 |---|---|---|---|---|---|
-| A1 | Set each supported kind on an F-285 shell, then reopen | The type element and its children follow the schema order this story writes. Tag and raw slots remain. The Word structure comparison stays pending until authentic provenance exists | Native setter and Python `Document` | `typed_content_control_payload_round_trips` | Authentic Word structure diff. Pending while provenance, version and input identity are missing |
+| A1 | Set each payload except `RepeatingSectionItem` on an F-285 shell, then reopen | The type element and its children follow the order named above. Tag and raw slots remain. The Word structure comparison stays pending until authentic provenance exists | Native `set_content_control_type` and Python `Document.set_content_control_type` | `typed_content_control_payload_round_trips` | Authentic Word structure diff. Pending while provenance, version and input identity are missing |
 | A2 | Date `2026-10-18` with both formats, plus `31/02/2026` and a non-Gregorian calendar marker | The valid date stores the existing display and full date. The two invalid inputs do not publish | Existing date preparer | `typed_date_control_rejects_bad_calendar_values` | Authentic Word date comparison. Pending while provenance is missing |
 | A3 | Checkbox `true`, `false`, `yes`, `no`, `1`, `0`, and `maybe` | The first six follow today's glyph mapping. `maybe` refuses | Existing checkbox path | `typed_checkbox_control_uses_existing_vocabulary` | Authentic Word checkbox comparison. Pending while provenance is missing |
 | A4 | Drop-down and combo with two items, a repeated value, and a fill that names the display | Unique items round-trip. The repeated value refuses. Fill selects the matching item and writes its value | List payload and `prepare_text_value` | `typed_list_control_rejects_unknown_and_ambiguous_values` | Authentic Word list comparison. Pending while provenance is missing |
 | A5 | Picture with an embedded image relationship, a missing id, and a text fill | The owned id round-trips. The other two refuse | Picture payload and value facade | `typed_picture_control_requires_an_owned_image` | No render change claimed |
 | A6 | Group, then a text fill | The group shell round-trips and the text fill refuses | Value facade | `typed_group_control_refuses_text` | Authentic Word group comparison. Pending while provenance is missing |
-| A7 | Repeating section with zero, one and three items. Repeat once. Remove down to one and then try the last | Zero refuses. One becomes two. Three becomes four. The last item cannot be removed | Section transaction | `repeating_section_clones_the_template_item` | Authentic Word repeating comparison. Pending while provenance is missing |
+| A7 | Repeating section with zero, one and three items. Call `repeat_content_control` once. Call `remove_content_control` down to one item and then on the last | Zero refuses and publishes nothing. One becomes two. Three becomes four. The last item refuses and publishes nothing. A non-last item is deleted by the F-285 method | `repeat_content_control` and F-285 `remove_content_control`, Rust and Python | `repeating_section_clones_the_template_item` | Authentic Word repeating comparison. Pending while provenance is missing |
+| A8 | `RepeatingSectionItem` on a shell inside a repeating section, and the same payload on a body shell | The nested shell round-trips as `w15:repeatingSectionItem`. The body shell returns `Error::Other` and the package bytes stay | Native and Python `set_content_control_type` | `repeating_item_requires_a_repeating_section_parent` | Authentic Word repeating comparison. Pending while provenance is missing |
 
 Citation, equation, bibliography, document-part list and document-part object stay readable and are not authored here. A setter call for those kinds refuses. That keeps the backlog list exact.
 
@@ -87,10 +95,11 @@ Citation, equation, bibliography, document-part list and document-part object st
 | Case | Modes or state combined | Expected difference or agreement | Wrong implementation rejected |
 |---|---|---|---|
 | C1 | Rich and plain shells converted to each typed kind | Unmodelled `sdtPr` children survive the conversion | A setter that rebuilds properties and drops raw slots |
-| C2 | Empty item list, one item, many items | Only one and many can be filled or repeated | A repeating section with no template |
+| C2 | Empty item list, one item, many items | Only one and many can be repeated. `repeat_content_control` and `remove_content_control` are the calls | A repeating section with no template, or a private helper with no public entry point |
 | C3 | Display key versus value key on a list | Both select the same item when they are unique | A filler that compares display only |
 | C4 | Save and reopen between set and fill | The payload is still there, and fill does not reset it | A fill that depends on in-memory state the package lost |
 | C5 | Local replacement and repetition versus the Word differential | Local tests observe child order, refusal and repetition counts. They do not certify Word. Missing authentic provenance stays pending | A test that treats generated XML as the Word oracle |
+| C6 | `RepeatingSectionItem` inside a section versus on a body shell | Only the nested parent accepts the payload | A variant list that omits the kind, or a body shell that accepts it |
 
 HTML export and layout already walk `sdtContent`. They are not given a second type policy. A picture control's image bytes are the existing drawing, so this story does not change the renderer.
 
@@ -111,7 +120,7 @@ Local tests construct those replacement and repetition observations in source an
 
 | Timing | Category | Test | Asserts |
 |---|---|---|---|
-| local scoped | regression | A1 through A7 | Child order, refusal, repetition counts. These rows do not claim a Word match |
+| local scoped | regression | A1 through A8 | Child order, refusal, repetition counts and the repeating-item parent. These rows do not claim a Word match |
 | local scoped | regression | Existing `prepare_text_value` and checkbox tests | Date and list rules did not move |
 | final sprint | oracle | Authentic Word structure and behaviour under replacement and repetition | Provenance, version and input identity recorded. Pending until that evidence exists |
 
@@ -147,15 +156,27 @@ Unchanged.
 - [ ] Wait for the F-285 dependency-prefix checkpoint.
 - [ ] Keep the Word differential pending until provenance, version and input identity exist.
 - [ ] Add RED coverage for one missing payload and one bad list value.
-- [ ] Implement the setter on the existing property model.
+- [ ] Implement `set_content_control_type` and `repeat_content_control` on the existing property model. Last-item removal stays on F-285 `remove_content_control`.
 - [ ] Update the HLD list and obtain a zero-finding microscope.
 - [ ] Leave the live Word compare, if the pin must change, to the final union.
+
+## Contract closure
+
+Reviewed against `.claude/reviews/S95.3-design-quality-pass-1.md` R1 on 2026-10-19.
+
+| Finding | Corrected section | Acceptance and test |
+|---|---|---|
+| R1 missing `RepeatingSectionItem` variant | Approach payload list and the type-setter behavior row | A8 and C6 |
+| R1 repeat and last-item removal had no callable entry | Approach `repeat_content_control` and F-285 `remove_content_control` | A7 and C2 |
+| R1 Python payload disagreed with the native setter | Approach Python `set_content_control_type`. F-285 insert stays payload-free | A1 |
+
+No new product choice. Q17, Q19 and Q21 stay answered. The Word differential stays pending.
 
 ## Open questions
 
 | ID | Affected F-IDs and A-IDs | Decision and recommendation | Status and answer/source |
 |---|---|---|---|
-| Q17 | F-286 A1 to A7 | `set_content_control_type(location, payload)` on an F-285 shell. The supported kinds are rich text, plain text, date, checkbox, picture, combo, drop-down, group, repeating section and repeating item. Citation, equation, bibliography and document-part kinds stay refused. Replacement and repetition observations stay required. Generated output is not a Word oracle. | Answered 2026-10-18 by the user. Checkbox mapping is the code at `content_control.rs` lines 81 to 88. |
+| Q17 | F-286 A1 to A8 | `set_content_control_type(location, payload)` on an F-285 shell. The supported kinds are rich text, plain text, date, checkbox, picture, combo, drop-down, group, repeating section and repeating item. Citation, equation, bibliography and document-part kinds stay refused. Replacement and repetition observations stay required. Generated output is not a Word oracle. | Answered 2026-10-18 by the user. Checkbox mapping is the code at `content_control.rs` lines 81 to 88. |
 | Q19 | F-285, F-286 and F-287 | This story starts after the F-285 prefix checkpoint and finishes before F-287. | Answered 2026-10-18 by the user. |
 | Q21 | F-285, and this story's approval | The F-285 method names. This plan has no separate product choice. | Answered 2026-10-18 on F-285. This plan adopts those names. |
 
