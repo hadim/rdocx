@@ -2292,9 +2292,7 @@ def test_auto_shape_type_reads_like_python_pptx_and_replaces_the_preset(tmp_path
     with pytest.raises(ValueError, match="shape is not an auto shape"):
         _ = shapes[-1].auto_shape_type
     assert MSO_SHAPE.from_xml("wedgeRoundRectCallout") is MSO_SHAPE.BALLOON
-    # Pins a known gap: the ECMA preset table has no upArrow, python-pptx has UP_ARROW.
-    with pytest.raises(ValueError, match="MSO_SHAPE has no XML mapping for 'upArrow'"):
-        MSO_SHAPE.from_xml("upArrow")
+    assert MSO_SHAPE.from_xml("upArrow") is MSO_SHAPE.UP_ARROW
 
     rounded = shapes[3]
     identity = (rounded.shape_id, rounded.name, rounded.left, rounded.width)
@@ -2310,9 +2308,9 @@ def test_auto_shape_type_reads_like_python_pptx_and_replaces_the_preset(tmp_path
         with pytest.raises(ValueError, match="shape is not an auto shape"):
             shapes[index].auto_shape_type = MSO_SHAPE.RECTANGLE
     with pytest.raises(ValueError, match="unsupported MSO_SHAPE value"):
-        rounded.auto_shape_type = 35
-    with pytest.raises(rpptx.RpptxError, match="unknown DrawingML preset geometry: upArrow"):
-        rounded.auto_shape_type = "upArrow"
+        rounded.auto_shape_type = 9999
+    with pytest.raises(rpptx.RpptxError, match="unknown DrawingML preset geometry: notAPreset"):
+        rounded.auto_shape_type = "notAPreset"
 
     target = tmp_path / "changed.pptx"
     prs.save(target)
@@ -3841,7 +3839,8 @@ def test_add_shape_accepts_preset_names_and_every_mso_shape_member(tmp_path):
     from rpptx.enum.shapes import MSO_AUTO_SHAPE_TYPE, MSO_CONNECTOR, MSO_CONNECTOR_TYPE, MSO_SHAPE, MSO_SHAPE_TYPE
 
     assert MSO_AUTO_SHAPE_TYPE is MSO_SHAPE and MSO_CONNECTOR is MSO_CONNECTOR_TYPE
-    assert len(MSO_SHAPE) == 181
+    assert len(MSO_SHAPE) == 182
+    assert (MSO_SHAPE.UP_ARROW, MSO_SHAPE.UP_ARROW.xml_value) == (35, "upArrow")
     assert (MSO_SHAPE.PENTAGON, MSO_SHAPE.CHEVRON) == (51, 52)
     assert MSO_SHAPE(5) is MSO_SHAPE.ROUNDED_RECTANGLE
     assert MSO_SHAPE.ROUNDED_RECTANGLE.xml_value == "roundRect"
@@ -3867,7 +3866,7 @@ def test_add_shape_accepts_preset_names_and_every_mso_shape_member(tmp_path):
 
     pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
     oracle_members = {member.name: member for member in pptx.enum.shapes.MSO_AUTO_SHAPE_TYPE}
-    assert set(oracle_members) - {member.name for member in MSO_SHAPE} == {"UP_ARROW"}
+    assert set(oracle_members) - {member.name for member in MSO_SHAPE} == set()
     for member in MSO_SHAPE:
         assert (oracle_members[member.name].value, oracle_members[member.name].xml_value) == (
             member.value,
@@ -11805,3 +11804,20 @@ def test_issue392_percentage_setters_round_instead_of_truncating():
     assert '<a:buSzPct val="29000"/>' in paragraph.element.xml
     shape.text_frame.paragraphs[0].add_run("x").font.baseline = 0.29
     assert 'baseline="29000"' in shape.text_frame.paragraphs[0].element.xml
+
+
+def test_issue392_up_arrow_is_an_authorable_preset():
+    import rpptx
+    from rpptx.enum.shapes import MSO_SHAPE
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    by_member = slide.shapes.add_shape(MSO_SHAPE.UP_ARROW, 0, 0, 914400, 1828800)
+    by_name = slide.shapes.add_shape("upArrow", 0, 0, 914400, 1828800)
+    assert by_member.auto_shape_type == by_name.auto_shape_type == MSO_SHAPE.UP_ARROW
+    assert '<a:prstGeom prst="upArrow">' in by_member.element.xml
+    assert len(by_member.adjustments) == 2
+    reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
+    assert reopened.slides[0].shapes[0].auto_shape_type == MSO_SHAPE.UP_ARROW
+    by_name.auto_shape_type = MSO_SHAPE.DOWN_ARROW
+    assert by_name.auto_shape_type == MSO_SHAPE.DOWN_ARROW

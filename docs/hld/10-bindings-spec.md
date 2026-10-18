@@ -776,10 +776,11 @@ occurs at the affected structural or text owner, with an explicit stale error
 when that owner is no longer valid. Pure-Python
 `Length`, `Inches`, `Pt`, `RGBColor`, and the `MSO_SHAPE`, `MSO_SHAPE_TYPE`,
 `MSO_CONNECTOR_TYPE`, and `MSO_FILL_TYPE` enumerations keep native inheritance
-outside the limited ABI. `MSO_SHAPE` carries the 181 python-pptx
+outside the limited ABI. `MSO_SHAPE` carries the 182 python-pptx
 `MSO_AUTO_SHAPE_TYPE` members whose preset rpptx can author, each with its
-preset name as `xml_value`. `UP_ARROW` is absent because the generated preset
-table has no `upArrow`.
+preset name as `xml_value`. The ECMA source of the generated preset table
+omits `upArrow`, so the generator adds it as the vertical mirror of
+`downArrow`.
 
 Presentation `Shape` handles expose optional `Length` values for left, top,
 width, and height plus optional non-visual id and name. Those values are the
@@ -888,9 +889,7 @@ assignment truncates as python-pptx does. `auto_shape_type` reads the
 first member in definition order when two share a preset. A picture reports
 its mask or `None`, and a shape without an auto-shape preset raises
 `ValueError`. Custom geometry raises too, as python-pptx does, although issue
-#217 asked for `None`. A shape with `prst="upArrow"` also raises `ValueError`,
-where python-pptx returns `UP_ARROW`. The generated preset table has no
-`upArrow`. rpptx accepts an `MSO_SHAPE` member or preset name to replace the
+#217 asked for `None`. rpptx accepts an `MSO_SHAPE` member or preset name to replace the
 geometry and reset adjustments. A text box or unsupported shape kind raises
 `ValueError`. An unknown preset raises `RpptxError`.
 

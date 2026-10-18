@@ -24,6 +24,77 @@ SOURCE_URL = (
     "ECMA-376-1_5th_edition_december_2016.zip"
 )
 
+# ECMA-376 Part 1, fifth edition, lists upDownArrow twice and omits upArrow,
+# although ST_ShapeType names it. This is the vertical mirror of downArrow,
+# the definition LibreOffice ships for upArrow.
+UP_ARROW_ERRATUM = b"""<upArrow>
+    <avLst xmlns="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <gd name="adj1" fmla="val 50000" />
+      <gd name="adj2" fmla="val 50000" />
+    </avLst>
+    <gdLst xmlns="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <gd name="maxAdj2" fmla="*/ 100000 h ss" />
+      <gd name="a1" fmla="pin 0 adj1 100000" />
+      <gd name="a2" fmla="pin 0 adj2 maxAdj2" />
+      <gd name="dy2" fmla="*/ ss a2 100000" />
+      <gd name="y2" fmla="+- t dy2 0" />
+      <gd name="dx1" fmla="*/ w a1 200000" />
+      <gd name="x1" fmla="+- hc 0 dx1" />
+      <gd name="x2" fmla="+- hc dx1 0" />
+      <gd name="dy1" fmla="*/ x1 dy2 wd2" />
+      <gd name="y1" fmla="+- y2 0 dy1" />
+    </gdLst>
+    <ahLst xmlns="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <ahXY gdRefX="adj1" minX="0" maxX="100000">
+        <pos x="x1" y="b" />
+      </ahXY>
+      <ahXY gdRefY="adj2" minY="0" maxY="maxAdj2">
+        <pos x="l" y="y2" />
+      </ahXY>
+    </ahLst>
+    <cxnLst xmlns="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <cxn ang="3cd4">
+        <pos x="hc" y="t" />
+      </cxn>
+      <cxn ang="cd2">
+        <pos x="l" y="y2" />
+      </cxn>
+      <cxn ang="cd4">
+        <pos x="hc" y="b" />
+      </cxn>
+      <cxn ang="0">
+        <pos x="r" y="y2" />
+      </cxn>
+    </cxnLst>
+    <rect l="x1" t="y1" r="x2" b="b" xmlns="http://schemas.openxmlformats.org/drawingml/2006/main" />
+    <pathLst xmlns="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <path>
+        <moveTo>
+          <pt x="l" y="y2" />
+        </moveTo>
+        <lnTo>
+          <pt x="hc" y="t" />
+        </lnTo>
+        <lnTo>
+          <pt x="r" y="y2" />
+        </lnTo>
+        <lnTo>
+          <pt x="x2" y="y2" />
+        </lnTo>
+        <lnTo>
+          <pt x="x2" y="b" />
+        </lnTo>
+        <lnTo>
+          <pt x="x1" y="b" />
+        </lnTo>
+        <lnTo>
+          <pt x="x1" y="y2" />
+        </lnTo>
+        <close />
+      </path>
+    </pathLst>
+  </upArrow>"""
+
 TOOL_DIR = Path(__file__).resolve().parent
 WORKSPACE = TOOL_DIR.parents[1]
 SOURCE = TOOL_DIR / "presetShapeDefinitions.xml"
@@ -79,6 +150,18 @@ def direct_definition_source_bytes(source: bytes) -> list[tuple[str, bytes]]:
     return definitions
 
 
+def custom_geometry_bytes(definition: ET.Element) -> bytes:
+    custom_geometry = ET.Element(f"{{{DRAWINGML_NS}}}custGeom")
+    for child in list(definition):
+        custom_geometry.append(copy.deepcopy(child))
+    remove_formatting_whitespace(custom_geometry)
+    return ET.tostring(
+        custom_geometry,
+        encoding="utf-8",
+        short_empty_elements=True,
+    )
+
+
 def load_definitions() -> dict[str, bytes]:
     source = SOURCE.read_bytes()
     digest = hashlib.sha256(source).hexdigest()
@@ -114,15 +197,7 @@ def load_definitions() -> dict[str, bytes]:
                 fail(f"conflicting duplicate preset shape definition: {name}")
             continue
         source_definitions[name] = source_definition
-        custom_geometry = ET.Element(f"{{{DRAWINGML_NS}}}custGeom")
-        for child in list(definition):
-            custom_geometry.append(copy.deepcopy(child))
-        remove_formatting_whitespace(custom_geometry)
-        definitions[name] = ET.tostring(
-            custom_geometry,
-            encoding="utf-8",
-            short_empty_elements=True,
-        )
+        definitions[name] = custom_geometry_bytes(definition)
 
     expected_unique = EXPECTED_DEFINITION_COUNT - 1
     if len(definitions) != expected_unique:
@@ -130,6 +205,9 @@ def load_definitions() -> dict[str, bytes]:
             "unique source name count mismatch: "
             f"expected {expected_unique}, got {len(definitions)}"
         )
+    if "upArrow" in definitions:
+        fail("the source now defines upArrow: drop UP_ARROW_ERRATUM")
+    definitions["upArrow"] = custom_geometry_bytes(ET.fromstring(UP_ARROW_ERRATUM))
     return definitions
 
 
@@ -161,6 +239,8 @@ def render_table(definitions: dict[str, bytes]) -> bytes:
         "// Inner path: OfficeOpenXML-DrawingMLGeometries.zip/"
         "presetShapeDefinitions.xml",
         f"// Source SHA-256: {EXPECTED_SOURCE_SHA256}",
+        "// The source lists upDownArrow twice and omits upArrow. upArrow is",
+        "// added by the generator as the vertical mirror of downArrow.",
         "//",
         "// Third-party licence notice:",
     ]
@@ -254,7 +334,7 @@ def main() -> int:
     print(
         "source_has_187_direct_definitions: ok "
         f"({EXPECTED_DEFINITION_COUNT} direct definitions, "
-        f"{len(definitions)} unique names)"
+        f"{len(definitions) - 1} unique names, upArrow added)"
     )
     if args.corpus is not None:
         decks, uses, unique = scan_corpus(args.corpus, definitions)

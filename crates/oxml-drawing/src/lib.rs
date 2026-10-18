@@ -211,6 +211,19 @@ mod tests {
     }
 
     #[test]
+    fn generated_lookup_restores_the_up_arrow_the_source_omits() {
+        let up = preset_shape_definition("upArrow").expect("upArrow preset");
+        assert!(CT_CustomGeometry2D::from_xml(up).is_ok());
+        let up = std::str::from_utf8(up).unwrap();
+        assert!(up.contains(r#"<a:gd name="y2" fmla="+- t dy2 0" />"#));
+        assert!(up.contains(r#"<a:rect l="x1" t="y1" r="x2" b="b" />"#));
+        assert_ne!(
+            preset_shape_definition("upDownArrow").map(<[u8]>::len),
+            Some(up.len())
+        );
+    }
+
+    #[test]
     fn drawingml_namespace_uris_match_the_specification() {
         assert_eq!(
             A_NS,
