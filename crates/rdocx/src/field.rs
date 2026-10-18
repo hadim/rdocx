@@ -4376,7 +4376,7 @@ fn fragment_style_numbering_projection(
                     .resolve_element(quick_xml::name::QName(b"w:reference"));
                 let w_is_word = namespace_is_word(&w_namespace);
                 let mut closure = None;
-                if owned && matches!(path.len(), 2 | 3 | 4)
+                if owned && matches!(path.len(), 2..=4)
                     && path.last().is_some_and(|parent| parent.word_prefix)
                     && let Some((name_start, _value_start, value_end)) = attribute_source_span(&wrapped[before..after], b"xmlns:w")
                     && &wrapped[before + name_start..before + value_end + 1]
