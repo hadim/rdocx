@@ -11735,3 +11735,38 @@ def test_fx254_whole_part_exception_keeps_physical_shape_identity(change):
         assert prs.to_bytes() == before
         assert element.xml == xml
         assert held.shape_id == first_id and held.text == "before"
+
+
+def test_issue392_placeholders_iterate_every_placeholder_after_a_missing_idx():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[3])
+    assert [shape.placeholder_format.idx for shape in slide.placeholders] == [0, 1, 2]
+    body = next(shape for shape in slide.shapes if shape.is_placeholder and shape.placeholder_format.idx == 1)
+    slide.shapes.remove(body)
+    placeholders = slide.placeholders
+    assert [shape.placeholder_format.idx for shape in placeholders] == [0, 2]
+    assert len(placeholders) == 2
+    assert placeholders[2].placeholder_format.idx == 2
+    layout = prs.slide_layouts[3]
+    master = prs.slide_masters[0]
+    for owner in (layout, master):
+        expected = [shape.shape_id for shape in owner.shapes if shape.is_placeholder]
+        assert [shape.shape_id for shape in owner.placeholders] == expected
+        assert len(owner.placeholders) == len(expected) > 2
+
+
+def test_issue392_slide_placeholders_iterate_in_idx_order_as_python_pptx():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[3])
+    element = slide.element
+    xml = element.xml
+    title, left, right = (re.search(rf'<p:ph[^>]*idx="{idx}"[^>]*/>', xml) for idx in (0, 1, 2))
+    assert title is None and left and right
+    element.replace_xml(xml.replace(left.group(0), "PLACEHOLDER", 1).replace(right.group(0), left.group(0), 1).replace("PLACEHOLDER", right.group(0), 1))
+    slide = prs.slides[0]
+    assert [shape.placeholder_format.idx for shape in slide.shapes if shape.is_placeholder] == [0, 2, 1]
+    assert [shape.placeholder_format.idx for shape in slide.placeholders] == [0, 1, 2]
