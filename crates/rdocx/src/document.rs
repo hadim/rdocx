@@ -35484,8 +35484,15 @@ impl Document {
     ) -> Result<()> {
         let program =
             Self::template_fragment_program(&self.doc_part_name, raw, scope, StoryKind::TableCell)?;
+        // A direct paragraph, table, or block control already satisfies the
+        // cell. An empty cell still receives the paragraph Word requires.
         if program.items.iter().any(|item| {
-            item.kind == crate::template::TemplateItemKind::Source(StoryItemKind::Paragraph)
+            matches!(
+                item.kind,
+                crate::template::TemplateItemKind::Source(
+                    StoryItemKind::Paragraph | StoryItemKind::Table | StoryItemKind::ContentControl
+                )
+            )
         }) {
             return Ok(());
         }

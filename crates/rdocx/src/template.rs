@@ -351,11 +351,17 @@ fn parse_program(
             } else {
                 None
             };
+            // Start-tag attributes such as `w14:paraId` share `extra_xml`
+            // with unmodelled children. They are not preserved siblings.
+            let preserved_siblings = row
+                .extra_xml
+                .iter()
+                .any(|(position, raw)| !CT_Row::raw_is_root_attributes(*position, raw));
             if marker.is_some()
                 && (item.marker_unsafe
                     || item.field_owned
                     || inherited_field
-                    || !row.extra_xml.is_empty()
+                    || preserved_siblings
                     || !row.content_controls.is_empty())
             {
                 return Err(template_error(
@@ -1147,16 +1153,24 @@ fn prepare_unowned_textbox_edits(
     let mut count = 0;
     for (part, original) in document.template_raw_parts() {
         let ranges = excluded.entry(part.clone()).or_default();
+        // Word writes one text box twice, and a box can contain another.
+        // Those physical ranges overlap. The raw walker accepts only a
+        // sorted list whose members do not overlap, so each overlap becomes
+        // one covering range. A range that merely touches the previous end
+        // stays separate.
+        ranges.retain(|range| range.start < range.end);
         ranges.sort_by_key(|range| (range.start, std::cmp::Reverse(range.end)));
-        let mut last_end = 0;
-        ranges.retain(|range| {
-            if range.end <= last_end {
-                false
+        let mut covered: Vec<std::ops::Range<usize>> = Vec::new();
+        for range in ranges.iter().cloned() {
+            if let Some(last) = covered.last_mut()
+                && range.start < last.end
+            {
+                last.end = last.end.max(range.end);
             } else {
-                last_end = range.end;
-                true
+                covered.push(range);
             }
-        });
+        }
+        *ranges = covered;
         let (_, _, sources) =
             placeholder::replace_original_literals_in_xml_part(&original, ranges, &[])?;
         let mut operands = BTreeMap::<String, String>::new();

@@ -4332,7 +4332,8 @@ fn word_value_attributes(xml: &[u8], elements: &[&[u8]]) -> Result<HashSet<Strin
 
 // The final direct owned numId is modeled. Earlier duplicates and Word-looking
 // descendants below opaque owners remain exact. Only the writer's redundant
-// canonical Word closure on the selected numPr/numId is comparison bookkeeping.
+// canonical Word closure on the selected pPr, numPr and numId is comparison
+// bookkeeping.
 fn fragment_style_numbering_projection(
     style: &rdocx_oxml::styles::CT_Style,
     mapped_num_id: Option<u32>,
@@ -4375,7 +4376,7 @@ fn fragment_style_numbering_projection(
                     .resolve_element(quick_xml::name::QName(b"w:reference"));
                 let w_is_word = namespace_is_word(&w_namespace);
                 let mut closure = None;
-                if owned && matches!(path.len(), 3 | 4)
+                if owned && matches!(path.len(), 2 | 3 | 4)
                     && path.last().is_some_and(|parent| parent.word_prefix)
                     && let Some((name_start, _value_start, value_end)) = attribute_source_span(&wrapped[before..after], b"xmlns:w")
                     && &wrapped[before + name_start..before + value_end + 1]
@@ -4401,12 +4402,18 @@ fn fragment_style_numbering_projection(
                                 "fragment style numbering attribute source was not found".into(),
                             )
                         })?;
+                    let mut closures = path
+                        .iter()
+                        .filter_map(|frame| frame.closure)
+                        .collect::<Vec<_>>();
+                    if let Some(closure) = closure {
+                        closures.push(closure);
+                    }
                     selected = Some((
                         value,
                         before + start - prefix.len(),
                         before + end - prefix.len(),
-                        closure,
-                        path.last().and_then(|parent| parent.closure),
+                        closures,
                     ));
                 }
                 if is_start {
@@ -4426,7 +4433,7 @@ fn fragment_style_numbering_projection(
         buffer.clear();
     }
     let mut edits = Vec::new();
-    if let Some((value, start, end, leaf_closure, parent_closure)) = selected {
+    if let Some((value, start, end, closures)) = selected {
         if Some(
             value
                 .parse::<u32>()
@@ -4440,7 +4447,7 @@ fn fragment_style_numbering_projection(
         if let Some(id) = mapped_num_id {
             edits.push((start, end, id.to_string().into_bytes()));
         }
-        for (start, end) in leaf_closure.into_iter().chain(parent_closure) {
+        for (start, end) in closures {
             edits.push((start, end, Vec::new()));
         }
     } else if mapped_num_id.is_some() {
