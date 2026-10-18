@@ -1009,8 +1009,10 @@ the operation preserves them. Formatting and run-value edits preserve text
 identity. Failed or no-match edits do not retire scopes. `Cell.vertical_anchor`
 reads and writes the direct `a:tcPr` anchor, independently of
 `Cell.text_frame.vertical_anchor` on `a:bodyPr`. Both retain physical text
-handles. Cell hyperlink reads use the owning body, while assigning an internal
-slide target refuses before relationship mutation.
+handles. Cell hyperlink reads use the owning body. Assigning an address
+writes the external relationship on the slide that holds the table, as
+python-pptx does, while assigning an internal slide target refuses before
+relationship mutation.
 
 python-pptx has no public API to add or remove table rows and columns, and its
 users call `table._tbl.add_tr(height)`, which appends a row without cell
@@ -1046,7 +1048,8 @@ colour format, while the
 `Run.text` setter replaces only that run's text and preserves its typed and
 unmodelled properties. `Run.hyperlink` returns a live `Hyperlink` whose
 `address` reads the target of the run's `a:hlinkClick`, or `None`. Assigning
-an address goes through the native `set_run_hyperlink`, which reuses the
+an address goes through the native `set_run_hyperlink`, or
+`set_cell_run_hyperlink` for a run of a table cell, which reuses the
 slide's relationship to the same address and removes the old relationship
 once nothing on the slide names it, so retargeting does not grow the part.
 `None` or an empty string removes the hyperlink, as in python-pptx, an address

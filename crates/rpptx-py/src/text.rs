@@ -1629,6 +1629,28 @@ impl PyRun {
     }
 }
 
+/// Returns the table row and column a cell run path names.
+fn cell_coordinates(path: &ContentPath) -> PyResult<(usize, usize)> {
+    let row = path
+        .segs
+        .iter()
+        .find_map(|segment| match segment {
+            PathSeg::Row(index) => Some(*index),
+            _ => None,
+        })
+        .ok_or_else(|| PyIndexError::new_err("row index is missing"))?;
+    let column = path
+        .segs
+        .iter()
+        .rev()
+        .find_map(|segment| match segment {
+            PathSeg::Cell(index) => Some(*index),
+            _ => None,
+        })
+        .ok_or_else(|| PyIndexError::new_err("column index is missing"))?;
+    Ok((row, column))
+}
+
 /// The click hyperlink of one run, like python-pptx `_Hyperlink`.
 #[pyclass(name = "Hyperlink")]
 pub struct PyHyperlink {
@@ -1655,23 +1677,7 @@ impl PyHyperlink {
         let shape = crate::shape::native_shape_ref_at(&presentation.inner, &current)
             .ok_or_else(|| PyIndexError::new_err("shape owner is absent"))?;
         let frame = if names_cell(&current) {
-            let row = current
-                .segs
-                .iter()
-                .find_map(|segment| match segment {
-                    PathSeg::Row(index) => Some(*index),
-                    _ => None,
-                })
-                .ok_or_else(|| PyIndexError::new_err("row index is missing"))?;
-            let column = current
-                .segs
-                .iter()
-                .rev()
-                .find_map(|segment| match segment {
-                    PathSeg::Cell(index) => Some(*index),
-                    _ => None,
-                })
-                .ok_or_else(|| PyIndexError::new_err("column index is missing"))?;
+            let (row, column) = cell_coordinates(&current)?;
             shape
                 .table()
                 .and_then(|table| table.cell(row, column))
@@ -1778,23 +1784,21 @@ impl PyHyperlink {
             .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
         let run =
             run_index(&current).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
-        if names_cell(&current) {
-            return Err(PyValueError::new_err(
-                "cell hyperlink assignment is not supported",
-            ));
-        }
         let shape_id = crate::shape::native_shape_ref_at(&presentation.inner, &current)
             .and_then(|shape| shape.non_visual_id())
             .ok_or_else(|| PyValueError::new_err("shape has no id"))?;
+        let address = value.filter(|value| !value.is_empty());
+        let slide = slide_index(&current)?;
+        if names_cell(&current) {
+            let (row, column) = cell_coordinates(&current)?;
+            return presentation
+                .inner
+                .set_cell_run_hyperlink(slide, shape_id, (row, column), paragraph, run, address)
+                .map_err(|error| rpptx_to_pyerr(py, error));
+        }
         presentation
             .inner
-            .set_run_hyperlink(
-                slide_index(&current)?,
-                shape_id,
-                paragraph,
-                run,
-                value.filter(|value| !value.is_empty()),
-            )
+            .set_run_hyperlink(slide, shape_id, paragraph, run, address)
             .map_err(|error| rpptx_to_pyerr(py, error))
     }
 }

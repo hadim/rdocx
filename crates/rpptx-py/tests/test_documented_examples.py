@@ -4897,11 +4897,13 @@ def test_cell_hyperlink_assignment_rejects_before_relationship_mutation():
     hyperlink = cell.text_frame.paragraphs[0].runs[0].hyperlink
     assert hyperlink.address is None
     before = prs.to_bytes()
-    for value in ("https://example.com", None, ""):
-        with pytest.raises(ValueError, match="cell hyperlink assignment"):
-            hyperlink.address = value
+    for value in (None, ""):
+        hyperlink.address = value
         assert prs.to_bytes() == before
         assert hyperlink.address is None
+    with pytest.raises(ValueError, match="cell hyperlink assignment"):
+        hyperlink.target_slide = prs.slides[0]
+    assert prs.to_bytes() == before
 
 
 def test_cell_text_frame_getter_and_missing_body_failures_do_not_materialize_source():
@@ -11869,3 +11871,30 @@ def test_issue392_empty_text_writes_a_paragraph_without_runs():
     assert len(frame.paragraphs[0].runs) == 0
     frame.paragraphs[0].text = "again"
     assert frame.text == "again"
+
+
+def test_issue392_hyperlink_address_on_a_table_cell_run():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    cell = slide.shapes.add_table(1, 2, 0, 1828800, 2743200, 914400).table.cell(0, 1)
+    run = cell.text_frame.paragraphs[0].add_run("b")
+    run.hyperlink.address = "https://example.org/b"
+    assert run.hyperlink.address == "https://example.org/b"
+    run.hyperlink.address = "https://example.org/b"
+    parts = _package_parts(prs.to_bytes())
+    rels = parts["ppt/slides/_rels/slide1.xml.rels"].decode()
+    assert rels.count('Target="https://example.org/b" TargetMode="External"') == 1
+    rid = re.search(r'<a:hlinkClick [^>]*r:id="(rId\d+)"', parts["ppt/slides/slide1.xml"].decode()).group(1)
+    assert f'Id="{rid}"' in rels
+    reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
+    cell = reopened.slides[0].shapes[0].table.cell(0, 1)
+    assert cell.text_frame.paragraphs[0].runs[0].hyperlink.address == "https://example.org/b"
+    cell.text_frame.paragraphs[0].runs[0].hyperlink.address = None
+    assert cell.text_frame.paragraphs[0].runs[0].hyperlink.address is None
+    parts = _package_parts(reopened.to_bytes())
+    assert "example.org" not in parts["ppt/slides/_rels/slide1.xml.rels"].decode()
+    assert "hlinkClick" not in parts["ppt/slides/slide1.xml"].decode()
+    with pytest.raises(ValueError, match="cell hyperlink assignment is not supported"):
+        cell.text_frame.paragraphs[0].runs[0].hyperlink.target_slide = reopened.slides[0]

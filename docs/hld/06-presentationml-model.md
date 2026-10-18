@@ -752,6 +752,15 @@ pub fn set_run_hyperlink(
     run_index: usize,
     address: Option<&str>,
 ) -> Result<()>;
+pub fn set_cell_run_hyperlink(
+    &mut self,
+    slide_index: usize,
+    shape_id: u32,
+    cell: (usize, usize),
+    paragraph_index: usize,
+    run_index: usize,
+    address: Option<&str>,
+) -> Result<()>;
 pub fn shape_hyperlink_address(&self, slide_index: usize, shape_id: u32) -> Result<Option<&str>>;
 pub fn set_shape_hyperlink(&mut self, slide_index: usize, shape_id: u32, address: Option<&str>) -> Result<()>;
 ```
@@ -768,7 +777,9 @@ unreferenced hyperlink relationship, so the relationship the old hyperlink
 named is removed once no other element of the slide names it, and one call
 changes the run and the relationships together. An empty address, a control
 character, or a missing shape, paragraph, or run leaves the slide and its
-relationships unchanged.
+relationships unchanged. `set_cell_run_hyperlink` applies the same rules to a
+run of the table cell at `(row, column)` in the graphic frame with that id.
+The relationship belongs to the slide that holds the frame.
 Shape click hyperlinks use the same slide relationship rules. The shape API
 reads, adds, retargets, and removes the `a:hlinkClick` in `p:cNvPr` while
 retaining other non-visual properties and unmodelled children. Insertion keeps
