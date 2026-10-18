@@ -22541,6 +22541,22 @@ impl<'a> ShapeMut<'a> {
         }
     }
 
+    /// Removes the `p:style` theme references of an ordinary shape or
+    /// connector, such as the accent line and fill `add_shape` writes, so
+    /// only direct formatting draws. A shape without one is unchanged.
+    pub fn remove_style(&mut self) -> Result<()> {
+        match self.leaf_mut() {
+            ShapeTreeChild::Shape(shape) => {
+                shape.remove_style();
+            }
+            ShapeTreeChild::Connector(connector) => {
+                connector.remove_style();
+            }
+            _ => return Err(self.unsupported("remove style")),
+        }
+        Ok(())
+    }
+
     /// Inserts or replaces one finite preset-geometry adjustment.
     fn set_adjust_value_leaf(&mut self, name: &str, value: f64) -> Result<()> {
         if !value.is_finite() {

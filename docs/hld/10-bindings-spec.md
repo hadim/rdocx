@@ -897,6 +897,10 @@ geometry and reset adjustments. A text box or unsupported shape kind raises
 connector style, or `None` without one. Writing 0 removes the theme effect,
 including a connector's shadow, while retaining its theme line style. The
 setter accepts an `int` only. A shape without a typed style refuses the write.
+`remove_style()` removes the `p:style` of an ordinary shape or connector, such
+as the accent line and fill `add_shape` writes, so only direct formatting
+draws. python-pptx has no such call. A shape without a style is unchanged and
+another shape kind raises.
 `xml` returns the shape element as bytes. A picture's `image` is a frozen
 `Image` snapshot, and `replace_image` changes only that picture through the
 native staged replacement. `crop_left`, `crop_top`, `crop_right`, and

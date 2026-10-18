@@ -844,7 +844,8 @@ which in the bundled theme is a soft shadow under the connector. PowerPoint,
 LibreOffice, and the renderer all draw no shadow for index 0, while an empty
 direct `a:effectLst` removes it in PowerPoint and the renderer but not in
 LibreOffice. A connector's style is rewritten from its typed view only when
-this index changes.
+this index changes. `ShapeMut::remove_style` removes the `p:style` of an
+ordinary shape or connector, so only direct formatting draws.
 
 A constructed table uses a canonical `p:graphicFrame` with deterministic name
 `Table {id}`, a typed transform, the DrawingML table URI, and a rectangular

@@ -11923,3 +11923,31 @@ def test_issue392_bullet_size_takes_an_absolute_length():
         paragraph.bullet_size = True
     reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
     assert reopened.slides[0].shapes[0].text_frame.paragraphs[0].bullet_size is None
+
+
+def test_issue392_remove_style_drops_the_theme_style_of_shapes_and_connectors():
+    import rpptx
+    from rpptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_shape(MSO_SHAPE.OVAL, 0, 0, 914400, 914400)
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = rpptx.RGBColor.from_string("2F4E8F")
+    shape.text = "kept"
+    connector = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, 0, 0, 914400, 0)
+    for owner in (shape, connector):
+        assert b"<p:style>" in owner.xml and owner.theme_effect_index is not None
+        owner.remove_style()
+        assert b"p:style" not in owner.xml and owner.theme_effect_index is None
+        owner.remove_style()
+    assert shape.text == "kept" and shape.fill.fore_color.rgb == rpptx.RGBColor.from_string("2F4E8F")
+    with pytest.raises((ValueError, rpptx.RpptxError)):
+        shape.theme_effect_index = 0
+    textbox = slide.shapes.add_textbox(0, 0, 914400, 914400)
+    textbox.remove_style()
+    picture = slide.shapes.add_picture(io.BytesIO(_tiny_png()), 0, 0)
+    with pytest.raises((ValueError, rpptx.RpptxError)):
+        picture.remove_style()
+    reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
+    assert all(b"p:style" not in item.xml for item in reopened.slides[0].shapes)

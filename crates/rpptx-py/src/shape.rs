@@ -1085,6 +1085,15 @@ impl PyShape {
         })
     }
 
+    /// Removes the shape's `p:style` theme references, such as the accent
+    /// line and fill `add_shape` and `add_connector` write, so only direct
+    /// formatting draws. A shape or connector without a direct line or fill
+    /// then draws none. python-pptx has no equivalent and its users remove
+    /// the element from `shape._element`.
+    fn remove_style(&self, py: Python<'_>) -> PyResult<()> {
+        self.edit(py, "Shape.remove_style", |shape| shape.remove_style())
+    }
+
     /// The shape element serialized on its own, as bytes.
     #[getter]
     fn xml<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
