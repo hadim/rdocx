@@ -21168,7 +21168,7 @@ fn a_ranged_comment_reply_and_resolution_keep_one_intact_thread() {
     assert_eq!(comments.len(), 2);
     assert_eq!(comments[0].id(), comment_id);
     assert_eq!(comments[0].text(), "Please review");
-    assert!(comments[0].resolved());
+    assert_eq!(comments[0].resolved(), Some(true));
     assert_eq!(comments[1].id(), reply_id);
     assert_eq!(comments[1].text(), "Looks good");
     assert_eq!(comments[1].parent_id(), Some(comment_id));
@@ -21220,7 +21220,7 @@ fn comments_keep_standard_content_type_ids_dates_and_threads() {
             (reply, Some(second), Some("2026-09-16T11:00:00+01:00")),
         ]
     );
-    assert!(comments[0].resolved());
+    assert_eq!(comments[0].resolved(), Some(true));
 
     let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
     assert_eq!(
@@ -39544,7 +39544,10 @@ fn fragment_import_preserves_unmodeled_xml_and_reopens() {
     let comments = reopened.comments();
     assert_eq!(comments.len(), 4);
     assert_eq!(
-        comments.iter().filter(|comment| comment.resolved()).count(),
+        comments
+            .iter()
+            .filter(|comment| comment.resolved() == Some(true))
+            .count(),
         2
     );
     assert_eq!(
@@ -62519,13 +62522,14 @@ fn comment_moves_cover_related_owners_and_refuse_invalid_graphs_atomically() {
                 .parent_id(),
             Some(id)
         );
-        assert!(
+        assert_eq!(
             document
                 .comments()
                 .iter()
                 .find(|comment| comment.id() == id)
                 .unwrap()
-                .resolved()
+                .resolved(),
+            Some(true)
         );
         document.validate_comment_ownership().unwrap();
         document.move_comment_to_text(id, "RETURN", 0).unwrap();

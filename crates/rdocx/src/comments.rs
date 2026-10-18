@@ -405,8 +405,11 @@ impl CommentRef<'_> {
         self.parent_id
     }
 
-    pub fn resolved(&self) -> bool {
-        self.extension.and_then(|entry| entry.done).unwrap_or(false)
+    /// Whether the thread is marked done. `None` when `commentsExtended.xml`
+    /// holds no entry for the comment, so an open comment and a comment whose
+    /// producer recorded no state differ. An entry without `w15:done` is open.
+    pub fn resolved(&self) -> Option<bool> {
+        self.extension.map(|entry| entry.done.unwrap_or(false))
     }
 }
 
@@ -3645,7 +3648,7 @@ mod tests {
         assert_eq!(package_bytes(&resolved), before);
         assert!(resolved.comments_extended.is_none());
         assert!(resolved.comments_extended_part_name.is_none());
-        assert!(!resolved.comments()[0].resolved());
+        assert_eq!(resolved.comments()[0].resolved(), None);
     }
 
     #[test]
@@ -3886,8 +3889,8 @@ mod tests {
 
         assert!(document.resolve_comment(reply, true).unwrap());
         let comments = document.comments();
-        assert!(comments[0].resolved());
-        assert!(!comments[1].resolved());
+        assert_eq!(comments[0].resolved(), Some(true));
+        assert_eq!(comments[1].resolved(), Some(false));
     }
 
     /// Five comments whose `w15:commentEx` rows are keyed, as Word and Google
@@ -3982,11 +3985,11 @@ mod tests {
         assert_eq!(
             observed,
             [
-                (None, false),
-                (Some(ids[0]), false),
-                (None, false),
-                (Some(ids[2]), false),
-                (None, true),
+                (None, Some(false)),
+                (Some(ids[0]), Some(false)),
+                (None, Some(false)),
+                (Some(ids[2]), Some(false)),
+                (None, Some(true)),
             ]
         );
         assert_eq!(comments[1].text(), "1B000001\n1B000002");
@@ -4020,7 +4023,7 @@ mod tests {
             .find(|comment| comment.id() == reply)
             .unwrap();
         assert_eq!(reread.parent_id(), Some(parent));
-        assert!(comments[2].resolved());
+        assert_eq!(comments[2].resolved(), Some(true));
     }
 
     #[test]

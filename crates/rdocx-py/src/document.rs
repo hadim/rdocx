@@ -567,7 +567,7 @@ pub struct PyComment {
     pub date: Option<String>,
     pub text: String,
     pub parent_id: Option<i32>,
-    pub resolved: bool,
+    pub resolved: Option<bool>,
     pub anchor_text: Option<String>,
     pub anchor: Option<PyStoryRunRange>,
 }
@@ -600,7 +600,7 @@ impl PyComment {
         date: Option<String>,
         text: String,
         parent_id: Option<i32>,
-        resolved: bool,
+        resolved: Option<bool>,
         anchor_text: Option<String>,
         anchor: Option<PyRef<'_, PyStoryRunRange>>,
     ) -> Self {

@@ -2322,7 +2322,11 @@ without change. A field whose parts are all in the
 paragraph is one run and is removed whole. A removal advances the binding
 revision. `CommentRef` exposes
 comment metadata, text, parent identity, resolved state and checked accepted-view
-anchor access without permitting part-local mutation. Frozen Python `Comment`
+anchor access without permitting part-local mutation. The resolved state is
+`None` when `commentsExtended.xml` holds no entry for the comment, so an open
+comment and one whose producer recorded no state differ. An entry without
+`w15:done` reads as open. The CLI lists a comment without an entry as open.
+Frozen Python `Comment`
 snapshots retain the seven original keyword arguments and add optional
 `anchor_text` and `anchor` values, both defaulting to `None` for manually
 constructed records. Equality retains the original seven metadata fields, since

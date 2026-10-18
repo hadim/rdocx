@@ -5033,7 +5033,7 @@ fn comment_move_outputs_reopen_with_unchanged_thread() {
     );
     assert_eq!(reopened.comments().len(), 2);
     assert_eq!(reopened.comments()[0].id(), id);
-    assert!(reopened.comments()[0].resolved());
+    assert_eq!(reopened.comments()[0].resolved(), Some(true));
     assert_eq!(reopened.comments()[1].parent_id(), Some(id));
     assert_eq!(fs::read(&input).unwrap(), before);
 }
