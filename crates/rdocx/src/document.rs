@@ -26757,6 +26757,32 @@ impl Document {
         Ok(true)
     }
 
+    /// Remove the direct body children in `range` and their wholly owned
+    /// comment threads in one staged publication, the counterpart of
+    /// [`Self::insert_document`]. Returns the number of removed children.
+    ///
+    /// The range must lie within the body. An empty range changes nothing.
+    /// A partial comment cut or unprovable companion ownership fails the
+    /// whole removal, which leaves the document unchanged.
+    pub fn try_remove_content_range(&mut self, range: std::ops::Range<usize>) -> Result<usize> {
+        let count = self.document.body.content.len();
+        if range.start > range.end || range.end > count {
+            return Err(Error::Other(format!(
+                "body content range {}..{} is outside 0..{count}",
+                range.start, range.end
+            )));
+        }
+        if range.is_empty() {
+            return Ok(0);
+        }
+        let mut candidate = self.clone_for_staging();
+        let removed = candidate.document.body.content.drain(range).count();
+        candidate.reconcile_comment_removal(self)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(removed)
+    }
+
     // ---- Image support ----
 
     /// Add an inline image to the document.
@@ -49517,6 +49543,27 @@ mod tests {
 
         // Out of bounds
         assert!(!doc.remove_content(10));
+    }
+
+    #[test]
+    fn remove_content_range_removes_body_children_at_once() {
+        let mut doc = Document::new();
+        for text in ["Zero", "One", "Two", "Three", "Four"] {
+            doc.add_paragraph(text);
+        }
+        assert_eq!(doc.try_remove_content_range(1..4).unwrap(), 3);
+        assert_eq!(doc.content_count(), 2);
+        assert_eq!(doc.paragraphs()[0].text(), "Zero");
+        assert_eq!(doc.paragraphs()[1].text(), "Four");
+        let before = doc.to_bytes().unwrap();
+        assert_eq!(doc.try_remove_content_range(1..1).unwrap(), 0);
+        assert!(doc.try_remove_content_range(1..3).is_err());
+        #[allow(clippy::reversed_empty_ranges)]
+        let reversed = 2..1;
+        assert!(doc.try_remove_content_range(reversed).is_err());
+        assert_eq!(doc.to_bytes().unwrap(), before);
+        assert_eq!(doc.try_remove_content_range(0..2).unwrap(), 2);
+        assert_eq!(doc.content_count(), 0);
     }
 
     #[test]
