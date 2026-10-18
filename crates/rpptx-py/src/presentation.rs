@@ -1752,9 +1752,7 @@ impl PyPresentation {
             })?;
         let result = PyTuple::new(py, counts)?;
         let changed = py
-            .detach(|| -> rpptx::Result<bool> {
-                Ok(self.inner.to_bytes()? != candidate.to_bytes()?)
-            })
+            .detach(|| -> rpptx::Result<bool> { Ok(!self.inner.serializes_like(&candidate)?) })
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         if changed {
             let survivors = self.replaced_text_owners(&candidate)?;
@@ -2395,14 +2393,11 @@ impl PyPptElement {
                 ));
             }
         }
-        let before = owner
+        if owner
             .inner
-            .to_bytes()
-            .map_err(|error| rpptx_to_pyerr(py, error))?;
-        let after = candidate
-            .to_bytes()
-            .map_err(|error| rpptx_to_pyerr(py, error))?;
-        if before == after {
+            .serializes_like(&candidate)
+            .map_err(|error| rpptx_to_pyerr(py, error))?
+        {
             return Ok(());
         }
         let generation = self
@@ -4452,9 +4447,11 @@ impl PyPresentation {
         candidate: rpptx::Presentation,
         operation: &'static str,
     ) -> PyResult<()> {
-        let before = self.inner.to_bytes().map_err(|e| rpptx_to_pyerr(py, e))?;
-        let after = candidate.to_bytes().map_err(|e| rpptx_to_pyerr(py, e))?;
-        if before == after {
+        if self
+            .inner
+            .serializes_like(&candidate)
+            .map_err(|e| rpptx_to_pyerr(py, e))?
+        {
             return Ok(());
         }
         let survivors = self.unchanged_owners()?;

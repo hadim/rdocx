@@ -36407,3 +36407,55 @@ fn fx239_notes_frame_projection_admits_only_one_direct_body() {
         Some("exact body")
     );
 }
+
+#[test]
+fn issue389_staged_copies_share_slides_and_compare_serialization() {
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut deck = Presentation::new().unwrap();
+    for index in 0..3 {
+        deck.add_slide(6).unwrap();
+        let mut slide = deck.slide_mut(index).unwrap();
+        for _ in 0..4 {
+            slide
+                .add_textbox(Emu(0), Emu(0), Emu(1_000_000), Emu(1_000_000))
+                .unwrap();
+        }
+    }
+    let before = deck.to_bytes().unwrap();
+    let mut staged = deck.clone();
+    assert!(deck.serializes_like(&staged).unwrap());
+    // A write to the staged copy leaves the source and its other slides alone.
+    staged
+        .shape_mut_at(ShapeOwner::Slide(1), &[2])
+        .unwrap()
+        .set_alt_text(Some("staged"))
+        .unwrap();
+    assert!(!deck.serializes_like(&staged).unwrap());
+    assert_ne!(staged.to_bytes().unwrap(), before);
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    assert_eq!(deck.slide_xml(0).unwrap(), staged.slide_xml(0).unwrap());
+    // Restoring the edited value serialises alike again.
+    staged
+        .shape_mut_at(ShapeOwner::Slide(1), &[2])
+        .unwrap()
+        .set_alt_text(None)
+        .unwrap();
+    assert_eq!(
+        deck.serializes_like(&staged).unwrap(),
+        staged.to_bytes().unwrap() == before
+    );
+    // A no-op write through a layout marks it dirty without changing its bytes.
+    let mut layout = deck.clone();
+    let shapes = layout.shapes_mut_at(ShapeOwner::Layout(0), &[]).unwrap();
+    drop(shapes);
+    assert_eq!(
+        deck.serializes_like(&layout).unwrap(),
+        layout.to_bytes().unwrap() == before
+    );
+    // A reopened copy holds equal state in fresh records.
+    let reopened = Presentation::from_bytes(&before).unwrap();
+    assert_eq!(
+        deck.serializes_like(&reopened).unwrap(),
+        reopened.to_bytes().unwrap() == before
+    );
+}

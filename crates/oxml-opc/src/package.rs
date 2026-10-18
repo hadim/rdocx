@@ -31,7 +31,7 @@ pub struct PackagePart {
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ContentTypesSource {
     xml: Vec<u8>,
     content_types: ContentTypes,
@@ -61,7 +61,7 @@ impl PackageReadLimits {
 }
 
 /// An in-memory representation of an OPC package (ZIP archive).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OpcPackage {
     /// Content types from `[Content_Types].xml`
     pub content_types: ContentTypes,

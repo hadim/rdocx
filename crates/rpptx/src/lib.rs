@@ -1130,7 +1130,7 @@ pub struct Presentation {
     layouts: Vec<LayoutRecord>,
     masters: Vec<MasterRecord>,
     themes: Vec<ThemeRecord>,
-    slides: Vec<SlideRecord>,
+    slides: Vec<Shared<SlideRecord>>,
 }
 
 #[derive(Clone, Debug)]
@@ -2682,7 +2682,34 @@ fn ppt_xml_relationship_facts(xml: &[u8]) -> Result<Vec<PptXmlRelationshipFact>>
     }
 }
 
+/// A record shared by the staged copies of a presentation until one of them
+/// writes to it. Every edit stages on a clone, so a clone must not copy every
+/// slide tree. Writing through `DerefMut` copies the record only while
+/// another copy still holds it.
 #[derive(Clone, Debug)]
+struct Shared<T: Clone>(std::sync::Arc<T>);
+
+impl<T: Clone> From<T> for Shared<T> {
+    fn from(value: T) -> Self {
+        Self(std::sync::Arc::new(value))
+    }
+}
+
+impl<T: Clone> std::ops::Deref for Shared<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T: Clone> std::ops::DerefMut for Shared<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 struct SlideRecord {
     id: u32,
     part_name: String,
@@ -2691,20 +2718,20 @@ struct SlideRecord {
     comments: Option<CommentRecord>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct CommentRecord {
     part_name: String,
     comments: CommentList,
     dirty: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct NotesRecord {
     part_name: String,
     notes: CT_NotesSlide,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct MediaEntry {
     part_name: String,
     bytes: Vec<u8>,
@@ -2713,7 +2740,7 @@ struct MediaEntry {
     newly_inserted: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct MediaStore {
     by_id: HashMap<MediaId, Vec<MediaEntry>>,
     namer: MediaNamer,
@@ -2979,7 +3006,7 @@ impl Presentation {
             resolve_handout_master(&package, &presentation_part)?;
 
         let presentation_relationships = package.get_part_rels(&presentation_part);
-        let mut slides = Vec::with_capacity(presentation.slide_ids.len());
+        let mut slides: Vec<Shared<SlideRecord>> = Vec::with_capacity(presentation.slide_ids.len());
         for slide_id in &presentation.slide_ids {
             let relationship = presentation_relationships
                 .and_then(|relationships| relationships.get_by_id(&slide_id.relationship_id))
@@ -2998,13 +3025,16 @@ impl Presentation {
             })?;
             let notes = resolve_notes(&package, &slide_part)?;
             let comments = resolve_comments(&package, &slide_part, &slide)?;
-            slides.push(SlideRecord {
-                id: slide_id.id,
-                part_name: slide_part,
-                slide,
-                notes,
-                comments,
-            });
+            slides.push(
+                SlideRecord {
+                    id: slide_id.id,
+                    part_name: slide_part,
+                    slide,
+                    notes,
+                    comments,
+                }
+                .into(),
+            );
         }
         validate_collaboration_model(&comment_authors, &slides).map_err(|message| {
             Error::MalformedPart {
@@ -4205,6 +4235,196 @@ impl Presentation {
         let layout = render_handout_pages(&package, layout, &[])?;
         render_export_pngs(&layout, dpi)
     }
+    /// The bytes [`Presentation::staged_package`] writes for a master part,
+    /// or `None` when it keeps the package's own part.
+    fn staged_master_xml(&self, record: &MasterRecord) -> Result<Option<Vec<u8>>> {
+        if !record.dirty {
+            return Ok(None);
+        }
+        let master = record
+            .master
+            .as_ref()
+            .map_err(|message| Error::MalformedPart {
+                part_name: record.part_name.clone(),
+                message: message.clone(),
+            })?;
+        let original = self
+            .package
+            .get_part(&record.part_name)
+            .and_then(|xml| CT_SlideMaster::from_xml(xml).ok());
+        if original.as_ref() == Some(master) {
+            return Ok(None);
+        }
+        master
+            .to_xml()
+            .map(Some)
+            .map_err(|error| Error::MalformedPart {
+                part_name: record.part_name.clone(),
+                message: error.to_string(),
+            })
+    }
+
+    /// The bytes [`Presentation::staged_package`] writes for a layout part,
+    /// or `None` when it keeps the package's own part.
+    fn staged_layout_xml(&self, record: &LayoutRecord) -> Result<Option<Vec<u8>>> {
+        let original = self
+            .package
+            .get_part(&record.part_name)
+            .and_then(|xml| CT_SlideLayout::from_xml(xml).ok());
+        if !record.dirty || original.as_ref() == Some(&record.layout) {
+            return Ok(None);
+        }
+        record
+            .layout
+            .to_xml()
+            .map(Some)
+            .map_err(|error| Error::MalformedPart {
+                part_name: record.part_name.clone(),
+                message: error.to_string(),
+            })
+    }
+
+    /// The bytes [`Presentation::staged_package`] writes for a theme part,
+    /// or `None` when it keeps the package's own part.
+    fn staged_theme_xml(&self, record: &ThemeRecord) -> Result<Option<Vec<u8>>> {
+        if !record.dirty {
+            return Ok(None);
+        }
+        let original = self
+            .package
+            .get_part(&record.part_name)
+            .and_then(|xml| CT_OfficeStyleSheet::from_xml(xml).ok());
+        if original.as_ref() == Some(&record.theme) {
+            return Ok(None);
+        }
+        record
+            .theme
+            .to_xml()
+            .map(Some)
+            .map_err(|error| Error::MalformedPart {
+                part_name: record.part_name.clone(),
+                message: error.to_string(),
+            })
+    }
+
+    /// The bytes [`Presentation::staged_package`] writes for a slide part,
+    /// or `None` when it keeps the package's own part.
+    fn staged_slide_xml(
+        &self,
+        record: &SlideRecord,
+        preserve_unchanged_modelled_parts: bool,
+    ) -> Result<Option<Vec<u8>>> {
+        let slide_changed = self
+            .package
+            .get_part(&record.part_name)
+            .and_then(|xml| CT_Slide::from_xml(xml).ok())
+            .as_ref()
+            != Some(&record.slide);
+        if preserve_unchanged_modelled_parts && !slide_changed {
+            return Ok(None);
+        }
+        record
+            .slide
+            .to_xml()
+            .map(Some)
+            .map_err(|error| Error::MalformedPart {
+                part_name: record.part_name.clone(),
+                message: error.to_string(),
+            })
+    }
+
+    /// Whether `staged`, a copy of this presentation, serialises to the same
+    /// bytes as [`Presentation::to_bytes`] writes for this one.
+    ///
+    /// An edit stages on a copy and changed nothing when both serialise
+    /// alike. Unchanged state settles that without serialising. A change
+    /// confined to slide, layout, master or theme models serialises only the
+    /// parts that differ, and any other change compares complete packages.
+    #[doc(hidden)]
+    pub fn serializes_like(&self, staged: &Self) -> Result<bool> {
+        let same_frame = self.package == staged.package
+            && self.media_store == staged.media_store
+            && self.presentation_part == staged.presentation_part
+            && self.presentation == staged.presentation
+            && self.core_properties == staged.core_properties
+            && self.core_properties_part_name == staged.core_properties_part_name
+            && self.core_properties_dirty == staged.core_properties_dirty
+            && self.application_properties == staged.application_properties
+            && self.custom_properties == staged.custom_properties
+            && self.comment_authors_part == staged.comment_authors_part
+            && self.comment_authors == staged.comment_authors
+            && self.comment_authors_dirty == staged.comment_authors_dirty
+            && self.notes_master_part == staged.notes_master_part
+            && self.notes_master == staged.notes_master
+            && self.notes_master_dirty == staged.notes_master_dirty
+            && self.handout_master_part == staged.handout_master_part
+            && self.handout_master == staged.handout_master
+            && self.handout_master_dirty == staged.handout_master_dirty
+            && self.embedded_invalidated_signatures == staged.embedded_invalidated_signatures
+            && self.package_signatures_invalidated == staged.package_signatures_invalidated
+            && self.layouts.len() == staged.layouts.len()
+            && self.masters.len() == staged.masters.len()
+            && self.themes.len() == staged.themes.len()
+            && self.slides.len() == staged.slides.len();
+        if !same_frame {
+            return Ok(self.to_bytes()? == staged.to_bytes()?);
+        }
+        // Both copies hold the same package, so a kept part is the same bytes.
+        let part = |kept: Option<Vec<u8>>, part_name: &str| {
+            kept.or_else(|| self.package.get_part(part_name).map(<[u8]>::to_vec))
+        };
+        for (before, after) in self.slides.iter().zip(&staged.slides) {
+            if std::sync::Arc::ptr_eq(&before.0, &after.0) || **before == **after {
+                continue;
+            }
+            if before.id != after.id
+                || before.part_name != after.part_name
+                || before.notes != after.notes
+                || before.comments != after.comments
+            {
+                return Ok(self.to_bytes()? == staged.to_bytes()?);
+            }
+            if part(self.staged_slide_xml(before, true)?, &before.part_name)
+                != part(staged.staged_slide_xml(after, true)?, &after.part_name)
+            {
+                return Ok(false);
+            }
+        }
+        for (before, after) in self.layouts.iter().zip(&staged.layouts) {
+            if before.part_name != after.part_name {
+                return Ok(self.to_bytes()? == staged.to_bytes()?);
+            }
+            if (before.dirty, &before.layout) != (after.dirty, &after.layout)
+                && part(self.staged_layout_xml(before)?, &before.part_name)
+                    != part(staged.staged_layout_xml(after)?, &after.part_name)
+            {
+                return Ok(false);
+            }
+        }
+        for (before, after) in self.masters.iter().zip(&staged.masters) {
+            if (before.id, &before.part_name) != (after.id, &after.part_name) {
+                return Ok(self.to_bytes()? == staged.to_bytes()?);
+            }
+            if (before.dirty, &before.master) != (after.dirty, &after.master)
+                && part(self.staged_master_xml(before)?, &before.part_name)
+                    != part(staged.staged_master_xml(after)?, &after.part_name)
+            {
+                return Ok(false);
+            }
+        }
+        for (before, after) in self.themes.iter().zip(&staged.themes) {
+            if before.part_name != after.part_name {
+                return Ok(self.to_bytes()? == staged.to_bytes()?);
+            }
+            if (before.dirty, &before.theme) != (after.dirty, &after.theme)
+                && part(self.staged_theme_xml(before)?, &before.part_name)
+                    != part(staged.staged_theme_xml(after)?, &after.part_name)
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
 
     fn staged_package(&self, preserve_unchanged_modelled_parts: bool) -> Result<OpcPackage> {
         #[cfg(all(feature = "render", test))]
@@ -4312,82 +4532,24 @@ impl Presentation {
                 })?,
             );
         }
-        for record in self.masters.iter().filter(|record| record.dirty) {
-            let master = record
-                .master
-                .as_ref()
-                .map_err(|message| Error::MalformedPart {
-                    part_name: record.part_name.clone(),
-                    message: message.clone(),
-                })?;
-            let original = self
-                .package
-                .get_part(&record.part_name)
-                .and_then(|xml| CT_SlideMaster::from_xml(xml).ok());
-            if original.as_ref() != Some(master) {
-                package.set_part(
-                    &record.part_name,
-                    master.to_xml().map_err(|error| Error::MalformedPart {
-                        part_name: record.part_name.clone(),
-                        message: error.to_string(),
-                    })?,
-                );
+        for record in &self.masters {
+            if let Some(xml) = self.staged_master_xml(record)? {
+                package.set_part(&record.part_name, xml);
             }
         }
         for record in &self.layouts {
-            let original = self
-                .package
-                .get_part(&record.part_name)
-                .and_then(|xml| CT_SlideLayout::from_xml(xml).ok());
-            if record.dirty && original.as_ref() != Some(&record.layout) {
-                package.set_part(
-                    &record.part_name,
-                    record
-                        .layout
-                        .to_xml()
-                        .map_err(|error| Error::MalformedPart {
-                            part_name: record.part_name.clone(),
-                            message: error.to_string(),
-                        })?,
-                );
+            if let Some(xml) = self.staged_layout_xml(record)? {
+                package.set_part(&record.part_name, xml);
             }
         }
-        for record in self.themes.iter().filter(|record| record.dirty) {
-            let original = self
-                .package
-                .get_part(&record.part_name)
-                .and_then(|xml| CT_OfficeStyleSheet::from_xml(xml).ok());
-            if original.as_ref() != Some(&record.theme) {
-                package.set_part(
-                    &record.part_name,
-                    record
-                        .theme
-                        .to_xml()
-                        .map_err(|error| Error::MalformedPart {
-                            part_name: record.part_name.clone(),
-                            message: error.to_string(),
-                        })?,
-                );
+        for record in &self.themes {
+            if let Some(xml) = self.staged_theme_xml(record)? {
+                package.set_part(&record.part_name, xml);
             }
         }
         for record in &self.slides {
-            let slide_changed = self
-                .package
-                .get_part(&record.part_name)
-                .and_then(|xml| CT_Slide::from_xml(xml).ok())
-                .as_ref()
-                != Some(&record.slide);
-            if !preserve_unchanged_modelled_parts || slide_changed {
-                package.set_part(
-                    &record.part_name,
-                    record
-                        .slide
-                        .to_xml()
-                        .map_err(|error| Error::MalformedPart {
-                            part_name: record.part_name.clone(),
-                            message: error.to_string(),
-                        })?,
-                );
+            if let Some(xml) = self.staged_slide_xml(record, preserve_unchanged_modelled_parts)? {
+                package.set_part(&record.part_name, xml);
             }
             if let Some(notes) = &record.notes {
                 let notes_changed = self
@@ -4774,7 +4936,7 @@ impl Presentation {
 
     /// Returns one slide by zero-based presentation index.
     pub fn slide(&self, index: usize) -> Option<SlideRef<'_>> {
-        self.slides.get(index).map(slide_ref)
+        self.slides.get(index).map(|record| slide_ref(record))
     }
 
     /// Returns one slide for in-place mutation by zero-based index.
@@ -4812,7 +4974,7 @@ impl Presentation {
 
     /// Iterates slides in `p:sldIdLst` order.
     pub fn slides(&self) -> impl ExactSizeIterator<Item = SlideRef<'_>> {
-        self.slides.iter().map(slide_ref)
+        self.slides.iter().map(|record| slide_ref(record))
     }
 
     /// Replaces literal text across regular DrawingML runs in every editable shape.
@@ -8697,7 +8859,7 @@ impl Presentation {
         *self = staged;
         self.slides
             .get(inserted)
-            .map(slide_ref)
+            .map(|record| slide_ref(record))
             .ok_or(Error::UnknownSlideIndex {
                 index: inserted,
                 slide_count: self.slides.len(),
@@ -8740,7 +8902,7 @@ impl Presentation {
         let inserted = staged.slides.len();
         staged.copy_slide_from_in_place(
             &source_package,
-            source.slides[index].clone(),
+            (*source.slides[index]).clone(),
             inserted,
             "transfer SmartArt slide",
             Some(&destination_layout),
@@ -8749,7 +8911,7 @@ impl Presentation {
         self.commit_candidate(staged)?;
         self.slides
             .get(inserted)
-            .map(slide_ref)
+            .map(|record| slide_ref(record))
             .ok_or(Error::UnknownSlideIndex {
                 index: inserted,
                 slide_count: self.slides.len(),
@@ -8782,7 +8944,7 @@ impl Presentation {
         let inserted = import.0[0];
         self.slides
             .get(inserted)
-            .map(slide_ref)
+            .map(|record| slide_ref(record))
             .ok_or(Error::UnknownSlideIndex {
                 index: inserted,
                 slide_count: self.slides.len(),
@@ -9032,7 +9194,7 @@ impl Presentation {
                     staged.adopt_source_layout(&source_package, layout, &mut adopted)?
                 }
             };
-            let mut record = source.slides[*index].clone();
+            let mut record = (*source.slides[*index]).clone();
             if !table_styles.is_empty() {
                 record.slide =
                     CT_Slide::from_xml(required_part(&source_package, &record.part_name)?)
@@ -9358,7 +9520,7 @@ impl Presentation {
 
     fn duplicate_slide_in_place(&mut self, index: usize) -> Result<usize> {
         let source_package = self.package.clone();
-        let source = self.slides[index].clone();
+        let source = (*self.slides[index]).clone();
         self.copy_slide_from_in_place(
             &source_package,
             source,
@@ -9664,7 +9826,8 @@ impl Presentation {
                 slide,
                 notes,
                 comments,
-            },
+            }
+            .into(),
         );
         Ok(inserted)
     }
@@ -11029,16 +11192,19 @@ impl Presentation {
             .content_types
             .add_override(&slide_part, content_types::SLIDE);
         self.presentation.slide_ids.push(slide_id);
-        self.slides.push(SlideRecord {
-            id,
-            part_name: slide_part,
-            slide,
-            notes: None,
-            comments: None,
-        });
+        self.slides.push(
+            SlideRecord {
+                id,
+                part_name: slide_part,
+                slide,
+                notes: None,
+                comments: None,
+            }
+            .into(),
+        );
         self.slides
             .last()
-            .map(slide_ref)
+            .map(|record| slide_ref(record))
             .ok_or(Error::MalformedPart {
                 part_name: self.presentation_part.clone(),
                 message: "new slide record was not retained".to_owned(),
@@ -21155,7 +21321,7 @@ fn invalid_presentation_mutation(operation: &'static str, message: String) -> Er
 
 fn validate_collaboration_model(
     authors: &CommentAuthorList,
-    slides: &[SlideRecord],
+    slides: &[Shared<SlideRecord>],
 ) -> std::result::Result<(), String> {
     let mut author_ids = HashSet::new();
     for author in &authors.authors {
