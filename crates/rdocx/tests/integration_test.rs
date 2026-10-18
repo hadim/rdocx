@@ -25712,3 +25712,25 @@ fn issue_391_replace_paragraph_xml_binds_a_declared_w14_root_attribute() {
     );
 }
 
+#[test]
+fn issue_391_standalone_story_item_snapshots_declare_their_scope() {
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    let exact = document.story_item_snapshots().unwrap();
+    let standalone = document.standalone_story_item_snapshots().unwrap();
+    assert_eq!(exact.len(), standalone.len());
+    let paragraph = exact
+        .iter()
+        .position(|item| item.location().item_kind() == StoryItemKind::Paragraph)
+        .unwrap();
+    assert!(!exact[paragraph].xml().starts_with(b"<w:p xmlns"));
+    let closed = standalone[paragraph].xml();
+    assert!(String::from_utf8_lossy(closed).contains("xmlns:w="));
+    assert_eq!(
+        closed,
+        document
+            .paragraph_element_xml(standalone[paragraph].location())
+            .unwrap()
+    );
+}
+

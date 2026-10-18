@@ -6221,7 +6221,7 @@ impl PyDocument {
     ) -> PyResult<PyStoryItem> {
         let item = self
             .inner
-            .story_item_snapshots()
+            .standalone_story_item_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?
             .into_iter()
             .find(|item| item.location() == location)
@@ -7917,7 +7917,7 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         let mut items = self
             .inner
-            .story_item_snapshots()
+            .standalone_story_item_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?
             .into_iter()
             .map(|item| (item.location().clone(), item))
@@ -9032,7 +9032,7 @@ impl PyDocument {
     fn story_items<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         let items = self
             .inner
-            .story_item_snapshots()
+            .standalone_story_item_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         let snapshots = items
             .into_iter()

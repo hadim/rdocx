@@ -21407,6 +21407,19 @@ impl Document {
     /// serializes the main document once and scans each story owner once for
     /// the complete snapshot.
     pub fn story_item_snapshots(&self) -> Result<Vec<StoryItemSnapshot>> {
+        self.collect_story_item_snapshots(false)
+    }
+
+    /// [`Document::story_item_snapshots`] with each item's XML standalone.
+    ///
+    /// Every item declares the namespaces in scope at its start, as
+    /// [`Document::story_range_paragraph_snapshot`] does, so it parses alone.
+    #[doc(hidden)]
+    pub fn standalone_story_item_snapshots(&self) -> Result<Vec<StoryItemSnapshot>> {
+        self.collect_story_item_snapshots(true)
+    }
+
+    fn collect_story_item_snapshots(&self, standalone: bool) -> Result<Vec<StoryItemSnapshot>> {
         let mut snapshots = Vec::new();
         let mut seen = HashSet::new();
         for source in self.story_sources()? {
@@ -21451,9 +21464,13 @@ impl Document {
             }
             let item_scopes = story_namespace_scopes_at(
                 source.xml.as_ref(),
-                inventories
-                    .iter()
-                    .flat_map(|(_, items, _)| items.iter().map(|item| item.scan.start)),
+                inventories.iter().flat_map(|(_, items, _)| {
+                    items.iter().flat_map(|item| {
+                        [item.scan.start]
+                            .into_iter()
+                            .chain((standalone && !item.complex_field).then_some(item.full.start))
+                    })
+                }),
             )?;
             for (story, items, direct_items) in inventories {
                 let mut direct_cursor = 0usize;
@@ -21475,6 +21492,13 @@ impl Document {
                         story_item_text_with_scope(source.xml.as_ref(), item, scope, &items)?;
                     let xml = if item.complex_field {
                         complex_story_field_xml(source.xml.as_ref(), item)?
+                    } else if standalone {
+                        let scope = item_scopes.get(&item.full.start).ok_or_else(|| {
+                            Error::Other(
+                                "story item namespace scope was not inventoried".to_owned(),
+                            )
+                        })?;
+                        close_content_fragment_namespaces(&source.xml[item.full.clone()], scope)?
                     } else {
                         source.xml[item.full.clone()].to_vec()
                     };

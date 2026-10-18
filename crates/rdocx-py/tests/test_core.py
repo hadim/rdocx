@@ -8997,3 +8997,24 @@ def test_issue_391_table_and_cell_replace_xml_bind_declared_w14_attributes():
     cell.replace_xml(ET.tostring(root, encoding="unicode").replace(">cell<", ">edited<"))
     reopened = rdocx.Document.from_bytes(document.to_bytes())
     assert reopened.tables[0].cell(0, 0).text == "edited"
+
+
+def test_issue_391_story_item_xml_is_standalone_like_paragraph_xml():
+    import xml.dom.minidom
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("alpha beta")
+    document.add_table(1, 1).cell(0, 0).text = "cell"
+    document.add_comment_on_text("beta", author="me", text="note")
+    items = document.story_items
+    assert items
+    for item in items:
+        xml.dom.minidom.parseString(item.xml)
+    body = next(i for i in items if i.story.kind == "body" and i.kind == "paragraph")
+    assert body.xml.decode() == document.paragraphs[0].xml
+    (comment,) = document.comments
+    xml.dom.minidom.parseString(comment.anchor.start.item.xml)
+    assert comment.anchor.start.item == body
+
+

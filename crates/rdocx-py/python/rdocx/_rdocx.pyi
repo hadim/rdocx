@@ -435,7 +435,8 @@ class StoryItem:
     @property
     def text(self) -> str | None: ...
     @property
-    def xml(self) -> bytes: ...
+    def xml(self) -> bytes:
+        """The item's XML, declaring the namespaces in scope, so it parses alone."""
     @property
     def revision(self) -> int: ...
 
