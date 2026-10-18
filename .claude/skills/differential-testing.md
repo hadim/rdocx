@@ -64,6 +64,56 @@ oracle is the thing being ported.
    headers with precomputed CRCs. The deck corpus is the one exception, it is
    fetched rather than committed, and it lives outside the published crates.
 
+## Composition and discriminating fixtures
+
+Internal consumer agreement is regression/integration evidence, not external
+parity. Before an oracle run, compare the affected internal consumers on the
+same input: evaluation, cached state, saved XML, layout/render, native facade,
+binding and CLI as applicable. A shared parser or formatter can still receive
+different context, defaults, selection, units or refusal policy. Trace those
+caller decisions in the consumer map.
+
+Plan a bounded risk-based matrix. Include meaningful zero/one/many collections,
+implicit/explicit lookup, legacy/versioned behavior, nested/direct owners and
+before/after update and reopen. Each decisive fixture names the plausible wrong
+implementation it would reject. Prefer multilevel values where relative/full
+context differ, known missing-root controls beside deferred empty items, and
+fresh/held handles before reopening. Do not multiply trivial fixtures or demand
+every Cartesian combination.
+
+Observe the promised layer. A cached number cannot prove the positioned field
+text. A reopened package cannot prove live in-memory alias validity. An
+unchanged hash proves stability on those samples, not correctness of a new
+feature. A reporter's self-catching success or contribution test count cannot
+prove every acceptance row. Retain exact expected/actual results and actual
+old-source RED/repaired GREEN outcomes. Use the same input and state when
+comparing consumers, and record intentional differences explicitly.
+
+## Compatibility facts and oracle provenance
+
+Before claiming parity, pin the primary reference version and exact source
+file/function or schema clause. Trace the specific getter, setter and collection
+class. Similar names do not imply identical ordering or conversion behavior.
+For numeric conversions, derive discriminating examples from the actual formula:
+ties, sign, scale and boundary rejection. Execute a narrow reference probe when
+source inspection leaves ambiguity. Do not ask the user to decide an answerable
+fact. An intentional departure is a separate documented product decision.
+
+For native-produced comparison evidence, retain the producer and version,
+input identity, output identity, production steps and exact observation being
+compared. Record hashes and retrieval locations consistent with the existing
+no-binary-fixture policy. An existing fixture qualifies only when its origin
+and coverage of the promised behavior can be established. Do not invent a
+producer version or call this library's own generated output a Word fixture.
+Self-generated inputs are useful local regressions, but cannot establish native
+output parity. Schema-valid child names alone do not prove application behavior.
+
+If the promised oracle or private unreduced input is unavailable, keep that
+acceptance row pending. Reduced examples qualify only their stated scope.
+Do not replace a native gate with internal round-trip success, restrict the
+supported formats to those convenient to test, or mark the full issue resolved.
+Any agreed scope change must update the acceptance contract explicitly.
+
 ## Where it applies
 
 Differential tests are worth their cost where a port can be subtly wrong rather

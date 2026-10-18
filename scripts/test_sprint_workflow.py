@@ -7798,7 +7798,14 @@ Pedro Assumpcao and the rdocx maintainers.
             git("config", "user.email", "workflow@example.invalid")
             originals = {
                 "docs/sprints/CURRENT_SPRINT.md": "# Current Sprint, S01\n",
-                "docs/sprints/BACKLOG.md": "F-123 pending\n",
+                "docs/sprints/BACKLOG.md": (
+                    "| F-123 | One | S01 | S | pending |\n"
+                    "| F-999 | Two | S01 | S | pending |\n"
+                ),
+                "docs/hld/02-scope-and-non-goals.md": (
+                    "| DOCX-002 | package | test | Y | Y | Y | Y | P | package | "
+                    "Y | Y | Y | Y | B | B | B | partial | test:evidence | F-999 |\n"
+                ),
                 "docs/sprints/SPRINT_TRACKER.md": "S01 pending\n",
                 "docs/sprints/AS_BUILT.md": "Historical evidence\n",
                 ".claude/plans/F-123-design.md": "**Status**: approved\n- [ ] Named assertion\n",
@@ -7815,7 +7822,8 @@ Pedro Assumpcao and the rdocx maintainers.
                     "verifications": [{"scope": "full", "passed": True, "head": source}]}
             record = {"scope": "metadata", "passed": True, "source_head": source, "full_attempt": 0}
             with patch.object(workflow, "REPO", repo):
-                write("docs/sprints/BACKLOG.md", "F-123 done\n")
+                write("docs/sprints/BACKLOG.md", originals["docs/sprints/BACKLOG.md"].replace(
+                    "| pending |", "| done |", 1))
                 write("docs/sprints/AS_BUILT.md", originals["docs/sprints/AS_BUILT.md"] + "Actual PASS at source SHA\n")
                 write(".claude/plans/F-123-design.md", "**Status**: completed\n- [x] Named assertion\n")
                 write(".claude/reviews/S01-sprint-review-pass-1.md", "**Verdict**: 0 blocking, actual full evidence\n")
@@ -7823,6 +7831,14 @@ Pedro Assumpcao and the rdocx maintainers.
                 data["reviews"][-1]["head"] = head
                 record["head"] = head
                 self.assertEqual(workflow.metadata_reuse_problems(data, head, record), [])
+                # Product inputs stayed fixed, but this completion edit breaks
+                # the capability policy that the earlier full run observed.
+                write("docs/sprints/BACKLOG.md", git(
+                    "show", f"{head}:docs/sprints/BACKLOG.md").replace("| pending |", "| done |"))
+                invalid_owner = commit()
+                problems = workflow.metadata_reuse_problems(data, invalid_owner, record)
+                self.assertTrue(any("DOCX-002" in problem for problem in problems), problems)
+                git("reset", "--hard", head)
                 data["verifications"].append(record)
                 self.assertEqual(workflow.closure_evidence_problems(data, head), [])
                 self.assertEqual(data["verifications"][0]["head"], source)
@@ -7870,6 +7886,47 @@ Pedro Assumpcao and the rdocx maintainers.
                 git("reset", "--hard", head)
                 write("README.md", "uncommitted change\n")
                 self.assertTrue(workflow.metadata_reuse_problems(data, head, record))
+
+    def test_requested_reviewer_must_match_before_recording_a_sprint_review(self) -> None:
+        for reviewer in (None, "grok"):
+            data = {"sprint": "S01", "reviewer": "codex", "reviews": []}
+            args = argparse.Namespace(sprint="S01", passno=1, blocking=0,
+                should_fix=0, nice_to_have=0, extend=False, reviewer=reviewer)
+            with self.subTest(reviewer=reviewer), patch.object(workflow, "load", return_value=data), \
+                    patch.object(workflow, "git_head", return_value="a" * 40), \
+                    patch.object(workflow, "save") as save, self.assertRaises(SystemExit):
+                workflow.cmd_record_review(args)
+            save.assert_not_called()
+            self.assertEqual(data["reviews"], [])
+        data = {"sprint": "S01", "reviewer": "codex", "reviews": []}
+        args.reviewer = "codex"
+        with patch.object(workflow, "load", return_value=data), \
+                patch.object(workflow, "git_head", return_value="a" * 40), \
+                patch.object(workflow, "save"):
+            self.assertEqual(workflow.cmd_record_review(args), 0)
+        self.assertEqual(data["reviews"][0]["reviewer"], "codex")
+
+    def test_requested_reviewer_survives_resume_and_blocks_wrong_closure(self) -> None:
+        data = {"sprint": "S01", "phase": "design", "reviewer": "codex",
+            "features": {}, "reviews": [], "verifications": []}
+        args = argparse.Namespace(sprint="S01", resume=True, force=False,
+            max_review_passes=3, max_workers=None, reviewer=None)
+        with patch.object(workflow, "parse_current_sprint", return_value=("S01", [])), \
+                patch.object(workflow, "state_path") as state_path, \
+                patch.object(workflow, "load", return_value=data), \
+                patch.object(workflow, "save"):
+            state_path.return_value.exists.return_value = True
+            self.assertEqual(workflow.cmd_init(args), 0)
+            self.assertEqual(data["reviewer"], "codex")
+            data["reviews"] = [{"pass": 1, "blocking": 0, "head": "current", "reviewer": "grok"}]
+            data["verifications"] = [{"scope": "full", "passed": True, "head": "current"}]
+            self.assertTrue(any("requested reviewer" in problem for problem in
+                workflow.closure_evidence_problems(data, "current")))
+            args.reviewer = "grok"
+            with self.assertRaises(SystemExit):
+                workflow.cmd_init(args)
+            data["reviews"][0]["reviewer"] = "codex"
+            self.assertEqual(workflow.closure_evidence_problems(data, "current"), [])
 
     def test_metadata_recorder_requires_explicit_source_anchor(self) -> None:
         self.assertTrue(workflow.metadata_reuse_problems(
@@ -8812,6 +8869,11 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-281 completes generated indexes, figures and authorities.
                 # Unmeasured collation owners retain their complete caches.
                 281,
+                # F-283 and F-284 completed navigation and template grammar.
+                # F-X259 repairs their reviewed consistency defects without
+                # leaving completed stories as active capability owners.
+                283,
+                284,
                 # F-282 delivers the bounded native foundation in S90.
                 # F-X192 owns the remaining DOCX-049 catalogue in S91.
                 282,

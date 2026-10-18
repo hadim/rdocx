@@ -29,6 +29,24 @@ call an unperformed final oracle a passed local gate.
 Record in-flight evidence and pending checks in the feature's existing
 `.claude/scratch/<F-ID>-progress.md` before handing over.
 
+## Acceptance applicability
+
+Before choosing commands, map each A-ID to the observation that proves it.
+Check selected test membership and discriminators, not just exit status. Cases
+that promise consumer agreement compare the same input across those paths.
+Keep internal agreement, round-trip correctness and native/oracle parity as
+separate claims. Preserve expected output, actual output and the failing
+assertion for semantic RED. A compile failure or self-catching reporter exit
+cannot replace that observation.
+
+After completion/status/capability edits, run only the metadata-dependent checks
+whose inputs changed, even when the earlier full product gate remains valid.
+At minimum run the existing live-capability-owner policy after status changes,
+plus classification checks when capability rows change. The metadata-adoption
+helper enforces the owner invariant but does not cover every possible delivery
+policy. Record exact post-edit applicability. Do not repeat unrelated product
+suites, native UI or corpora for metadata alone.
+
 ## Steps
 
 1. **Format.** `cargo fmt --all --check`.
@@ -69,8 +87,10 @@ Record in-flight evidence and pending checks in the feature's existing
 6. **The repository-policy checks.** Run once under `--full`. A workflow-only
    change runs its unique affected policy tests locally, without product gates.
    Newly written completion/review Markdown and commit messages receive their
-   cheap prose check after the full gate. Metadata adoption enforces this check
-   without repeating product verification.
+   cheap prose check after the full gate. Also rerun affected completion-policy
+   assertions against final metadata, including live capability ownership.
+   Metadata adoption enforces prose and owner consistency without repeating
+   product verification.
    Do not run the entire policy suite after each product story.
 
    Run `python3 scripts/prose_check.py` over tracked Markdown and the commit

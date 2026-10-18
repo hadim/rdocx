@@ -11,11 +11,22 @@ against the design plan as the contract.
 
 1. **Re-read the contract.** `.claude/plans/F-XXX-design.md` and its cited
    `docs/hld/` sections. Then `.claude/scratch/F-XXX-progress.md` if resuming.
+   Use the exact approved signatures, numeric conversions and XML placements.
+   If source inspection contradicts a compatibility claim or exposes an invalid
+   content model, stop the affected change, revise the contract and resolve
+   material decisions before proceeding. Do not code around a flawed plan or
+   silently weaken its acceptance gate.
 
 2. **Confirm the state.** The F-ID is `in-progress`, the branch is `sprint/sNN`,
    and the stubs exist and fail.
 
-3. **Work the checklist in order.** Use scoped `cargo check` between edits.
+3. **Work the checklist in order.** Implement the numbered acceptance rows,
+   preserving the consumer map and test matrix. Inspect every caller of shared
+   policy: defaults, context, owner selection and scope must agree where the
+   contract says so. Compare actual relevant outputs, including positioned
+   rendering, before/after update and save/reopen. Add a missing discriminating
+   control when a new interaction is found. Keep unchanged-input consumers and
+   refusal/atomicity controls valid. Use scoped `cargo check` between edits.
    Batch related focused regressions sharing a test binary when practical,
    rather than compiling the same large binary separately for each added case.
    Retain individual outcomes and rerun the cases affected by each source fix.

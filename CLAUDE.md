@@ -95,6 +95,10 @@ truth for what must pass.
 - **Only `/close-sprint` may merge to `main` or create an `sNN` sprint tag.**
 - **Only `/release` may create or push a `v*` release tag or start crates.io
   publication.** It requires a separate final approval at the reviewed SHA.
+- Every model uses the canonical commands and skills. New designs name consumers,
+  observable acceptance criteria and discriminating state/mode tests. Completion
+  reruns affected metadata checks. A requested independent reviewer is actually
+  invoked or receives an explicit handoff, never impersonated.
 - The design plan is a machine-consumed contract. Its `## HLD impact` section is
   a file list implemented before verification and confirmed at completion, which is what keeps the
   spec set from rotting.
