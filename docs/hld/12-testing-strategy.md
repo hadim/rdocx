@@ -9,6 +9,11 @@ cell and control owners, numbering suppression from outline suppression,
 actual page-local first/last selection, generated cache poison, preserved text
 beside partial caches, stale exclusion refusal and copied SEQ isolation.
 
+A multilevel STYLEREF regression compares n/r/r+t/w in the evaluator and actual
+positioned field text before update, after update and after save/reopen. Its
+literal level labels make relative and full context visibly different. A shared
+formatter alone does not prove that its consumers pass the same context.
+
 The native comparison belongs to the final integrated gate. It pins the actual
 Word build, source and update/save/reopen lifecycle and records per-placement
 painting separately from shared saved caches. Unavailable historical narrative
@@ -1042,7 +1047,11 @@ endnote and a text box, including split-run formatting, filters, escapes and
 one evaluation of a shared header or footer. Repeated ranges keep unique
 drawing, bookmark, note, comment and relationship identities through the
 existing fragment transaction. Chart labels and unknown raw text boxes stay on
-the scalar boundary, and formatter mode refuses them before callbacks. Word,
+the scalar boundary, and formatter mode refuses them before callbacks. Empty,
+single and multiple records exercise both implicit and explicit lexical lookup
+in legacy and grammar1 modes. Nested loop/if preflight retains unknown deferred
+item paths while known missing root members, wrong container kinds and malformed
+syntax refuse with unchanged document bytes. Word,
 LibreOffice and the full native gates remain the integrated union. The
 repeating-table regression gate expands three
 adjacent template rows over ten records and compares all thirty rows in order.

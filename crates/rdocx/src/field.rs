@@ -14371,13 +14371,9 @@ impl<'a> Evaluator<'a> {
             .any(|name| has_switch(instruction, name));
         let mut value = if numbered {
             match numbering {
-                Some(numbering) => match numbering.numbered_reference_text(
-                    instruction,
-                    // An unnumbered STYLEREF caller has no list to compare.
-                    // Word then returns the target level for `\r`, which is
-                    // the same result as sharing the target's own context.
-                    layout.paragraph_numbering(caller).or(Some(numbering)),
-                ) {
+                Some(numbering) => match numbering
+                    .numbered_reference_text(instruction, layout.paragraph_numbering(caller))
+                {
                     Ok(value) => value,
                     Err(diagnostic) => return keep(&diagnostic),
                 },

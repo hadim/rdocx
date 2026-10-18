@@ -2139,7 +2139,10 @@ text already contains every ancestor placeholder replaces the accumulated
 path. Any other formatted level is appended, and one trailing full stop is
 removed. `\w` with `\t` keeps the literal-free full context. An unnumbered
 STYLEREF caller has no list context, so `\r` returns the current level, the
-same result as `\n`. REF `\r` with no caller numbering keeps the full
+same result as `\n`. The existing resolved-number formatter owns this default
+for both field evaluation/cache updates and positioned rendering. Callers pass
+their actual numbering rather than selecting a second fallback policy.
+REF `\r` with no caller numbering keeps the full
 context. `\r` shares context across concrete instances of one abstract
 definition when neither instance has a start override. A different
 definition, or any instance start override, keeps the full context. The

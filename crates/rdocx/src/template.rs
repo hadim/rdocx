@@ -402,8 +402,26 @@ fn parse_program(
     })
 }
 
-fn deferred_expression(expression: &Expression, scopes: &[Scope]) -> bool {
-    matches!(expression.path.first(), Some(PathStep::Key(key)) if scopes.iter().rev().find(|scope| scope.name == *key).is_some_and(|scope| scope.deferred))
+fn deferred_expression(expression: &Expression, root: &Value, scopes: &[Scope]) -> bool {
+    let Some(PathStep::Key(key)) = expression.path.first() else {
+        return false;
+    };
+    if let Some(scope) = scopes.iter().rev().find(|scope| scope.name == *key) {
+        return scope.deferred;
+    }
+    // An empty item cannot supply implicit properties yet. Known outer/root
+    // properties must still be evaluated, including invalid intermediate kinds.
+    scopes.iter().any(|scope| scope.deferred)
+        && !root
+            .as_object()
+            .is_some_and(|value| value.contains_key(key))
+        && !scopes.iter().any(|scope| {
+            !scope.deferred
+                && scope
+                    .value
+                    .as_object()
+                    .is_some_and(|value| value.contains_key(key))
+        })
 }
 
 fn program_path_value<'a>(
@@ -415,7 +433,7 @@ fn program_path_value<'a>(
         return resolve_value(evaluation.data, scopes, path);
     }
     let expression = parse_expression(&path[0])?;
-    if deferred_expression(&expression, scopes) {
+    if deferred_expression(&expression, evaluation.data, scopes) {
         return Ok(ResolvedValue::Deferred);
     }
     expression_value(&expression, evaluation.data, scopes)?
@@ -439,7 +457,7 @@ fn evaluate_program_blocks(
                     let (text, properties) = match &token.value {
                         ScalarValue::Literal(text) => ((*text).to_owned(), None),
                         ScalarValue::Expression(expression) => {
-                            if deferred_expression(expression, scopes) {
+                            if deferred_expression(expression, evaluation.data, scopes) {
                                 continue;
                             }
                             let text = if evaluation.versioned {

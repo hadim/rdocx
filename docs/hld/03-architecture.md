@@ -1124,7 +1124,11 @@ and keeps its revision-save identities. Numbered paragraphs in a
 loop retain their source `numId` and level, which keeps one continuous list
 without allocating definitions. Numbering references are validated before
 evaluation. Loop variables form lexical scopes, and dotted lookup searches the
-innermost scope before the root value. Grammar 1 is selected by `render_template_versioned` and by the native
+innermost scope before the root value. Both grammars defer explicit item paths
+and unknown implicit item properties while preflighting an empty loop. Known
+outer or root properties still validate their complete path and intermediate
+container kinds. Structural paths and scalar leaves use the same deferred
+scope policy. Grammar 1 is selected by `render_template_versioned` and by the native
 formatter. `render_template` keeps the legacy property-key grammar. Structural
 controls pair inside one physical owner. That owner may be the main body, a
 table cell, a header, a footer, one normal footnote or endnote, or one checked

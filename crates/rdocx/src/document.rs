@@ -39852,6 +39852,150 @@ fn has_consistent_sfnt_header(data: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn reviewed_styleref_relative_fields_render_the_evaluated_number() {
+        let mut document = Document::new();
+        for level in 1..=3 {
+            document
+                .set_style(StyleBuilder::paragraph(
+                    &format!("Heading{level}"),
+                    &format!("Heading {level}"),
+                ))
+                .unwrap();
+        }
+        let definition = document
+            .add_numbering_definition(&[
+                ListLevel::decimal().level_text("Chapter %1."),
+                ListLevel::decimal().level_text("Section %2."),
+                ListLevel::decimal().level_text("Clause %3."),
+            ])
+            .unwrap();
+        let instance = document.add_numbering_instance(definition, &[]).unwrap();
+        for level in 0..3 {
+            let mut paragraph = document.add_paragraph(&format!("Title {level}"));
+            paragraph.set_style(&format!("Heading{}", level + 1));
+            assert!(paragraph.set_numbering(instance, level));
+        }
+        for mode in ["n", "r", "r \\t", "w"] {
+            document
+                .add_paragraph("")
+                .add_run("")
+                .add_field(&format!("STYLEREF \"Heading 3\" \\{mode}"), "OLD")
+                .unwrap();
+        }
+        let expected = ["Clause 1", "Clause 1", "1", "Chapter 1.Section 1.Clause 1"];
+        fn assert_values(document: &Document, expected: &[&str]) {
+            let evaluated = document
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap();
+            assert_eq!(evaluated.len(), expected.len());
+            for (field, value) in evaluated.iter().zip(expected) {
+                assert_eq!(
+                    field.outcome,
+                    crate::FieldOutcome::Resolved((*value).into())
+                );
+            }
+            let layout = document.layout_deterministic().unwrap();
+            let mut rendered = Vec::new();
+            for page in &layout.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| match element {
+                    oxml_layout::PositionedElement::Text(run) if run.field_source.is_some() => {
+                        rendered.push(run.text.clone());
+                    }
+                    oxml_layout::PositionedElement::MultilingualText(run)
+                        if run.field_source.is_some() =>
+                    {
+                        rendered.push(run.logical_text.clone());
+                    }
+                    _ => {}
+                });
+            }
+            assert_eq!(rendered, expected);
+        }
+        assert_values(&document, &expected);
+        document
+            .update_fields(&FieldEvaluationContext::default())
+            .unwrap();
+        assert_values(&document, &expected);
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_values(&reopened, &expected);
+    }
+
+    #[test]
+    fn reviewed_template_empty_implicit_scopes_match_populated_scopes() {
+        for versioned in [false, true] {
+            for expression in ["name", "person.name"] {
+                for names in [vec![], vec!["Ada"], vec!["Ada", "Cy"]] {
+                    let mut document = Document::new();
+                    for text in [
+                        "{% for person in people %}".to_owned(),
+                        format!("{{{{{expression}}}}}"),
+                        "{% endfor %}".to_owned(),
+                    ] {
+                        document.add_paragraph(&text);
+                    }
+                    let data = serde_json::json!({"people": names.iter().map(|name| serde_json::json!({"name":name})).collect::<Vec<_>>()});
+                    let count = if versioned {
+                        document.render_template_versioned(&data, 1)
+                    } else {
+                        document.render_template(&data)
+                    }
+                    .unwrap();
+                    assert_eq!(count, names.len());
+                    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+                    assert_eq!(
+                        reopened
+                            .paragraphs()
+                            .iter()
+                            .map(|p| p.text())
+                            .collect::<Vec<_>>(),
+                        names
+                    );
+                }
+            }
+            let mut nested = Document::new();
+            for text in [
+                "{% for person in people %}",
+                "{% for child in children %}",
+                "{% if enabled %}",
+                "{{child.name}}",
+                "{% endif %}",
+                "{% endfor %}",
+                "{% endfor %}",
+            ] {
+                nested.add_paragraph(text);
+            }
+            let data = serde_json::json!({"people": []});
+            let result = if versioned {
+                nested.render_template_versioned(&data, 1)
+            } else {
+                nested.render_template(&data)
+            };
+            assert_eq!(result.unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn reviewed_template_empty_scopes_still_refuse_known_invalid_roots() {
+        for versioned in [false, true] {
+            for body in ["{{config.missing}}", "{{wrong.child}}", "{{person.name"] {
+                let mut document = Document::new();
+                for text in ["{% for person in people %}", body, "{% endfor %}"] {
+                    document.add_paragraph(text);
+                }
+                let before = document.to_bytes().unwrap();
+                let data = serde_json::json!({"people": [], "config": {}, "wrong": 3});
+                let result = if versioned {
+                    document.render_template_versioned(&data, 1)
+                } else {
+                    document.render_template(&data)
+                };
+                assert!(result.is_err(), "{body}, versioned={versioned}");
+                assert_eq!(document.to_bytes().unwrap(), before);
+            }
+        }
+    }
+
+    #[test]
     fn fx251_native_equal_position_tab_insertion_stays_supported() {
         let mut document = Document::new();
         let mut paragraph = document.add_paragraph("native contract");

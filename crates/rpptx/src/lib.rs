@@ -1759,29 +1759,28 @@ fn ppt_xml_frontiers(source: &[u8], names: &mut PptXmlNames) -> Result<PptXmlFro
                     // Complex MC is a retained delegated provider, not an
                     // ordinary typed shape branch. Its metadata is still
                     // captured below for exact source/namespace custody.
+                    let table = names.values[p.uri] == A_NS
+                        && names.values[p.local] == "graphicData"
+                        && names.values[uri] == A_NS
+                        && names.values[local] == "tbl";
+                    let alternate = (names.values[p.uri] == P_NS
+                        && matches!(names.values[p.local].as_str(), "spTree" | "grpSp")
+                        || names.values[p.uri] == PPT_MC_NS && names.values[p.local] == "Fallback")
+                        && names.values[uri] == PPT_MC_NS
+                        && names.values[local] == "AlternateContent";
+                    let fallback = names.values[p.uri] == PPT_MC_NS
+                        && names.values[p.local] == "AlternateContent"
+                        && names.values[uri] == PPT_MC_NS
+                        && names.values[local] == "Fallback";
+                    let fallback_shape = names.values[p.uri] == PPT_MC_NS
+                        && names.values[p.local] == "Fallback"
+                        && names.values[uri] == P_NS
+                        && matches!(
+                            names.values[local].as_str(),
+                            "sp" | "pic" | "graphicFrame" | "cxnSp" | "grpSp"
+                        );
                     modeled = p.modeled
-                        && (order.is_some()
-                            || names.values[p.uri] == A_NS
-                                && names.values[p.local] == "graphicData"
-                                && names.values[uri] == A_NS
-                                && names.values[local] == "tbl"
-                            || (names.values[p.uri] == P_NS
-                                && matches!(names.values[p.local].as_str(), "spTree" | "grpSp")
-                                || names.values[p.uri] == PPT_MC_NS
-                                    && names.values[p.local] == "Fallback")
-                                && names.values[uri] == PPT_MC_NS
-                                && names.values[local] == "AlternateContent"
-                            || names.values[p.uri] == PPT_MC_NS
-                                && names.values[p.local] == "AlternateContent"
-                                && names.values[uri] == PPT_MC_NS
-                                && names.values[local] == "Fallback"
-                            || names.values[p.uri] == PPT_MC_NS
-                                && names.values[p.local] == "Fallback"
-                                && names.values[uri] == P_NS
-                                && matches!(
-                                    names.values[local].as_str(),
-                                    "sp" | "pic" | "graphicFrame" | "cxnSp" | "grpSp"
-                                ));
+                        && (order.is_some() || table || alternate || fallback || fallback_shape);
                     if p.modeled && ppt_xml_frontier(&names.values[p.uri], &names.values[p.local]) {
                         if let Some((rank, repeated)) = order {
                             if p.rank
