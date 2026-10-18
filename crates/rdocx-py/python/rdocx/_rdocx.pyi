@@ -439,6 +439,14 @@ class StoryItem:
         """The item's XML, declaring the namespaces in scope, so it parses alone."""
     @property
     def revision(self) -> int: ...
+    @property
+    def paragraph(self) -> Paragraph | None:
+        """A `Paragraph` handle on this paragraph item, in any story, a text box among them.
+
+        `None` for another kind of item or for one not read from a document.
+        In a text box that Word writes twice, as a DrawingML shape and a VML
+        fallback, a format edit reaches only the copy this item lists.
+        """
 
 
 @_final

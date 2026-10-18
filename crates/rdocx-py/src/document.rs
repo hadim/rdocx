@@ -914,6 +914,8 @@ pub struct PyStoryItem {
     xml: Vec<u8>,
     revision: u64,
     binding: Option<oxml_py_support::ContentPath>,
+    /// The document that listed this item. A caller-built item has none.
+    document: Option<std::sync::Arc<Py<PyDocument>>>,
 }
 
 #[pymethods]
@@ -938,6 +940,7 @@ impl PyStoryItem {
             xml: xml.unwrap_or_default().to_vec(),
             revision,
             binding: None,
+            document: None,
         }
     }
 
@@ -974,6 +977,31 @@ impl PyStoryItem {
     #[getter]
     fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// A `Paragraph` handle on this paragraph item, in any story, or `None`
+    /// for another kind of item or one not read from a document.
+    #[getter]
+    fn paragraph(&self, py: Python<'_>) -> PyResult<Option<Py<PyParagraph>>> {
+        let (Some(document), "paragraph", [index, ..]) = (
+            &self.document,
+            self.kind.as_str(),
+            self.index_path.as_slice(),
+        ) else {
+            return Ok(None);
+        };
+        let document = document.clone_ref(py);
+        let (location, path) = {
+            let owner = document.borrow(py);
+            let location = owner.native_location(py, self)?;
+            let path = owner.revisions.capture(smallvec![PathSeg::Para(*index)]);
+            (location, path)
+        };
+        Py::new(
+            py,
+            PyParagraph::for_story(document, path, location).bind_current(py, None)?,
+        )
+        .map(Some)
     }
 }
 
@@ -6250,6 +6278,7 @@ impl PyDocument {
         py: Python<'_>,
         position: &rdocx::StoryRunPosition,
         items: &mut HashMap<rdocx::ContentLocation, rdocx::StoryItemSnapshot>,
+        document: &std::sync::Arc<Py<PyDocument>>,
     ) -> PyResult<PyStoryRunPosition> {
         if !items.contains_key(&position.location) {
             let snapshot = self
@@ -6269,6 +6298,7 @@ impl PyDocument {
                 xml: item.xml().to_vec(),
                 revision: self.revisions.current(),
                 binding: Some(self.capture_snapshot(smallvec![])?),
+                document: Some(document.clone()),
             },
             run_index: position.run_index,
         })
@@ -6278,6 +6308,7 @@ impl PyDocument {
         &self,
         py: Python<'_>,
         location: &rdocx::ContentLocation,
+        document: std::sync::Arc<Py<PyDocument>>,
     ) -> PyResult<PyStoryItem> {
         let item = self
             .inner
@@ -6295,6 +6326,7 @@ impl PyDocument {
             xml: item.xml().to_vec(),
             revision: self.revisions.current(),
             binding: Some(self.capture_snapshot(smallvec![])?),
+            document: Some(document),
         })
     }
 
@@ -6311,8 +6343,9 @@ impl PyDocument {
             .paragraph_story_location(paragraph_index)
             .map_err(|error| rdocx_to_pyerr(py, error))?
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
+        let owner = std::sync::Arc::new(paragraph.document.clone_ref(py));
         let [_, _] = location.index_path() else {
-            return document.story_item_snapshot(py, &location);
+            return document.story_item_snapshot(py, &location, owner);
         };
         let item = document
             .inner
@@ -6327,6 +6360,7 @@ impl PyDocument {
             xml: item.xml().to_vec(),
             revision: document.revisions.current(),
             binding: Some(document.capture_snapshot(smallvec![])?),
+            document: Some(owner),
         })
     }
 
@@ -8024,19 +8058,22 @@ impl PyDocument {
     }
 
     #[getter]
-    fn comments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        let mut anchors = self
+    fn comments<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyTuple>> {
+        let py = slf.py();
+        let owner = std::sync::Arc::new(slf.clone().unbind());
+        let this = slf.borrow();
+        let mut anchors = this
             .inner
             .comment_anchor_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        let mut items = self
+        let mut items = this
             .inner
             .standalone_story_item_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?
             .into_iter()
             .map(|item| (item.location().clone(), item))
             .collect::<HashMap<_, _>>();
-        let records = self
+        let records = this
             .inner
             .comments()
             .into_iter()
@@ -8049,8 +8086,13 @@ impl PyDocument {
                 let anchor = range
                     .map(|range| -> PyResult<PyStoryRunRange> {
                         Ok(PyStoryRunRange {
-                            start: self.comment_story_position(py, &range.start, &mut items)?,
-                            end: self.comment_story_position(py, &range.end, &mut items)?,
+                            start: this.comment_story_position(
+                                py,
+                                &range.start,
+                                &mut items,
+                                &owner,
+                            )?,
+                            end: this.comment_story_position(py, &range.end, &mut items, &owner)?,
                         })
                     })
                     .transpose()?;
@@ -9143,8 +9185,11 @@ impl PyDocument {
     }
 
     #[getter]
-    fn story_items<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        let items = self
+    fn story_items<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyTuple>> {
+        let py = slf.py();
+        let owner = std::sync::Arc::new(slf.clone().unbind());
+        let this = slf.borrow();
+        let items = this
             .inner
             .standalone_story_item_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
@@ -9152,14 +9197,15 @@ impl PyDocument {
             .into_iter()
             .map(|item| {
                 Ok(PyStoryItem {
-                    story: self.owned_story_snapshot(item.location().story())?,
+                    story: this.owned_story_snapshot(item.location().story())?,
                     kind: story_item_kind_name(item.location().item_kind()).to_owned(),
                     index_path: item.location().index_path().to_vec(),
                     direct_body_index: item.direct_body_index(),
                     text: item.text().map(str::to_owned),
                     xml: item.xml().to_vec(),
-                    revision: self.revisions.current(),
-                    binding: Some(self.capture_snapshot(smallvec![])?),
+                    revision: this.revisions.current(),
+                    binding: Some(this.capture_snapshot(smallvec![])?),
+                    document: Some(owner.clone()),
                 })
             })
             .collect::<PyResult<Vec<_>>>()?;

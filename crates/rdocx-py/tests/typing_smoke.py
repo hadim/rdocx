@@ -338,6 +338,7 @@ def exercise_rdocx_types(path: Path) -> None:
         xml=None,
     )
     assert_type(compatible_story_item.xml, bytes)
+    assert_type(story_items[0].paragraph, Paragraph | None)
     part_names: tuple[str, ...] = document.part_names
     styles_xml: str = document.part_xml("word/styles.xml")
     document.set_default_paragraph_format(space_before=0, space_after=Pt(6), line_spacing=1.15)

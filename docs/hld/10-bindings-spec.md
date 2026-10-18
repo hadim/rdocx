@@ -704,7 +704,9 @@ then the paragraph's position among the control's paragraphs. Comment positions
 and scoped paragraph replacement accept this path. Both paragraph-handle positions and returned comment
 endpoints carry checked accepted paragraph text and nonempty paragraph XML.
 Every `StoryItem.xml` declares the namespaces in scope at the item, as
-`Paragraph.xml` does, so it parses alone.
+`Paragraph.xml` does, so it parses alone. `StoryItem.paragraph` is a
+`Paragraph` handle on a paragraph item of any story, a text box among them, or
+`None` for another kind of item or one not read from a document.
 `Document.add_comment` accepts either range form.
 `Document.add_comment_on_text` comments on the zero-based occurrence of an
 exact text in the main story without run index bookkeeping. The original

@@ -9051,3 +9051,48 @@ def _tiny_png():
     return header + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00")) + chunk(b"IEND", b"")
 
 
+def _issue_391_text_box_document():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("body")
+    box = (
+        '<w:r><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml" style="width:100pt;height:40pt">'
+        '<v:textbox><w:txbxContent><w:p><w:r><w:t>in the box</w:t></w:r></w:p></w:txbxContent></v:textbox>'
+        '</v:shape></w:pict></w:r>'
+    )
+    return _replace_document_body(document, f"<w:p><w:r><w:t>body</w:t></w:r>{box}</w:p>")
+
+
+def test_issue_391_story_item_paragraph_reaches_a_text_box_paragraph():
+    import rdocx
+
+    document = _issue_391_text_box_document()
+    item = next(i for i in document.story_items if i.story.kind == "text_box")
+    paragraph = item.paragraph
+    assert paragraph.text == "in the box"
+    paragraph.paragraph_format.line_spacing = 1.5
+    paragraph.paragraph_format.left_indent = rdocx.Pt(10)
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.paragraphs[0].text == "body"
+    item = next(i for i in reopened.story_items if i.story.kind == "text_box")
+    assert item.text == "in the box"
+    assert item.paragraph.paragraph_format.line_spacing == 1.5
+    assert item.paragraph.paragraph_format.left_indent == rdocx.Pt(10)
+
+
+def test_issue_391_story_item_paragraph_is_none_or_stale_outside_a_live_paragraph():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("first")
+    document.add_table(1, 1)
+    items = document.story_items
+    assert next(i for i in items if i.kind == "table").paragraph is None
+    body = next(i for i in items if i.kind == "paragraph")
+    body.paragraph.text = "edited"
+    assert document.paragraphs[0].text == "edited"
+    built = rdocx.StoryItem(story=body.story, kind="paragraph", index_path=(0,), text=None)
+    assert built.paragraph is None
+    with pytest.raises(rdocx.StaleElementError):
+        body.paragraph
