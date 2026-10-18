@@ -24,8 +24,8 @@ providers and qualify the integrated result once.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-X192 | Complete the remaining Word bibliography catalogue | L | pending | - |
-| F-283 | Complete numbering-aware navigation fields | L | in-progress | codex |
-| F-284 | Stable container-wide template grammar | L | in-progress | codex |
+| F-283 | Complete numbering-aware navigation fields | L | done | - |
+| F-284 | Stable container-wide template grammar | L | done | - |
 
 ## Sequencing note
 

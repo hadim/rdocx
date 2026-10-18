@@ -20620,3 +20620,114 @@ negative/unsupported evidence. A future genuine multi-face solution needs new
 bounded evidence and its own approved scope, not a rewrite of these results.
 F-X219 alone remains unfinished and carried to S96. No S96 work, publication or
 version change is included in this completion.
+
+### F-283, Complete numbering-aware navigation fields
+
+**Sprint.** S95.2
+**Completed.** 2026-10-18
+**Size.** L, estimated 4 to 5 days, actual not recorded
+
+**What was built.** Numbered REF, STYLEREF, PAGEREF, captions, TOC and the
+source-qualified outline now share one resolved numbering result. `\w` keeps
+each level's literal text, drops one trailing full stop, and `\w` with `\t`
+stays the literal-free full context. An unnumbered STYLEREF caller returns the
+current level for `\r`. An unnumbered REF caller keeps the full context.
+Cross-instance `\r` shares a prefix only when both concrete instances use the
+same abstract definition and neither has a start override. A restart that
+writes a start override stays on the full context. Visible markers, saved
+caches and the numbered outline use the same counters.
+
+**Non-obvious choices.** `ResolvedNumbering` gained two doc-hidden fields,
+`definition_id` and `has_start_override`. They are instance metadata for the
+share rule, in the same class as the existing hidden `relative_to` method.
+`has_start_override` is true when any level override on that instance carries
+a start, so `restart_numbering` does not look like a continuation. Same-instance
+callers still omit only the shared prefix. No source still returns the full
+numeric suffix, which keeps the pinned unnumbered REF result `1.1.Clause 1`.
+
+**Deviations from the design plan.** The open question said to stop if native
+evidence required a new public field or a different compatibility policy. The
+captured Word 16.114 PDFs required the share rule above. The two fields are
+doc-hidden and are named in HLD 10. They add no Python, WASM or CLI surface.
+The design draft was not rewritten. This entry is the deviation record.
+
+**Spec sections touched.** HLD 08 states the literal, relative and restart
+rules and the hidden-marker counters, REF 1 and STYLEREF 2. HLD 10 lists
+`definition_id`, `has_start_override` and hidden `relative_to`. HLD 03 and
+HLD 14 keep the navigation boundary. No spec section was left contradicting
+the producer.
+
+**Tests.** `relative_numbering_omits_only_shared_source_context`,
+`ref_n_r_and_w_apply_level_relative_and_full_context_rules`,
+`styleref_modes_reuse_numbering_literals_and_context`,
+`relative_ref_uses_physical_caller_context`,
+`numbered_ref_delimiters_match_all_pinned_word_controls_and_reopen` and
+`all_caption_references_match_authenticated_before_and_after_word`.
+`cargo test -p rdocx-layout --all-targets` passed 353 tests.
+`cargo test -p rdocx --all-targets` passed the lib, integration and regression
+binaries, including 2446 regression tests. Word 16.114 build 16.114.26101123
+field update, save, PDF and disk reopen supplied the oracle. Microscope pass 2
+is 0 defects and 0 smells. The shared full gate is the S95.2 verification at
+b240cb3509a9641fe265ebfc605c987a3f35e143.
+
+**Hash harness.** 49 documents and seven pixel cases unchanged. No baseline
+recording.
+
+**Notes for future sessions.** Do not treat an unnumbered REF `\r` as the
+current level. That path stays full context. Do not reject constant numbering
+cycles. Cyclic note expansion stays unimplemented. F-X192 is not a dependency
+and stays carried to S96.
+
+### F-284, Stable container-wide template grammar
+
+**Sprint.** S95.2
+**Completed.** 2026-10-18
+**Size.** L, estimated 4 to 5 days, actual not recorded
+
+**What was built.** Grammar version 1 is opt-in through
+`render_template_versioned` and the native formatter. Legacy `render_template`
+keeps the previous grammar. One payload renders across body, table cell,
+header, footer, footnote, endnote and text box. Block content controls
+contribute their direct paragraphs. Nested controls stay opaque. Paired text-box
+copies keep the original root start tag, so both copies still render. Python
+uses the same grammar. `TEMPLATE_GRAMMAR_VERSION` and `TemplateFormatContext`
+are public Rust exports in the stories family. No Python callback, WASM method
+or CLI surface was added.
+
+**Non-obvious choices.** The main document part is read from `document.to_xml`
+only for `doc_part_name`. Headers, footers, notes and charts stay on the
+package part. Alias 0 replays the actual paired child. Alias 1 and later rebuild
+through the fragment program and then restore the original root start tag.
+Same-document import still runs `source_owned_numbering_remap` twice. Repeated
+drawing ids stay unique. Deletion `w:delText` stays unreplaced.
+
+**Deviations from the design plan.** None. The integrated fixes for block
+controls and paired root tags stay inside the approved transaction and the
+approved grammar.
+
+**Spec sections touched.** HLD 02 classifies the template facade as stories.
+HLD 03, HLD 04, HLD 10 and HLD 12 describe the grammar, the staged fragment
+transaction and the Python method. HLD 14 keeps the container gate.
+
+**Tests.** Named installed tests
+`test_f284_versioned_paths_filters_escapes_and_legacy_selection`,
+`test_f284_container_expansion_uses_existing_native_transaction`,
+`test_f284_version_and_data_refusals_preserve_bytes_and_held_owners`,
+`test_f284_wrong_intermediate_default_and_inserted_text_are_literal`,
+`test_fx203_installed_template_and_checked_insertion_have_real_results` and
+`test_fx203_template_json_conversion_is_typed_and_atomically_preflighted`.
+The current-source wheel then passed the full `crates/rdocx-py/tests` suite,
+strict mypy and stubtest. Word 16.114 build 16.114.26101123 and LibreOffice
+26.2.5.2 opened, saved and reopened the mixed container. The Word and
+LibreOffice PDFs contain the fourteen declared strings and do not contain the
+filtered token. Microscope pass 1 is 0 defects and 0 smells. The shared full
+gate is the S95.2 verification at b240cb3509a9641fe265ebfc605c987a3f35e143.
+
+**Hash harness.** 49 documents and seven pixel cases unchanged. Template
+rendering stays opt-in. No baseline recording.
+
+**Notes for future sessions.** Do not weaken `template_publish_program`
+equality or `reject_new_repeated_drawing_ids`. Do not make `mod template`
+public. The microscope nitpick that an internal `invalid template:` message
+becomes `ValueError` stays a nitpick. The document remains unpublished.
+F-X192 is carried and is not part of this grammar.

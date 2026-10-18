@@ -39,9 +39,9 @@ regenerated, never hand-edited.
 | M21, Presentation depth | 15 | 15 | 0 | 0 |
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
-| M24, Modern DOCX authoring completeness | 54 | 24 | 2 | 28 |
+| M24, Modern DOCX authoring completeness | 54 | 26 | 0 | 28 |
 | X, Cross-cutting | 272 | 263 | 0 | 5 |
-| **Total** | **603** | **537** | **2** | **60** |
+| **Total** | **603** | **539** | **0** | **60** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -513,8 +513,8 @@ regenerated, never hand-edited.
 | F-280 | Captions, sequences, and complete cross-references | S90 | M | done |
 | F-281 | Indexes and tables of figures and authorities | S90 | L | done |
 | F-282 | Citations and bibliography authoring | S90 | L | done |
-| F-283 | Complete numbering-aware navigation fields | S95.2 | L | in-progress |
-| F-284 | Stable container-wide template grammar | S95.2 | L | in-progress |
+| F-283 | Complete numbering-aware navigation fields | S95.2 | L | done |
+| F-284 | Stable container-wide template grammar | S95.2 | L | done |
 | F-285 | Content control creation and lifecycle | S95.3 | L | pending |
 | F-286 | Rich, repeating, and typed content controls | S95.3 | L | pending |
 | F-287 | Custom XML stores and data binding authoring | S95.3 | L | pending |

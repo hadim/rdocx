@@ -1,6 +1,6 @@
 # F-284, Stable container-wide template grammar
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.2
 **Size**: L
 **Depends on**: F-253, F-261, F-276
@@ -320,7 +320,7 @@ after this physical-order callback phase. All work remains on the staged clone.
 - [x] Add actual named local RED/GREEN and atomic preservation controls.
 - [x] Update exactly the named HLD intent, including the existing Python method.
 - [x] Consume focused scoped checks and a fresh independent zero-finding microscope.
-- [ ] Qualify the final integrated native/oracle/full/rider union and complete records once.
+- [x] Qualify the final integrated native/oracle/full/rider union and complete records once.
 
 ## Open questions
 

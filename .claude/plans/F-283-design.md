@@ -1,6 +1,6 @@
 # F-283, Complete numbering-aware navigation fields
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.2
 **Size**: L
 **Depends on**: F-248, F-279 through F-282, F-X200
@@ -389,7 +389,7 @@ F-X192 formatter cases or F-284 template grammar as navigation work.
 - [x] Exercise public mutation, continuation, restart-to-5 and final layout refresh.
 - [x] Pass the named local GREEN, fast scoped checks and independent microscope.
 - [x] Handoff with explicit final Word, package, consumer and harness debt.
-- [ ] Integrator runs the final union once before final completion ledgers.
+- [x] Integrator runs the final union once before final completion ledgers.
 
 ## Open questions
 
