@@ -401519,6 +401519,45 @@ fn fx201_even_story_creation_publishes_settings_and_owner_together() {
 }
 
 #[test]
+fn issue_390_validate_reports_a_header_relationship_to_a_non_xml_part() {
+    use rdocx::ValidationSeverity;
+    let mut source = Document::new();
+    source.add_paragraph("x");
+    source.set_header("kept header");
+    assert!(source.validate().unwrap().is_valid());
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "rId99",
+            oxml_opc::relationship::rel_types::HEADER,
+            "header9.bin",
+        );
+    package
+        .content_types
+        .add_override("/word/header9.bin", "application/octet-stream");
+    package.set_part("/word/header9.bin", b"not XML".to_vec());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let report = document.validate().unwrap();
+    let findings = report
+        .findings
+        .iter()
+        .filter(|finding| finding.message.starts_with("header relationship"))
+        .collect::<Vec<_>>();
+    assert_eq!(findings.len(), 1, "{:?}", report.findings);
+    assert_eq!(findings[0].severity, ValidationSeverity::Error);
+    assert_eq!(
+        findings[0].message,
+        "header relationship rId99 points at /word/header9.bin, which is not a WordprocessingML header part (content type application/octet-stream)"
+    );
+    assert!(!report.is_valid());
+}
+
+#[test]
 fn fx201_section_validation_reports_explicit_sizes_without_mutating_source() {
     use rdocx::ValidationSeverity;
     let xml = format!(

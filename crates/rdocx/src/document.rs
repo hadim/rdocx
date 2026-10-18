@@ -59237,6 +59237,23 @@ fn validate_document_package(package: OpcPackage) -> Result<ValidationReport> {
                         "relationship {} points at missing part {target}",
                         rel.id
                     ));
+                    continue;
+                }
+                // Layout and the section stories skip a header or footer
+                // relationship to any other part, so its story is lost.
+                for kind in [HeaderFooterKind::Header, HeaderFooterKind::Footer] {
+                    let content_type = package.content_types.content_type_for(&target);
+                    if rel.rel_type == kind.relationship_type()
+                        && content_type != Some(kind.content_type())
+                    {
+                        errors.push(format!(
+                            "{} relationship {} points at {target}, which is not a WordprocessingML {} part (content type {})",
+                            kind.part_stem(),
+                            rel.id,
+                            kind.part_stem(),
+                            content_type.unwrap_or("none"),
+                        ));
+                    }
                 }
             }
         }
