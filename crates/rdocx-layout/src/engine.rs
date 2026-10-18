@@ -8888,7 +8888,11 @@ fn assign_shared_document_structure(
                     block, semantics, ..
                 } => {
                     lists.clear();
-                    let paragraph_id = builder.add(StructureRole::Paragraph, Some(root));
+                    let role = block
+                        .heading_level
+                        .map(|level| StructureRole::Heading(level.min(6) as u8))
+                        .unwrap_or(StructureRole::Paragraph);
+                    let paragraph_id = builder.add(role, Some(root));
                     semantics.structure_id = Some(paragraph_id);
                     debug_assert!(block.list.is_none());
                     debug_assert!(block.anchored.is_empty());
