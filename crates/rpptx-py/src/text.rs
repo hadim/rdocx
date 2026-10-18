@@ -1353,40 +1353,68 @@ impl PyParagraph {
     /// The bullet or number size as a fraction of the text size, from 0.25
     /// to 4.0. `None` means no percentage value, including retained point-size
     /// values. Assigning `None` removes only the explicit size owner.
+    /// The bullet size, a ratio of the text size from `a:buSzPct` or a
+    /// `Length` from `a:buSzPts`, or `None` when the paragraph sets neither.
     #[getter]
-    fn bullet_size(&self, py: Python<'_>) -> PyResult<Option<f64>> {
-        let size = self.read_bullet(py, |bullet| match &bullet.size.as_ref()?.value {
-            TextBulletSizeValue::Percent(value) => Some(value.clone()),
-            TextBulletSizeValue::Points(_) => None,
-        })?;
-        size.map(|value| {
-            match value.strip_suffix('%') {
+    fn bullet_size(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let size = self.read_bullet(py, |bullet| Some(bullet.size.as_ref()?.value.clone()))?;
+        match size {
+            None => Ok(None),
+            Some(TextBulletSizeValue::Points(centipoints)) => {
+                length_object(py, i64::from(centipoints) * EMU_PER_CENTIPOINT).map(Some)
+            }
+            Some(TextBulletSizeValue::Percent(value)) => match value.strip_suffix('%') {
                 Some(percent) => percent.parse::<f64>().map(|percent| percent / 100.0),
                 None => value.parse::<f64>().map(|value| value / 100_000.0),
             }
             .map_err(|_| PyValueError::new_err(format!("bullet size {value:?} is not a number")))
-        })
-        .transpose()
+            .map(|ratio| Some(PyFloat::new(py, ratio).into_any().unbind())),
+        }
     }
 
+    /// Writes `a:buSzPts` for a `Length`, rounded to the nearest hundredth
+    /// of a point, and `a:buSzPct` for a ratio of the text size.
     #[setter]
-    fn set_bullet_size(&self, py: Python<'_>, value: Option<f64>) -> PyResult<()> {
-        let size = value
-            .map(|value| {
+    fn set_bullet_size(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let size = match value {
+            None => None,
+            Some(value) if value.is_none() => None,
+            Some(value) if value.is_instance_of::<PyBool>() => {
+                return Err(PyTypeError::new_err(
+                    "bullet size rejects bool; use a ratio such as 0.85 or rpptx.util.Pt(18)",
+                ));
+            }
+            Some(value) if value.is_instance(&py.import("rpptx")?.getattr("Length")?)? => {
+                let emu = value.extract::<i64>()?;
+                let centipoints = (emu as f64 / EMU_PER_CENTIPOINT as f64).round_ties_even();
+                Some(
+                    i32::try_from(centipoints as i64)
+                        .ok()
+                        .and_then(|centipoints| TextBulletSize::points(centipoints).ok())
+                        .ok_or_else(|| {
+                            PyValueError::new_err("bullet size must be from 1 to 4000 points")
+                        })?,
+                )
+            }
+            Some(value) => {
+                let value = value.extract::<f64>()?;
                 if !value.is_finite() || !(0.25..=4.0).contains(&value) {
                     return Err(PyValueError::new_err(
-                        "bullet size must be from 0.25 to 4.0",
+                        "bullet size must be from 0.25 to 4.0, or a Length such as rpptx.util.Pt(18)",
                     ));
                 }
-                TextBulletSize::percent(((value * 100_000.0).round_ties_even() as i64).to_string()).map_err(
-                    |_| {
+                Some(
+                    TextBulletSize::percent(
+                        ((value * 100_000.0).round_ties_even() as i64).to_string(),
+                    )
+                    .map_err(|_| {
                         PyValueError::new_err(format!(
                             "bullet size must be from 0.25 to 4.0, got {value}"
                         ))
-                    },
+                    })?,
                 )
-            })
-            .transpose()?;
+            }
+        };
         self.edit_bullet(py, |bullet| bullet.size = size)
     }
 

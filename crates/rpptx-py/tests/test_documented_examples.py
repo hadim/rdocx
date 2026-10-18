@@ -11898,3 +11898,28 @@ def test_issue392_hyperlink_address_on_a_table_cell_run():
     assert "hlinkClick" not in parts["ppt/slides/slide1.xml"].decode()
     with pytest.raises(ValueError, match="cell hyperlink assignment is not supported"):
         cell.text_frame.paragraphs[0].runs[0].hyperlink.target_slide = reopened.slides[0]
+
+
+def test_issue392_bullet_size_takes_an_absolute_length():
+    import rpptx
+    from rpptx import Pt
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    paragraph = slide.shapes.add_textbox(0, 0, 2743200, 914400).text_frame.paragraphs[0]
+    paragraph.bullet = "-"
+    paragraph.bullet_size = Pt(17.85)
+    assert '<a:buSzPts val="1785"/>' in paragraph.element.xml
+    size = paragraph.bullet_size
+    assert isinstance(size, rpptx.Length) and size == 1785 * 127
+    paragraph.bullet_size = 0.85
+    assert '<a:buSzPct val="85000"/>' in paragraph.element.xml and paragraph.bullet_size == 0.85
+    paragraph.bullet_size = None
+    assert "buSz" not in paragraph.element.xml
+    for invalid in (Pt(0.5), Pt(4001)):
+        with pytest.raises(ValueError, match="bullet size must be from 1 to 4000 points"):
+            paragraph.bullet_size = invalid
+    with pytest.raises(TypeError):
+        paragraph.bullet_size = True
+    reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
+    assert reopened.slides[0].shapes[0].text_frame.paragraphs[0].bullet_size is None

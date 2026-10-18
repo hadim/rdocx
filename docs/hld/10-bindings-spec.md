@@ -4024,8 +4024,9 @@ reads Length or None. Font.language, east_asian_name and complex_script_name
 read direct source values. Paragraph.auto_number accepts any of the41 admitted
 DrawingML schemes with start_at from1 to32767. bullet_color, bullet_size and
 bullet_font remain independently editable. Fractional bullet size accepts
-0.25 to4.0, while an imported absolute point size reads None without implying
-a follows-text policy. Table first_row, last_row, first_col, last_col,
+0.25 to4.0 and writes `a:buSzPct`. A `Length` from 1 to 4000 points writes
+`a:buSzPts`, rounded to the nearest hundredth of a point, and an absolute
+size reads back as a `Length`. Table first_row, last_row, first_col, last_col,
 horz_banding, vert_banding and style_id preserve grid and cell ownership.
 
 FillFormat.gradient_stops exposes checked live stops with runtime identity
