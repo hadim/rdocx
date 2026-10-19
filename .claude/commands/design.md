@@ -80,6 +80,26 @@ with a short reason rather than inventing APIs or broadening a small story.
   qualified element, schema type, permitted child payload, order and cardinality.
   Inline and block contexts need separate rows when their content models differ.
   State how unknown siblings and unsupported placements are preserved or refused.
+  Apply the invariant to every operation that can introduce the structure,
+  including insert, move, clone, replace, unwrap and repeat where supported.
+  Name the check each operation reaches before publication. A valid source
+  does not imply a valid destination, and a permissive reopen is not validation.
+  For transparent wrappers, specify how the inherited parent grammar reaches
+  the actual payload. Distinguish wrappers that preserve context from elements
+  that introduce a different child grammar. Neither accepting the wrapper name
+  alone nor applying the outer grammar indiscriminately to all descendants is
+  sufficient. Include incompatible nested payloads and legal nested controls.
+- **Specify raw XML validation.** Distinguish well-formedness, namespace
+  correctness, parent/schema validity and application behavior. Name which
+  existing mechanism proves each promised level. Event parsing or root counts
+  alone do not prove attribute syntax, uniqueness or prefix binding. Include
+  valid source-preservation and malformed-attribute refusal controls when the
+  API accepts raw XML. Do not add an unrelated general XML framework.
+  Separate attribute separators/quoting/duplicates from legal XML names,
+  literal-value syntax, escapes and entity handling under the approved policy.
+  Name which layers the parser actually checks. XML lexical names may contain
+  a colon. Namespace-well-formedness is a separate requirement, not permission
+  to reject an explicitly supported opaque XML input.
 - **Preserve the whole acceptance contract.** Map every issue/backlog promise
   to an A-ID and evidence, including performance budgets and unreduced inputs.
   Missing native evidence or a reduced reproduction does not narrow the promise.
@@ -106,10 +126,20 @@ semantic check, not a check that headings and answered Q-IDs exist.
 2. Compare every supported kind against its payload variants and valid parent
    contexts. Explain any kind created only as a child of another operation.
    An umbrella statement such as "all supported kinds" is not coverage.
+   For shared validation, extend the existing consumer map with every publisher
+   that can introduce the prohibited state, its enforcement path and proving
+   A-ID/test. Search by behavior as well as helper name. A separate admission
+   path, such as type conversion or repeating-section construction, can enforce
+   the same invariant without calling the repaired helper. Record exclusions
+   and their reasons. No new tracker or second inventory is required.
 3. Reconcile repeated signatures, parameter names, defaults and representations
    across the approach, tables, decisions and consumer plans. Keep one complete
    definition and refer back to it rather than maintaining divergent copies.
    "Same methods" does not define a new binding payload representation.
+   For promised bindings, give each public native operation an explicit
+   exposed/not-exposed disposition consistent with scope. Name the actual
+   binding and stub plus a test invoking it with public arguments. A native
+   test or similarly named generic binding does not prove that route exists.
 4. For a new projection of existing data, inventory the states the parser
    already accepts. Specify reading, preservation without assignment, explicit
    assignment and clearing for applicable variants and absence. A narrower
@@ -121,6 +151,15 @@ semantic check, not a check that headings and answered Q-IDs exist.
    changes and require the revision acknowledgment in `/implement-feature`
    before they continue. Retain applicable evidence and invalidate only the
    observations affected by the actual change.
+6. For performance acceptance, pin the workload, build profile, measured
+   boundary, sample/aggregation rule and threshold before measurement. Separate
+   setup from the timed operation. Specify a deterministic work-bound control
+   beside timing where unrelated-data scaling is the defect. Diagnostic sizes
+   and counters do not replace correctness, binding or final qualification.
+   Name the actual public consumer being timed. Cover its lookup, validation
+   and publication costs, including bindings. A native-only benchmark cannot
+   discharge a binding cost criterion. Instrument actual traversal work rather
+   than placing a constant counter at entry to an unbounded loop.
 
 Record the closure result and any unresolved items in the existing plan.
 Answered questions alone do not discharge these checks. Revisions preserve

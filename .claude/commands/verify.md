@@ -31,6 +31,38 @@ Record in-flight evidence and pending checks in the feature's existing
 
 ## Acceptance applicability
 
+### Build, artifact and semantic outcome
+
+Keep the wrapper/transport exit, checked child exit and semantic acceptance
+outcome separate. A wrapper that successfully records Cargo exit 101 has
+recorded a failed build. Exit zero with a reported target of false is successful
+measurement execution, not a satisfied target. Classify an approved trend as a
+trend and a required threshold miss as a failed criterion.
+
+Do not measure or test a leftover binary after a failed rebuild. Record the
+successful build command, actual child exit, source identity, profile/features,
+artifact path and content hash. Link the observation to that artifact and
+source, including the actual imported extension path for Python. A diagnostic
+such as enum size or body_content_bytes alone does not identify a binary.
+Retain failed attempts separately. A later successful build and run can
+supersede their applicable result, but must not relabel them as successful or
+claim to qualify newer source without an applicability check.
+
+For benchmarks, retain every required operation, small/large workload sizes,
+raw sample values and units, aggregation, ratios, threshold and pass/fail.
+Preserve relevant runtime/load observations. Near-threshold success remains
+success under the approved protocol. Do not retry to select a favorable result,
+change the denominator or relax the threshold after seeing it. Repeat only for
+an explicit invalidation or a predeclared sampling rule. Keep structural work
+bounds, timing, functional correctness and final native evidence distinct.
+Measure the acceptance consumer itself. Native timing does not qualify a
+Python API workload: retain the imported release extension path and hash, and
+include binding lookup, validation and publication in the timed call. Trace
+work counters through the actual loops they claim to bound. A constant marker
+beside an uncounted inventory scan is not a structural work-bound control.
+
+### Selecting applicable checks
+
 For scoped Python checks, select the A-ID tests and their affected controls
 before launching a broad file. Preflight only their required dependencies,
 oracle pins, installed extension identity and environment configuration. Avoid

@@ -128,6 +128,29 @@ The trigger is the S95.11/S95.2 independent evaluation: local tests missed
 cross-consumer numbering, empty implicit-loop scopes and post-gate status drift.
 Record this trigger in F-X259's eventual AS_BUILT Notes for future sessions.
 
+The S95.3 review adds concrete closure checks to the existing design and review
+commands: lifecycle destination invariants, exact binding coverage and actual
+raw-XML validation. `/verify` owns the distinct build, artifact and semantic
+outcome requirements. Preserve that review as historical evidence. Process
+clarifications do not fix its product findings, satisfy missing native evidence
+or permit closure. Attribute this follow-up trigger in the eventual process
+change's delivery notes, separately from product remediation.
+
+S95.3 pass 2 retained the same nested-placement and XML-validation defects on
+different inputs after direct-case repairs. `/implement-feature` owns the
+targeted remediation discipline: invariant and caller analysis, a different
+discriminating case where applicable, honest RED provenance and escalation
+after repeated failed repairs. Preserve supported input contracts during fixes.
+This instruction update does not close those findings or supply Word evidence.
+
+The later focused S95.3 reviews also exposed a separate repeating-section
+publisher using an equivalent predicate. Consumer coverage therefore includes
+all publishers of the invalid state, not only callers of the first repaired
+helper. Keep that coverage in the existing plan. Escalation names the actual
+recipient and role and preserves sole-writer ownership. Review and repair
+handoffs are distinct. These controls are defined in `/implement-feature` and
+do not replace a missing native acceptance observation.
+
 ### External CI source availability
 
 When an approved feature requires actual external CI execution of its new

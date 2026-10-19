@@ -7,6 +7,6 @@ description: "Adversarially review one feature's diff. Records findings, changes
 
 Canonical source: `.claude/commands/microscope.md`.
 
-Source SHA-256: `90e8bf30e8e46fdbcf04b9f22b4bf59144c9189ca6d491e993d1970666d992a3`.
+Source SHA-256: `fa789db9c445013a9a1c8d913e5f677e6ac3ffca7bf94c04ceb6b7a1a58d4134`.
 
 Read the canonical source in full before acting, and follow it with whatever tools this host provides. Treat any invocation arguments as arguments to that workflow. Where it names another slash command, follow the repository skill of the same name. Where it says to ask with `AskUserQuestion`, ask through this host's own question mechanism. `.claude/WORKFLOW.md` wins on any process question. Do not edit this generated adapter.

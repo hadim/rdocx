@@ -393,6 +393,21 @@ each pass with `record-review`. Continue this loop inside the current
 `/run-sprint` invocation. A review pass remains read-only, but returning from it
 to a distinct remediation phase does not require another user invocation.
 
+Apply `/implement-feature`'s remediation discipline before each repair. When
+a finding survives on a different input, retain its ID and reassess the shared
+invariant. Do not count more example-specific patches as closure. Two failed
+repair attempts require design/reviewer escalation within the existing bound.
+Separate code defects from externally missing acceptance evidence. Do not
+spend another code-fix cycle pretending to obtain an unavailable native oracle.
+
+Use the concrete escalation handoff in `/implement-feature`. Report the actual
+recipient and role, preserve the current dirty diff and wait for the previous
+writer to stop before reassignment. Review delegation is not implementation
+delegation. Resume unaffected work only when leases and dependencies permit.
+After a focused repair review is clean, refresh invalidated final evidence
+before the next sprint review. A known external acceptance blocker remains
+blocking, and an unavailable named reviewer requires an explicit handoff.
+
 At the bound, if actionable findings remain, `set-phase SNN blocked`, do not
 push, and report what is outstanding. Closure stays forbidden.
 

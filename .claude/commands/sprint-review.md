@@ -28,6 +28,13 @@ the implementing session between passes.
    cases combined with compatibility/scoping modes, and before/after mutation
    state. Compare the reviewed final metadata with policy-test inputs.
 
+   Challenge lifecycle-wide placement invariants, promised binding methods and
+   raw-XML validation, even when creation and round-trip tests pass. Distinguish
+   a failed intermediate build from a later identified successful artifact.
+   Read the semantic outcome of performance/render reports, not only their
+   process exit. Keep source-bound timing, structural work bounds and native
+   qualification separate. A passing ratio cannot discharge another blocker.
+
    Consume the actual final full and oracle observations. This command does not rerun them. Completion/review-only
    changes require bounded metadata adoption, not another product gate.
 

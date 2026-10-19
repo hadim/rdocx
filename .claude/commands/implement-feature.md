@@ -43,6 +43,15 @@ against the design plan as the contract.
    Run the narrowest useful test target, not the workspace. Never defer a check
    needed to resolve an actual implementation uncertainty merely to batch it.
 
+   Follow the operation invariants in `/design`, including destination checks
+   on move/clone and byte-identical refusal. For promised bindings, implement
+   and invoke each exact public method and update its stub. For raw XML, inspect
+   the validator's actual attribute and applicable namespace checks rather than assuming
+   the event reader or save/reopen performs them. If optimizing representations,
+   inspect all affected constructors/callers and earn the necessary scoped
+   compile checks before rebuilding the measured release artifact. Follow
+   `/verify`'s build/artifact/semantic outcome rules when reporting evidence.
+
 4. **Keep the progress file current.** Update
    `.claude/scratch/F-XXX-progress.md` whenever you stop, using the shape below.
    This is what makes a handoff or a resume cheap.
@@ -65,6 +74,49 @@ against the design plan as the contract.
    Obtain `/microscope F-XXX --working`. Do not run a whole suite or external
    oracle here. Record the final sprint checks still due. Source changes after
    review require affected checks and a review of the new material.
+
+## Remediation discipline
+
+Before patching a confirmed finding, record its violated invariant and root
+cause in the existing progress file. Distinguish the faulty acceptance rule
+from the input that exposed it. Enumerate the shared helper's relevant callers
+and the other ways the same invalid state can reach publication.
+
+Complete the publisher coverage in the existing consumer map before declaring
+the fault class repaired. Inspect equivalent predicates as well as callers of
+one helper. Every applicable publisher needs its enforcement path and proving
+case, or an evidence-backed exclusion. A helper-level fix is not evidence for
+a publisher still using a copied predicate. Reuse a concrete policy owner when
+its context and contract match rather than adding another partial validator.
+
+Keep the reported reproduction and add a structurally different discriminator
+where the defect admits one. For grammar checks, test direct payloads and
+payloads hidden inside transparent wrappers, with valid nested controls beside
+them. For XML validation, successful attribute iteration is not proof that names,
+values or references are legal. Cover those independent dimensions according to
+the approved contract. Preserve explicitly valid opaque inputs and raw bytes.
+
+Run new failing discriminators against the actual pre-repair source before
+claiming semantic RED, then the repaired source for GREEN. If the old source
+cannot be executed, label source tracing as counterfactual evidence and keep
+the execution limitation explicit. Do not rename it an observed RED.
+
+Return each stable finding ID as addressed with evidence, disputed with
+evidence, needs-design or unresolved. A fresh review decides whether it is
+closed. Two unsuccessful repair attempts for the same invariant require
+designer or more capable reviewer investigation before another patch. This
+does not clear the finding or extend the sprint-review bound. Missing external
+oracle evidence needs an acquisition path, not repeated speculative code fixes.
+
+Escalation ends with a concrete handoff in the existing progress record:
+current source and dirty-work identity, stable finding IDs, root cause,
+remaining publishers, failing inputs, exact next checks and the responsible
+recipient. State whether the recipient is investigating, implementing or
+reviewing. A reviewer stays read-only. A reassigned implementer becomes the
+sole writer only after the previous writer stops. If the requested recipient
+cannot actually be invoked, preserve work and report the handoff as pending.
+Do not claim delegation or another model's repair from a suggested prompt.
+After repair, obtain fresh independent review and keep external blockers open.
 
 ## Progress file shape
 

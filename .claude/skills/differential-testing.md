@@ -89,6 +89,51 @@ prove every acceptance row. Retain exact expected/actual results and actual
 old-source RED/repaired GREEN outcomes. Use the same input and state when
 comparing consumers, and record intentional differences explicitly.
 
+For structure-changing APIs, cross applicable operations with destination
+contexts. Creation passing its grammar check does not prove move, clone,
+replace, unwrap or repetition reaches that check. Use a bounded set of legal
+destinations and incompatible parent/payload pairs. Assert refusal without
+changing source, destination, relationships or live owner state where promised.
+A parser preserving unsupported children as opaque XML cannot certify that a
+writer is allowed to introduce those children.
+
+Challenge a repaired guard with a payload hidden one level deeper behind a
+context-preserving wrapper. Carry the destination slot through that wrapper
+until its meaningful content is checked. Also test legal nesting and elements
+that change child context, so a blanket recursive rejection cannot pass. Check
+all relevant users of the guard, including unwrap when it shares the policy.
+
+Enumerate semantic publishers, not just direct helper callers. Type conversion,
+repetition and a copied emptiness predicate can reintroduce the same invalid
+state after move/clone guards are repaired. Tie each applicable publication path
+to a test in the existing consumer map. For event-based text rules, inspect all
+variants of the pinned parser. Text, CDATA and GeneralRef are different events.
+Compare equivalent literal, decimal/hexadecimal and predefined-reference forms
+at the same grammar position. Preserve legal whitespace and text inside valid
+child elements. Classify document-boundary positions separately. A successful
+test of one representation does not establish the others.
+
+For binding parity, call every promised operation through the actual public
+binding, with its documented argument types, and inspect the installed result.
+Native coverage and a correct stub cannot prove a Python method exists or that
+its argument conversion reaches the native operation. Exercise the promised
+nested owner contexts and at least one atomic refusal where applicable.
+
+For APIs accepting XML bytes, separate tokenization from well-formedness,
+namespace validation and schema validity. Include duplicate or malformed
+attributes and relevant unbound-prefix cases beside valid raw-byte retention.
+Inspect which parser options and attribute iterators enforce the requirement.
+An accepted event stream or successful round-trip alone is insufficient.
+
+Distinguish attribute tokenization from name/value validation. Where the
+contract requires a well-formed element, use invalid-name, literal less-than
+and undeclared-reference cases, such as `<root 1bad="x"/>`, `<root a="<"/>`
+and `<root a="&bad;"/>`, under the approved entity/declaration policy. Include
+valid escaped values and legal names as positive controls. A colon in a lexical
+XML name does not itself require namespace binding. If the contract explicitly
+retains `<root a:b="1"/>`, preserve that case. Enforcing namespaces requires its
+own approved contract, not a silent side effect of repairing lexical validation.
+
 ## Compatibility facts and oracle provenance
 
 When exposing existing imported data through a new API, enumerate the parser's

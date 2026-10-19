@@ -7,6 +7,6 @@ description: "Review a whole sprint's delta before it merges. Bounded loop, chan
 
 Canonical source: `.claude/commands/sprint-review.md`.
 
-Source SHA-256: `8f8244d599f6950dbbad713221f492c5e54a6fb8ebf90926048e87a51521534f`.
+Source SHA-256: `4526c4ed6738db947b4c71b8ecffe5d090f52a202a7bdb21c5a855b57c4a9514`.
 
 Read the canonical source in full before acting, and follow it with whatever tools this host provides. Treat any invocation arguments as arguments to that workflow. Where it names another slash command, follow the repository skill of the same name. Where it says to ask with `AskUserQuestion`, ask through this host's own question mechanism. `.claude/WORKFLOW.md` wins on any process question. Do not edit this generated adapter.

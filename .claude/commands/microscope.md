@@ -53,6 +53,22 @@ Without it, review the F-ID's commits on the sprint branch.
    Following a contradictory or incomplete plan is a contract finding, not a
    reason to approve. Verify callable operation and variant coverage, imported
    states and the worker's acknowledgment of applicable canonical revisions.
+   Trace structure invariants through every applicable lifecycle operation,
+   especially move/clone destination checks. Inspect public binding and stub
+   coverage per promised method, with actual binding invocation evidence.
+   For raw XML input, verify attribute and applicable namespace validation mechanisms.
+   For measured results, follow `/verify`'s separate child-exit, artifact and
+   semantic-outcome checks. A successful wrapper or diagnostic size is not proof.
+   For remediation, inspect the cause and shared-helper consumers, not only
+   the newly passing reported examples. Challenge context-preserving wrappers
+   and independent name/value validation where relevant. Preserve valid
+   controls and distinguish actual historical RED from source counterfactuals.
+   Retain finding IDs when the same invariant fails on a new input.
+   Check publisher coverage, including behaviorally equivalent predicates that
+   do not call the repaired helper. When parsing drives the invariant, challenge
+   equivalent content represented by different event variants. State the paths
+   examined and exclusions. Do not close a fault class solely because every
+   supplied regression passed.
 
 5. **Classify every finding.**
 
