@@ -1,19 +1,20 @@
 //! Read-only content-control handles and atomic value binding.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 use oxml_opc::OpcPackage;
 use quick_xml::XmlVersion;
-use quick_xml::events::Event;
+use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, ResolveResult};
-use quick_xml::reader::NsReader;
+use quick_xml::reader::{NsReader, Reader};
 use rdocx_oxml::content_control::{CT_DataBinding, CT_Sdt, SdtContent, SdtType};
 use rdocx_oxml::document::{BodyContent, CT_Body};
-use rdocx_oxml::namespace::matches_local_name;
+use rdocx_oxml::namespace::{W_NS, matches_local_name};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R, CT_Text, RunContent};
 
-use crate::{Document, Error, Result};
+use crate::{ContentFragment, ContentLocation, Document, Error, Result, StoryItemKind, StoryKind};
 
 const CUSTOM_XML_REL_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
@@ -1286,4 +1287,1327 @@ fn validate_xml(xml: &[u8]) -> Result<()> {
             }
         }
     }
+}
+
+const W15_NS: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
+
+/// Where a new content control is inserted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentControlPlacement {
+    Block,
+    Row,
+    Cell,
+    Paragraph,
+    Inline,
+}
+
+/// Lock stored on `w:lock`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentControlLock {
+    Unlocked,
+    SdtLocked,
+    ContentLocked,
+    SdtContentLocked,
+}
+
+impl ContentControlLock {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Unlocked => "unlocked",
+            Self::SdtLocked => "sdtLocked",
+            Self::ContentLocked => "contentLocked",
+            Self::SdtContentLocked => "sdtContentLocked",
+        }
+    }
+}
+
+/// Appearance stored on `w15:appearance`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentControlAppearance {
+    BoundingBox,
+    Tags,
+    Hidden,
+}
+
+impl ContentControlAppearance {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::BoundingBox => "boundingBox",
+            Self::Tags => "tags",
+            Self::Hidden => "hidden",
+        }
+    }
+}
+
+/// Fields for one rich-text or plain-text shell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentControlSpec {
+    pub placement: ContentControlPlacement,
+    pub kind: SdtType,
+    pub tag: Option<String>,
+    pub alias: Option<String>,
+    pub lock: Option<ContentControlLock>,
+    pub appearance: Option<ContentControlAppearance>,
+    pub placeholder: Option<bool>,
+}
+
+impl Document {
+    /// Insert one rich-text or plain-text shell at `destination`.
+    pub fn insert_content_control(
+        &mut self,
+        destination: &ContentLocation,
+        spec: ContentControlSpec,
+    ) -> Result<()> {
+        reject_control_text("content-control tag", spec.tag.as_deref())?;
+        reject_control_text("content-control alias", spec.alias.as_deref())?;
+        let kind_name = plain_or_rich(spec.kind)?;
+        let id = self.smallest_content_control_id()?;
+        let shell = control_shell(&spec, id, kind_name)?;
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        match spec.placement {
+            ContentControlPlacement::Block | ContentControlPlacement::Paragraph => {
+                require_block_parent(&candidate, destination)?;
+                let control = parse_control(&shell)?;
+                candidate
+                    .insert_content(destination, ContentFragment::content_control(control)?)
+                    .map_err(control_fault)?;
+                self.commit_staged_mutation(candidate);
+            }
+            ContentControlPlacement::Row => {
+                let located = table_parent_range(&candidate, destination)?;
+                let columns = table_column_count(&located.xml, &located.range)?;
+                let shell =
+                    control_shell_with_body(&spec, id, kind_name, &row_shell(columns, spec.kind)?)?;
+                splice_inside(&mut candidate, located, &shell)?;
+                self.publish_candidate(candidate)?;
+            }
+            ContentControlPlacement::Cell => {
+                let located = row_parent_range(&candidate, destination)?;
+                let shell = control_shell_with_body(&spec, id, kind_name, &cell_shell(spec.kind)?)?;
+                splice_inside(&mut candidate, located, &shell)?;
+                self.publish_candidate(candidate)?;
+            }
+            ContentControlPlacement::Inline => {
+                let located = paragraph_parent_range(&candidate, destination)?;
+                if shell_contains_paragraph(&shell)? {
+                    return Err(Error::Other(
+                        "inline content control cannot contain a paragraph".to_owned(),
+                    ));
+                }
+                splice_inside(&mut candidate, located, &shell)?;
+                self.publish_candidate(candidate)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Set or clear `w:tag` without rewriting `sdtContent`.
+    pub fn set_content_control_tag(
+        &mut self,
+        location: &ContentLocation,
+        tag: Option<&str>,
+    ) -> Result<()> {
+        reject_control_text("content-control tag", tag)?;
+        self.edit_control_property(location, PropertyEdit::Tag(tag.map(str::to_owned)))
+    }
+
+    /// Set or clear `w:alias` without rewriting `sdtContent`.
+    pub fn set_content_control_alias(
+        &mut self,
+        location: &ContentLocation,
+        alias: Option<&str>,
+    ) -> Result<()> {
+        reject_control_text("content-control alias", alias)?;
+        self.edit_control_property(location, PropertyEdit::Alias(alias.map(str::to_owned)))
+    }
+
+    /// Set or clear `w:lock` without rewriting `sdtContent`.
+    pub fn set_content_control_lock(
+        &mut self,
+        location: &ContentLocation,
+        lock: Option<ContentControlLock>,
+    ) -> Result<()> {
+        self.edit_control_property(location, PropertyEdit::Lock(lock))
+    }
+
+    /// Set or clear `w15:appearance` without rewriting `sdtContent`.
+    pub fn set_content_control_appearance(
+        &mut self,
+        location: &ContentLocation,
+        appearance: Option<ContentControlAppearance>,
+    ) -> Result<()> {
+        self.edit_control_property(location, PropertyEdit::Appearance(appearance))
+    }
+
+    /// Set or clear the qualified `w:showingPlcHdr` marker.
+    ///
+    /// A foreign-namespace lookalike stays in place.
+    pub fn set_content_control_placeholder(
+        &mut self,
+        location: &ContentLocation,
+        placeholder: Option<bool>,
+    ) -> Result<()> {
+        self.edit_control_property(location, PropertyEdit::Placeholder(placeholder))
+    }
+
+    /// Delete one control, including the content inside it.
+    pub fn remove_content_control(&mut self, location: &ContentLocation) -> Result<()> {
+        let (_part, xml, range, direct) = control_item(self, location)?;
+        if direct && control_parent_is_block(&xml, &range)? {
+            refuse_cell_without_paragraph(self, location.story(), &xml, &range, b"")?;
+            return self
+                .remove_content_at(location)
+                .map(|_| ())
+                .map_err(control_fault);
+        }
+        self.rewrite_control(location, ControlRewrite::Remove)
+    }
+
+    /// Drop the shell and leave its content when the parent can hold it.
+    pub fn unwrap_content_control(&mut self, location: &ContentLocation) -> Result<()> {
+        self.rewrite_control(location, ControlRewrite::Unwrap)
+    }
+
+    /// Move one control inside the same story. The id stays.
+    pub fn move_content_control(
+        &mut self,
+        source: &ContentLocation,
+        destination: &ContentLocation,
+    ) -> Result<()> {
+        if source.story() != destination.story() {
+            return Err(Error::Other(
+                "content control can move only within one story".to_owned(),
+            ));
+        }
+        let (_part, xml, range, direct) = control_item(self, source)?;
+        if direct && control_parent_is_block(&xml, &range)? {
+            return self
+                .move_content(source, destination)
+                .map_err(control_fault);
+        }
+        let bytes = xml
+            .get(range.clone())
+            .ok_or_else(|| Error::Other("content control bytes are missing".to_owned()))?
+            .to_vec();
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (part, mut updated, source_range, _) = control_item(&candidate, source)?;
+        let dest = nested_destination(&candidate, destination)?;
+        if part != dest.part {
+            return Err(Error::Other(
+                "content control can move only within one story".to_owned(),
+            ));
+        }
+        if ranges_overlap(&source_range, &dest.range) {
+            return Err(Error::Other(
+                "content control move destination is inside the source".to_owned(),
+            ));
+        }
+        let original_len = updated.len();
+        updated.drain(source_range.clone());
+        let dest_range = shift_after_removal(&dest.range, &source_range);
+        let replacement = insert_into_element(&updated, &dest_range, &bytes)?;
+        updated.splice(dest_range, replacement);
+        ensure_cell_paragraph(&candidate, source.story(), &updated, original_len)?;
+        candidate.write_story_part(&part, updated)?;
+        self.publish_candidate(candidate)
+    }
+
+    /// Clone one control. The copy gets a new id and drops paragraph identity.
+    pub fn clone_content_control(
+        &mut self,
+        source: &ContentLocation,
+        destination: &ContentLocation,
+    ) -> Result<()> {
+        let (_part, xml, range, direct) = control_item(self, source)?;
+        if direct && control_parent_is_block(&xml, &range)? {
+            return self
+                .clone_content(source, destination)
+                .map_err(control_fault);
+        }
+        let bytes = xml
+            .get(range)
+            .ok_or_else(|| Error::Other("content control bytes are missing".to_owned()))?
+            .to_vec();
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let fresh = freshen_control(&mut candidate, &bytes)?;
+        let dest = nested_destination(&candidate, destination)?;
+        let mut dest_xml = dest.xml;
+        let replacement = insert_into_element(&dest_xml, &dest.range, &fresh)?;
+        dest_xml.splice(dest.range, replacement);
+        candidate.write_story_part(&dest.part, dest_xml)?;
+        self.publish_candidate(candidate)
+    }
+
+    fn publish_candidate(&mut self, candidate: Document) -> Result<()> {
+        let reopened = candidate
+            .prepare_and_reopen_staged()
+            .map_err(control_fault)?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    fn smallest_content_control_id(&self) -> Result<i32> {
+        let mut used = HashSet::new();
+        for xml in self.owned_story_parts()? {
+            collect_control_ids(&xml, &mut used)?;
+        }
+        let mut id = 1i32;
+        while used.contains(&id) {
+            id = id
+                .checked_add(1)
+                .ok_or_else(|| Error::Other("content control ids are exhausted".to_owned()))?;
+        }
+        Ok(id)
+    }
+
+    fn edit_control_property(
+        &mut self,
+        location: &ContentLocation,
+        edit: PropertyEdit,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (part, mut xml, range, _) = control_item(&candidate, location)?;
+        let updated = edit_sdt_property(&xml, &range, edit)?;
+        let _ = xml.splice(range, updated);
+        candidate.write_story_part(&part, xml)?;
+        self.publish_candidate(candidate)
+    }
+
+    fn rewrite_control(
+        &mut self,
+        location: &ContentLocation,
+        rewrite: ControlRewrite,
+    ) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (part, mut xml, range, _) = control_item(&candidate, location)?;
+        let replacement = match rewrite {
+            ControlRewrite::Remove => {
+                refuse_cell_without_paragraph(&candidate, location.story(), &xml, &range, b"")?;
+                Vec::new()
+            }
+            ControlRewrite::Unwrap => {
+                let inner = sdt_content_bytes(&xml, &range)?;
+                if !parent_can_hold(&xml, &range, &inner)? {
+                    return Err(Error::Other(
+                        "content control unwrap leaves content the parent cannot hold".to_owned(),
+                    ));
+                }
+                refuse_cell_without_paragraph(&candidate, location.story(), &xml, &range, &inner)?;
+                inner
+            }
+        };
+        xml.splice(range, replacement);
+        candidate.write_story_part(&part, xml)?;
+        self.publish_candidate(candidate)
+    }
+}
+
+enum PropertyEdit {
+    Tag(Option<String>),
+    Alias(Option<String>),
+    Lock(Option<ContentControlLock>),
+    Appearance(Option<ContentControlAppearance>),
+    Placeholder(Option<bool>),
+}
+
+enum ControlRewrite {
+    Remove,
+    Unwrap,
+}
+
+fn reject_control_text(what: &str, value: Option<&str>) -> Result<()> {
+    if let Some(value) = value {
+        oxml_core::xml::reject_non_xml_characters(what, value)?;
+    }
+    Ok(())
+}
+
+fn control_fault(error: Error) -> Error {
+    match error {
+        Error::Story(inner) => Error::Other(inner.to_string()),
+        other => other,
+    }
+}
+
+fn plain_or_rich(kind: SdtType) -> Result<&'static str> {
+    match kind {
+        SdtType::RichText => Ok("richText"),
+        SdtType::PlainText => Ok("text"),
+        other => Err(Error::Other(format!(
+            "{} content control type payload is owned by F-286",
+            sdt_type_name(other)
+        ))),
+    }
+}
+
+fn sdt_type_name(kind: SdtType) -> &'static str {
+    match kind {
+        SdtType::RichText => "rich text",
+        SdtType::PlainText => "plain text",
+        SdtType::Picture => "picture",
+        SdtType::CheckBox => "checkbox",
+        SdtType::ComboBox => "combo box",
+        SdtType::DropDownList => "drop-down list",
+        SdtType::Date => "date",
+        SdtType::DocumentPartList => "document part list",
+        SdtType::DocumentPartObject => "document part object",
+        SdtType::Group => "group",
+        SdtType::RepeatingSection => "repeating section",
+        SdtType::RepeatingSectionItem => "repeating section item",
+        SdtType::Citation => "citation",
+        SdtType::Equation => "equation",
+        SdtType::Bibliography => "bibliography",
+    }
+}
+
+fn control_shell(spec: &ContentControlSpec, id: i32, kind_name: &str) -> Result<String> {
+    let body = match spec.placement {
+        ContentControlPlacement::Inline => "<w:r/>".to_owned(),
+        ContentControlPlacement::Row | ContentControlPlacement::Cell => String::new(),
+        ContentControlPlacement::Block | ContentControlPlacement::Paragraph => {
+            block_paragraph(spec.kind)?
+        }
+    };
+    control_shell_with_body(spec, id, kind_name, &body)
+}
+
+fn control_shell_with_body(
+    spec: &ContentControlSpec,
+    id: i32,
+    kind_name: &str,
+    body: &str,
+) -> Result<String> {
+    let mut properties = String::new();
+    if let Some(alias) = &spec.alias {
+        properties.push_str(&val_element("w:alias", alias));
+    }
+    if let Some(tag) = &spec.tag {
+        properties.push_str(&val_element("w:tag", tag));
+    }
+    properties.push_str(&val_element("w:id", &id.to_string()));
+    if let Some(lock) = spec.lock {
+        properties.push_str(&val_element("w:lock", lock.as_str()));
+    }
+    if spec.placeholder == Some(true) {
+        properties.push_str("<w:showingPlcHdr/>");
+    }
+    properties.push_str(&format!("<w:{kind_name}/>"));
+    if let Some(appearance) = spec.appearance {
+        properties.push_str(&format!(
+            "<w15:appearance w15:val=\"{}\" xmlns:w15=\"{W15_NS}\"/>",
+            appearance.as_str()
+        ));
+    }
+    Ok(format!(
+        "<w:sdt xmlns:w=\"{W_NS}\"><w:sdtPr>{properties}</w:sdtPr><w:sdtContent>{body}</w:sdtContent></w:sdt>"
+    ))
+}
+
+fn block_paragraph(kind: SdtType) -> Result<String> {
+    match kind {
+        SdtType::PlainText => Ok("<w:p><w:r><w:t></w:t></w:r></w:p>".to_owned()),
+        SdtType::RichText => Ok("<w:p/>".to_owned()),
+        other => Err(Error::Other(format!(
+            "{} content control type payload is owned by F-286",
+            sdt_type_name(other)
+        ))),
+    }
+}
+
+fn row_shell(columns: usize, kind: SdtType) -> Result<String> {
+    let columns = columns.max(1);
+    let cell = cell_shell(kind)?;
+    let mut row = String::from("<w:tr>");
+    for _ in 0..columns {
+        row.push_str(&cell);
+    }
+    row.push_str("</w:tr>");
+    Ok(row)
+}
+
+fn cell_shell(kind: SdtType) -> Result<String> {
+    Ok(format!(
+        "<w:tc><w:tcPr><w:tcW w:w=\"0\" w:type=\"auto\"/></w:tcPr>{}</w:tc>",
+        block_paragraph(kind)?
+    ))
+}
+
+fn val_element(name: &str, value: &str) -> String {
+    format!("<{name} w:val=\"{}\"/>", xml_attr(value))
+}
+
+fn xml_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('"', "&quot;")
+}
+
+fn parse_control(xml: &str) -> Result<CT_Sdt> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(start)) if start.local_name().as_ref() == b"sdt" => {
+                return CT_Sdt::from_xml(&mut reader, &start).map_err(Error::from);
+            }
+            Ok(Event::Eof) => {
+                return Err(Error::Other(
+                    "content control shell did not parse".to_owned(),
+                ));
+            }
+            Ok(_) => buffer.clear(),
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "content control shell did not parse: {error}"
+                )));
+            }
+        }
+    }
+}
+
+fn shell_contains_paragraph(xml: &str) -> Result<bool> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut in_content = false;
+    let mut depth = 0usize;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(start)) => {
+                let local = start.local_name();
+                if in_content && depth == 0 && local.as_ref() == b"p" {
+                    return Ok(true);
+                }
+                if local.as_ref() == b"sdtContent" {
+                    in_content = true;
+                    depth = 0;
+                } else if in_content {
+                    depth += 1;
+                }
+                buffer.clear();
+            }
+            Ok(Event::Empty(start)) => {
+                let local = start.local_name();
+                if in_content && depth == 0 && local.as_ref() == b"p" {
+                    return Ok(true);
+                }
+                buffer.clear();
+            }
+            Ok(Event::End(end)) => {
+                if end.local_name().as_ref() == b"sdtContent" {
+                    return Ok(false);
+                }
+                if in_content && depth > 0 {
+                    depth -= 1;
+                }
+                buffer.clear();
+            }
+            Ok(Event::Eof) => return Ok(false),
+            Ok(_) => buffer.clear(),
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "content control shell did not parse: {error}"
+                )));
+            }
+        }
+    }
+}
+
+fn require_block_parent(document: &Document, destination: &ContentLocation) -> Result<()> {
+    let kind = destination.story().kind();
+    if !matches!(
+        kind,
+        StoryKind::Body
+            | StoryKind::TableCell
+            | StoryKind::Header
+            | StoryKind::Footer
+            | StoryKind::Footnote
+            | StoryKind::Endnote
+            | StoryKind::Comment
+            | StoryKind::TextBox
+    ) {
+        return Err(Error::Other(
+            "content control placement does not match its parent".to_owned(),
+        ));
+    }
+    if Document::location_is_end(destination) {
+        return Ok(());
+    }
+    let (_, _, _, direct) = document
+        .copy_indexed_story_item(destination, destination.index_path())
+        .map_err(control_fault)?;
+    if direct {
+        Ok(())
+    } else {
+        Err(Error::Other(
+            "content control placement does not match its parent".to_owned(),
+        ))
+    }
+}
+
+struct PartRange {
+    part: String,
+    xml: Vec<u8>,
+    range: Range<usize>,
+}
+
+fn table_parent_range(document: &Document, destination: &ContentLocation) -> Result<PartRange> {
+    if Document::location_is_end(destination)
+        || destination.item_kind() != StoryItemKind::Table
+        || destination.index_path().len() != 1
+    {
+        return Err(Error::Other(
+            "content control placement does not match its parent".to_owned(),
+        ));
+    }
+    let (part, xml, range, _) = document
+        .copy_indexed_story_item(destination, destination.index_path())
+        .map_err(control_fault)?;
+    Ok(PartRange { part, xml, range })
+}
+
+fn row_parent_range(document: &Document, destination: &ContentLocation) -> Result<PartRange> {
+    let path = destination.index_path();
+    let [table_index, row_index] = path else {
+        return Err(Error::Other(
+            "content control placement does not match its parent".to_owned(),
+        ));
+    };
+    if destination.item_kind() != StoryItemKind::Table {
+        return Err(Error::Other(
+            "content control placement does not match its parent".to_owned(),
+        ));
+    }
+    let (part, xml, table_range, _) = document
+        .copy_indexed_story_item(destination, &[*table_index])
+        .map_err(control_fault)?;
+    let range = nth_direct_child(&xml, &table_range, b"tr", *row_index)?;
+    Ok(PartRange { part, xml, range })
+}
+
+fn paragraph_parent_range(document: &Document, destination: &ContentLocation) -> Result<PartRange> {
+    if Document::location_is_end(destination) || destination.item_kind() != StoryItemKind::Paragraph
+    {
+        return Err(Error::Other(
+            "content control placement does not match its parent".to_owned(),
+        ));
+    }
+    let (part, xml, range, _) = document
+        .copy_indexed_story_item(destination, destination.index_path())
+        .map_err(control_fault)?;
+    Ok(PartRange { part, xml, range })
+}
+
+fn splice_inside(document: &mut Document, located: PartRange, payload: &str) -> Result<()> {
+    let PartRange {
+        part,
+        mut xml,
+        range,
+    } = located;
+    let replacement = insert_into_element(&xml, &range, payload.as_bytes())?;
+    xml.splice(range, replacement);
+    document.write_story_part(&part, xml)
+}
+
+fn control_item(
+    document: &Document,
+    location: &ContentLocation,
+) -> Result<(String, Vec<u8>, Range<usize>, bool)> {
+    document
+        .copy_indexed_story_item(location, location.index_path())
+        .map_err(control_fault)
+}
+
+struct XmlElem {
+    id: usize,
+    parent: Option<usize>,
+    local: Vec<u8>,
+    word: bool,
+    w15: bool,
+    range: Range<usize>,
+    open_end: usize,
+    inner_end: Option<usize>,
+    val: Option<String>,
+}
+
+fn index_elements(xml: &[u8]) -> Result<Vec<XmlElem>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut stack: Vec<(usize, usize, usize)> = Vec::new();
+    let mut elems = Vec::new();
+    let mut next_id = 0usize;
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("content control XML is invalid: {error}")))?;
+        let word = is_word(&namespace);
+        let w15 = is_w15(&namespace);
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) => {
+                let id = next_id;
+                next_id += 1;
+                let parent = stack.last().map(|frame| frame.0);
+                let val = word_val(&reader, &element)?;
+                stack.push((id, before, after));
+                elems.push(XmlElem {
+                    id,
+                    parent,
+                    local: element.local_name().as_ref().to_vec(),
+                    word,
+                    w15,
+                    range: before..before,
+                    open_end: after,
+                    inner_end: None,
+                    val,
+                });
+            }
+            Event::Empty(element) => {
+                let id = next_id;
+                next_id += 1;
+                elems.push(XmlElem {
+                    id,
+                    parent: stack.last().map(|frame| frame.0),
+                    local: element.local_name().as_ref().to_vec(),
+                    word,
+                    w15,
+                    range: before..after,
+                    open_end: after,
+                    inner_end: None,
+                    val: word_val(&reader, &element)?,
+                });
+            }
+            Event::End(_) => {
+                let Some((id, start, open_end)) = stack.pop() else {
+                    return Err(Error::Other(
+                        "content control XML has an unmatched end element".to_owned(),
+                    ));
+                };
+                let Some(elem) = elems.iter_mut().find(|elem| elem.id == id) else {
+                    return Err(Error::Other(
+                        "content control XML lost an open element".to_owned(),
+                    ));
+                };
+                elem.range = start..after;
+                elem.open_end = open_end;
+                elem.inner_end = Some(before);
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if !stack.is_empty() {
+        return Err(Error::Other(
+            "content control XML ended inside an element".to_owned(),
+        ));
+    }
+    Ok(elems)
+}
+
+fn is_word(namespace: &ResolveResult<'_>) -> bool {
+    matches!(namespace, ResolveResult::Bound(Namespace(uri)) if *uri == W_NS.as_bytes())
+}
+
+fn is_w15(namespace: &ResolveResult<'_>) -> bool {
+    matches!(namespace, ResolveResult::Bound(Namespace(uri)) if *uri == W15_NS.as_bytes())
+}
+
+fn word_val(reader: &NsReader<&[u8]>, element: &BytesStart<'_>) -> Result<Option<String>> {
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| {
+            Error::Other(format!("content control attribute is invalid: {error}"))
+        })?;
+        let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+        if is_word(&namespace) && local.as_ref() == b"val" {
+            let value = attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                .map_err(|error| {
+                    Error::Other(format!(
+                        "content control attribute value is invalid: {error}"
+                    ))
+                })?;
+            return Ok(Some(value.into_owned()));
+        }
+    }
+    Ok(None)
+}
+
+fn element_at<'a>(elems: &'a [XmlElem], range: &Range<usize>) -> Result<&'a XmlElem> {
+    elems
+        .iter()
+        .find(|elem| elem.range.start == range.start)
+        .ok_or_else(|| Error::Other("content control bytes are missing".to_owned()))
+}
+
+fn nth_direct_child(
+    xml: &[u8],
+    parent: &Range<usize>,
+    local: &[u8],
+    index: usize,
+) -> Result<Range<usize>> {
+    let elems = index_elements(xml)?;
+    let parent = element_at(&elems, parent)?;
+    elems
+        .iter()
+        .filter(|elem| elem.parent == Some(parent.id) && elem.word && elem.local == local)
+        .nth(index)
+        .map(|elem| elem.range.clone())
+        .ok_or_else(|| {
+            Error::Other("content control placement does not match its parent".to_owned())
+        })
+}
+
+fn table_column_count(xml: &[u8], table_range: &Range<usize>) -> Result<usize> {
+    let elems = index_elements(xml)?;
+    let table = element_at(&elems, table_range)?;
+    if let Some(row) = elems
+        .iter()
+        .find(|elem| elem.parent == Some(table.id) && elem.word && elem.local == b"tr")
+    {
+        let count = elems
+            .iter()
+            .filter(|elem| elem.parent == Some(row.id) && elem.word && elem.local == b"tc")
+            .count();
+        return Ok(count.max(1));
+    }
+    if let Some(grid) = elems
+        .iter()
+        .find(|elem| elem.parent == Some(table.id) && elem.word && elem.local == b"tblGrid")
+    {
+        let count = elems
+            .iter()
+            .filter(|elem| elem.parent == Some(grid.id) && elem.word && elem.local == b"gridCol")
+            .count();
+        if count > 0 {
+            return Ok(count);
+        }
+    }
+    Ok(1)
+}
+
+fn insert_into_element(xml: &[u8], range: &Range<usize>, payload: &[u8]) -> Result<Vec<u8>> {
+    let elems = index_elements(xml)?;
+    let elem = element_at(&elems, range)?;
+    if elem.inner_end.is_none() {
+        return expand_empty(&xml[elem.range.clone()], payload);
+    }
+    let inner_end = elem.inner_end.unwrap_or(elem.range.end);
+    let mut updated = xml[elem.range.start..inner_end].to_vec();
+    updated.extend_from_slice(payload);
+    updated.extend_from_slice(&xml[inner_end..elem.range.end]);
+    Ok(updated)
+}
+
+fn expand_empty(element: &[u8], payload: &[u8]) -> Result<Vec<u8>> {
+    let qname = element_qname(element)?;
+    let slash = element
+        .windows(2)
+        .rposition(|window| window == b"/>")
+        .ok_or_else(|| Error::Other("content control empty element is not closed".to_owned()))?;
+    let mut updated = element[..slash].to_vec();
+    while updated.last().is_some_and(u8::is_ascii_whitespace) {
+        updated.pop();
+    }
+    updated.push(b'>');
+    updated.extend_from_slice(payload);
+    updated.extend_from_slice(b"</");
+    updated.extend_from_slice(qname.as_bytes());
+    updated.push(b'>');
+    Ok(updated)
+}
+
+fn element_qname(bytes: &[u8]) -> Result<&str> {
+    let rest = bytes
+        .strip_prefix(b"<")
+        .ok_or_else(|| Error::Other("content control element is not a start tag".to_owned()))?;
+    let end = rest
+        .iter()
+        .position(|byte| byte.is_ascii_whitespace() || *byte == b'/' || *byte == b'>')
+        .ok_or_else(|| Error::Other("content control element name is missing".to_owned()))?;
+    std::str::from_utf8(&rest[..end])
+        .map_err(|error| Error::Other(format!("content control element name is invalid: {error}")))
+}
+
+fn collect_control_ids(xml: &[u8], used: &mut HashSet<i32>) -> Result<()> {
+    let elems = index_elements(xml)?;
+    for elem in &elems {
+        if !(elem.word && elem.local == b"id") {
+            continue;
+        }
+        let Some(parent) = elem
+            .parent
+            .and_then(|id| elems.iter().find(|item| item.id == id))
+        else {
+            continue;
+        };
+        if !(parent.word && parent.local == b"sdtPr") {
+            continue;
+        }
+        if let Some(value) = &elem.val
+            && let Ok(id) = value.parse::<i32>()
+            && id > 0
+        {
+            used.insert(id);
+        }
+    }
+    Ok(())
+}
+
+fn edit_sdt_property(xml: &[u8], sdt_range: &Range<usize>, edit: PropertyEdit) -> Result<Vec<u8>> {
+    let elems = index_elements(xml)?;
+    let sdt = element_at(&elems, sdt_range)?;
+    let sdt_pr = elems
+        .iter()
+        .find(|elem| elem.parent == Some(sdt.id) && elem.word && elem.local == b"sdtPr")
+        .ok_or_else(|| Error::Other("content control has no properties".to_owned()))?;
+    if let Some(target) = elems
+        .iter()
+        .find(|elem| elem.parent == Some(sdt_pr.id) && property_matches(elem, &edit))
+    {
+        let replacement = property_bytes(xml, target, &edit)?;
+        return splice_absolute(xml, sdt_range, &target.range, &replacement);
+    }
+    if property_clears(&edit) {
+        return Ok(xml[sdt_range.clone()].to_vec());
+    }
+    let markup = property_bytes_new(xml, sdt_pr, &edit)?;
+    if sdt_pr.inner_end.is_none() {
+        let expanded = expand_empty(&xml[sdt_pr.range.clone()], &markup)?;
+        return splice_absolute(xml, sdt_range, &sdt_pr.range, &expanded);
+    }
+    let rank = property_insert_rank(&edit);
+    let insert_at = elems
+        .iter()
+        .filter(|elem| elem.parent == Some(sdt_pr.id))
+        .find(|elem| property_rank(elem).is_some_and(|child| child > rank))
+        .map(|elem| elem.range.start)
+        .unwrap_or(sdt_pr.inner_end.unwrap_or(sdt_pr.range.end));
+    splice_absolute(xml, sdt_range, &(insert_at..insert_at), &markup)
+}
+
+fn splice_absolute(
+    xml: &[u8],
+    outer: &Range<usize>,
+    target: &Range<usize>,
+    replacement: &[u8],
+) -> Result<Vec<u8>> {
+    if target.start < outer.start || target.end > outer.end {
+        return Err(Error::Other(
+            "content control property is outside its shell".to_owned(),
+        ));
+    }
+    let mut updated = xml[outer.clone()].to_vec();
+    let local = (target.start - outer.start)..(target.end - outer.start);
+    updated.splice(local, replacement.iter().copied());
+    Ok(updated)
+}
+
+fn property_matches(elem: &XmlElem, edit: &PropertyEdit) -> bool {
+    match edit {
+        PropertyEdit::Tag(_) => elem.word && elem.local == b"tag",
+        PropertyEdit::Alias(_) => elem.word && elem.local == b"alias",
+        PropertyEdit::Lock(_) => elem.word && elem.local == b"lock",
+        PropertyEdit::Appearance(_) => elem.w15 && elem.local == b"appearance",
+        PropertyEdit::Placeholder(_) => elem.word && elem.local == b"showingPlcHdr",
+    }
+}
+
+fn property_clears(edit: &PropertyEdit) -> bool {
+    matches!(
+        edit,
+        PropertyEdit::Tag(None)
+            | PropertyEdit::Alias(None)
+            | PropertyEdit::Lock(None)
+            | PropertyEdit::Appearance(None)
+            | PropertyEdit::Placeholder(None)
+            | PropertyEdit::Placeholder(Some(false))
+    )
+}
+
+fn property_insert_rank(edit: &PropertyEdit) -> u8 {
+    match edit {
+        PropertyEdit::Alias(_) => 1,
+        PropertyEdit::Tag(_) => 2,
+        PropertyEdit::Lock(_) => 4,
+        PropertyEdit::Placeholder(_) => 7,
+        PropertyEdit::Appearance(_) => 21,
+    }
+}
+
+fn property_rank(elem: &XmlElem) -> Option<u8> {
+    if elem.word {
+        return match elem.local.as_slice() {
+            b"rPr" => Some(0),
+            b"alias" => Some(1),
+            b"tag" => Some(2),
+            b"id" => Some(3),
+            b"lock" => Some(4),
+            b"placeholder" => Some(5),
+            b"temporary" => Some(6),
+            b"showingPlcHdr" => Some(7),
+            b"dataBinding" => Some(8),
+            b"label" | b"tabIndex" => Some(9),
+            b"richText" | b"text" | b"date" | b"picture" | b"comboBox" | b"dropDownList"
+            | b"citation" | b"group" | b"bibliography" | b"equation" | b"docPartList"
+            | b"docPartObj" => Some(20),
+            _ => None,
+        };
+    }
+    if elem.w15 {
+        return match elem.local.as_slice() {
+            b"appearance" => Some(21),
+            b"repeatingSection" | b"repeatingSectionItem" => Some(20),
+            _ => None,
+        };
+    }
+    if elem.local.as_slice() == b"checkbox" {
+        return Some(20);
+    }
+    None
+}
+
+fn property_bytes(xml: &[u8], target: &XmlElem, edit: &PropertyEdit) -> Result<Vec<u8>> {
+    if property_clears(edit) {
+        return Ok(Vec::new());
+    }
+    if matches!(edit, PropertyEdit::Appearance(_)) {
+        return Ok(appearance_markup(edit)?.into_bytes());
+    }
+    let prefix = name_prefix(element_qname(&xml[target.range.clone()])?);
+    Ok(property_markup(prefix, edit)?.into_bytes())
+}
+
+fn property_bytes_new(xml: &[u8], sdt_pr: &XmlElem, edit: &PropertyEdit) -> Result<Vec<u8>> {
+    if matches!(edit, PropertyEdit::Appearance(_)) {
+        return Ok(appearance_markup(edit)?.into_bytes());
+    }
+    let prefix = name_prefix(element_qname(&xml[sdt_pr.range.clone()])?);
+    Ok(property_markup(prefix, edit)?.into_bytes())
+}
+
+fn name_prefix(qname: &str) -> &str {
+    match qname.split_once(':') {
+        Some((prefix, _)) => prefix,
+        None => "",
+    }
+}
+
+fn property_markup(prefix: &str, edit: &PropertyEdit) -> Result<String> {
+    match edit {
+        PropertyEdit::Tag(Some(value)) => Ok(prefixed_val(prefix, "tag", value)),
+        PropertyEdit::Alias(Some(value)) => Ok(prefixed_val(prefix, "alias", value)),
+        PropertyEdit::Lock(Some(lock)) => Ok(prefixed_val(prefix, "lock", lock.as_str())),
+        PropertyEdit::Placeholder(Some(true)) => Ok(prefixed_marker(prefix, "showingPlcHdr")),
+        PropertyEdit::Appearance(_) => appearance_markup(edit),
+        _ => Err(Error::Other(
+            "content control property value is missing".to_owned(),
+        )),
+    }
+}
+
+fn appearance_markup(edit: &PropertyEdit) -> Result<String> {
+    let PropertyEdit::Appearance(Some(appearance)) = edit else {
+        return Err(Error::Other(
+            "content control appearance value is missing".to_owned(),
+        ));
+    };
+    Ok(format!(
+        "<w15:appearance w15:val=\"{}\" xmlns:w15=\"{W15_NS}\"/>",
+        xml_attr(appearance.as_str())
+    ))
+}
+
+fn prefixed_val(prefix: &str, local: &str, value: &str) -> String {
+    if prefix.is_empty() {
+        format!("<{local} val=\"{}\"/>", xml_attr(value))
+    } else {
+        format!("<{prefix}:{local} {prefix}:val=\"{}\"/>", xml_attr(value))
+    }
+}
+
+fn prefixed_marker(prefix: &str, local: &str) -> String {
+    if prefix.is_empty() {
+        format!("<{local}/>")
+    } else {
+        format!("<{prefix}:{local}/>")
+    }
+}
+
+fn sdt_content_bytes(xml: &[u8], sdt_range: &Range<usize>) -> Result<Vec<u8>> {
+    let elems = index_elements(xml)?;
+    let sdt = element_at(&elems, sdt_range)?;
+    let Some(content) = elems
+        .iter()
+        .find(|elem| elem.parent == Some(sdt.id) && elem.word && elem.local == b"sdtContent")
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(inner_end) = content.inner_end else {
+        return Ok(Vec::new());
+    };
+    Ok(xml[content.open_end..inner_end].to_vec())
+}
+
+#[derive(Clone, Copy)]
+enum ParentSlot {
+    Block,
+    Table,
+    Row,
+    Inline,
+    Other,
+}
+
+fn parent_can_hold(xml: &[u8], sdt_range: &Range<usize>, inner: &[u8]) -> Result<bool> {
+    let elems = index_elements(xml)?;
+    let sdt = element_at(&elems, sdt_range)?;
+    inner_matches_slot(parent_slot(&elems, sdt.id), inner)
+}
+
+fn parent_slot(elems: &[XmlElem], id: usize) -> ParentSlot {
+    let Some(elem) = elems.iter().find(|elem| elem.id == id) else {
+        return ParentSlot::Other;
+    };
+    let Some(parent_id) = elem.parent else {
+        return ParentSlot::Other;
+    };
+    let Some(parent) = elems.iter().find(|elem| elem.id == parent_id) else {
+        return ParentSlot::Other;
+    };
+    match parent.local.as_slice() {
+        b"sdt" | b"sdtContent" => parent_slot(elems, parent.id),
+        b"p" | b"hyperlink" | b"fldSimple" | b"ins" | b"del" | b"moveFrom" | b"moveTo" => {
+            ParentSlot::Inline
+        }
+        b"tbl" => ParentSlot::Table,
+        b"tr" => ParentSlot::Row,
+        b"body" | b"hdr" | b"ftr" | b"footnote" | b"endnote" | b"comment" | b"txbxContent"
+        | b"tc" => ParentSlot::Block,
+        _ => ParentSlot::Other,
+    }
+}
+
+fn control_parent_is_block(xml: &[u8], range: &Range<usize>) -> Result<bool> {
+    let elems = index_elements(xml)?;
+    let sdt = element_at(&elems, range)?;
+    Ok(matches!(parent_slot(&elems, sdt.id), ParentSlot::Block))
+}
+
+fn inner_matches_slot(slot: ParentSlot, inner: &[u8]) -> Result<bool> {
+    if matches!(slot, ParentSlot::Other) {
+        return Ok(false);
+    }
+    let mut wrapped = Vec::new();
+    wrapped.extend_from_slice(b"<w:root xmlns:w=\"");
+    wrapped.extend_from_slice(W_NS.as_bytes());
+    wrapped.extend_from_slice(b"\">");
+    wrapped.extend_from_slice(inner);
+    wrapped.extend_from_slice(b"</w:root>");
+    let mut reader = NsReader::from_reader(wrapped.as_slice());
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    loop {
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| {
+                Error::Other(format!(
+                    "content control unwrap content is invalid: {error}"
+                ))
+            })?;
+        let word = is_word(&namespace);
+        drop(namespace);
+        match event {
+            Event::Start(element) => {
+                if depth == 1 && !child_allowed(slot, word, element.local_name().as_ref()) {
+                    return Ok(false);
+                }
+                depth += 1;
+            }
+            Event::Empty(element) => {
+                if depth == 1 && !child_allowed(slot, word, element.local_name().as_ref()) {
+                    return Ok(false);
+                }
+            }
+            Event::End(_) => {
+                if depth == 0 {
+                    return Err(Error::Other(
+                        "content control unwrap content is invalid".to_owned(),
+                    ));
+                }
+                depth -= 1;
+            }
+            Event::Text(text) if depth == 1 && !xml_space(text.as_ref()) => return Ok(false),
+            Event::CData(text) if depth == 1 && !xml_space(text.as_ref()) => return Ok(false),
+            Event::Eof => return Ok(true),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn child_allowed(slot: ParentSlot, word: bool, local: &[u8]) -> bool {
+    if !word {
+        return false;
+    }
+    match slot {
+        ParentSlot::Block => matches!(
+            local,
+            b"p" | b"tbl"
+                | b"sdt"
+                | b"bookmarkStart"
+                | b"bookmarkEnd"
+                | b"proofErr"
+                | b"commentRangeStart"
+                | b"commentRangeEnd"
+                | b"permStart"
+                | b"permEnd"
+                | b"customXml"
+        ),
+        ParentSlot::Table => {
+            matches!(
+                local,
+                b"tr" | b"sdt" | b"bookmarkStart" | b"bookmarkEnd" | b"proofErr" | b"customXml"
+            )
+        }
+        ParentSlot::Row => {
+            matches!(
+                local,
+                b"tc" | b"sdt" | b"bookmarkStart" | b"bookmarkEnd" | b"proofErr" | b"customXml"
+            )
+        }
+        ParentSlot::Inline => matches!(
+            local,
+            b"r" | b"sdt"
+                | b"hyperlink"
+                | b"fldSimple"
+                | b"ins"
+                | b"del"
+                | b"moveFrom"
+                | b"moveTo"
+                | b"bookmarkStart"
+                | b"bookmarkEnd"
+                | b"commentRangeStart"
+                | b"commentRangeEnd"
+                | b"proofErr"
+                | b"customXml"
+        ),
+        ParentSlot::Other => false,
+    }
+}
+
+fn xml_space(bytes: &[u8]) -> bool {
+    bytes
+        .iter()
+        .all(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+}
+
+fn nested_destination(document: &Document, destination: &ContentLocation) -> Result<PartRange> {
+    if !Document::location_is_end(destination)
+        && destination.item_kind() == StoryItemKind::Paragraph
+    {
+        return paragraph_parent_range(document, destination);
+    }
+    if !Document::location_is_end(destination) && destination.item_kind() == StoryItemKind::Table {
+        return match destination.index_path().len() {
+            1 => table_parent_range(document, destination),
+            2 => row_parent_range(document, destination),
+            _ => Err(Error::Other(
+                "content control placement does not match its parent".to_owned(),
+            )),
+        };
+    }
+    Err(Error::Other(
+        "content control placement does not match its parent".to_owned(),
+    ))
+}
+
+fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
+    left.start < right.end && right.start < left.end
+}
+
+fn shift_after_removal(dest: &Range<usize>, removed: &Range<usize>) -> Range<usize> {
+    if dest.start >= removed.end {
+        let shift = removed.len();
+        dest.start - shift..dest.end - shift
+    } else {
+        dest.clone()
+    }
+}
+
+fn ensure_cell_paragraph(
+    document: &Document,
+    story: &crate::StoryId,
+    edited: &[u8],
+    original_len: usize,
+) -> Result<()> {
+    if story.kind() != StoryKind::TableCell {
+        return Ok(());
+    }
+    let delta = edited.len() as isize - original_len as isize;
+    let (_xml, span) = document.story_owner_span(story)?;
+    let end = usize::try_from(span.end as isize + delta)
+        .map_err(|_| Error::Other("content control cell span is invalid".to_owned()))?;
+    if span.start > end || end > edited.len() {
+        return Err(Error::Other(
+            "content control cell span is invalid".to_owned(),
+        ));
+    }
+    if !word_paragraph_in_span(edited, span.start..end)? {
+        return Err(Error::Other(
+            "cannot remove the final required table-cell paragraph".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn refuse_cell_without_paragraph(
+    document: &Document,
+    story: &crate::StoryId,
+    xml: &[u8],
+    range: &Range<usize>,
+    replacement: &[u8],
+) -> Result<()> {
+    if story.kind() != StoryKind::TableCell {
+        return Ok(());
+    }
+    let mut edited = xml.to_vec();
+    edited.splice(range.clone(), replacement.iter().copied());
+    ensure_cell_paragraph(document, story, &edited, xml.len())
+}
+
+fn word_paragraph_in_span(xml: &[u8], span: Range<usize>) -> Result<bool> {
+    let elems = index_elements(xml)?;
+    Ok(elems.iter().any(|elem| {
+        elem.word
+            && elem.local == b"p"
+            && elem.range.start >= span.start
+            && elem.range.end <= span.end
+    }))
+}
+
+fn freshen_control(document: &mut Document, sdt_bytes: &[u8]) -> Result<Vec<u8>> {
+    let mut wrapped = format!(
+        "<w:document xmlns:w=\"{W_NS}\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:body>"
+    )
+    .into_bytes();
+    wrapped.extend_from_slice(sdt_bytes);
+    wrapped.extend_from_slice(b"</w:body></w:document>");
+    let updated = crate::field::freshen_content_fragment_identities(document, &wrapped)?;
+    let elems = index_elements(&updated)?;
+    let sdt = elems
+        .iter()
+        .find(|elem| elem.word && elem.local == b"sdt")
+        .ok_or_else(|| Error::Other("content control clone did not keep its shell".to_owned()))?;
+    Ok(updated[sdt.range.clone()].to_vec())
 }

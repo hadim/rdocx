@@ -3344,6 +3344,18 @@ PowerPoint pixel baseline, the wasm check, and the hash harness remain
 final-sprint evidence. The Word hash and the Word seven-pixel baseline stay
 unchanged.
 
+Content-control creation round-trips one rich or plain shell at block, row,
+cell, paragraph, and inline placements in a body, table, header, and text box.
+The same tests clear and restore tag, alias, lock, appearance, and placeholder
+on an imported control while an unmodelled property child, `sdtContent`, and a
+foreign `showingPlcHdr` stay. Move keeps the id. Clone allocates a new id and
+drops `w14:paraId`. A cross-story move and an illegal unwrap or cell-emptying
+removal return the original package. A created tag accepts the existing fill,
+and a missing tag rolls back. Checkbox, date, and repeating-section creation
+name F-286 and publish nothing. Python covers the same insert, metadata, fill,
+refusal, and remove surface on the frozen snapshot. The hash harness and the
+installed `rdocx` suite remain final-sprint evidence.
+
 Numbering replacement-level controls exercise both bullet-over-decimal refusal
 and decimal-over-bullet restart and continuation after reopen. A bounded native
 counter control requires one source build, owner discovery, item discovery and

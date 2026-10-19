@@ -3096,7 +3096,10 @@ body, table, header, footer, note, and text-box locations without run-split loss
 ### F-285, Content control creation and lifecycle (L)
 Create, inspect, edit, move, clone, and remove block, row, cell, paragraph, and
 inline content controls with typed identity, alias, tag, lock, appearance, and
-placeholder behavior.
+placeholder behavior. Public creation admits rich text and plain text. Other
+kinds name F-286 and publish nothing. Python exposes insert, metadata, remove,
+and unwrap on the frozen snapshot. Move and clone stay on the Rust facade.
+WASM and CLI gain no method.
 **Depends on**: F-253, F-254.
 **Test gate**: round-trip. Each control location and property survives public
 creation and mutation with no raw-XML fallback.

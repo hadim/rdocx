@@ -2565,6 +2565,25 @@ existing all-match tag/alias setters. Its bind_content_controls(dict[str,str])
 wrapper uses the same tag precedence, alias fallback and ignored unmatched keys.
 WASM has no corresponding new form surface.
 
+`Document::insert_content_control` takes a `ContentLocation` and a
+`ContentControlSpec`. Python
+`Document.insert_content_control(destination, placement, kind, tag=None, alias=None, lock=None, appearance=None, placeholder=None)`
+uses the same fields and does not expose `ContentControlSpec`. Placement names
+are `block`, `row`, `cell`, `paragraph`, and `inline`. Kind names match the
+frozen snapshot. Creation admits `rich_text` and `plain_text`. Other known
+kinds return `RdocxError` and name F-286. An unknown kind is `ValueError`.
+Lock names are the stored values `unlocked`, `sdtLocked`, `contentLocked`, and
+`sdtContentLocked`. Appearance names are `boundingBox`, `tags`, and `hidden`.
+Placeholder is `bool` or `None`, and any other type is `TypeError`.
+`set_content_control_tag`, `set_content_control_alias`,
+`set_content_control_lock`, `set_content_control_appearance`, and
+`set_content_control_placeholder` each take a location and an optional value.
+An omitted value or `None` clears that field and does not replace content.
+`remove_content_control` and `unwrap_content_control` use the same location.
+Python returns `None`. Rust returns `Result<()>`. A refusal is `Error::Other`
+and does not publish. `ContentControl` stays a frozen snapshot. Move and clone
+stay on the Rust facade. WASM and CLI gain no method.
+
 Native Word callers inspect direct body order through
 `Document::body_items`. Each `BodyItemRef` borrows one paragraph, table,
 body-level content control, or preserved unsupported XML child. It does not

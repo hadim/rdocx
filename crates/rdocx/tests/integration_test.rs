@@ -25711,3 +25711,661 @@ fn fx246_both_formats_render_three_distinct_legend_positions() {
         }
     }
 }
+
+fn content_control_spec(
+    placement: rdocx::ContentControlPlacement,
+    kind: rdocx_oxml::content_control::SdtType,
+    tag: &str,
+) -> rdocx::ContentControlSpec {
+    rdocx::ContentControlSpec {
+        placement,
+        kind,
+        tag: Some(tag.to_owned()),
+        alias: Some(format!("{tag}-alias")),
+        lock: Some(rdocx::ContentControlLock::ContentLocked),
+        appearance: Some(rdocx::ContentControlAppearance::BoundingBox),
+        placeholder: Some(true),
+    }
+}
+
+fn body_story(document: &Document) -> rdocx::StoryId {
+    document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap()
+}
+
+fn document_with_body_inner(inner: &str) -> Document {
+    let mut seed = Document::new();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns:p="urn:producer" xmlns:q="urn:foreign"><w:body>{inner}<w:sectPr/></w:body></w:document>"#
+    );
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(&bytes.into_inner()).unwrap()
+}
+
+fn story_control_xml(document: &Document, story: &rdocx::StoryId, tag: &str) -> String {
+    let needle = format!("w:val=\"{tag}\"");
+    document
+        .story_items(story)
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == StoryItemKind::ContentControl)
+        .map(|item| String::from_utf8(item.xml().unwrap().into_owned()).unwrap())
+        .find(|xml| {
+            let tag_at = xml.find(&needle);
+            let content_at = xml.find("<w:sdtContent").unwrap_or(xml.len());
+            tag_at.is_some_and(|offset| offset < content_at)
+        })
+        .unwrap_or_else(|| panic!("missing content control {tag}"))
+}
+
+fn document_part_xml(document: &mut Document) -> String {
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
+}
+
+fn assert_order(xml: &str, earlier: &str, later: &str) {
+    let left = xml
+        .find(earlier)
+        .unwrap_or_else(|| panic!("missing {earlier} in {xml}"));
+    let right = xml
+        .find(later)
+        .unwrap_or_else(|| panic!("missing {later} in {xml}"));
+    assert!(left < right, "{earlier} should precede {later}");
+}
+
+fn text_box_options() -> rdocx::TextBoxOptions {
+    rdocx::TextBoxOptions {
+        width: Length::pt(120.0),
+        height: Length::pt(40.0),
+        anchor: rdocx::PictureAnchor {
+            horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Column,
+            horizontal_offset: Length::pt(12.0),
+            horizontal_alignment: None,
+            vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Paragraph,
+            vertical_offset: Length::pt(6.0),
+            vertical_alignment: None,
+            wrap: rdocx::DrawingWrap::Square,
+            distance_top: Length::pt(0.0),
+            distance_bottom: Length::pt(0.0),
+            distance_left: Length::pt(0.0),
+            distance_right: Length::pt(0.0),
+            relative_height: 1,
+            behind_text: false,
+        },
+        rotation_degrees: 0.0,
+        text_direction: rdocx::TextBoxDirection::Horizontal,
+        fill_color: None,
+    }
+}
+
+#[test]
+fn content_control_create_round_trips_each_placement() {
+    let mut document = Document::new();
+    document.add_paragraph("anchor");
+    document.add_table(2, 3);
+    let body = body_story(&document);
+    let before_refusal = document.to_bytes().unwrap();
+    let end = rdocx::ContentLocation::end(body.clone());
+    let refused = document.insert_content_control(
+        &end,
+        content_control_spec(
+            rdocx::ContentControlPlacement::Inline,
+            rdocx_oxml::content_control::SdtType::RichText,
+            "refused-inline",
+        ),
+    );
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(document.to_bytes().unwrap(), before_refusal);
+
+    document
+        .insert_content_control(
+            &end,
+            content_control_spec(
+                rdocx::ContentControlPlacement::Block,
+                rdocx_oxml::content_control::SdtType::RichText,
+                "body-block",
+            ),
+        )
+        .unwrap();
+    let paragraph = document
+        .story_items(&body_story(&document))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .insert_content_control(
+            &paragraph,
+            content_control_spec(
+                rdocx::ContentControlPlacement::Paragraph,
+                rdocx_oxml::content_control::SdtType::PlainText,
+                "body-paragraph",
+            ),
+        )
+        .unwrap();
+    let table = document
+        .story_items(&body_story(&document))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Table)
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .insert_content_control(
+            &table,
+            content_control_spec(
+                rdocx::ContentControlPlacement::Row,
+                rdocx_oxml::content_control::SdtType::RichText,
+                "body-row",
+            ),
+        )
+        .unwrap();
+    let table = document
+        .story_items(&body_story(&document))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Table)
+        .unwrap()
+        .location()
+        .clone();
+    let mut cell_path = table.index_path().to_vec();
+    cell_path.push(0);
+    let cell_destination =
+        rdocx::ContentLocation::new(table.story().clone(), StoryItemKind::Table, cell_path);
+    document
+        .insert_content_control(
+            &cell_destination,
+            content_control_spec(
+                rdocx::ContentControlPlacement::Cell,
+                rdocx_oxml::content_control::SdtType::PlainText,
+                "body-cell",
+            ),
+        )
+        .unwrap();
+    let inline_paragraph = document
+        .story_items(&body_story(&document))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .insert_content_control(
+            &inline_paragraph,
+            content_control_spec(
+                rdocx::ContentControlPlacement::Inline,
+                rdocx_oxml::content_control::SdtType::RichText,
+                "body-inline",
+            ),
+        )
+        .unwrap();
+
+    let header = document
+        .create_section_story(0, rdocx::HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap();
+    document
+        .insert_content_control(
+            &rdocx::ContentLocation::end(header.clone()),
+            content_control_spec(
+                rdocx::ContentControlPlacement::Block,
+                rdocx_oxml::content_control::SdtType::PlainText,
+                "header-block",
+            ),
+        )
+        .unwrap();
+    document
+        .add_text_box_to_story(&body_story(&document), "box", text_box_options())
+        .unwrap();
+    let text_box = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::TextBox)
+        .unwrap();
+    document
+        .insert_content_control(
+            &rdocx::ContentLocation::end(text_box.clone()),
+            content_control_spec(
+                rdocx::ContentControlPlacement::Block,
+                rdocx_oxml::content_control::SdtType::RichText,
+                "textbox-block",
+            ),
+        )
+        .unwrap();
+
+    let saved = document.to_bytes().unwrap();
+    let document = Document::from_bytes(&saved).unwrap();
+    let body = body_story(&document);
+    let block = story_control_xml(&document, &body, "body-block");
+    assert!(
+        block.contains("<w:richText") || block.contains("<w:richText/>"),
+        "{block}"
+    );
+    assert!(
+        block.contains("w:val=\"1\"") || block.contains("w:val=\"1\""),
+        "{block}"
+    );
+    assert_order(&block, "<w:sdtPr", "<w:sdtContent");
+    assert_order(
+        &block,
+        "w:val=\"body-block-alias\"",
+        "w:val=\"body-block\"/>",
+    );
+    assert_order(&block, "w:showingPlcHdr", "w:richText");
+    assert!(block.contains("w15:val=\"boundingBox\""), "{block}");
+    assert!(!block.contains("w:sdt><w:sdt"), "{block}");
+
+    let paragraph_control = story_control_xml(&document, &body, "body-paragraph");
+    assert!(paragraph_control.contains("<w:text"), "{paragraph_control}");
+    assert!(paragraph_control.contains("<w:t"), "{paragraph_control}");
+    let row = story_control_xml(&document, &body, "body-row");
+    assert!(row.contains("<w:tr"), "{row}");
+    assert_eq!(row.matches("<w:tc>").count(), 3, "{row}");
+    let cell = story_control_xml(&document, &body, "body-cell");
+    assert!(cell.contains("<w:tc"), "{cell}");
+    assert!(cell.contains("<w:text"), "{cell}");
+    let inline = story_control_xml(&document, &body, "body-inline");
+    assert!(inline.contains("<w:r"), "{inline}");
+    let content = inline.split("<w:sdtContent").nth(1).unwrap();
+    assert!(!content.contains("<w:p"), "{inline}");
+
+    let header = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Header)
+        .unwrap();
+    let header_control = story_control_xml(&document, &header, "header-block");
+    assert!(header_control.contains("<w:text"), "{header_control}");
+    let text_box = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::TextBox)
+        .unwrap();
+    let text_box_control = story_control_xml(&document, &text_box, "textbox-block");
+    assert!(
+        text_box_control.contains("textbox-block"),
+        "{text_box_control}"
+    );
+
+    let listed = document
+        .content_controls()
+        .into_iter()
+        .filter_map(|control| control.tag().map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert!(listed.contains(&"body-block".to_owned()), "{listed:?}");
+    assert!(listed.contains(&"body-inline".to_owned()), "{listed:?}");
+    assert!(!listed.contains(&"header-block".to_owned()), "{listed:?}");
+
+    let mut gap = Document::from_bytes(&saved).unwrap();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(gap.to_bytes().unwrap())).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let xml = xml.replacen("w:val=\"1\"", "w:val=\"8\"", 1);
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut gap = Document::from_bytes(&bytes.into_inner()).unwrap();
+    gap.insert_content_control(
+        &rdocx::ContentLocation::end(body_story(&gap)),
+        content_control_spec(
+            rdocx::ContentControlPlacement::Block,
+            rdocx_oxml::content_control::SdtType::RichText,
+            "reused-id",
+        ),
+    )
+    .unwrap();
+    let reused = story_control_xml(&gap, &body_story(&gap), "reused-id");
+    assert!(reused.contains("w:val=\"1\""), "{reused}");
+}
+
+#[test]
+fn content_control_metadata_edit_preserves_raw_slots() {
+    let mut document = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><p:before exact="yes"/><w:alias w:val="old-alias"/><w:tag w:val="outer"/><w:id w:val="7"/><w:lock w:val="sdtLocked"/><q:showingPlcHdr/><w:showingPlcHdr/><w:richText/><w15:appearance w15:val="tags"/><p:after exact="yes"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>kept</w:t></w:r></w:p><w:sdt><w:sdtPr><w:tag w:val="inner"/><w:id w:val="8"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>nested</w:t></w:r></w:p></w:sdtContent></w:sdt></w:sdtContent></w:sdt>"#,
+    );
+    let before_xml = document_part_xml(&mut document);
+    let content_at = before_xml.find("<w:sdtContent").unwrap();
+    let content_end = before_xml.rfind("</w:sdtContent>").unwrap();
+    let original_content = before_xml[content_at..content_end].to_owned();
+    let original_before = before_xml
+        .split("<p:before")
+        .nth(1)
+        .unwrap()
+        .split("/>")
+        .next()
+        .unwrap()
+        .to_owned();
+    let retarget = |document: &Document, tag: &str| {
+        document
+            .story_items(&body_story(document))
+            .unwrap()
+            .into_iter()
+            .find(|item| {
+                item.kind() == StoryItemKind::ContentControl
+                    && String::from_utf8(item.xml().unwrap().into_owned())
+                        .unwrap()
+                        .contains(tag)
+            })
+            .unwrap()
+            .location()
+            .clone()
+    };
+    let location = retarget(&document, "outer");
+    document
+        .set_content_control_tag(&location, Some("outer-new"))
+        .unwrap();
+    let location = retarget(&document, "outer-new");
+    document
+        .set_content_control_alias(&location, Some("alias-new"))
+        .unwrap();
+    let location = retarget(&document, "outer-new");
+    document
+        .set_content_control_lock(&location, Some(rdocx::ContentControlLock::Unlocked))
+        .unwrap();
+    let location = retarget(&document, "outer-new");
+    document
+        .set_content_control_appearance(&location, Some(rdocx::ContentControlAppearance::Hidden))
+        .unwrap();
+    let location = retarget(&document, "outer-new");
+    document
+        .set_content_control_placeholder(&location, None)
+        .unwrap();
+    let after = document_part_xml(&mut document);
+    assert!(after.contains("outer-new"), "{after}");
+    assert!(after.contains("alias-new"), "{after}");
+    assert!(after.contains("w:val=\"unlocked\""), "{after}");
+    assert!(after.contains("w15:val=\"hidden\""), "{after}");
+    assert!(after.contains("q:showingPlcHdr"), "{after}");
+    assert!(!after.contains("<w:showingPlcHdr"), "{after}");
+    assert!(after.contains(&original_before), "{after}");
+    assert!(after.contains("inner"), "{after}");
+    assert!(after.contains("kept"), "{after}");
+    let content_at = after.find("<w:sdtContent").unwrap();
+    let content_end = after.rfind("</w:sdtContent>").unwrap();
+    assert_eq!(after[content_at..content_end], original_content);
+    let tags = document
+        .content_controls()
+        .into_iter()
+        .filter_map(|control| control.tag().map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert_eq!(tags, vec!["outer-new".to_owned(), "inner".to_owned()]);
+}
+
+#[test]
+fn content_control_move_and_clone_keep_or_refresh_identity() {
+    let mut document = document_with_body_inner(
+        r#"<w:p><w:r><w:t>before</w:t></w:r></w:p><w:sdt><w:sdtPr><w:tag w:val="block-move"/><w:id w:val="4"/><w:richText/></w:sdtPr><w:sdtContent><w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="1234ABCD" w14:textId="1234ABCD"><w:r><w:t>moved</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>after</w:t></w:r></w:p><w:p><w:r><w:t>host</w:t></w:r><w:sdt><w:sdtPr><w:tag w:val="inline-move"/><w:id w:val="5"/><w:richText/></w:sdtPr><w:sdtContent><w:r><w:t>inline</w:t></w:r></w:sdtContent></w:sdt></w:p>"#,
+    );
+    let header = document
+        .create_section_story(0, rdocx::HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap();
+    let body = body_story(&document);
+    let block = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            item.kind() == StoryItemKind::ContentControl
+                && String::from_utf8(item.xml().unwrap().into_owned())
+                    .unwrap()
+                    .contains("block-move")
+        })
+        .unwrap()
+        .location()
+        .clone();
+    let before_move = document.to_bytes().unwrap();
+    let refused =
+        document.move_content_control(&block, &rdocx::ContentLocation::end(header.clone()));
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(document.to_bytes().unwrap(), before_move);
+    document
+        .move_content_control(&block, &rdocx::ContentLocation::end(body.clone()))
+        .unwrap();
+    let moved = story_control_xml(&document, &body_story(&document), "block-move");
+    assert!(moved.contains("w:val=\"4\""), "{moved}");
+    assert!(moved.contains("moved"), "{moved}");
+    assert!(moved.contains("paraId"), "{moved}");
+    let block_location = document
+        .story_items(&body_story(&document))
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            item.kind() == StoryItemKind::ContentControl
+                && String::from_utf8(item.xml().unwrap().into_owned())
+                    .unwrap()
+                    .contains("block-move")
+        })
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .clone_content_control(
+            &block_location,
+            &rdocx::ContentLocation::end(header.clone()),
+        )
+        .unwrap();
+    let header_story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Header)
+        .unwrap();
+    let cloned = document
+        .story_items(&header_story)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::ContentControl)
+        .map(|item| String::from_utf8(item.xml().unwrap().into_owned()).unwrap())
+        .unwrap();
+    assert!(!cloned.contains("paraId"), "{cloned}");
+    assert!(!cloned.contains("w:val=\"4\""), "{cloned}");
+    assert!(cloned.contains("moved"), "{cloned}");
+
+    let inline = document
+        .story_items(&body_story(&document))
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            item.kind() == StoryItemKind::ContentControl
+                && String::from_utf8(item.xml().unwrap().into_owned())
+                    .unwrap()
+                    .contains("inline-move")
+        })
+        .unwrap()
+        .location()
+        .clone();
+    let destination = document
+        .story_items(&body_story(&document))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .clone_content_control(&inline, &destination)
+        .unwrap();
+    let copies = document
+        .content_controls()
+        .into_iter()
+        .filter(|control| control.tag() == Some("inline-move"))
+        .map(|control| control.id())
+        .collect::<Vec<_>>();
+    assert_eq!(copies.len(), 2, "{copies:?}");
+    assert_ne!(copies[0], copies[1]);
+}
+
+#[test]
+fn content_control_remove_is_atomic() {
+    let mut document = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="delete-me"/><w:id w:val="2"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>gone</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="unwrap-me"/><w:id w:val="3"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>kept</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let body = body_story(&document);
+    let delete_at = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            String::from_utf8(item.xml().unwrap().into_owned())
+                .unwrap()
+                .contains("delete-me")
+        })
+        .unwrap()
+        .location()
+        .clone();
+    document.remove_content_control(&delete_at).unwrap();
+    let left = document_part_xml(&mut document);
+    assert!(!left.contains("delete-me"), "{left}");
+    assert!(!left.contains("gone"), "{left}");
+    assert!(left.contains("kept"), "{left}");
+    let unwrap_at = document
+        .story_items(&body_story(&document))
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            String::from_utf8(item.xml().unwrap().into_owned())
+                .unwrap()
+                .contains("unwrap-me")
+        })
+        .unwrap()
+        .location()
+        .clone();
+    document.unwrap_content_control(&unwrap_at).unwrap();
+    let unwrapped = document_part_xml(&mut document);
+    assert!(!unwrapped.contains("unwrap-me"), "{unwrapped}");
+    assert!(unwrapped.contains("kept"), "{unwrapped}");
+    assert!(!unwrapped.contains("<w:sdt"), "{unwrapped}");
+
+    let mut illegal = document_with_body_inner(
+        r#"<w:p><w:sdt><w:sdtPr><w:id w:val="6"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>bad</w:t></w:r></w:p></w:sdtContent></w:sdt></w:p>"#,
+    );
+    let before = illegal.to_bytes().unwrap();
+    let inline = illegal
+        .story_items(&body_story(&illegal))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::ContentControl)
+        .unwrap()
+        .location()
+        .clone();
+    let error = illegal.unwrap_content_control(&inline).unwrap_err();
+    assert!(error.to_string().contains("parent cannot hold"), "{error}");
+    assert_eq!(illegal.to_bytes().unwrap(), before);
+
+    let mut cell_document = document_with_body_inner(
+        r#"<w:tbl><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:sdt><w:sdtPr><w:tag w:val="only-cell"/><w:id w:val="9"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>only</w:t></w:r></w:p></w:sdtContent></w:sdt></w:tc></w:tr></w:tbl>"#,
+    );
+    let cell = cell_document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::TableCell)
+        .unwrap();
+    let only = cell_document
+        .story_items(&cell)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::ContentControl)
+        .unwrap()
+        .location()
+        .clone();
+    let before_cell = cell_document.to_bytes().unwrap();
+    let error = cell_document.remove_content_control(&only).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("final required table-cell paragraph"),
+        "{error}"
+    );
+    assert_eq!(cell_document.to_bytes().unwrap(), before_cell);
+    cell_document.unwrap_content_control(&only).unwrap();
+    let unwrapped_cell = document_part_xml(&mut cell_document);
+    assert!(unwrapped_cell.contains("only"), "{unwrapped_cell}");
+    assert!(!unwrapped_cell.contains("<w:sdt"), "{unwrapped_cell}");
+}
+
+#[test]
+fn content_control_create_then_fill_uses_existing_setter() {
+    let mut document = Document::new();
+    let body = body_story(&document);
+    document
+        .insert_content_control(
+            &rdocx::ContentLocation::end(body),
+            content_control_spec(
+                rdocx::ContentControlPlacement::Block,
+                rdocx_oxml::content_control::SdtType::RichText,
+                "fill-me",
+            ),
+        )
+        .unwrap();
+    let counts = document
+        .fill_content_control_tags(&[("fill-me", "hello")])
+        .unwrap();
+    assert_eq!(counts, vec![1]);
+    let mut document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let (filled_text, filled_id) = {
+        let filled = document
+            .content_controls()
+            .into_iter()
+            .find(|control| control.tag() == Some("fill-me"))
+            .unwrap();
+        (filled.text(), filled.id())
+    };
+    assert_eq!(filled_text, "hello");
+    assert_eq!(filled_id, Some(1));
+    let before = document.to_bytes().unwrap();
+    let missing = document.fill_content_control_tags(&[("missing-tag", "nope")]);
+    assert!(missing.is_err(), "{missing:?}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert_eq!(
+        document
+            .content_controls()
+            .into_iter()
+            .find(|control| control.tag() == Some("fill-me"))
+            .unwrap()
+            .text(),
+        "hello"
+    );
+}
+
+#[test]
+fn content_control_typed_payload_is_refused_until_f286() {
+    let mut document = Document::new();
+    let body = body_story(&document);
+    let destination = rdocx::ContentLocation::end(body);
+    for (kind, name) in [
+        (rdocx_oxml::content_control::SdtType::CheckBox, "checkbox"),
+        (rdocx_oxml::content_control::SdtType::Date, "date"),
+        (
+            rdocx_oxml::content_control::SdtType::RepeatingSection,
+            "repeating section",
+        ),
+    ] {
+        let before = document.to_bytes().unwrap();
+        let error = document
+            .insert_content_control(
+                &destination,
+                content_control_spec(rdocx::ContentControlPlacement::Block, kind, "typed"),
+            )
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains(name), "{message}");
+        assert!(message.contains("F-286"), "{message}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+}

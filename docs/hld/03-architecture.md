@@ -1769,6 +1769,33 @@ owner. Clones allocate fresh document identities and drop the `w14:paraId` and
 fragments require the unchanged owner scope. Every operation serializes and
 reopens a staged candidate before publishing it.
 
+`Document::insert_content_control` writes one rich-text or plain-text shell at
+a `ContentLocation`. `ContentControlPlacement` is block, row, cell, paragraph,
+or inline, and it must match the destination parent. A block story or a cell
+accepts a block or paragraph control. A table accepts a row control. A row
+accepts a cell control. A paragraph accepts an inline control. A mismatch
+returns `Error::Other` and publishes nothing. Kind is `SdtType::RichText` or
+`SdtType::PlainText`. Any other kind names F-286 and publishes nothing. The id
+is the smallest unused positive `i32` across story parts. Tag and alias reject
+non-XML characters. Lock, appearance, and placeholder edits rewrite only
+`w:sdtPr`. `None` clears that field. Unmodelled property children and
+foreign-namespace `showingPlcHdr` lookalikes stay. Child order on a created
+shell is `w:sdtPr`, then `w:sdtEndPr` when present, then `w:sdtContent`. The
+default inline shell is one empty run. The default block or paragraph shell is
+one empty paragraph, and a plain-text paragraph in that shell contains one
+empty run. The default row shell is one schema-valid row. The default cell
+shell is one schema-valid cell whose block content is one empty paragraph.
+Direct block children use `move_content`, `clone_content`, and
+`remove_content_at`. Row, cell, paragraph, and inline controls use that same
+staged transaction through location-aware wrappers. Clone drops `w14:paraId`
+and `w14:textId` and allocates a new sdt id. Move keeps the id and stays inside
+one story. Remove deletes the shell and its content. Unwrap leaves the content
+only when the parent can hold it, and refuses a cell that would lose its last
+paragraph. Story-item classification seeds each owner with the ancestor prefix
+bindings already collected for that part, including a document-level `w14`
+binding, so a control whose paragraph carries `w14:paraId` stays typed. That
+scan does not start a second per-offset namespace walk.
+
 `DocumentFragment` owns a package-authoritative half-open block selection from
 any supported story owner. Existing two-segment paragraph paths inside block
 controls resolve their enclosing control content. Source and destination keep

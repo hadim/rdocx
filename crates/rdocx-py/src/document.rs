@@ -5601,6 +5601,81 @@ fn content_control_type_name(
     }
 }
 
+fn content_control_kind_from_name(name: &str) -> PyResult<rdocx_oxml::content_control::SdtType> {
+    use rdocx_oxml::content_control::SdtType;
+    match name {
+        "rich_text" => Ok(SdtType::RichText),
+        "plain_text" => Ok(SdtType::PlainText),
+        "picture" => Ok(SdtType::Picture),
+        "checkbox" => Ok(SdtType::CheckBox),
+        "combo_box" => Ok(SdtType::ComboBox),
+        "dropdown_list" => Ok(SdtType::DropDownList),
+        "date" => Ok(SdtType::Date),
+        "document_part_list" => Ok(SdtType::DocumentPartList),
+        "document_part_object" => Ok(SdtType::DocumentPartObject),
+        "group" => Ok(SdtType::Group),
+        "repeating_section" => Ok(SdtType::RepeatingSection),
+        "repeating_section_item" => Ok(SdtType::RepeatingSectionItem),
+        "citation" => Ok(SdtType::Citation),
+        "equation" => Ok(SdtType::Equation),
+        "bibliography" => Ok(SdtType::Bibliography),
+        _ => Err(PyValueError::new_err(format!(
+            "unknown content control kind {name:?}"
+        ))),
+    }
+}
+
+fn content_control_placement_from_name(name: &str) -> PyResult<rdocx::ContentControlPlacement> {
+    match name {
+        "block" => Ok(rdocx::ContentControlPlacement::Block),
+        "row" => Ok(rdocx::ContentControlPlacement::Row),
+        "cell" => Ok(rdocx::ContentControlPlacement::Cell),
+        "paragraph" => Ok(rdocx::ContentControlPlacement::Paragraph),
+        "inline" => Ok(rdocx::ContentControlPlacement::Inline),
+        _ => Err(PyValueError::new_err(format!(
+            "content control placement must be block, row, cell, paragraph, or inline, got {name:?}"
+        ))),
+    }
+}
+
+fn content_control_lock_from_name(name: &str) -> PyResult<rdocx::ContentControlLock> {
+    match name {
+        "unlocked" => Ok(rdocx::ContentControlLock::Unlocked),
+        "sdtLocked" => Ok(rdocx::ContentControlLock::SdtLocked),
+        "contentLocked" => Ok(rdocx::ContentControlLock::ContentLocked),
+        "sdtContentLocked" => Ok(rdocx::ContentControlLock::SdtContentLocked),
+        _ => Err(PyValueError::new_err(format!(
+            "unknown content control lock {name:?}"
+        ))),
+    }
+}
+
+fn content_control_appearance_from_name(name: &str) -> PyResult<rdocx::ContentControlAppearance> {
+    match name {
+        "boundingBox" => Ok(rdocx::ContentControlAppearance::BoundingBox),
+        "tags" => Ok(rdocx::ContentControlAppearance::Tags),
+        "hidden" => Ok(rdocx::ContentControlAppearance::Hidden),
+        _ => Err(PyValueError::new_err(format!(
+            "unknown content control appearance {name:?}"
+        ))),
+    }
+}
+
+fn optional_python_bool(value: Option<&Bound<'_, PyAny>>, name: &str) -> PyResult<Option<bool>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+    if !value.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(format!(
+            "{name} must be a bool or None"
+        )));
+    }
+    value.extract::<bool>().map(Some)
+}
+
 #[pyclass(name = "HtmlDiagnostic", frozen, get_all, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct PyHtmlDiagnostic {
@@ -6432,6 +6507,20 @@ impl PyDocument {
         }
         .map_err(|e| rdocx_to_pyerr(py, e))?;
         self.publish_api_candidate(py, candidate, "Document.remove_note")
+    }
+
+    fn edit_content_control(
+        &mut self,
+        py: Python<'_>,
+        location: &PyContentLocation,
+        operation: &'static str,
+        edit: impl FnOnce(&mut rdocx::Document, &rdocx::ContentLocation) -> rdocx::Result<()> + Send,
+    ) -> PyResult<()> {
+        let location = location.native(py, self)?;
+        let mut candidate = self.inner.clone_for_staging();
+        py.detach(|| edit(&mut candidate, &location))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.publish_api_candidate(py, candidate, operation)
     }
 
     fn publish_api_candidate(
@@ -7792,6 +7881,152 @@ impl PyDocument {
         self.publish_api_candidate(py, candidate, "Document.fill_content_control_tags")?;
 
         Ok(result)
+    }
+
+    #[allow(clippy::too_many_arguments)] // Q21 keeps each public operand explicit.
+    #[pyo3(signature = (destination, placement, kind, tag=None, alias=None, lock=None, appearance=None, placeholder=None))]
+    fn insert_content_control(
+        &mut self,
+        py: Python<'_>,
+        destination: PyRef<'_, PyContentLocation>,
+        placement: &str,
+        kind: &str,
+        tag: Option<String>,
+        alias: Option<String>,
+        lock: Option<String>,
+        appearance: Option<String>,
+        placeholder: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let destination = destination.native(py, self)?;
+        let spec = rdocx::ContentControlSpec {
+            placement: content_control_placement_from_name(placement)?,
+            kind: content_control_kind_from_name(kind)?,
+            tag,
+            alias,
+            lock: lock
+                .as_deref()
+                .map(content_control_lock_from_name)
+                .transpose()?,
+            appearance: appearance
+                .as_deref()
+                .map(content_control_appearance_from_name)
+                .transpose()?,
+            placeholder: optional_python_bool(placeholder, "placeholder")?,
+        };
+        let mut candidate = self.inner.clone_for_staging();
+        py.detach(|| candidate.insert_content_control(&destination, spec))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.publish_api_candidate(py, candidate, "Document.insert_content_control")
+    }
+
+    #[pyo3(signature = (location, tag=None))]
+    fn set_content_control_tag(
+        &mut self,
+        py: Python<'_>,
+        location: PyRef<'_, PyContentLocation>,
+        tag: Option<String>,
+    ) -> PyResult<()> {
+        self.edit_content_control(
+            py,
+            &location,
+            "Document.set_content_control_tag",
+            |document, location| document.set_content_control_tag(location, tag.as_deref()),
+        )
+    }
+
+    #[pyo3(signature = (location, alias=None))]
+    fn set_content_control_alias(
+        &mut self,
+        py: Python<'_>,
+        location: PyRef<'_, PyContentLocation>,
+        alias: Option<String>,
+    ) -> PyResult<()> {
+        self.edit_content_control(
+            py,
+            &location,
+            "Document.set_content_control_alias",
+            |document, location| document.set_content_control_alias(location, alias.as_deref()),
+        )
+    }
+
+    #[pyo3(signature = (location, lock=None))]
+    fn set_content_control_lock(
+        &mut self,
+        py: Python<'_>,
+        location: PyRef<'_, PyContentLocation>,
+        lock: Option<String>,
+    ) -> PyResult<()> {
+        let lock = lock
+            .as_deref()
+            .map(content_control_lock_from_name)
+            .transpose()?;
+        self.edit_content_control(
+            py,
+            &location,
+            "Document.set_content_control_lock",
+            |document, location| document.set_content_control_lock(location, lock),
+        )
+    }
+
+    #[pyo3(signature = (location, appearance=None))]
+    fn set_content_control_appearance(
+        &mut self,
+        py: Python<'_>,
+        location: PyRef<'_, PyContentLocation>,
+        appearance: Option<String>,
+    ) -> PyResult<()> {
+        let appearance = appearance
+            .as_deref()
+            .map(content_control_appearance_from_name)
+            .transpose()?;
+        self.edit_content_control(
+            py,
+            &location,
+            "Document.set_content_control_appearance",
+            |document, location| document.set_content_control_appearance(location, appearance),
+        )
+    }
+
+    #[pyo3(signature = (location, placeholder=None))]
+    fn set_content_control_placeholder(
+        &mut self,
+        py: Python<'_>,
+        location: PyRef<'_, PyContentLocation>,
+        placeholder: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let placeholder = optional_python_bool(placeholder, "placeholder")?;
+        self.edit_content_control(
+            py,
+            &location,
+            "Document.set_content_control_placeholder",
+            |document, location| document.set_content_control_placeholder(location, placeholder),
+        )
+    }
+
+    fn remove_content_control(
+        &mut self,
+        py: Python<'_>,
+        location: PyRef<'_, PyContentLocation>,
+    ) -> PyResult<()> {
+        self.edit_content_control(
+            py,
+            &location,
+            "Document.remove_content_control",
+            |document, location| document.remove_content_control(location),
+        )
+    }
+
+    fn unwrap_content_control(
+        &mut self,
+        py: Python<'_>,
+        location: PyRef<'_, PyContentLocation>,
+    ) -> PyResult<()> {
+        self.edit_content_control(
+            py,
+            &location,
+            "Document.unwrap_content_control",
+            |document, location| document.unwrap_content_control(location),
+        )
     }
 
     fn set_content_control_value_by_alias(

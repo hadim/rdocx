@@ -136,11 +136,25 @@ Unchanged. Creation must not alter the bytes of a document that does not call th
 
 ## Implementation checklist
 
-- [ ] Confirm F-X259 through F-X262 have left `document.rs` and the bindings spec.
-- [ ] Add the failing round-trip stubs to the existing integration entrypoint.
-- [ ] Implement insert, edit, move, clone and remove on the existing types.
-- [ ] Update the HLD list and obtain a zero-finding microscope.
+- [x] Confirm F-X259 through F-X262 have left `document.rs` and the bindings spec.
+- [x] Add the failing round-trip stubs to the existing integration entrypoint.
+- [x] Implement insert, edit, move, clone and remove on the existing types.
+- [x] Update the HLD list and obtain a zero-finding microscope.
 - [ ] Complete this story through the dependency-prefix checkpoint before F-286 or F-287 starts. Leave the full hash harness for final sprint closure, and record it as rider debt at the prefix.
+
+## Deviations
+
+The file lease named in Dependency readiness is met. F-X259 is integrated at `4879e58a`, F-X260 at `883080bb`, F-X261 at `6adb7258`, and F-X262 at `8c14bd3c`. That last commit is the parent of claim `2a6078ce`. The readiness sentence stays as written. No product contract changed.
+
+There is no RED commit. The new methods did not exist, so compile-time absence is not a semantic failure. The six integration tests and the Python shell test are fixed-source checks.
+
+Block and paragraph placement insert at a direct-child boundary of a block story or a table cell. A paragraph item means insert before that item. Row placement takes a table item whose path length is 1. Cell placement takes a table path of length 2 and splices into that direct row. Inline placement splices into a paragraph item. Q21 has no content argument, so an inline shell whose content is a paragraph is covered by the parent mismatch and by unwrapping an imported inline control that already holds a paragraph.
+
+Story-item classification inherits ancestor prefix bindings, including a document-level `w14` binding, so a reopened control with `w14:paraId` stays typed. The scan does not call `story_namespace_scope_at`.
+
+Python does not expose move or clone. Those methods stay on the Rust facade. `Document::content_controls` remains the body inventory. Header and text-box controls are read through story items.
+
+DOCX-052 is complete for rich and plain shells. Typed payloads stay on DOCX-053. The owner exclusion in `scripts/test_sprint_workflow.py` records that split.
 
 ## Open questions
 

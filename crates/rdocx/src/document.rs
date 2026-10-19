@@ -7348,15 +7348,23 @@ fn story_word_prefixes_at(
         let prefix = std::str::from_utf8(prefix)
             .map_err(|error| Error::Other(format!("story namespace prefix is invalid: {error}")))?
             .to_owned();
-        prefixes.retain(|candidate| candidate != &prefix);
         let value = attribute
             .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
             .map_err(|error| {
                 Error::Other(format!(
                     "story namespace declaration decode failed: {error}"
                 ))
-            })?;
-        if value.as_ref() == WORD_NAMESPACE {
+            })?
+            .into_owned();
+        prefixes.retain(|candidate| {
+            candidate != &prefix
+                && candidate
+                    .strip_prefix('\0')
+                    .and_then(|rest| rest.split_once('\0'))
+                    .is_none_or(|(bound, _)| bound != prefix)
+        });
+        prefixes.push(format!("\0{prefix}\0{value}"));
+        if value == WORD_NAMESPACE {
             prefixes.push(prefix);
         }
     }
@@ -12861,6 +12869,8 @@ fn scan_story_items(
     let mut paragraphs = Vec::<(Range<usize>, Vec<String>)>::new();
     let mut active = false;
     let mut buffer = Vec::new();
+    let mut ancestor_prefixes: Vec<String> = Vec::new();
+    let mut ancestor_frames: Vec<Vec<String>> = Vec::new();
     loop {
         let before = reader.buffer_position() as usize;
         let (namespace, event) = reader
@@ -12872,8 +12882,19 @@ fn scan_story_items(
         let after = reader.buffer_position() as usize;
         if !active {
             if before != owner.full.start {
-                if matches!(event, Event::Eof) {
-                    break;
+                match &event {
+                    Event::Start(element) => {
+                        let next = story_word_prefixes_at(element, &ancestor_prefixes, false)?;
+                        ancestor_frames.push(std::mem::take(&mut ancestor_prefixes));
+                        ancestor_prefixes = next;
+                    }
+                    Event::End(_) => {
+                        if let Some(previous) = ancestor_frames.pop() {
+                            ancestor_prefixes = previous;
+                        }
+                    }
+                    Event::Eof => break,
+                    _ => {}
                 }
                 buffer.clear();
                 continue;
@@ -12968,7 +12989,8 @@ fn scan_story_items(
                 }
                 let inherited = stack
                     .last()
-                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                    .map(|frame| frame.word_prefixes.as_slice())
+                    .unwrap_or(ancestor_prefixes.as_slice());
                 let word_prefixes = story_word_prefixes_at(&element, inherited, is_word_namespace)?;
                 stack.push(XmlElementFrame {
                     namespace: namespace_kind,
@@ -21069,6 +21091,51 @@ impl Document {
             .into());
         }
         Ok((source, item))
+    }
+
+    pub(crate) fn location_is_end(location: &ContentLocation) -> bool {
+        location.is_end
+    }
+
+    pub(crate) fn owned_story_parts(&self) -> Result<Vec<Vec<u8>>> {
+        Ok(self
+            .story_sources()?
+            .into_iter()
+            .map(|source| source.xml.into_owned())
+            .collect())
+    }
+
+    pub(crate) fn copy_indexed_story_item(
+        &self,
+        location: &ContentLocation,
+        index_path: &[usize],
+    ) -> Result<(String, Vec<u8>, std::ops::Range<usize>, bool)> {
+        let mut located = location.clone();
+        located.index_path = index_path.to_vec();
+        located.is_end = false;
+        let (source, item) = if located.item_kind == StoryItemKind::Paragraph {
+            self.story_range_paragraph_source(&located)?
+        } else {
+            self.story_item_source(&located)?
+        };
+        Ok((
+            source.part_name.clone(),
+            source.xml.into_owned(),
+            item.full,
+            item.direct_owner_child,
+        ))
+    }
+
+    pub(crate) fn write_story_part(&mut self, part_name: &str, xml: Vec<u8>) -> Result<()> {
+        set_story_source_xml(self, part_name, xml)
+    }
+
+    pub(crate) fn story_owner_span(
+        &self,
+        story: &StoryId,
+    ) -> Result<(Vec<u8>, std::ops::Range<usize>)> {
+        let (source, owner) = self.story_source_and_owner(story)?;
+        Ok((source.xml.into_owned(), owner.full))
     }
 
     fn story_range_paragraph_source<'a>(

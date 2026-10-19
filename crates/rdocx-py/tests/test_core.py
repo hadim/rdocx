@@ -6309,6 +6309,53 @@ def test_fx204_counted_regex_preserves_failed_noop_and_empty_handles():
         _ = held.text
 
 
+def test_f285_content_control_shell_metadata_and_refusal():
+    import rdocx
+    document = rdocx.Document()
+    body = next(story for story in document.stories if story.kind == "body")
+    end = rdocx.ContentLocation.end(body)
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="does not match"):
+        document.insert_content_control(end, "inline", "rich_text", tag="refused")
+    assert document.to_bytes() == before
+    with pytest.raises(rdocx.RdocxError, match="F-286"):
+        document.insert_content_control(end, "block", "checkbox", tag="later")
+    assert document.to_bytes() == before
+    with pytest.raises(TypeError):
+        document.insert_content_control(end, "block", "rich_text", placeholder=1)
+    assert document.to_bytes() == before
+    document.insert_content_control(
+        end,
+        "block",
+        "rich_text",
+        tag="fill-me",
+        alias="shown",
+        lock="contentLocked",
+        appearance="boundingBox",
+        placeholder=True,
+    )
+    item = next(item for item in document.story_items if item.kind == "content_control")
+    location = rdocx.ContentLocation(item.story, item.kind, item.index_path)
+    document.set_content_control_tag(location, "renamed")
+    item = next(item for item in document.story_items if b"renamed" in item.xml)
+    location = rdocx.ContentLocation(item.story, item.kind, item.index_path)
+    document.fill_content_control_tags([("renamed", "hello")])
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    control = reopened.content_controls()[0]
+    assert control.tag == "renamed"
+    assert control.alias == "shown"
+    assert control.type == "rich_text"
+    assert control.text == "hello"
+    assert control.id == 1
+    item = next(item for item in reopened.story_items if item.kind == "content_control")
+    reopened.remove_content_control(
+        rdocx.ContentLocation(item.story, item.kind, item.index_path)
+    )
+    assert reopened.content_controls() == ()
+    with zipfile.ZipFile(io.BytesIO(reopened.to_bytes())) as package:
+        assert b"hello" not in package.read("word/document.xml")
+
+
 def test_fx204_tag_fill_keeps_alias_and_late_refusal_atomic():
     import rdocx
     document = _replace_document_body(rdocx.Document(), '<w:sdt><w:sdtPr><w:tag w:val="client"/><w:alias w:val="alias"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>before</w:t></w:r></w:p></w:sdtContent></w:sdt>')
