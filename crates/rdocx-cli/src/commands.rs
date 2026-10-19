@@ -173,7 +173,7 @@ pub fn text(file: &Path, json_output: bool) -> Result<()> {
         for (body_index, content) in document.body.content.iter().enumerate() {
             match content {
                 BodyContent::Paragraph(paragraph) => {
-                    joining.push(paragraph);
+                    joining.push(paragraph.as_ref());
                     if !document.body.accepted_paragraph_joins_next(body_index) {
                         paragraphs.push(joined_paragraph_json(body_index, &joining));
                         joining.clear();

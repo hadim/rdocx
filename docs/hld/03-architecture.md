@@ -88,7 +88,9 @@ attribute names and do not replace those prefixes. A paragraph that is not
 plain, a relationship change, or a removal whose media ownership is not
 proved keeps the staged package transaction. `Document::remove_content_range`
 also keeps that transaction. It removes a half-open range of direct body
-children and does not recurse into tables.
+children and does not recurse into tables. Modelled body children and
+preserved raw children are stored in boxes, so a direct removal shifts
+pointers.
 
 PowerPoint edits one child for `add_textbox` on a connector-free slide, for
 alt text, for non-connector geometry, for a non-blip shape fill, and for a
@@ -96,6 +98,9 @@ shape XML replacement whose relationship facts and owner signature stay the
 same. A connector, a blip fill, a relationship change, a group refit, a
 retained package signature, or a whole-part replacement keeps the staged
 package transaction. These local edits do not read unrelated slides.
+Shape-id allocation reads typed ids and preserved raw blobs. The whole tree
+is serialized only when a preserved prefix other than `p` is not declared in
+that blob.
 
 Word binding admission refuses PDF save paths, duplicate stored tab positions,
 page breaks in actual physical headers and malformed authored language values

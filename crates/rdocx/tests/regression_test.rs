@@ -469,10 +469,10 @@ fn rich_content_reopens_in_every_header_and_footer_variant() {
             document.create_section_story(0, kind, variant).unwrap();
             for item in &content {
                 let fragment = match item.clone() {
-                    BodyContent::Paragraph(value) => ContentFragment::paragraph(value).unwrap(),
-                    BodyContent::Table(value) => ContentFragment::table(value).unwrap(),
+                    BodyContent::Paragraph(value) => ContentFragment::paragraph(*value).unwrap(),
+                    BodyContent::Table(value) => ContentFragment::table(*value).unwrap(),
                     BodyContent::ContentControl(value) => {
-                        ContentFragment::content_control(value).unwrap()
+                        ContentFragment::content_control(*value).unwrap()
                     }
                     BodyContent::RawXml(_) => panic!("fixture must be modeled"),
                 };
@@ -1159,10 +1159,10 @@ fn rich_section_stories_survive_reopen_replace_and_unlink() {
         .content
     {
         let fragment = match content {
-            BodyContent::Paragraph(paragraph) => ContentFragment::paragraph(paragraph).unwrap(),
-            BodyContent::Table(table) => ContentFragment::table(table).unwrap(),
+            BodyContent::Paragraph(paragraph) => ContentFragment::paragraph(*paragraph).unwrap(),
+            BodyContent::Table(table) => ContentFragment::table(*table).unwrap(),
             BodyContent::ContentControl(control) => {
-                ContentFragment::content_control(control).unwrap()
+                ContentFragment::content_control(*control).unwrap()
             }
             BodyContent::RawXml(_) => panic!("rich fixture remains typed"),
         };
@@ -1478,7 +1478,7 @@ fn f254_block_context_content_control(content: &str) -> CT_Sdt {
     else {
         panic!("block-context content-control fixture stays typed");
     };
-    control
+    *control
 }
 
 fn f255_story_document() -> Document {
@@ -10461,7 +10461,7 @@ fn update_page_fields_writes_body_and_nested_caches_preserving_footer_sources() 
     let document_xml = package.get_part("/word/document.xml").unwrap();
     let body = CT_Document::from_xml(document_xml).unwrap().body;
     let paragraphs = body.content.iter().filter_map(|content| match content {
-        BodyContent::Paragraph(paragraph) => Some(paragraph),
+        BodyContent::Paragraph(paragraph) => Some(paragraph.as_ref()),
         _ => None,
     });
     let caches = |values: &[(&str, &str, Option<bool>)]| {
@@ -10489,7 +10489,7 @@ fn update_page_fields_writes_body_and_nested_caches_preserving_footer_sources() 
         .content
         .iter()
         .filter_map(|content| match content {
-            BodyContent::Paragraph(paragraph) => Some(paragraph),
+            BodyContent::Paragraph(paragraph) => Some(paragraph.as_ref()),
             _ => None,
         })
         .flat_map(|paragraph| &paragraph.runs)
@@ -10531,7 +10531,7 @@ fn update_page_fields_formats_page_caches_in_the_owning_section() {
     assert_eq!(document.update_page_fields().unwrap(), 2);
     let body = body_from_document(&mut document);
     let paragraphs = body.content.iter().filter_map(|content| match content {
-        BodyContent::Paragraph(paragraph) => Some(paragraph),
+        BodyContent::Paragraph(paragraph) => Some(paragraph.as_ref()),
         _ => None,
     });
     assert_eq!(
@@ -50151,7 +50151,10 @@ fn public_created_building_blocks_insert_and_reopen() {
 fn glossary_lifecycle_preserves_untouched_docparts() {
     let mut document = Document::new();
     let mut block = f277_block("first", "docParts");
-    block.body.content.push(BodyContent::Paragraph(CT_P::new()));
+    block
+        .body
+        .content
+        .push(BodyContent::Paragraph(Box::default()));
     let first = document.create_building_block(block).unwrap();
     let mut package = f249_package(&document.to_bytes().unwrap());
     let raw = String::from(
@@ -50172,7 +50175,10 @@ fn glossary_lifecycle_preserves_untouched_docparts() {
     let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
     let producer = document.building_blocks().unwrap()[0].clone();
     let mut third = f277_block("third", "docParts");
-    third.body.content.push(BodyContent::Paragraph(CT_P::new()));
+    third
+        .body
+        .content
+        .push(BodyContent::Paragraph(Box::default()));
     let third = document.create_building_block(third).unwrap();
     let mut changed = third.block.clone();
     changed.category = Some("changed".to_owned());
@@ -50499,7 +50505,7 @@ fn glossary_block_grammar_rejects_inline_xml_and_preserves_opaque_blocks() {
         block
             .body
             .content
-            .push(BodyContent::RawXml(content.as_bytes().to_vec()));
+            .push(BodyContent::RawXml(Box::new(content.as_bytes().to_vec())));
         assert!(document.create_building_block(block).is_err(), "{content}");
         assert_eq!(document.to_bytes().unwrap(), before);
         let mut producer = f249_minimal_building_block_document();
@@ -50531,7 +50537,7 @@ fn glossary_block_grammar_rejects_inline_xml_and_preserves_opaque_blocks() {
     block
         .body
         .content
-        .push(BodyContent::RawXml(content.to_vec()));
+        .push(BodyContent::RawXml(Box::new(content.to_vec())));
     let entry = document.create_building_block(block).unwrap();
     let story = f254_story(&document, StoryKind::Body);
     document
@@ -64162,7 +64168,7 @@ fn building_block_transfer_update_and_public_insertion_omit_review_state() {
     local.validate_comment_ownership().unwrap();
     let mut body = CT_Body::new();
     body.sect_pr = None;
-    body.content.push(BodyContent::Paragraph(CT_P::from_xml_fragment(format!(r#"<w:p xmlns:w="{W_NS}"><w:commentRangeStart w:id="0"/><w:r><w:t>new supplied</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p>"#).as_bytes()).unwrap()));
+    body.content.push(BodyContent::Paragraph(Box::new(CT_P::from_xml_fragment(format!(r#"<w:p xmlns:w="{W_NS}"><w:commentRangeStart w:id="0"/><w:r><w:t>new supplied</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p>"#).as_bytes()).unwrap())));
     let mut supplied = f277_block("supplied", "autoTxt");
     supplied.body = body;
     let bytes = local.to_bytes().unwrap();
@@ -297421,7 +297427,7 @@ fn bibliography_twelve_styles_single_document_lifecycle_match_actual_word() {
                             }
                         }
                     }
-                    Some(BodyContent::Paragraph(result))
+                    Some(BodyContent::Paragraph(Box::new(result)))
                 }
                 BodyContent::Table(table) => Some(BodyContent::Table(table)),
                 _ => None,

@@ -3143,7 +3143,7 @@ fn combine_mail_merge_sections(mut candidates: Vec<Document>) -> Result<Document
                 .document
                 .body
                 .content
-                .push(BodyContent::Paragraph(paragraph));
+                .push(BodyContent::Paragraph(Box::new(paragraph)));
         }
     }
     combined.invalidate_layout();
@@ -3456,7 +3456,7 @@ fn import_fragment_content_with_state(
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(paragraph));
+            .push(BodyContent::Paragraph(Box::new(paragraph)));
     }
     let dependency_source = if document.glossary_part_name.as_deref() == Some(destination_part) {
         wrap_fragment_companion(&crate::document::package_authoritative_body_fragment(
@@ -4656,7 +4656,7 @@ fn remap_rich_rows(
         .iter_mut()
         .map(|item| std::mem::take(&mut item.row))
         .collect();
-    let mut content = vec![BodyContent::Table(table)];
+    let mut content = vec![BodyContent::Table(Box::new(table))];
     remap_rich_body_content(document, &mut content, identity_state)?;
     let Some(BodyContent::Table(table)) = content.pop() else {
         return Err(Error::Other(
@@ -15233,12 +15233,14 @@ struct LegacyStoryParagraph {
 fn parsed_physical_field_paragraph(xml: &[u8]) -> Result<CT_P> {
     let mut body = CT_Body::default();
     body.content
-        .push(BodyContent::Paragraph(CT_P::from_xml_fragment(xml)?));
+        .push(BodyContent::Paragraph(Box::new(CT_P::from_xml_fragment(
+            xml,
+        )?)));
     prepare_physical_story_projection(&mut body, &mut [])?;
     let BodyContent::Paragraph(paragraph) = body.content.remove(0) else {
         unreachable!()
     };
-    Ok(paragraph)
+    Ok(*paragraph)
 }
 
 fn legacy_story_paragraphs(
@@ -17432,7 +17434,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(paragraph));
+            .push(BodyContent::Paragraph(Box::new(paragraph)));
         document
     }
 
@@ -17455,7 +17457,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(paragraph));
+            .push(BodyContent::Paragraph(Box::new(paragraph)));
         document
     }
 
@@ -17702,7 +17704,7 @@ mod tests {
         let BodyContent::Paragraph(paragraph) = &document.document.body.content[0] else {
             unreachable!()
         };
-        let paragraphs = [paragraph];
+        let paragraphs = [paragraph.as_ref()];
         let mut evaluator = Evaluator::new(&document, &context);
         evaluator.evaluate_story("main", &paragraphs).unwrap();
         evaluator.evaluate_story("header:one", &paragraphs).unwrap();
@@ -18738,7 +18740,7 @@ mod tests {
         let BodyContent::Paragraph(paragraph) = &story_document.document.body.content[0] else {
             unreachable!()
         };
-        let paragraphs = [paragraph];
+        let paragraphs = [paragraph.as_ref()];
         let story_context = FieldEvaluationContext::default();
         let mut evaluator = Evaluator::new(&story_document, &story_context);
         evaluator.evaluate_story("header:one", &paragraphs).unwrap();
@@ -18777,7 +18779,7 @@ mod tests {
                 .document
                 .body
                 .content
-                .push(BodyContent::Paragraph(paragraph));
+                .push(BodyContent::Paragraph(Box::new(paragraph)));
         }
         assert_eq!(
             heading_restart
@@ -18834,7 +18836,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(source));
+            .push(BodyContent::Paragraph(Box::new(source)));
         let mut field = CT_P::new();
         field.runs.push(CT_R {
             properties: None,
@@ -18850,7 +18852,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(field));
+            .push(BodyContent::Paragraph(Box::new(field)));
         let results = document
             .evaluate_fields(&FieldEvaluationContext::default())
             .unwrap();
@@ -18916,7 +18918,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(paragraph));
+            .push(BodyContent::Paragraph(Box::new(paragraph)));
 
         assert_eq!(
             document
@@ -19003,7 +19005,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Table(table));
+            .push(BodyContent::Table(Box::new(table)));
         assert!(
             document
                 .add_paragraph("numbered target")
@@ -19049,7 +19051,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(field_paragraph));
+            .push(BodyContent::Paragraph(Box::new(field_paragraph)));
 
         assert_eq!(
             document
@@ -19116,7 +19118,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(paragraph));
+            .push(BodyContent::Paragraph(Box::new(paragraph)));
 
         assert_eq!(
             document
@@ -19186,7 +19188,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(relative));
+            .push(BodyContent::Paragraph(Box::new(relative)));
         assert_eq!(
             document
                 .evaluate_fields(&FieldEvaluationContext::default())
@@ -19227,7 +19229,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(fallback));
+            .push(BodyContent::Paragraph(Box::new(fallback)));
         assert_eq!(
             plain
                 .evaluate_fields(&FieldEvaluationContext::default())
@@ -19285,7 +19287,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(field_paragraph));
+            .push(BodyContent::Paragraph(Box::new(field_paragraph)));
         for index in 4..=5 {
             assert!(
                 document
@@ -19435,7 +19437,7 @@ mod tests {
         let BodyContent::Paragraph(paragraph) = &document.document.body.content[0] else {
             unreachable!()
         };
-        let paragraphs = [paragraph];
+        let paragraphs = [paragraph.as_ref()];
         let context = FieldEvaluationContext::default();
         let mut evaluator = Evaluator::new(&document, &context);
         evaluator.bookmarks.insert(
@@ -19532,7 +19534,7 @@ mod tests {
                 extra_xml_positions: Vec::new(),
                 alt_drawings: Vec::new(),
             });
-            BodyContent::Paragraph(paragraph)
+            BodyContent::Paragraph(Box::new(paragraph))
         };
         let crossed = [
             marker("TableStart:Outer"),

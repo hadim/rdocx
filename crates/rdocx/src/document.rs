@@ -1538,17 +1538,17 @@ impl DocumentFragment {
 impl ContentFragment {
     /// Create a fixed-prefix paragraph fragment.
     pub fn paragraph(paragraph: CT_P) -> Result<Self> {
-        Self::from_body_content(BodyContent::Paragraph(paragraph))
+        Self::from_body_content(BodyContent::Paragraph(Box::new(paragraph)))
     }
 
     /// Create a fixed-prefix table fragment.
     pub fn table(table: CT_Tbl) -> Result<Self> {
-        Self::from_body_content(BodyContent::Table(table))
+        Self::from_body_content(BodyContent::Table(Box::new(table)))
     }
 
     /// Create a fixed-prefix block content-control fragment.
     pub fn content_control(control: CT_Sdt) -> Result<Self> {
-        Self::from_body_content(BodyContent::ContentControl(control))
+        Self::from_body_content(BodyContent::ContentControl(Box::new(control)))
     }
 
     /// Return the direct story-item kind carried by this fragment.
@@ -2188,7 +2188,7 @@ fn paragraph_visibility_owners(
         let path = vec![(name, slot)];
         slot += 1;
         match child {
-            BodyContent::Paragraph(p) => out.push((path, p)),
+            BodyContent::Paragraph(p) => out.push((path, p.as_ref())),
             BodyContent::ContentControl(c)
                 if scope == ParagraphVisibilityScope::FacadeRecursive =>
             {
@@ -15718,9 +15718,9 @@ fn insert_html_content_into_cell(
     let inserted = content
         .into_iter()
         .map(|item| match item {
-            BodyContent::Paragraph(paragraph) => Ok(CellContent::Paragraph(paragraph)),
-            BodyContent::Table(table) => Ok(CellContent::Table(table)),
-            BodyContent::ContentControl(control) => Ok(CellContent::ContentControl(control)),
+            BodyContent::Paragraph(paragraph) => Ok(CellContent::Paragraph(*paragraph)),
+            BodyContent::Table(table) => Ok(CellContent::Table(*table)),
+            BodyContent::ContentControl(control) => Ok(CellContent::ContentControl(*control)),
             BodyContent::RawXml(_) => Err(Error::Other(
                 "HTML projection produced unsupported raw cell content".to_owned(),
             )),
@@ -15864,7 +15864,7 @@ fn block_paragraphs(content: &[BodyContent]) -> Vec<&CT_P> {
     let mut paragraphs = Vec::new();
     for item in content {
         match item {
-            BodyContent::Paragraph(paragraph) => paragraphs.push(paragraph),
+            BodyContent::Paragraph(paragraph) => paragraphs.push(paragraph.as_ref()),
             BodyContent::ContentControl(control) => {
                 collect_block_control_paragraphs(control, &mut paragraphs);
             }
@@ -19855,7 +19855,7 @@ impl Document {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(paragraph));
+            .push(BodyContent::Paragraph(Box::new(paragraph)));
         candidate.document.to_xml()?;
 
         candidate.package.set_part(&chart_part, chart_xml);
@@ -20459,7 +20459,7 @@ impl Document {
         paragraph
             .insert_accepted_run(position.run_index, run)
             .map_err(|error| Error::Other(format!("field insertion boundary: {error}")))?;
-        let replacement = serialize_content_fragment(BodyContent::Paragraph(paragraph))?;
+        let replacement = serialize_content_fragment(BodyContent::Paragraph(Box::new(paragraph)))?;
         let replacement = close_content_fragment_namespaces(&replacement, &scope)?;
         xml.splice(item.full, replacement);
         set_story_source_xml(self, &part_name, xml)
@@ -20597,7 +20597,7 @@ impl Document {
         let mut updated = source_xml;
         for (span, paragraph) in edits {
             let scope = story_namespace_scope_at(&updated, span.start)?;
-            let xml = serialize_content_fragment(BodyContent::Paragraph(paragraph))?;
+            let xml = serialize_content_fragment(BodyContent::Paragraph(Box::new(paragraph)))?;
             let xml = close_content_fragment_namespaces(&xml, &scope)?;
             updated.splice(span, xml);
         }
@@ -22491,7 +22491,7 @@ impl Document {
             self.document
                 .body
                 .content
-                .push(BodyContent::Paragraph(paragraph));
+                .push(BodyContent::Paragraph(Box::new(paragraph)));
         } else {
             close_typed_story_drawing_namespaces(&mut paragraph)?;
             self.append_fragment_to_story(story, ContentFragment::paragraph(paragraph)?)?;
@@ -22524,7 +22524,7 @@ impl Document {
                 .document
                 .body
                 .content
-                .push(BodyContent::Paragraph(paragraph));
+                .push(BodyContent::Paragraph(Box::new(paragraph)));
         } else {
             let fragment = ContentFragment::paragraph(paragraph)?;
             candidate.append_fragment_to_story(story, fragment)?;
@@ -23788,7 +23788,7 @@ impl Document {
             ));
         }
         match parsed.body.content.remove(0) {
-            BodyContent::Table(table) => Ok(table),
+            BodyContent::Table(table) => Ok(*table),
             _ => Err(Error::Other(
                 "rich table source is not a qualified table".to_owned(),
             )),
@@ -26095,7 +26095,10 @@ impl Document {
         if !text.is_empty() {
             p.add_run(text);
         }
-        self.document.body.content.push(BodyContent::Paragraph(p));
+        self.document
+            .body
+            .content
+            .push(BodyContent::Paragraph(Box::new(p)));
         match self.document.body.content.last_mut().unwrap() {
             BodyContent::Paragraph(p) => Paragraph { inner: p },
             _ => unreachable!(),
@@ -26750,7 +26753,10 @@ impl Document {
             tbl.rows.push(row);
         }
 
-        self.document.body.content.push(BodyContent::Table(tbl));
+        self.document
+            .body
+            .content
+            .push(BodyContent::Table(Box::new(tbl)));
         match self.document.body.content.last_mut().unwrap() {
             BodyContent::Table(t) => Table { inner: t },
             _ => unreachable!(),
@@ -26859,7 +26865,7 @@ impl Document {
         self.document
             .body
             .paragraphs()
-            .position(|paragraph| std::ptr::eq(paragraph, target))
+            .position(|paragraph| std::ptr::eq(paragraph, target.as_ref()))
     }
 
     /// Return the direct body index of the paragraph addressed by `paragraph_index`.
@@ -26872,7 +26878,7 @@ impl Document {
             .body
             .content
             .iter()
-            .position(|content| matches!(content, BodyContent::Paragraph(paragraph) if std::ptr::eq(paragraph, target)))
+            .position(|content| matches!(content, BodyContent::Paragraph(paragraph) if std::ptr::eq(paragraph.as_ref(), target)))
     }
 
     /// Return the checked body story location of the paragraph addressed by
@@ -26962,7 +26968,7 @@ impl Document {
             .iter()
             .enumerate()
             .find_map(|(slot, child)| match child {
-                BodyContent::Paragraph(paragraph) if std::ptr::eq(paragraph, selected) => {
+                BodyContent::Paragraph(paragraph) if std::ptr::eq(paragraph.as_ref(), selected) => {
                     Some((slot, None))
                 }
                 BodyContent::ContentControl(control) => control
@@ -27013,7 +27019,7 @@ impl Document {
     pub fn content_index_of_table(&self, table_index: usize) -> Option<usize> {
         let target = self.table(table_index)?.inner;
         self.document.body.content.iter().position(
-            |content| matches!(content, BodyContent::Table(table) if std::ptr::eq(table, target)),
+            |content| matches!(content, BodyContent::Table(table) if std::ptr::eq(table.as_ref(), target)),
         )
     }
 
@@ -27062,7 +27068,7 @@ impl Document {
         let mut stored_xml = Vec::new();
         stored.to_xml(&mut Writer::new(&mut stored_xml))?;
         let incoming = CT_P::from_xml_fragment_checked(xml.as_bytes())?;
-        if stored_xml == xml.as_bytes() || stored == incoming {
+        if stored_xml == xml.as_bytes() || *stored == incoming {
             note_fx260_body(1);
             return Ok(Some(false));
         }
@@ -27091,7 +27097,7 @@ impl Document {
         validate_element_xml_identity_change(self, &story, &stored_xml, xml.as_bytes())?;
         note_fx260_body(1);
         if let BodyContent::Paragraph(paragraph) = &mut self.document.body.content[slot] {
-            *paragraph = incoming;
+            **paragraph = incoming;
         }
         self.invalidate_layout();
         Ok(Some(true))
@@ -27212,7 +27218,7 @@ impl Document {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(p));
+            .push(BodyContent::Paragraph(Box::new(p)));
         candidate.invalidate_layout();
         self.commit_staged_mutation(candidate);
         Ok(())
@@ -27828,7 +27834,7 @@ impl Document {
                 .document
                 .body
                 .content
-                .push(BodyContent::Paragraph(CT_P::new()));
+                .push(BodyContent::Paragraph(Box::default()));
         }
         let Some(BodyContent::Paragraph(p)) = candidate.document.body.content.last_mut() else {
             unreachable!();
@@ -29770,7 +29776,7 @@ impl Document {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(p));
+            .push(BodyContent::Paragraph(Box::new(p)));
         candidate.validate_numbering_graph()?;
         self.commit_staged_mutation(candidate);
         match self.document.body.content.last_mut().unwrap() {
@@ -29887,7 +29893,7 @@ impl Document {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(p));
+            .push(BodyContent::Paragraph(Box::new(p)));
         if restart {
             let index = candidate.paragraph_count() - 1;
             candidate.restart_numbering(index, 1)?;
@@ -32189,7 +32195,7 @@ impl Document {
             self.document
                 .body
                 .content
-                .push(BodyContent::Paragraph(paragraph));
+                .push(BodyContent::Paragraph(Box::new(paragraph)));
             self.document.body.sect_pr = Some(inserted);
             return Ok(());
         }
@@ -32211,7 +32217,7 @@ impl Document {
         self.document
             .body
             .content
-            .insert(insert_at, BodyContent::Paragraph(paragraph));
+            .insert(insert_at, BodyContent::Paragraph(Box::new(paragraph)));
         Ok(())
     }
 
@@ -32320,7 +32326,7 @@ impl Document {
                 if *properties == CT_PPr::default() {
                     paragraph.properties = None;
                 }
-                *paragraph == CT_P::new()
+                *paragraph == Box::default()
             };
             if remove_empty_owner {
                 self.document.body.content.remove(owner_index);
@@ -32346,7 +32352,7 @@ impl Document {
                 if *properties == CT_PPr::default() {
                     paragraph.properties = None;
                 }
-                (promoted, *paragraph == CT_P::new())
+                (promoted, *paragraph == Box::default())
             };
             if remove_empty_owner {
                 self.document.body.content.remove(previous_owner);
@@ -32365,10 +32371,11 @@ impl Document {
             .filter(|(_, content)| {
                 matches!(
                     content,
-                    BodyContent::Paragraph(CT_P {
-                        properties: Some(properties),
-                        ..
-                    }) if properties.sect_pr.is_some()
+                    BodyContent::Paragraph(paragraph)
+                        if paragraph
+                            .properties
+                            .as_ref()
+                            .is_some_and(|properties| properties.sect_pr.is_some())
                 )
             })
             .nth(ordinal)
@@ -34821,7 +34828,7 @@ impl Document {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(p));
+            .push(BodyContent::Paragraph(Box::new(p)));
         candidate
             .append_document_content(other)
             .expect("document append-with-break preflight failed");
@@ -35387,7 +35394,7 @@ impl Document {
             self.document
                 .body
                 .content
-                .insert(insert_at + i, BodyContent::Paragraph(p));
+                .insert(insert_at + i, BodyContent::Paragraph(Box::new(p)));
         }
         self.identifiers = identifiers;
         self.invalidate_layout();
@@ -41449,7 +41456,7 @@ mod tests {
                     .push(rdocx_oxml::footnotes::CT_Footnote {
                         id: 1,
                         note_type: rdocx_oxml::footnotes::NoteType::Normal,
-                        paragraphs: vec![paragraph],
+                        paragraphs: vec![*paragraph],
                     }),
                 2 => {
                     let source = format!(
@@ -41457,7 +41464,7 @@ mod tests {
                     );
                     let mut comments =
                         rdocx_oxml::comments::CT_Comments::from_xml(source.as_bytes()).unwrap();
-                    comments.comments[0].paragraphs = vec![paragraph];
+                    comments.comments[0].paragraphs = vec![*paragraph];
                     document.comments = Some(comments);
                 }
                 3 => {
@@ -41519,7 +41526,7 @@ mod tests {
             table = outer;
         }
         let mut document = Document::new();
-        document.document.body.content = vec![BodyContent::Table(table)];
+        document.document.body.content = vec![BodyContent::Table(Box::new(table))];
         assert!(document.validate_model_resource_limits().is_err());
         let mut before = std::io::Cursor::new(Vec::new());
         document.package.write_to(&mut before).unwrap();
@@ -42426,7 +42433,7 @@ mod tests {
         let BodyContent::Table(table) = &reopened.document.body.content[0] else {
             panic!("typed root table")
         };
-        let mut table = table;
+        let mut table = table.as_ref();
         for depth in 1..tables {
             assert_eq!(table.rows.len(), 1);
             assert_eq!(table.rows[0].cells.len(), 1);
@@ -42557,7 +42564,7 @@ mod tests {
         let BodyContent::Table(table) = &reopened.document.body.content[0] else {
             panic!("typed root table")
         };
-        let mut table = table;
+        let mut table = table.as_ref();
         for depth in 1..tables {
             assert_eq!(table.rows.len(), 1);
             assert_eq!(table.rows[0].cells.len(), 1);
@@ -42611,7 +42618,7 @@ mod tests {
             let BodyContent::Table(table) = &model.body.content[0] else {
                 panic!("typed root table")
             };
-            let mut table = table;
+            let mut table = table.as_ref();
             for depth in 1..32 {
                 assert_eq!(table.rows.len(), 1);
                 assert_eq!(table.rows[0].cells.len(), 1);
@@ -46453,7 +46460,7 @@ mod tests {
                 .document
                 .body
                 .content
-                .push(BodyContent::RawXml(RAW.to_vec()));
+                .push(BodyContent::RawXml(Box::new(RAW.to_vec())));
             document.to_bytes().unwrap()
         }
 
@@ -46893,7 +46900,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(revised));
+            .push(BodyContent::Paragraph(Box::new(revised)));
         let source_before = document.document.to_xml().unwrap();
         let source_xml = std::str::from_utf8(&source_before).unwrap();
         assert!(source_xml.contains("<w:ins ") && source_xml.contains("<w:del "));
@@ -47105,7 +47112,7 @@ mod tests {
         doc.document
             .body
             .content
-            .push(BodyContent::RawXml(b"<w:custom/>".to_vec()));
+            .push(BodyContent::RawXml(Box::new(b"<w:custom/>".to_vec())));
 
         let mut reader = quick_xml::Reader::from_reader(
             br#"<w:sdt xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:sdtContent><w:p><w:r><w:t>inside</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
@@ -47119,7 +47126,7 @@ mod tests {
         doc.document
             .body
             .content
-            .push(BodyContent::ContentControl(control));
+            .push(BodyContent::ContentControl(Box::new(control)));
         doc.add_paragraph("last");
 
         let items = doc
@@ -47235,7 +47242,7 @@ mod tests {
         doc.document
             .body
             .content
-            .push(BodyContent::Paragraph(paragraph));
+            .push(BodyContent::Paragraph(Box::new(paragraph)));
 
         reset_layout_invocations();
         doc.render_page_to_png_deterministic(0, 1.0).unwrap();
@@ -47924,7 +47931,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(fields));
+            .push(BodyContent::Paragraph(Box::new(fields)));
         for index in 0..140 {
             warm_document.add_paragraph(&format!("paragraph {index:03} stable line"));
         }
@@ -50356,7 +50363,7 @@ mod tests {
         doc.document
             .body
             .content
-            .push(BodyContent::Paragraph(paragraph));
+            .push(BodyContent::Paragraph(Box::new(paragraph)));
 
         let count = doc
             .render_template(&serde_json::json!({"profile": {"name": "Ada"}}))
@@ -50805,7 +50812,7 @@ mod tests {
     fn versioned_template_raw_opaque_scalars_are_original_only_and_preflighted() {
         let mut document = Document::new();
         document.add_paragraph("{{name}}");
-        document.document.body.content.push(BodyContent::RawXml(br#"<w:custom><w:txbxContent><w:p><w:r><w:t>{{{{name}}}} / {{name}} / {{other}}</w:t></w:r></w:p></w:txbxContent></w:custom>"#.to_vec()));
+        document.document.body.content.push(BodyContent::RawXml(Box::new(br#"<w:custom><w:txbxContent><w:p><w:r><w:t>{{{{name}}}} / {{name}} / {{other}}</w:t></w:r></w:p></w:txbxContent></w:custom>"#.to_vec())));
         let data =
             serde_json::json!({"name":"{{other}}\u{e000}rdocx-template-0\u{e001}","other":"DATA"});
         let before = document.to_bytes().unwrap();
@@ -51116,7 +51123,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(boundary));
+            .push(BodyContent::Paragraph(Box::new(boundary)));
         f284_export_native_input(&mut document, "mixed-seven-owner-version1-baseline");
         assert_eq!(document.render_template_versioned(&serde_json::json!({"items":[
             {"name":"One","show":true}, {"name":"Hidden","show":false}, {"name":"Three","show":true}
@@ -51278,7 +51285,7 @@ mod tests {
         document
             .add_text_box_to_story(&body, "KNOWN {{name}}", f284_text_box_options())
             .unwrap();
-        document.document.body.content.push(BodyContent::RawXml(br#"<w:custom><w:txbxContent><w:p><w:r><w:t>OPAQUE {{name}}</w:t></w:r></w:p></w:txbxContent></w:custom>"#.to_vec()));
+        document.document.body.content.push(BodyContent::RawXml(Box::new(br#"<w:custom><w:txbxContent><w:p><w:r><w:t>OPAQUE {{name}}</w:t></w:r></w:p></w:txbxContent></w:custom>"#.to_vec())));
         assert_eq!(
             document
                 .render_template_versioned(&serde_json::json!({"name":"{{literal}}"}), 1)
@@ -51832,9 +51839,9 @@ mod tests {
             .cell(0, 0)
             .expect("template table cell")
             .set_text("Table {{table}}");
-        doc.document.body.content.push(BodyContent::RawXml(
+        doc.document.body.content.push(BodyContent::RawXml(Box::new(
             br#"<w:custom><w:txbxContent><w:p><w:r><w:t>Box {{box}}</w:t></w:r></w:p></w:txbxContent></w:custom>"#.to_vec(),
-        ));
+        )));
 
         let chart_part = "/word/charts/chart99.xml";
         doc.package.set_part(
@@ -51917,7 +51924,7 @@ mod tests {
         doc.document
             .body
             .content
-            .push(BodyContent::Paragraph(paragraph));
+            .push(BodyContent::Paragraph(Box::new(paragraph)));
 
         assert_eq!(
             doc.render_template(&serde_json::json!({"value": "kept"}))
@@ -52036,7 +52043,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(generated));
+            .push(BodyContent::Paragraph(Box::new(generated)));
         document.add_paragraph("{% endfor %}");
 
         let row = |text: &str, raw: Option<Vec<u8>>| {
@@ -52062,7 +52069,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Table(table));
+            .push(BodyContent::Table(Box::new(table)));
 
         document
             .render_template(&serde_json::json!({"items": ["one", "two"]}))
@@ -52153,7 +52160,7 @@ mod tests {
             cell.properties = Some(properties);
             cell.content = vec![
                 CellContent::Paragraph(paragraph),
-                CellContent::ContentControl(control.clone()),
+                CellContent::ContentControl(*control.clone()),
             ];
             cell.extra_xml.push((0, cell_raw.clone()));
             let mut row = CT_Row::new();
@@ -52200,7 +52207,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Table(table));
+            .push(BodyContent::Table(Box::new(table)));
 
         assert_eq!(
             document
@@ -52329,7 +52336,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Table(table));
+            .push(BodyContent::Table(Box::new(table)));
 
         assert_eq!(
             document
@@ -52374,7 +52381,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Table(outer));
+            .push(BodyContent::Table(Box::new(outer)));
 
         document
             .render_template(&serde_json::json!({"show": true}))
@@ -52430,7 +52437,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Table(table));
+            .push(BodyContent::Table(Box::new(table)));
         let before = document.document.to_xml().unwrap();
 
         assert!(
@@ -52588,7 +52595,7 @@ mod tests {
             panic!("expected parsed content control");
         };
         control.content = vec![SdtContent::Row(row)];
-        control
+        *control
     }
 
     fn template_test_table_with_control(open: &str, control: CT_Sdt, close: &str) -> Document {
@@ -52602,7 +52609,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Table(table));
+            .push(BodyContent::Table(Box::new(table)));
         document
     }
 
@@ -54179,7 +54186,7 @@ mod tests {
                         .document
                         .body
                         .content
-                        .push(BodyContent::Paragraph(paragraph));
+                        .push(BodyContent::Paragraph(Box::new(paragraph)));
                 }
                 let before_model = document.document.to_xml().unwrap();
                 let serialized = String::from_utf8(before_model.clone()).unwrap();
@@ -54321,7 +54328,7 @@ mod tests {
         doc.document
             .body
             .content
-            .push(BodyContent::Paragraph(paragraph));
+            .push(BodyContent::Paragraph(Box::new(paragraph)));
 
         assert_eq!(
             doc.links(),
@@ -55489,7 +55496,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(reference));
+            .push(BodyContent::Paragraph(Box::new(reference)));
         let mut package =
             OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
         let document_part = document.doc_part_name.clone();
@@ -60310,9 +60317,9 @@ fn f283_navigation_exclusion_stamp_rejects_stale_sources_and_bad_runs() {
         .document
         .body
         .content
-        .push(rdocx_oxml::document::BodyContent::Paragraph(
+        .push(rdocx_oxml::document::BodyContent::Paragraph(Box::new(
             rdocx_oxml::text::CT_P::new(),
-        ));
+        )));
     assert!(rdocx_layout::engine::evaluate_sequence_fields(&input).is_err());
     assert!(rdocx_layout::layout_document_deterministic_with_provenance(&input).is_err());
 }
@@ -60350,9 +60357,9 @@ fn f283_navigation_facts_only_snapshot_is_validated_without_fields() {
         .document
         .body
         .content
-        .push(rdocx_oxml::document::BodyContent::Paragraph(
+        .push(rdocx_oxml::document::BodyContent::Paragraph(Box::new(
             rdocx_oxml::text::CT_P::new(),
-        ));
+        )));
     assert!(rdocx_layout::layout_document_deterministic_with_provenance(&input).is_err());
 }
 
@@ -60397,9 +60404,9 @@ fn f283_navigation_failure_is_stamped_and_preserves_sequence_values() {
         .document
         .body
         .content
-        .push(rdocx_oxml::document::BodyContent::Paragraph(
+        .push(rdocx_oxml::document::BodyContent::Paragraph(Box::new(
             rdocx_oxml::text::CT_P::new(),
-        ));
+        )));
     assert!(rdocx_layout::engine::evaluate_sequence_fields(&input).is_err());
     assert!(rdocx_layout::layout_document_deterministic_with_provenance(&input).is_err());
 }

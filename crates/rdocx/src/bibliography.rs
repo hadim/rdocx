@@ -2966,7 +2966,7 @@ impl BibliographyUpdateState {
                                     complex_paragraph_mark.then_some(true);
                             }
                         }
-                        rdocx_oxml::document::BodyContent::Paragraph(paragraph)
+                        rdocx_oxml::document::BodyContent::Paragraph(Box::new(paragraph))
                     },
                 )
                 .collect(),
@@ -7955,9 +7955,9 @@ fn ieee_bibliography_table(
         ..Default::default()
     });
     Ok(vec![
-        BodyContent::Paragraph(first),
-        BodyContent::Table(table),
-        BodyContent::Paragraph(trailing),
+        BodyContent::Paragraph(Box::new(first)),
+        BodyContent::Table(Box::new(table)),
+        BodyContent::Paragraph(Box::new(trailing)),
     ])
 }
 

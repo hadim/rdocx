@@ -19565,7 +19565,7 @@ mod advanced_table_authoring_and_geometry {
             .content
             .into_iter()
             .find_map(|item| match item {
-                rdocx_oxml::document::BodyContent::Table(table) => Some(table),
+                rdocx_oxml::document::BodyContent::Table(table) => Some(*table),
                 _ => None,
             })
             .expect("document holds one table")

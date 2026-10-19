@@ -12807,7 +12807,7 @@ fn fx237_control_table() -> rdocx_oxml::content_control::CT_Sdt {
     else {
         unreachable!()
     };
-    control
+    *control
 }
 
 #[test]
