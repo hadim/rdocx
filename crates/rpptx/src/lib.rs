@@ -6093,6 +6093,12 @@ impl Presentation {
         if ppt_xml_relationship_facts(before)? != ppt_xml_relationship_facts(xml.as_bytes())? {
             return Ok(false);
         }
+        // Check the submitted bytes before typed projection can discard them.
+        // A fragment cannot establish inherited MC authority, so use the
+        // whole-part transaction when its local frontier cannot prove the edit.
+        if check_ppt_frontier_changes(before, xml.as_bytes()).is_err() {
+            return Ok(false);
+        }
         if ppt_xml_known_owner_equivalent(before, xml.as_bytes())? {
             return Ok(true);
         }

@@ -31,4 +31,5 @@ oxml-layout = { workspace = true }
 oxml-py-support = { workspace = true }
 pyo3 = { workspace = true }
 rpptx = { workspace = true, features = ["default-template", "render", "system-fonts", "digital-signatures"] }
+rpptx-oxml = { workspace = true }
 smallvec = { workspace = true }

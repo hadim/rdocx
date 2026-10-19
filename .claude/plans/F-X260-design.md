@@ -162,3 +162,22 @@ R4 in `.claude/reviews/S95.3-design-quality-pass-1.md` does not change A1 throug
 | Q10 | F-X260 A5 | All seven Issue 389 release operations keep a large-to-small ratio below 3. A visit counter fails a whole-package scan. Debug timings do not pass. Range removal is not one of the seven rows. | Answered 2026-10-18 by the user. Workload sizes are the Issue 389 release table: empty deck versus 40 by 40, and 50 versus 800 paragraphs. |
 
 No issue or pull request closes from this plan.
+
+## Codex takeover, installed regression reconciliation
+
+The user's takeover request includes final installed checks. A fresh rpptx
+binding exposed A7 violations in existing tests: the fast local XML path
+projected away foreign geometry before checking submitted bytes, and could
+not establish inherited MC authority. Validate submitted frontier bytes before
+projection and defer unproven fragments to the existing whole-part transaction.
+A graphic-frame table-presence refusal must restore exact pre-edit package
+state, not reconstruct a snapshot after mutation. Textbox append must retain
+the existing structural duplicate-ID refusal, inspecting only its target slide.
+The existing installed fx206/fx211b/fx254 tests are discriminating regressions.
+Requalify A5 because append/XML hot paths changed. No new registry or public API.
+
+Takeover microscope D1 rejects a full-presentation rollback clone for every
+graphic-frame edit. Preflight incoming table presence with the existing
+`rpptx-oxml` concrete graphic-frame parser, before native publication. The Python
+binding adds that existing workspace dependency for this named consumer. Reject
+payload transitions before mutation and keep unchanged-payload edits local.

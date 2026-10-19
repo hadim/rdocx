@@ -1753,6 +1753,28 @@ impl PyShapeCollection {
             && let rpptx::ShapeOwner::Slide(slide) = slide_index
         {
             let mut presentation = self.presentation.borrow_mut(py);
+            // The append shortcut must preserve the structural proof's refusal
+            // of imported ambiguous identities, without visiting other slides.
+            let mut pending = presentation
+                .inner
+                .slide(slide)
+                .ok_or_else(|| PyIndexError::new_err("slide owner is absent"))?
+                .shapes()
+                .collect::<Vec<_>>();
+            let mut ids = std::collections::HashSet::new();
+            while let Some(shape) = pending.pop() {
+                if shape.kind() != rpptx::ShapeKind::AlternateContent {
+                    let id = shape.non_visual_id().ok_or_else(|| {
+                        PyValueError::new_err("structural owner proof requires a shape id")
+                    })?;
+                    if !ids.insert(id) {
+                        return Err(PyValueError::new_err(
+                            "structural owner proof has an ambiguous shape id",
+                        ));
+                    }
+                }
+                pending.extend(shape.children());
+            }
             {
                 let mut shapes = presentation
                     .inner

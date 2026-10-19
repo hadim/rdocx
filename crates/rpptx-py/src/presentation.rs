@@ -2377,6 +2377,23 @@ impl PyPptElement {
         } else {
             None
         };
+        // Refuse unsupported payload transitions before native publication.
+        // Parse only the submitted frame, never clone unrelated slide models.
+        if let Some(structure) = before_structure.as_ref()
+            && structure.1 == rpptx::ShapeKind::GraphicFrame
+        {
+            let incoming = rpptx_oxml::graphic_frame::CT_GraphicFrame::from_xml(xml.as_bytes())
+                .map_err(|error| PyValueError::new_err(error.to_string()))?;
+            let incoming_table = matches!(
+                incoming.graphic_data.payload(),
+                rpptx_oxml::graphic_frame::GraphicDataPayload::Table(_)
+            );
+            if structure.2 != incoming_table {
+                return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                    "Shape.element.replace_xml does not support changing table payload presence",
+                ));
+            }
+        }
         let result = match self.kind {
             PptElementKind::Shape => owner.inner.replace_shape_xml_at(part, &shapes, xml),
             PptElementKind::Table => owner.inner.replace_table_xml_at(part, &shapes, xml),

@@ -4889,18 +4889,31 @@ def test_cell_text_value_edits_and_unrelated_structure_retain_handles():
             operation()
 
 
-def test_cell_hyperlink_assignment_rejects_before_relationship_mutation():
+def test_cell_hyperlink_assignment_uses_slide_and_refuses_invalid_input_atomically():
+    import rpptx
+
     prs, table = _f_x194_table()
     cell = table.cell(0, 0)
     cell.text = "link"
     hyperlink = cell.text_frame.paragraphs[0].runs[0].hyperlink
     assert hyperlink.address is None
     before = prs.to_bytes()
-    for value in ("https://example.com", None, ""):
-        with pytest.raises(ValueError, match="cell hyperlink assignment"):
-            hyperlink.address = value
+    for value in (None, ""):
+        hyperlink.address = value
         assert prs.to_bytes() == before
         assert hyperlink.address is None
+    hyperlink.address = "https://example.com"
+    assert hyperlink.address == "https://example.com"
+    before = prs.to_bytes()
+    with pytest.raises(rpptx.RpptxError, match="control characters"):
+        hyperlink.address = "https://example.com/\ninvalid"
+    assert prs.to_bytes() == before
+    reopened = rpptx.Presentation.from_bytes(before)
+    assert (
+        reopened.slides[0].shapes[0].table.cell(0, 0)
+        .text_frame.paragraphs[0].runs[0].hyperlink.address
+        == "https://example.com"
+    )
 
 
 def test_cell_text_frame_getter_and_missing_body_failures_do_not_materialize_source():

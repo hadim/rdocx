@@ -1809,6 +1809,7 @@ dependencies = [
  "oxml-py-support",
  "pyo3",
  "rpptx",
+ "rpptx-oxml",
  "smallvec",
 ]
 
