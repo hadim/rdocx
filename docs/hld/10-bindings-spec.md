@@ -2585,7 +2585,9 @@ Python `move_content_control(source, destination)` and
 `clone_content_control(source, destination)` take two `ContentLocation`
 values. Move keeps the id and stays inside one story. Clone allocates a new
 id and drops `w14:paraId` and `w14:textId`. A destination whose parent cannot
-hold the control content refuses before publication. Python returns `None`.
+hold the control content refuses before publication. A nested content
+control is transparent under that grammar. Decoded references at that
+boundary use the same rule. Python returns `None`.
 Rust returns `Result<()>`. A refusal is `Error::Other` and does not publish.
 `ContentControl` stays a frozen snapshot. WASM and CLI gain no method.
 
@@ -2606,6 +2608,13 @@ and CLI gain no method. The authentic Word differential stays pending.
 `Document::add_custom_xml_store(item_xml, schema_uris)` returns the braced item
 id. Python `Document.add_custom_xml_store(item_xml, schema_uris=())` takes
 `bytes` and a sequence of strings.
+DOCTYPE/DTD declarations refuse before allocation, including in the prolog.
+An XML declaration must be first and follow XML 1.0 declaration syntax.
+Input bytes must be UTF-8. Declarations accept UTF-8 and, for wholly ASCII
+inputs, US-ASCII. Unsupported or contradictory declared encodings refuse.
+Legal processing instructions and comments remain supported. Invalid document
+events refuse atomically. Valid item bytes, including supported unbound-prefix
+Names, remain verbatim.
 `Document::set_content_control_binding(location, store_item_id, xpath, prefix_mappings)`
 and Python
 `Document.set_content_control_binding(location, store_item_id, xpath, prefix_mappings=None)`

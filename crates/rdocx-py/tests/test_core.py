@@ -6315,6 +6315,52 @@ def _content_location(document, predicate):
     return rdocx.ContentLocation(item.story, item.kind, item.index_path)
 
 
+@pytest.mark.parametrize(
+    ("payload", "refusal"),
+    [
+        ("&#65;<w:p/>", "not a block sequence"),
+        ("&lt;<w:p/>", "not a block sequence"),
+        ("&#32;<w:p/>", None),
+        (
+            '<w:sdt><w:sdtPr><w:id w:val="2"/><w:richText/></w:sdtPr>'
+            '<w:sdtContent>&#65;<w:p/></w:sdtContent></w:sdt>',
+            "not a block sequence",
+        ),
+        (
+            '<w:sdt><w:sdtPr><w:id w:val="2"/><w:richText/></w:sdtPr>'
+            '<w:sdtContent><w:p/></w:sdtContent></w:sdt>',
+            None,
+        ),
+    ],
+)
+def test_f286_repeating_section_checks_decoded_boundary_text(payload, refusal):
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        '<w:sdt><w:sdtPr><w:tag w:val="probe"/><w:id w:val="1"/>'
+        '<w:richText/></w:sdtPr><w:sdtContent>' + payload
+        + '</w:sdtContent></w:sdt><w:p><w:r><w:t>tail</w:t></w:r></w:p>',
+    )
+    location = _content_location(document, lambda item: item.kind == "content_control")
+    before = document.to_bytes()
+    if refusal:
+        with pytest.raises(rdocx.RdocxError, match=refusal):
+            document.set_content_control_type(
+                location, rdocx.ContentControlTypePayload.repeating_section()
+            )
+        assert document.to_bytes() == before
+    else:
+        document.set_content_control_type(
+            location, rdocx.ContentControlTypePayload.repeating_section()
+        )
+        assert document.to_bytes() != before
+        xml = _document_xml(document)
+        assert b"<w:sdtContent>" + payload.encode() + b"</w:sdtContent>" in xml
+        assert xml.count(b"repeatingSectionItem") == 1
+        assert b">tail<" in xml
+
+
 def test_f286_typed_content_control_payload_repeat_and_refusal():
     import rdocx
     document = rdocx.Document()
@@ -6532,6 +6578,277 @@ def test_f285_move_and_clone_content_control_identity_and_refusal():
     )
     cell_ids = tag_ids(document, "cell-shell")
     assert cell_id in cell_ids and len(cell_ids) == 2 and len(set(cell_ids)) == 2
+
+
+def test_f285_nested_transparent_payload_matches_destination():
+    import rdocx
+
+    row = '<w:tr><w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p/></w:tc></w:tr>'
+    run = "<w:r><w:t>kept</w:t></w:r>"
+
+    def shell(tag, identifier, inner):
+        return (
+            f'<w:sdt><w:sdtPr><w:tag w:val="{tag}"/><w:id w:val="{identifier}"/>'
+            f"</w:sdtPr><w:sdtContent>{inner}</w:sdtContent></w:sdt>"
+        )
+
+    grid = '<w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid>'
+    row_nest = shell("row-nest", 1, shell("row-inner", 2, row))
+    inline_ok = shell("inline-ok", 5, shell("inline-inner", 6, run))
+    inline_bad = shell("inline-bad", 7, shell("inline-bad-inner", 8, row))
+    body = (
+        "<w:p><w:r><w:t>host</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>other</w:t></w:r></w:p>"
+        f"<w:tbl>{grid}{row_nest}</w:tbl>"
+        f"<w:tbl>{grid}<w:tr><w:tc><w:tcPr><w:tcW w:w=\"0\" w:type=\"auto\"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>"
+        f"<w:p>{inline_ok}</w:p><w:p>{inline_bad}</w:p>"
+    )
+
+    def located(document, predicate):
+        return _content_location(document, predicate)
+
+    def by_tag(document, tag):
+        needle = f'w:val="{tag}"'.encode()
+
+        def predicate(item):
+            if item.kind != "content_control":
+                return False
+            xml = item.xml
+            tag_at = xml.find(needle)
+            content_at = xml.find(b"<w:sdtContent")
+            return tag_at != -1 and (content_at == -1 or tag_at < content_at)
+
+        return located(document, predicate)
+
+    def paragraph(document, text):
+        return located(document, lambda item: item.kind == "paragraph" and item.text == text)
+
+    def tables(document):
+        return [
+            rdocx.ContentLocation(item.story, item.kind, item.index_path)
+            for item in document.story_items
+            if item.kind == "table"
+        ]
+
+    failures = []
+    for label, operation, tag, target in [
+        ("clone row", "clone", "row-nest", "host"),
+        ("move row", "move", "row-nest", "host"),
+        ("clone inline", "clone", "inline-ok", "table"),
+    ]:
+        document = _replace_document_body(rdocx.Document(), body)
+        before = document.to_bytes()
+        source = by_tag(document, tag)
+        destination = paragraph(document, "host") if target == "host" else tables(document)[1]
+        try:
+            if operation == "clone":
+                document.clone_content_control(source, destination)
+            else:
+                document.move_content_control(source, destination)
+        except rdocx.RdocxError as error:
+            if "does not match" not in str(error) or document.to_bytes() != before:
+                failures.append(f"{label}: {error} unchanged={document.to_bytes() == before}")
+        else:
+            failures.append(f"{label}: published unchanged={document.to_bytes() == before}")
+
+    document = _replace_document_body(rdocx.Document(), body)
+    before = document.to_bytes()
+    try:
+        document.unwrap_content_control(by_tag(document, "inline-bad"))
+    except rdocx.RdocxError as error:
+        if "parent cannot hold" not in str(error) or document.to_bytes() != before:
+            failures.append(f"unwrap: {error} unchanged={document.to_bytes() == before}")
+    else:
+        failures.append(f"unwrap: published unchanged={document.to_bytes() == before}")
+
+    document = _replace_document_body(rdocx.Document(), body)
+    document.clone_content_control(by_tag(document, "row-nest"), tables(document)[1])
+    ids = [control.id for control in document.content_controls() if control.tag == "row-nest"]
+    if sorted(ids) == [1] or len(set(ids)) != 2:
+        failures.append(f"legal row clone ids: {ids}")
+    document.unwrap_content_control(by_tag(document, "inline-ok"))
+    xml = _document_xml(document)
+    if b"inline-ok" in xml or b"inline-inner" not in xml or b"kept" not in xml:
+        failures.append("legal inline unwrap lost the nested run")
+    assert failures == []
+
+
+def test_f285_reference_text_matches_payload_boundary():
+    import rdocx
+
+    def shell(tag, identifier, inner):
+        return (
+            f'<w:sdt><w:sdtPr><w:tag w:val="{tag}"/><w:id w:val="{identifier}"/>'
+            f"</w:sdtPr><w:sdtContent>{inner}</w:sdtContent></w:sdt>"
+        )
+
+    def document_for(inner):
+        body = (
+            "<w:p><w:r><w:t>host</w:t></w:r></w:p><w:p>"
+            + shell("outer", 1, shell("inner", 2, inner))
+            + "</w:p>"
+        )
+        return _replace_document_body(rdocx.Document(), body)
+
+    def by_tag(document, tag):
+        needle = f'w:val="{tag}"'.encode()
+
+        def predicate(item):
+            if item.kind != "content_control":
+                return False
+            xml = item.xml
+            tag_at = xml.find(needle)
+            content_at = xml.find(b"<w:sdtContent")
+            return tag_at != -1 and (content_at == -1 or tag_at < content_at)
+
+        return _content_location(document, predicate)
+
+    def host(document):
+        return _content_location(
+            document, lambda item: item.kind == "paragraph" and item.text == "host"
+        )
+
+    failures = []
+    for label, operation, inner, needle in [
+        ("clone decimal", "clone", "&#65;", "does not match"),
+        ("move hexadecimal", "move", "&#x41;", "does not match"),
+        ("clone predefined", "clone", "&lt;", "does not match"),
+        ("unwrap decimal", "unwrap", "&#65;", "parent cannot hold"),
+    ]:
+        document = document_for(inner)
+        before = document.to_bytes()
+        try:
+            if operation == "clone":
+                document.clone_content_control(by_tag(document, "outer"), host(document))
+            elif operation == "move":
+                document.move_content_control(by_tag(document, "outer"), host(document))
+            else:
+                document.unwrap_content_control(by_tag(document, "outer"))
+        except rdocx.RdocxError as error:
+            if needle not in str(error) or document.to_bytes() != before:
+                failures.append(f"{label}: {error} unchanged={document.to_bytes() == before}")
+        else:
+            failures.append(f"{label}: published unchanged={document.to_bytes() == before}")
+
+    document = document_for("&#32;")
+    document.clone_content_control(by_tag(document, "outer"), host(document))
+    ids = [control.id for control in document.content_controls() if control.tag == "outer"]
+    if len(set(ids)) != 2 or 1 not in ids:
+        failures.append(f"legal space clone ids: {ids}")
+    document = document_for("<w:r><w:t>&#65;</w:t></w:r>")
+    document.clone_content_control(by_tag(document, "outer"), host(document))
+    if len({control.id for control in document.content_controls() if control.tag == "outer"}) != 2:
+        failures.append("legal run reference clone did not keep two ids")
+    assert failures == []
+
+
+def test_f287_custom_xml_reference_forms_and_position():
+    import rdocx
+
+    document = rdocx.Document()
+    failures = []
+    for label, item, needle in [
+        ("decimal before root", b"&#65;<root/>", "fragment"),
+        ("predefined after root", b"<root/>&lt;", "fragment"),
+        ("cdata space before root", b"<![CDATA[ ]]><root/>", "fragment"),
+        ("uppercase attribute", b'<root a="&#X41;"/>', "not XML"),
+        ("double hyphen in comment", b"<root><!--a--b--></root>", "not XML"),
+    ]:
+        fresh = rdocx.Document()
+        before = fresh.to_bytes()
+        try:
+            fresh.add_custom_xml_store(item)
+        except rdocx.RdocxError as error:
+            if needle not in str(error) or fresh.to_bytes() != before:
+                failures.append(f"{label}: {error} unchanged={fresh.to_bytes() == before}")
+        else:
+            failures.append(f"{label}: published unchanged={fresh.to_bytes() == before}")
+    assert failures == []
+    kept = [
+        b"<!--note--><root/>",
+        b"<root><!--note--></root>",
+        b"<root>&#x41;</root>",
+        b'<root a:b="1"/>',
+        b"<root>&#32;</root>",
+        b"<root><![CDATA[A]]></root>",
+    ]
+    for item in kept:
+        document.add_custom_xml_store(item)
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    with zipfile.ZipFile(io.BytesIO(reopened.to_bytes())) as archive:
+        for index, item in enumerate(kept, start=1):
+            assert archive.read(f"customXml/item{index}.xml") == item
+
+
+def test_f287_custom_xml_document_events_are_owned_and_atomic():
+    import io
+    import zipfile
+
+    import rdocx
+
+    for item in [
+        b"<root><!DOCTYPE root></root>",
+        b"<!DOCTYPE root><root/>",
+        b"<root/><!DOCTYPE root>",
+        b'<root><?xml version="1.0"?></root>',
+        b' <?xml version="1.0"?><root/>',
+        b'<?xml version="1.0" standalone="maybe"?><root/>',
+        b"<?XmL note?><root/>",
+        b"<root><?1bad note?></root>",
+        b"<root>text]]></root>",
+        b'<?xml version="1.0" encoding="UTF-16"?><root/>',
+        "<?xml version='1.0' encoding='US-ASCII'?><root>é</root>".encode(),
+        b'<root a="1"b="2"/>',
+        b'<?xml version="1.0"encoding="UTF-8"?><root/>',
+    ]:
+        document = rdocx.Document()
+        before = document.to_bytes()
+        with pytest.raises(rdocx.RdocxError, match="not XML"):
+            document.add_custom_xml_store(item)
+        assert document.to_bytes() == before
+
+    for item in [
+        b'<?xml version="1.0" encoding="UTF-8"?><root/>',
+        b"<?before ok?><root><?inside ok?></root><?after ok?>",
+        b"<!--before--><root/><!--after-->",
+        b'<root a:b:c="&lt;"/>',
+    ]:
+        document = rdocx.Document()
+        document.add_custom_xml_store(item)
+        reopened = rdocx.Document.from_bytes(document.to_bytes())
+        with zipfile.ZipFile(io.BytesIO(reopened.to_bytes())) as archive:
+            assert archive.read("customXml/item1.xml") == item
+
+
+def test_f287_custom_xml_names_values_and_references():
+    import rdocx
+
+    document = rdocx.Document()
+    failures = []
+    for label, item in [
+        ("literal less-than", b'<root a="<"/>'),
+        ("attribute name", b'<root 1bad="x"/>'),
+        ("attribute entity", b'<root a="&bad;"/>'),
+        ("element name", b"<1bad/>"),
+        ("text entity", b"<root>&bad;</root>"),
+        ("character reference", b'<root a="&#x0;"/>'),
+    ]:
+        before = document.to_bytes()
+        try:
+            document.add_custom_xml_store(item)
+        except rdocx.RdocxError as error:
+            if "not XML" not in str(error) or document.to_bytes() != before:
+                failures.append(f"{label}: {error} unchanged={document.to_bytes() == before}")
+        else:
+            failures.append(f"{label}: published unchanged={document.to_bytes() == before}")
+    assert failures == []
+    opaque = b'<root a:b="1"/>'
+    entity = b'<root a="&lt;">&#65;</root>'
+    document.add_custom_xml_store(opaque)
+    document.add_custom_xml_store(entity)
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        assert archive.read("customXml/item1.xml") == opaque
+        assert archive.read("customXml/item2.xml") == entity
 
 
 def test_fx204_tag_fill_keeps_alias_and_late_refusal_atomic():

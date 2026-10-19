@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use oxml_opc::OpcPackage;
 use quick_xml::XmlVersion;
-use quick_xml::events::{BytesStart, Event};
+use quick_xml::events::{BytesRef, BytesStart, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::{NsReader, Reader};
 use rdocx_oxml::content_control::{CT_DataBinding, CT_Sdt, SdtContent, SdtType};
@@ -1665,6 +1665,11 @@ impl Document {
         }
         let (_part, xml, range, direct) = control_item(self, source)?;
         if direct && control_parent_is_block(&xml, &range)? {
+            if !inner_matches_slot(ParentSlot::Block, &sdt_content_bytes(&xml, &range)?)? {
+                return Err(Error::Other(
+                    "content control placement does not match its parent".to_owned(),
+                ));
+            }
             return self
                 .move_content(source, destination)
                 .map_err(control_fault);
@@ -1706,6 +1711,11 @@ impl Document {
     ) -> Result<()> {
         let (_part, xml, range, direct) = control_item(self, source)?;
         if direct && control_parent_is_block(&xml, &range)? {
+            if !inner_matches_slot(ParentSlot::Block, &sdt_content_bytes(&xml, &range)?)? {
+                return Err(Error::Other(
+                    "content control placement does not match its parent".to_owned(),
+                ));
+            }
             return self
                 .clone_content(source, destination)
                 .map_err(control_fault);
@@ -1821,11 +1831,16 @@ fn validate_store_item(xml: &[u8]) -> Result<()> {
     if xml.is_empty() {
         return Err(Error::Other("custom XML item is empty".to_owned()));
     }
+    let text = std::str::from_utf8(xml)
+        .map_err(|error| Error::Other(format!("custom XML item is not XML: {error}")))?;
+    oxml_core::xml::reject_non_xml_characters("custom XML item is not XML", text)?;
     let mut reader = Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
+    reader.config_mut().check_comments = true;
     let mut buffer = Vec::new();
     let mut roots = 0usize;
     let mut depth = 0usize;
+    let mut declaration_allowed = true;
     loop {
         match reader.read_event_into(&mut buffer) {
             Ok(Event::Start(start)) => {
@@ -1856,21 +1871,57 @@ fn validate_store_item(xml: &[u8]) -> Result<()> {
                 depth -= 1;
             }
             Ok(Event::Text(text)) => {
+                if text.windows(3).any(|bytes| bytes == b"]]>") {
+                    return Err(Error::Other(
+                        "custom XML item is not XML: literal CDATA terminator in text".to_owned(),
+                    ));
+                }
                 if depth == 0 && !is_xml_whitespace(text.as_ref()) {
                     return Err(Error::Other("custom XML item is a fragment".to_owned()));
                 }
             }
-            Ok(Event::CData(text)) => {
-                if depth == 0 && !is_xml_whitespace(text.as_ref()) {
+            Ok(Event::CData(_)) => {
+                if depth == 0 {
                     return Err(Error::Other("custom XML item is a fragment".to_owned()));
                 }
             }
+            Ok(Event::GeneralRef(reference)) => {
+                if depth == 0 {
+                    return Err(Error::Other("custom XML item is a fragment".to_owned()));
+                }
+                decode_one_xml_reference(&reference).map_err(|detail| {
+                    Error::Other(format!("custom XML item is not XML: {detail}"))
+                })?;
+            }
+            Ok(Event::Decl(declaration)) => {
+                if !declaration_allowed {
+                    return Err(Error::Other(
+                        "custom XML item is not XML: declaration must be first".to_owned(),
+                    ));
+                }
+                validate_store_declaration(&declaration, text.is_ascii())?;
+            }
+            Ok(Event::DocType(_)) => {
+                return Err(Error::Other(
+                    "custom XML item is not XML: DTD declarations are unsupported".to_owned(),
+                ));
+            }
+            Ok(Event::PI(instruction)) => {
+                let target = instruction.target();
+                if !store_xml_name_is_valid(target) || target.eq_ignore_ascii_case(b"xml") {
+                    return Err(Error::Other(
+                        "custom XML item is not XML: invalid processing instruction target"
+                            .to_owned(),
+                    ));
+                }
+            }
+            Ok(Event::Comment(_)) => {} // The reader checks comment syntax.
             Ok(Event::Eof) => break,
-            Ok(_) => {}
             Err(error) => {
                 return Err(Error::Other(format!("custom XML item is not XML: {error}")));
             }
         }
+        declaration_allowed = false;
         buffer.clear();
     }
     if roots != 1 || depth != 0 {
@@ -1881,11 +1932,183 @@ fn validate_store_item(xml: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn reject_store_attributes(start: &BytesStart<'_>) -> Result<()> {
-    for attribute in start.attributes() {
-        attribute.map_err(|error| Error::Other(format!("custom XML item is not XML: {error}")))?;
+fn validate_store_declaration(
+    declaration: &quick_xml::events::BytesDecl<'_>,
+    ascii_only: bool,
+) -> Result<()> {
+    let invalid =
+        || Error::Other("custom XML item is not XML: invalid XML 1.0 declaration".to_owned());
+    let content = std::str::from_utf8(declaration.as_ref()).map_err(|_| invalid())?;
+    let start = BytesStart::from_content(content, 3);
+    reject_store_attribute_separators(&start)?;
+    let mut encoding_seen = false;
+    let mut standalone_seen = false;
+    let mut version_seen = false;
+    for (index, attribute) in start.attributes().enumerate() {
+        let attribute = attribute.map_err(|_| invalid())?;
+        let value = attribute.value.as_ref();
+        match attribute.key.as_ref() {
+            b"version" if index == 0 && value == b"1.0" => version_seen = true,
+            b"encoding" if version_seen && !encoding_seen && !standalone_seen => {
+                if !value.first().is_some_and(u8::is_ascii_alphabetic)
+                    || !value.iter().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                    })
+                {
+                    return Err(invalid());
+                }
+                if !value.eq_ignore_ascii_case(b"UTF-8")
+                    && !(ascii_only && value.eq_ignore_ascii_case(b"US-ASCII"))
+                {
+                    return Err(Error::Other(
+                        "custom XML item is not XML: encoding is unsupported or contradicts UTF-8 input"
+                            .to_owned(),
+                    ));
+                }
+                encoding_seen = true;
+            }
+            b"standalone"
+                if version_seen && !standalone_seen && matches!(value, b"yes" | b"no") =>
+            {
+                standalone_seen = true;
+            }
+            _ => return Err(invalid()),
+        }
+    }
+    if !version_seen {
+        return Err(invalid());
     }
     Ok(())
+}
+
+fn reject_store_attributes(start: &BytesStart<'_>) -> Result<()> {
+    reject_store_name(start.name().as_ref())?;
+    reject_store_attribute_separators(start)?;
+    for attribute in start.attributes() {
+        let attribute = attribute
+            .map_err(|error| Error::Other(format!("custom XML item is not XML: {error}")))?;
+        reject_store_name(attribute.key.as_ref())?;
+        reject_store_attribute_value(attribute.value.as_ref())?;
+    }
+    Ok(())
+}
+
+fn reject_store_attribute_separators(start: &BytesStart<'_>) -> Result<()> {
+    // quick-xml checks quoting and duplicates, but accepts adjacent attributes.
+    // Inspect only their separators here. Names and values are checked above.
+    let mut quote = None;
+    let mut separator_required = true;
+    for &byte in start.attributes_raw() {
+        if let Some(delimiter) = quote {
+            if byte == delimiter {
+                quote = None;
+                separator_required = true;
+            }
+        } else {
+            if separator_required {
+                if !matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
+                    return Err(Error::Other(
+                        "custom XML item is not XML: attribute requires whitespace".to_owned(),
+                    ));
+                }
+                separator_required = false;
+            }
+            if matches!(byte, b'\'' | b'"') {
+                quote = Some(byte);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reject_store_name(name: &[u8]) -> Result<()> {
+    if store_xml_name_is_valid(name) {
+        Ok(())
+    } else {
+        Err(Error::Other(format!(
+            "custom XML item is not XML: invalid name {}",
+            String::from_utf8_lossy(name)
+        )))
+    }
+}
+
+fn reject_store_attribute_value(value: &[u8]) -> Result<()> {
+    if value.contains(&b'<') {
+        return Err(Error::Other(
+            "custom XML item is not XML: attribute contains a literal less-than sign".to_owned(),
+        ));
+    }
+    let text = std::str::from_utf8(value)
+        .map_err(|error| Error::Other(format!("custom XML item is not XML: {error}")))?;
+    decode_xml_reference_text(text)
+        .map_err(|detail| Error::Other(format!("custom XML item is not XML: {detail}")))?;
+    Ok(())
+}
+
+/// Decode XML references with quick-xml and then apply the XML 1.0 character rule.
+/// Numeric syntax stays in `unescape`, including its lowercase hexadecimal marker.
+fn decode_xml_reference_text(raw: &str) -> std::result::Result<std::borrow::Cow<'_, str>, String> {
+    let decoded = quick_xml::escape::unescape(raw).map_err(|error| error.to_string())?;
+    if decoded.chars().all(oxml_core::xml::is_xml_1_0_character) {
+        Ok(decoded)
+    } else {
+        Err("character reference is not legal in XML 1.0".to_owned())
+    }
+}
+
+fn decode_one_xml_reference(reference: &BytesRef<'_>) -> std::result::Result<char, String> {
+    let body = reference.decode().map_err(|error| error.to_string())?;
+    let mut raw = String::with_capacity(body.len() + 2);
+    raw.push('&');
+    raw.push_str(body.as_ref());
+    raw.push(';');
+    let decoded = decode_xml_reference_text(&raw)?;
+    let mut characters = decoded.chars();
+    match (characters.next(), characters.next()) {
+        (Some(character), None) => Ok(character),
+        _ => Err("character reference is not legal in XML 1.0".to_owned()),
+    }
+}
+
+fn store_xml_name_is_valid(name: &[u8]) -> bool {
+    let Ok(name) = std::str::from_utf8(name) else {
+        return false;
+    };
+    let mut characters = name.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    store_name_start(first) && characters.all(store_name_character)
+}
+
+fn store_name_start(character: char) -> bool {
+    character == ':'
+        || matches!(
+            character,
+            'A'..='Z'
+                | '_'
+                | 'a'..='z'
+                | '\u{00C0}'..='\u{00D6}'
+                | '\u{00D8}'..='\u{00F6}'
+                | '\u{00F8}'..='\u{02FF}'
+                | '\u{0370}'..='\u{037D}'
+                | '\u{037F}'..='\u{1FFF}'
+                | '\u{200C}'..='\u{200D}'
+                | '\u{2070}'..='\u{218F}'
+                | '\u{2C00}'..='\u{2FEF}'
+                | '\u{3001}'..='\u{D7FF}'
+                | '\u{F900}'..='\u{FDCF}'
+                | '\u{FDF0}'..='\u{FFFD}'
+                | '\u{10000}'..='\u{EFFFF}'
+        )
+}
+
+fn store_name_character(character: char) -> bool {
+    store_name_start(character)
+        || matches!(
+            character,
+            '-' | '.' | '0'..='9' | '\u{00B7}' | '\u{0300}'..='\u{036F}' | '\u{203F}'..='\u{2040}'
+        )
 }
 
 fn control_fault(error: Error) -> Error {
@@ -2714,43 +2937,93 @@ fn control_parent_is_block(xml: &[u8], range: &Range<usize>) -> Result<bool> {
     Ok(matches!(parent_slot(&elems, sdt.id), ParentSlot::Block))
 }
 
-fn inner_matches_slot(slot: ParentSlot, inner: &[u8]) -> Result<bool> {
-    if matches!(slot, ParentSlot::Other) {
-        return Ok(false);
-    }
-    let mut wrapped = Vec::new();
+fn detached_control_content(control: &[u8]) -> Result<Vec<u8>> {
+    let wrapped = wrap_word_root(control);
+    let prefix = b"<w:root xmlns:w=\"".len() + W_NS.len() + b"\">".len();
+    sdt_content_bytes(&wrapped, &(prefix..prefix + control.len()))
+}
+
+fn wrap_word_root(inner: &[u8]) -> Vec<u8> {
+    let mut wrapped = Vec::with_capacity(inner.len() + W_NS.len() + 32);
     wrapped.extend_from_slice(b"<w:root xmlns:w=\"");
     wrapped.extend_from_slice(W_NS.as_bytes());
     wrapped.extend_from_slice(b"\">");
     wrapped.extend_from_slice(inner);
     wrapped.extend_from_slice(b"</w:root>");
-    let mut reader = NsReader::from_reader(wrapped.as_slice());
+    wrapped
+}
+
+fn inner_matches_slot(slot: ParentSlot, inner: &[u8]) -> Result<bool> {
+    if matches!(slot, ParentSlot::Other) {
+        return Ok(false);
+    }
+    if payload_has_nonspace_text(inner)? {
+        return Ok(false);
+    }
+    let wrapped = wrap_word_root(inner);
+    let elems = index_elements(&wrapped)?;
+    let Some(root) = elems.iter().find(|elem| elem.parent.is_none()) else {
+        return Ok(true);
+    };
+    transparent_children_match(slot, &wrapped, &elems, root.id)
+}
+
+fn transparent_children_match(
+    slot: ParentSlot,
+    xml: &[u8],
+    elems: &[XmlElem],
+    parent_id: usize,
+) -> Result<bool> {
+    for child in elems.iter().filter(|elem| elem.parent == Some(parent_id)) {
+        if child.word && child.local == b"sdt" {
+            if !sdt_payload_matches(slot, xml, elems, child)? {
+                return Ok(false);
+            }
+        } else if !child_allowed(slot, child.word, &child.local) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn sdt_payload_matches(
+    slot: ParentSlot,
+    xml: &[u8],
+    elems: &[XmlElem],
+    sdt: &XmlElem,
+) -> Result<bool> {
+    let mut contents = Vec::new();
+    for child in elems.iter().filter(|elem| elem.parent == Some(sdt.id)) {
+        match (child.word, child.local.as_slice()) {
+            (true, b"sdtPr" | b"sdtEndPr") => {}
+            (true, b"sdtContent") => contents.push(child),
+            _ => return Ok(false),
+        }
+    }
+    for content in contents {
+        let Some(inner_end) = content.inner_end else {
+            continue;
+        };
+        let inner = &xml[content.open_end..inner_end];
+        if payload_has_nonspace_text(inner)?
+            || !transparent_children_match(slot, xml, elems, content.id)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn payload_has_nonspace_text(inner: &[u8]) -> Result<bool> {
+    let wrapped = wrap_word_root(inner);
+    let mut reader = Reader::from_reader(wrapped.as_slice());
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
     let mut depth = 0usize;
     loop {
-        let (namespace, event) = reader
-            .read_resolved_event_into(&mut buffer)
-            .map_err(|error| {
-                Error::Other(format!(
-                    "content control unwrap content is invalid: {error}"
-                ))
-            })?;
-        let word = is_word(&namespace);
-        drop(namespace);
-        match event {
-            Event::Start(element) => {
-                if depth == 1 && !child_allowed(slot, word, element.local_name().as_ref()) {
-                    return Ok(false);
-                }
-                depth += 1;
-            }
-            Event::Empty(element) => {
-                if depth == 1 && !child_allowed(slot, word, element.local_name().as_ref()) {
-                    return Ok(false);
-                }
-            }
-            Event::End(_) => {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_)) => depth += 1,
+            Ok(Event::End(_)) => {
                 if depth == 0 {
                     return Err(Error::Other(
                         "content control unwrap content is invalid".to_owned(),
@@ -2758,10 +3031,25 @@ fn inner_matches_slot(slot: ParentSlot, inner: &[u8]) -> Result<bool> {
                 }
                 depth -= 1;
             }
-            Event::Text(text) if depth == 1 && !xml_space(text.as_ref()) => return Ok(false),
-            Event::CData(text) if depth == 1 && !xml_space(text.as_ref()) => return Ok(false),
-            Event::Eof => return Ok(true),
-            _ => {}
+            Ok(Event::Text(text)) if depth == 1 && !xml_space(text.as_ref()) => return Ok(true),
+            Ok(Event::CData(text)) if depth == 1 && !xml_space(text.as_ref()) => return Ok(true),
+            Ok(Event::GeneralRef(reference)) if depth == 1 => {
+                let character = decode_one_xml_reference(&reference).map_err(|detail| {
+                    Error::Other(format!(
+                        "content control unwrap content is invalid: {detail}"
+                    ))
+                })?;
+                if !matches!(character, ' ' | '\t' | '\n' | '\r') {
+                    return Ok(true);
+                }
+            }
+            Ok(Event::Eof) => return Ok(false),
+            Ok(_) => {}
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "content control unwrap content is invalid: {error}"
+                )));
+            }
         }
         buffer.clear();
     }
@@ -2830,7 +3118,7 @@ fn destination_accepts_control(
 ) -> Result<()> {
     let elems = index_elements(parent_xml)?;
     let parent = element_at(&elems, parent_range)?;
-    let inner = sdt_content_bytes(control, &(0..control.len()))?;
+    let inner = detached_control_content(control)?;
     if inner_matches_slot(element_slot(&elems, parent), &inner)? {
         Ok(())
     } else {
@@ -3162,6 +3450,16 @@ fn repeating_content(xml: &[u8], sdt_range: &Range<usize>) -> Result<RepeatingCo
     {
         return Ok(RepeatingContent::AlreadyItem);
     }
+    for child in children {
+        if child.word
+            && child.local == b"sdt"
+            && !sdt_payload_matches(ParentSlot::Block, xml, &elems, child).map_err(|error| {
+                Error::Other(format!("repeating section content is invalid: {error}"))
+            })?
+        {
+            return Ok(RepeatingContent::NotBlock);
+        }
+    }
     Ok(RepeatingContent::Wrap)
 }
 
@@ -3189,6 +3487,14 @@ fn inner_has_nonspace_text(inner: &[u8]) -> Result<bool> {
             }
             Ok(Event::Text(text)) if depth == 1 && !xml_space(text.as_ref()) => return Ok(true),
             Ok(Event::CData(text)) if depth == 1 && !xml_space(text.as_ref()) => return Ok(true),
+            Ok(Event::GeneralRef(reference)) if depth == 1 => {
+                let character = decode_one_xml_reference(&reference).map_err(|detail| {
+                    Error::Other(format!("repeating section content is invalid: {detail}"))
+                })?;
+                if !matches!(character, ' ' | '\t' | '\n' | '\r') {
+                    return Ok(true);
+                }
+            }
             Ok(Event::Eof) => return Ok(false),
             Ok(_) => {}
             Err(error) => {

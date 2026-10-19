@@ -28,7 +28,7 @@ Add store and binding methods on `Document`. Do not add a package-surgery API, a
 
 Rust `Document::add_custom_xml_store(&mut self, item_xml: &[u8], schema_uris: &[&str]) -> Result<String>`. Python `Document.add_custom_xml_store(item_xml: bytes, schema_uris: Sequence[str] = ()) -> str`. The method stages a new item part, a properties part, both relationships and the content-type overrides through the same steps as `create_collection`. Part names use `reserve_preferred_part_name`. An occupied conventional name is not overwritten. The returned value is the new item id, not the part name. `create_collection` itself still returns the part name.
 
-`item_xml` must be one well-formed XML element. Empty bytes, a fragment, or bytes that are not XML return `Error::Other` and do not publish. `schema_uris` is a list of attribute values. An empty list writes `<ds:schemaRefs/>`, which is what bibliography writes. Each URI must be non-empty. Caller order is kept, including a repeated URI. The properties root is `ds:datastoreItem` with attribute `ds:itemID`, then child `ds:schemaRefs`, then one `ds:schemaRef` per URI. URIs are stored and not fetched. The id is the braced uppercase form `{00000000-0000-4000-8000-############}` from the existing allocator.
+`item_xml` must be one well-formed XML element. Q23 explicitly refuses every DOCTYPE/DTD declaration before allocation, including declarations in the prolog. XML declarations, legal processing instructions and comments remain supported, and valid bytes retain their original representation. Empty bytes, a fragment, or bytes that are not XML return `Error::Other` and do not publish. `schema_uris` is a list of attribute values. An empty list writes `<ds:schemaRefs/>`, which is what bibliography writes. Each URI must be non-empty. Caller order is kept, including a repeated URI. The properties root is `ds:datastoreItem` with attribute `ds:itemID`, then child `ds:schemaRefs`, then one `ds:schemaRef` per URI. URIs are stored and not fetched. The id is the braced uppercase form `{00000000-0000-4000-8000-############}` from the existing allocator.
 
 Rust `Document::set_content_control_binding(&mut self, location: &ContentLocation, store_item_id: &str, xpath: &str, prefix_mappings: Option<&str>) -> Result<()>`. Python `Document.set_content_control_binding(location, store_item_id: str, xpath: str, prefix_mappings: str | None = None) -> None`. The three strings are the fields of the existing `CT_DataBinding`. There is no new binding object. `None` and `""` mean no prefix mappings. The mapping text uses `parse_prefix_mappings`. The xpath uses `parse_xpath`. The store must resolve to one part through `resolve_custom_xml_part`. The selected element must already exist or be an empty element `select_xml_element` can expand. A failed check returns `Error::Other` and does not publish.
 
@@ -164,3 +164,36 @@ No new product choice. Q18, Q19 and Q21 stay answered. The private helper fact s
 | Q21 | F-285, and this story's approval | The F-285 method names. This plan has no separate product choice. | Answered 2026-10-18 on F-285. This plan adopts those names. |
 
 No external issue closes from this plan.
+
+## Codex takeover, approved Q23 and event coverage
+
+On 2026-10-19 the user requested Codex take over the remaining work and close
+when qualified. The user explicitly approved refusing DTD declarations. This
+is a bounded API decision, not a claim that native Word evidence exists.
+
+| Event | Before root | Inside root | After root | Proof |
+|---|---|---|---|---|
+| Start / Empty | Admit one root | Validate names and attributes | Refuse second root | Existing root/attribute cases |
+| End | Parser rejects unmatched | Matched depth transition | Parser rejects unmatched | Reader end-name checks |
+| Text | Literal XML whitespace only | Legal XML characters, no literal CDATA terminator | Literal XML whitespace only | Document-event test |
+| CData / GeneralRef | Refuse | Existing decoded-reference and XML character rules | Refuse | Existing reference cases |
+| Comment | Enable lexical checking | Enable lexical checking | Enable lexical checking | Comment refusal and retention |
+| PI | Legal XML Name, target not case-insensitive xml | Same | Same | Document-event test |
+| Decl | Only first event, validate XML 1.0 declaration grammar | Refuse | Refuse | Document-event test |
+| DocType | Refuse by Q23 | Refuse | Refuse | Document-event test |
+| Eof | Refuse missing root | Refuse unclosed root | Accept exactly one closed root | Existing root cases |
+
+A7 extends admission coverage through
+`custom_xml_store_document_events_are_validated_before_publication` and
+`test_f287_custom_xml_document_events_are_owned_and_atomic`. Both compare
+complete package bytes on refusal and valid store bytes after reopen.
+
+The input is UTF-8, with optional UTF-8 BOM. A declaration may name UTF-8 or
+US-ASCII when the whole input is ASCII. Unsupported or contradictory encoding
+labels refuse before publication. This follows the actual decoder boundary
+instead of treating every syntactically valid encoding label as supported.
+Attribute and declaration fields require XML whitespace between quoted fields.
+
+Q23: answered by the user in this session, "Refuse DTD declarations explicitly
+(recommended)". No namespace-well-formedness requirement is added. B1 and final
+integrated qualification stay pending. Historical reviews are retained.

@@ -1798,7 +1798,10 @@ Direct block children use `move_content`, `clone_content`, and
 staged transaction through location-aware wrappers. Clone drops `w14:paraId`
 and `w14:textId` and allocates a new sdt id. Move keeps the id and stays inside
 one story. Both refuse before publication when the destination parent cannot
-hold the control content. Remove deletes the shell and its content. Unwrap leaves the content
+hold the control content. A nested content control is transparent, so move,
+clone and unwrap apply that same parent grammar to its content. Character
+references, predefined entities and CDATA at that boundary count as their
+decoded text. Remove deletes the shell and its content. Unwrap leaves the content
 only when the parent can hold it, and refuses a cell that would lose its last
 paragraph. Story-item classification seeds each owner with the ancestor prefix
 bindings already collected for that part, including a document-level `w14`
@@ -1816,8 +1819,9 @@ repeating item. Date writes `w:dateFormat`, then `w:storeMappedDataAs` with
 a non-XML character refuses. Picture requires an image relationship the part
 already owns and a drawing in the shell that embeds it. Repeating section
 content must already be one repeating item, or one block sequence that the
-call wraps in one nested repeating item. Empty content refuses. A repeating
-item is legal only when its parent is already a repeating section. Citation,
+call wraps in one nested repeating item. Empty content refuses. Admission
+uses the same decoded-text rule at each transparent nested block boundary. A
+repeating item is legal only when its parent is already a repeating section. Citation,
 equation, bibliography, and document-part kinds stay refused at creation and
 have no payload. Tag, alias, id, lock, appearance, placeholder, and unmodelled
 property children stay. `Document::repeat_content_control` clones the first
@@ -1834,8 +1838,18 @@ differential stays pending.
 part, both relationships, and both content-type overrides through the
 bibliography store sequence. The call returns the braced item id. An occupied
 conventional name is not overwritten. Item bytes must be one well-formed
-XML element. That check includes attribute syntax and unique attribute names.
-Valid item bytes stay verbatim. An empty schema list writes an empty `ds:schemaRefs`. Each schema URI
+XML element. DTD declarations are explicitly unsupported and refuse before
+allocation in every position. XML declarations are allowed only first and
+must satisfy the XML 1.0 declaration grammar. Input bytes are UTF-8. A declared
+encoding must be UTF-8, or US-ASCII for an entirely ASCII input. Other encodings
+refuse rather than being interpreted as UTF-8 under a contradictory label.
+Processing-instruction targets
+must be legal XML Names and cannot be case-insensitive `xml`. Every parser
+event has an explicit admission rule. That check includes XML names, attribute values, entity
+references, unique attribute names and comment well-formedness. One reference decoder feeds the XML
+1.0 character rule. A reference, CDATA section or nonspace text outside the
+root is a fragment. Valid item bytes stay verbatim,
+including an unbound prefix. An empty schema list writes an empty `ds:schemaRefs`. Each schema URI
 is stored in caller order and is not fetched. `Document::set_content_control_binding`
 writes `w:dataBinding` with `w:prefixMappings` when a mapping is present, then
 `w:xpath`, then `w:storeItemID`. `None` and an empty mapping omit

@@ -26374,6 +26374,374 @@ fn content_control_move_and_clone_refuse_mismatched_destinations() {
     assert_ne!(cloned_inline[0], cloned_inline[1]);
 }
 
+fn nested_shell(tag: &str, id: i32, inner: &str) -> String {
+    format!(
+        "<w:sdt><w:sdtPr><w:tag w:val=\"{tag}\"/><w:id w:val=\"{id}\"/></w:sdtPr><w:sdtContent>{inner}</w:sdtContent></w:sdt>"
+    )
+}
+
+fn nested_control_document() -> Document {
+    let row = "<w:tr><w:tc><w:tcPr><w:tcW w:w=\"0\" w:type=\"auto\"/></w:tcPr><w:p/></w:tc></w:tr>";
+    let cell = "<w:tc><w:tcPr><w:tcW w:w=\"0\" w:type=\"auto\"/></w:tcPr><w:p/></w:tc>";
+    let run = "<w:r><w:t>kept</w:t></w:r>";
+    let paragraph = "<w:p><w:r><w:t>block</w:t></w:r></w:p>";
+    let grid = "<w:tblGrid><w:gridCol w:w=\"1000\"/></w:tblGrid>";
+    let row_nest = nested_shell("row-nest", 1, &nested_shell("row-inner", 2, row));
+    let cell_nest = nested_shell("cell-nest", 3, &nested_shell("cell-inner", 4, cell));
+    let inline_ok = nested_shell("inline-ok", 5, &nested_shell("inline-inner", 6, run));
+    let inline_bad = nested_shell("inline-bad", 7, &nested_shell("inline-bad-inner", 8, row));
+    let block_bad = nested_shell("block-bad", 11, &nested_shell("block-inner", 12, row));
+    let block_ok = nested_shell(
+        "block-ok",
+        13,
+        &nested_shell("block-ok-inner", 14, paragraph),
+    );
+    let deep = nested_shell(
+        "deep-row",
+        15,
+        &nested_shell("deep-mid", 16, &nested_shell("deep-inner", 17, row)),
+    );
+    document_with_body_inner(&format!(
+        "<w:p><w:r><w:t>host</w:t></w:r></w:p><w:p><w:r><w:t>other</w:t></w:r></w:p><w:tbl>{grid}{row_nest}</w:tbl><w:tbl>{grid}<w:tr><w:tc><w:tcPr><w:tcW w:w=\"0\" w:type=\"auto\"/></w:tcPr><w:p/></w:tc>{cell_nest}</w:tr></w:tbl><w:tbl>{grid}<w:tr><w:tc><w:tcPr><w:tcW w:w=\"0\" w:type=\"auto\"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:tbl>{grid}{deep}</w:tbl><w:p>{inline_ok}</w:p><w:p>{inline_bad}</w:p>{block_bad}{block_ok}<w:p><w:r><w:t>tail</w:t></w:r></w:p>"
+    ))
+}
+
+fn nested_tables(document: &Document) -> Vec<rdocx::ContentLocation> {
+    document
+        .story_items(&body_story(document))
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.kind() == StoryItemKind::Table)
+        .map(|item| item.location().clone())
+        .collect()
+}
+
+fn nested_paragraph(document: &Document, text: &str) -> rdocx::ContentLocation {
+    document
+        .story_items(&body_story(document))
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            item.kind() == StoryItemKind::Paragraph && item.text().unwrap().as_deref() == Some(text)
+        })
+        .unwrap_or_else(|| panic!("missing paragraph {text}"))
+        .location()
+        .clone()
+}
+
+fn control_refusal_failure(
+    label: &str,
+    clone: bool,
+    source_tag: &str,
+    destination: impl Fn(&Document) -> rdocx::ContentLocation,
+    needle: &str,
+) -> Option<String> {
+    let mut document = nested_control_document();
+    let before = document.to_bytes().unwrap();
+    let source = control_by_tag(&document, source_tag);
+    let destination = destination(&document);
+    let result = if clone {
+        document.clone_content_control(&source, &destination)
+    } else {
+        document.move_content_control(&source, &destination)
+    };
+    match result {
+        Err(error)
+            if error.to_string().contains(needle) && document.to_bytes().unwrap() == before =>
+        {
+            None
+        }
+        other => Some(format!(
+            "{label}: {other:?} unchanged={}",
+            document.to_bytes().unwrap() == before
+        )),
+    }
+}
+
+#[test]
+fn content_control_nested_payload_uses_destination_grammar() {
+    let mut failures = Vec::new();
+    for (label, clone, tag, which) in [
+        ("clone row wrapper into paragraph", true, "row-nest", "host"),
+        ("move row wrapper into paragraph", false, "row-nest", "host"),
+        ("clone cell wrapper into table", true, "cell-nest", "table"),
+        (
+            "clone inline wrapper into table",
+            true,
+            "inline-ok",
+            "table",
+        ),
+        (
+            "move three-level row wrapper into paragraph",
+            false,
+            "deep-row",
+            "host",
+        ),
+        ("move direct block row wrapper", false, "block-bad", "end"),
+    ] {
+        if let Some(failure) = control_refusal_failure(
+            label,
+            clone,
+            tag,
+            |document| match which {
+                "table" => nested_tables(document)[2].clone(),
+                "end" => rdocx::ContentLocation::end(body_story(document)),
+                _ => nested_paragraph(document, "host"),
+            },
+            "does not match",
+        ) {
+            failures.push(failure);
+        }
+    }
+    let mut unwrap_document = nested_control_document();
+    let unwrap_before = unwrap_document.to_bytes().unwrap();
+    let unwrap_at = control_by_tag(&unwrap_document, "inline-bad");
+    match unwrap_document.unwrap_content_control(&unwrap_at) {
+        Err(error)
+            if error.to_string().contains("parent cannot hold")
+                && unwrap_document.to_bytes().unwrap() == unwrap_before => {}
+        other => failures.push(format!(
+            "unwrap nested row in paragraph: {other:?} unchanged={}",
+            unwrap_document.to_bytes().unwrap() == unwrap_before
+        )),
+    }
+
+    let mut legal = nested_control_document();
+    let row = control_by_tag(&legal, "row-nest");
+    let table = nested_tables(&legal)[2].clone();
+    if let Err(error) = legal.clone_content_control(&row, &table) {
+        failures.push(format!("legal nested row clone: {error}"));
+    } else {
+        let ids = legal
+            .content_controls_by_tag("row-nest")
+            .into_iter()
+            .map(|control| control.id().unwrap())
+            .collect::<Vec<_>>();
+        if ids.len() != 2 || !ids.contains(&1) || ids[0] == ids[1] {
+            failures.push(format!("legal nested row clone ids: {ids:?}"));
+        }
+    }
+    let inline = control_by_tag(&legal, "inline-ok");
+    let other = nested_paragraph(&legal, "other");
+    if let Err(error) = legal.clone_content_control(&inline, &other) {
+        failures.push(format!("legal nested inline clone: {error}"));
+    } else {
+        let ids = legal
+            .content_controls_by_tag("inline-ok")
+            .into_iter()
+            .map(|control| control.id().unwrap())
+            .collect::<Vec<_>>();
+        if ids.len() != 2 || !ids.contains(&5) || ids[0] == ids[1] {
+            failures.push(format!("legal nested inline clone ids: {ids:?}"));
+        }
+    }
+    let mut unwrap_legal = nested_control_document();
+    let unwrap_ok = control_by_tag(&unwrap_legal, "inline-ok");
+    if let Err(error) = unwrap_legal.unwrap_content_control(&unwrap_ok) {
+        failures.push(format!("legal nested inline unwrap: {error}"));
+    } else {
+        let xml = document_part_xml(&mut unwrap_legal);
+        if xml.contains("inline-ok") || !xml.contains("inline-inner") || !xml.contains(">kept<") {
+            failures.push("legal nested inline unwrap bytes changed the nested run".to_owned());
+        }
+    }
+    let block = control_by_tag(&legal, "block-ok");
+    let end = rdocx::ContentLocation::end(body_story(&legal));
+    if let Err(error) = legal.move_content_control(&block, &end) {
+        failures.push(format!("legal direct nested block move: {error}"));
+    } else {
+        let xml = document_part_xml(&mut legal);
+        let tail = xml.find(">tail<");
+        let tag = xml.find("block-ok");
+        if tail.is_none_or(|tail| tag.is_none_or(|tag| tail >= tag))
+            || !xml.contains("w:val=\"13\"")
+        {
+            failures.push(format!("legal direct nested block move order: {xml}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+fn reference_shell_document(inner: &str) -> Document {
+    let shell = nested_shell("outer", 1, &nested_shell("inner", 2, inner));
+    document_with_body_inner(&format!(
+        "<w:p><w:r><w:t>host</w:t></w:r></w:p><w:p>{shell}</w:p>"
+    ))
+}
+
+fn reference_block_document(inner: &str) -> Document {
+    let shell = nested_shell("block-ref", 11, &nested_shell("block-inner", 12, inner));
+    document_with_body_inner(&format!("{shell}<w:p><w:r><w:t>tail</w:t></w:r></w:p>"))
+}
+
+fn reference_payload_refusal(
+    label: &str,
+    clone: bool,
+    inner: &str,
+    needle: &str,
+) -> Option<String> {
+    let mut document = reference_shell_document(inner);
+    let before = document.to_bytes().unwrap();
+    let source = control_by_tag(&document, "outer");
+    let destination = nested_paragraph(&document, "host");
+    let result = if clone {
+        document.clone_content_control(&source, &destination)
+    } else {
+        document.move_content_control(&source, &destination)
+    };
+    match result {
+        Err(error)
+            if error.to_string().contains(needle) && document.to_bytes().unwrap() == before =>
+        {
+            None
+        }
+        other => Some(format!(
+            "{label}: {other:?} unchanged={}",
+            document.to_bytes().unwrap() == before
+        )),
+    }
+}
+
+fn reference_unwrap_refusal(label: &str, inner: &str, needle: &str) -> Option<String> {
+    let mut document = reference_shell_document(inner);
+    let before = document.to_bytes().unwrap();
+    let source = control_by_tag(&document, "outer");
+    match document.unwrap_content_control(&source) {
+        Err(error)
+            if error.to_string().contains(needle) && document.to_bytes().unwrap() == before =>
+        {
+            None
+        }
+        other => Some(format!(
+            "{label}: {other:?} unchanged={}",
+            document.to_bytes().unwrap() == before
+        )),
+    }
+}
+
+fn reference_direct_refusal(label: &str, clone: bool, inner: &str) -> Option<String> {
+    let mut document = reference_block_document(inner);
+    let before = document.to_bytes().unwrap();
+    let source = control_by_tag(&document, "block-ref");
+    let destination = rdocx::ContentLocation::end(body_story(&document));
+    let result = if clone {
+        document.clone_content_control(&source, &destination)
+    } else {
+        document.move_content_control(&source, &destination)
+    };
+    match result {
+        Err(error)
+            if error.to_string().contains("does not match")
+                && document.to_bytes().unwrap() == before =>
+        {
+            None
+        }
+        other => Some(format!(
+            "{label}: {other:?} unchanged={}",
+            document.to_bytes().unwrap() == before
+        )),
+    }
+}
+
+fn reference_clone_ids(label: &str, inner: &str) -> Option<String> {
+    let mut document = reference_shell_document(inner);
+    let source = control_by_tag(&document, "outer");
+    let destination = nested_paragraph(&document, "host");
+    if let Err(error) = document.clone_content_control(&source, &destination) {
+        return Some(format!("{label}: {error}"));
+    }
+    let ids = document
+        .content_controls_by_tag("outer")
+        .into_iter()
+        .map(|control| control.id().unwrap())
+        .collect::<Vec<_>>();
+    if ids.len() == 2 && ids.contains(&1) && ids[0] != ids[1] {
+        None
+    } else {
+        Some(format!("{label} ids: {ids:?}"))
+    }
+}
+
+#[test]
+fn content_control_reference_text_uses_payload_boundary() {
+    let mut failures = Vec::new();
+    for (label, clone, inner) in [
+        ("clone decimal", true, "&#65;"),
+        ("move hexadecimal", false, "&#x41;"),
+        ("clone predefined", true, "&lt;"),
+        ("clone literal", true, "A"),
+        ("clone cdata", true, "<![CDATA[A]]>"),
+        (
+            "clone decimal beside run",
+            true,
+            "&#65;<w:r><w:t>kept</w:t></w:r>",
+        ),
+    ] {
+        if let Some(failure) = reference_payload_refusal(label, clone, inner, "does not match") {
+            failures.push(failure);
+        }
+    }
+    if let Some(failure) = reference_payload_refusal("clone uppercase", true, "&#X41;", "invalid") {
+        failures.push(failure);
+    }
+    for (label, inner) in [
+        ("unwrap decimal", "&#65;"),
+        ("unwrap predefined", "&lt;"),
+        ("unwrap cdata", "<![CDATA[A]]>"),
+    ] {
+        if let Some(failure) = reference_unwrap_refusal(label, inner, "parent cannot hold") {
+            failures.push(failure);
+        }
+    }
+    if let Some(failure) = reference_direct_refusal("move direct decimal", false, "&#65;") {
+        failures.push(failure);
+    }
+    if let Some(failure) = reference_direct_refusal("clone direct predefined", true, "&amp;") {
+        failures.push(failure);
+    }
+    for (label, inner) in [
+        ("legal decimal space", "&#32;"),
+        ("legal hexadecimal space", "&#x20;"),
+        ("legal literal space", " "),
+        ("legal cdata space", "<![CDATA[ ]]>"),
+        ("legal space beside run", "&#32;<w:r><w:t>kept</w:t></w:r>"),
+        (
+            "legal run references",
+            "<w:r><w:t>&#65;&#x41;&amp;<![CDATA[kept]]></w:t></w:r>",
+        ),
+    ] {
+        if let Some(failure) = reference_clone_ids(label, inner) {
+            failures.push(failure);
+        }
+    }
+    let mut unwrap_space = reference_shell_document("&#32;");
+    let unwrap_at = control_by_tag(&unwrap_space, "outer");
+    if let Err(error) = unwrap_space.unwrap_content_control(&unwrap_at) {
+        failures.push(format!("legal space unwrap: {error}"));
+    } else {
+        let xml = document_part_xml(&mut unwrap_space);
+        if xml.contains("w:val=\"outer\"") || !xml.contains("w:val=\"inner\"") {
+            failures.push("legal space unwrap removed the inner control".to_owned());
+        }
+    }
+    let mut move_space = reference_block_document("&#32;");
+    let block = control_by_tag(&move_space, "block-ref");
+    let end = rdocx::ContentLocation::end(body_story(&move_space));
+    if let Err(error) = move_space.move_content_control(&block, &end) {
+        failures.push(format!("legal direct space move: {error}"));
+    } else {
+        let xml = document_part_xml(&mut move_space);
+        let tail = xml.find(">tail<");
+        let tag = xml.find("block-ref");
+        if tail.is_none_or(|tail| tag.is_none_or(|tag| tail >= tag))
+            || !xml.contains("w:val=\"11\"")
+        {
+            failures.push(format!("legal direct space move order: {xml}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 #[test]
 fn content_control_remove_is_atomic() {
     let mut document = document_with_body_inner(
@@ -26879,6 +27247,81 @@ fn typed_group_control_refuses_text() {
 }
 
 #[test]
+fn content_control_repeating_section_checks_decoded_boundary_text() {
+    let mut failures = Vec::new();
+    for (payload, refusal) in [
+        ("A<w:p/>", Some("not a block sequence")),
+        ("&#65;<w:p/>", Some("not a block sequence")),
+        ("&lt;<w:p/>", Some("not a block sequence")),
+        ("&#x41;<w:p/>", Some("not a block sequence")),
+        ("&#32;<w:p/>", None),
+        ("<![CDATA[A]]><w:p/>", Some("not a block sequence")),
+        ("&#X41;<w:p/>", Some("invalid")),
+    ]
+    .into_iter()
+    .map(|(payload, refusal)| (payload.to_owned(), refusal))
+    .chain(
+        [
+            ("&#65;<w:p/>", Some("not a block sequence")),
+            ("A<w:p/>", Some("not a block sequence")),
+            ("&#x41;<w:p/>", Some("not a block sequence")),
+            ("&lt;<w:p/>", Some("not a block sequence")),
+            ("<![CDATA[A]]><w:p/>", Some("not a block sequence")),
+            ("&#X41;<w:p/>", Some("repeating section content is invalid")),
+            ("&#32;<w:p/>", None),
+            ("<w:p/>", None),
+            ("<w:p><w:r><w:t>A</w:t></w:r></w:p>", None),
+            (
+                r#"<w:sdt><w:sdtPr><w:id w:val="3"/><w:richText/></w:sdtPr><w:sdtContent>&#65;<w:p/></w:sdtContent></w:sdt>"#,
+                Some("not a block sequence"),
+            ),
+        ]
+        .into_iter()
+        .map(|(payload, refusal)| {
+            (
+                format!(
+                    r#"<w:sdt><w:sdtPr><w:id w:val="2"/><w:richText/></w:sdtPr><w:sdtContent>{payload}</w:sdtContent></w:sdt>"#
+                ),
+                refusal,
+            )
+        }),
+    ) {
+        let mut document = document_with_body_inner(&format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="probe"/><w:id w:val="1"/><w:richText/></w:sdtPr><w:sdtContent>{payload}</w:sdtContent></w:sdt><w:p><w:r><w:t>tail</w:t></w:r></w:p>"#
+        ));
+        let location = control_by_tag(&document, "probe");
+        let before = document.to_bytes().unwrap();
+        let result = document.set_content_control_type(
+            &location,
+            rdocx::ContentControlTypePayload::RepeatingSection,
+        );
+        let after = document.to_bytes().unwrap();
+        let passed = match (&result, refusal) {
+            (Err(error), Some(expected)) => error.to_string().contains(expected) && after == before,
+            (Ok(()), None) => {
+                let xml = document_part_xml(&mut document);
+                after != before
+                    && xml.contains(&format!("<w:sdtContent>{payload}</w:sdtContent>"))
+                    && xml.matches("repeatingSectionItem").count() == 1
+                    && xml.contains(">tail<")
+            }
+            _ => false,
+        };
+        eprintln!(
+            "payload={payload:?} result={result:?} unchanged={} passed={passed}",
+            after == before
+        );
+        if !passed {
+            failures.push(format!(
+                "{payload:?}: {result:?}, unchanged={}",
+                after == before
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn repeating_section_clones_the_template_item() {
     let mut empty = document_with_body_inner(
         r#"<w:sdt><w:sdtPr><w:tag w:val="empty"/><w:id w:val="1"/><w:richText/></w:sdtPr><w:sdtContent/></w:sdt>"#,
@@ -27061,6 +27504,278 @@ fn bind_rich(
     document
         .set_content_control_binding(&location, store_id, xpath, mappings)
         .unwrap();
+}
+
+#[test]
+fn custom_xml_store_rejects_names_values_and_references() {
+    let mut document = Document::new();
+    let mut failures = Vec::new();
+    for (label, item) in [
+        ("literal less-than", &br#"<root a="<"/>"#[..]),
+        ("attribute name", &br#"<root 1bad="x"/>"#[..]),
+        ("attribute entity", &br#"<root a="&bad;"/>"#[..]),
+        ("element name", &b"<1bad/>"[..]),
+        ("text entity", &b"<root>&bad;</root>"[..]),
+        ("character reference", &br#"<root a="&#x0;"/>"#[..]),
+    ] {
+        let before = document.to_bytes().unwrap();
+        match document.add_custom_xml_store(item, &[]) {
+            Err(error)
+                if error.to_string().contains("not XML")
+                    && document.to_bytes().unwrap() == before => {}
+            other => failures.push(format!(
+                "{label}: {other:?} unchanged={}",
+                document.to_bytes().unwrap() == before
+            )),
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    let opaque = br#"<root a:b="1"/>"#;
+    let entity = br#"<root a="&lt;">&#65;</root>"#;
+    document.add_custom_xml_store(opaque, &[]).unwrap();
+    document.add_custom_xml_store(entity, &[]).unwrap();
+    assert_eq!(part_bytes(&mut document, "/customXml/item1.xml"), opaque);
+    assert_eq!(part_bytes(&mut document, "/customXml/item2.xml"), entity);
+}
+
+fn store_reference_refusal(label: &str, item: &[u8], needle: &str) -> Option<String> {
+    let mut document = Document::new();
+    let before = document.to_bytes().unwrap();
+    match document.add_custom_xml_store(item, &[]) {
+        Err(error)
+            if error.to_string().contains(needle) && document.to_bytes().unwrap() == before =>
+        {
+            None
+        }
+        other => Some(format!(
+            "{label}: {other:?} unchanged={}",
+            document.to_bytes().unwrap() == before
+        )),
+    }
+}
+
+fn store_reference_verbatim(label: &str, item: &[u8]) -> Option<String> {
+    let mut document = Document::new();
+    match document.add_custom_xml_store(item, &[]) {
+        Ok(_)
+            if part_bytes(
+                &mut Document::from_bytes(&document.to_bytes().unwrap()).unwrap(),
+                "/customXml/item1.xml",
+            ) == item =>
+        {
+            None
+        }
+        Ok(id) => Some(format!("{label}: stored {id} with different bytes")),
+        Err(error) => Some(format!("{label}: {error}")),
+    }
+}
+
+#[test]
+fn custom_xml_store_reference_forms_and_document_position() {
+    let mut failures = Vec::new();
+    for (label, item, needle) in [
+        ("decimal before root", &b"&#65;<root/>"[..], "fragment"),
+        ("hexadecimal before root", &b"&#x41;<root/>"[..], "fragment"),
+        ("predefined before root", &b"&lt;<root/>"[..], "fragment"),
+        ("literal before root", &b"A<root/>"[..], "fragment"),
+        (
+            "cdata before root",
+            &b"<![CDATA[A]]><root/>"[..],
+            "fragment",
+        ),
+        (
+            "space reference before root",
+            &b"&#32;<root/>"[..],
+            "fragment",
+        ),
+        (
+            "hexadecimal space before root",
+            &b"&#x20;<root/>"[..],
+            "fragment",
+        ),
+        (
+            "cdata space before root",
+            &b"<![CDATA[ ]]><root/>"[..],
+            "fragment",
+        ),
+        ("decimal after root", &b"<root/>&#65;"[..], "fragment"),
+        ("hexadecimal after root", &b"<root/>&#x41;"[..], "fragment"),
+        ("predefined after root", &b"<root/>&lt;"[..], "fragment"),
+        ("literal after root", &b"<root/>A"[..], "fragment"),
+        ("cdata after root", &b"<root/><![CDATA[A]]>"[..], "fragment"),
+        (
+            "space reference after root",
+            &b"<root/>&#32;"[..],
+            "fragment",
+        ),
+        (
+            "cdata space after root",
+            &b"<root/><![CDATA[ ]]>"[..],
+            "fragment",
+        ),
+        (
+            "uppercase attribute",
+            &br#"<root a="&#X41;"/>"#[..],
+            "not XML",
+        ),
+        ("uppercase text", &b"<root>&#X41;</root>"[..], "not XML"),
+        (
+            "double hyphen in comment",
+            &b"<root><!--a--b--></root>"[..],
+            "not XML",
+        ),
+    ] {
+        if let Some(failure) = store_reference_refusal(label, item, needle) {
+            failures.push(failure);
+        }
+    }
+    for (label, item) in [
+        ("literal space before root", &b" <root/>"[..]),
+        ("literal space after root", &b"<root/> "[..]),
+        ("comment before root", &b"<!--note--><root/>"[..]),
+        ("comment inside root", &b"<root><!--note--></root>"[..]),
+        (
+            "processing instruction before root",
+            &b"<?pi note?><root/>"[..],
+        ),
+        ("literal inside", &b"<root>A</root>"[..]),
+        ("decimal inside", &b"<root>&#65;</root>"[..]),
+        ("hexadecimal inside", &b"<root>&#x41;</root>"[..]),
+        ("predefined inside", &b"<root>&lt;</root>"[..]),
+        ("cdata inside", &b"<root><![CDATA[A]]></root>"[..]),
+        ("literal space inside", &b"<root> </root>"[..]),
+        ("decimal space inside", &b"<root>&#32;</root>"[..]),
+        ("hexadecimal space inside", &b"<root>&#x20;</root>"[..]),
+        ("cdata space inside", &b"<root><![CDATA[ ]]></root>"[..]),
+        ("literal attribute", &br#"<root a="A"/>"#[..]),
+        ("decimal attribute", &br#"<root a="&#65;"/>"#[..]),
+        ("hexadecimal attribute", &br#"<root a="&#x41;"/>"#[..]),
+        ("predefined attribute", &br#"<root a="&lt;"/>"#[..]),
+        ("space attribute", &br#"<root a="&#32;"/>"#[..]),
+        ("expanded less-than attribute", &br#"<root a="&#60;"/>"#[..]),
+        ("colon name", &br#"<root a:b="1"/>"#[..]),
+        ("repeated colon name", &br#"<root a:b:c="1"/>"#[..]),
+    ] {
+        if let Some(failure) = store_reference_verbatim(label, item) {
+            failures.push(failure);
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn custom_xml_store_document_events_are_validated_before_publication() {
+    let mut failures = Vec::new();
+    for (label, item) in [
+        ("doctype inside", &b"<root><!DOCTYPE root></root>"[..]),
+        ("doctype before", &b"<!DOCTYPE root><root/>"[..]),
+        ("doctype after", &b"<root/><!DOCTYPE root>"[..]),
+        (
+            "external doctype",
+            &br#"<!DOCTYPE root SYSTEM "https://example.invalid/store.dtd"><root/>"#[..],
+        ),
+        (
+            "declaration inside",
+            &br#"<root><?xml version="1.0"?></root>"#[..],
+        ),
+        ("declaration after", &br#"<root/><?xml version="1.0"?>"#[..]),
+        (
+            "declaration after space",
+            &br#" <?xml version="1.0"?><root/>"#[..],
+        ),
+        (
+            "declaration after comment",
+            &br#"<!--note--><?xml version="1.0"?><root/>"#[..],
+        ),
+        (
+            "repeated declaration",
+            &br#"<?xml version="1.0"?><?xml version="1.0"?><root/>"#[..],
+        ),
+        ("bad version", &br#"<?xml version="2.0"?><root/>"#[..]),
+        (
+            "bad standalone",
+            &br#"<?xml version="1.0" standalone="maybe"?><root/>"#[..],
+        ),
+        (
+            "unknown declaration attribute",
+            &br#"<?xml version="1.0" extra="x"?><root/>"#[..],
+        ),
+        (
+            "declaration order",
+            &br#"<?xml version="1.0" standalone="yes" encoding="UTF-8"?><root/>"#[..],
+        ),
+        (
+            "bad encoding name",
+            &br#"<?xml version="1.0" encoding="1bad"?><root/>"#[..],
+        ),
+        ("reserved PI", &b"<?XmL note?><root/>"[..]),
+        ("bad PI target", &b"<root><?1bad note?></root>"[..]),
+        ("cdata terminator in text", &b"<root>text]]></root>"[..]),
+        ("illegal literal character", &b"<root>\x01</root>"[..]),
+        ("invalid UTF-8", &b"<root>\xff</root>"[..]),
+        (
+            "encoding mismatch",
+            &br#"<?xml version="1.0" encoding="UTF-16"?><root/>"#[..],
+        ),
+        (
+            "unsupported encoding",
+            &br#"<?xml version="1.0" encoding="unknown-encoding"?><root/>"#[..],
+        ),
+        (
+            "non-ASCII payload",
+            "<?xml version='1.0' encoding='US-ASCII'?><root>é</root>".as_bytes(),
+        ),
+        ("adjacent attributes", &br#"<root a="1"b="2"/>"#[..]),
+        (
+            "adjacent nested attributes",
+            &br#"<root><child a='1'b='2'/></root>"#[..],
+        ),
+        (
+            "adjacent declaration fields",
+            &br#"<?xml version="1.0"encoding="UTF-8"?><root/>"#[..],
+        ),
+    ] {
+        if let Some(failure) = store_reference_refusal(label, item, "not XML") {
+            failures.push(failure);
+        }
+    }
+    for (label, item) in [
+        ("declaration", &br#"<?xml version="1.0"?><root/>"#[..]),
+        (
+            "ASCII declaration",
+            &br#"<?xml version="1.0" encoding="US-ASCII"?><root/>"#[..],
+        ),
+        (
+            "UTF-8 payload",
+            "<?xml version='1.0' encoding='utf-8'?><root>é</root>".as_bytes(),
+        ),
+        (
+            "full declaration",
+            &br#"<?xml version='1.0' encoding='UTF-8' standalone='yes'?><root/>"#[..],
+        ),
+        (
+            "BOM declaration",
+            &b"\xef\xbb\xbf<?xml version='1.0'?><root/>"[..],
+        ),
+        (
+            "PI positions",
+            &b"<?before ok?><root><?inside ok?></root><?after ok?>"[..],
+        ),
+        ("colon PI name", &b"<?a:b:c note?><root/>"[..]),
+        (
+            "comments at boundaries",
+            &b"<!--before--><root><!--inside--></root><!--after-->"[..],
+        ),
+        ("escaped terminator", &b"<root>]]&gt;</root>"[..]),
+        ("opaque attributes", &br#"<root a:b:c="&lt;"/>"#[..]),
+        ("attribute quote controls", &br#"<root a="'" b='"'/>"#[..]),
+        ("attribute whitespace", &b"<root\ta='1'\nb='2'\rc='3'/>"[..]),
+    ] {
+        if let Some(failure) = store_reference_verbatim(label, item) {
+            failures.push(failure);
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 #[test]
