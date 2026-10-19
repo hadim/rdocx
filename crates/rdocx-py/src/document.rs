@@ -8109,6 +8109,34 @@ impl PyDocument {
         )
     }
 
+    fn move_content_control(
+        &mut self,
+        py: Python<'_>,
+        source: PyRef<'_, PyContentLocation>,
+        destination: PyRef<'_, PyContentLocation>,
+    ) -> PyResult<()> {
+        let source = source.native(py, self)?;
+        let destination = destination.native(py, self)?;
+        let mut candidate = self.inner.clone_for_staging();
+        py.detach(|| candidate.move_content_control(&source, &destination))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.publish_api_candidate(py, candidate, "Document.move_content_control")
+    }
+
+    fn clone_content_control(
+        &mut self,
+        py: Python<'_>,
+        source: PyRef<'_, PyContentLocation>,
+        destination: PyRef<'_, PyContentLocation>,
+    ) -> PyResult<()> {
+        let source = source.native(py, self)?;
+        let destination = destination.native(py, self)?;
+        let mut candidate = self.inner.clone_for_staging();
+        py.detach(|| candidate.clone_content_control(&source, &destination))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.publish_api_candidate(py, candidate, "Document.clone_content_control")
+    }
+
     fn set_content_control_type(
         &mut self,
         py: Python<'_>,

@@ -1797,7 +1797,8 @@ Direct block children use `move_content`, `clone_content`, and
 `remove_content_at`. Row, cell, paragraph, and inline controls use that same
 staged transaction through location-aware wrappers. Clone drops `w14:paraId`
 and `w14:textId` and allocates a new sdt id. Move keeps the id and stays inside
-one story. Remove deletes the shell and its content. Unwrap leaves the content
+one story. Both refuse before publication when the destination parent cannot
+hold the control content. Remove deletes the shell and its content. Unwrap leaves the content
 only when the parent can hold it, and refuses a cell that would lose its last
 paragraph. Story-item classification seeds each owner with the ancestor prefix
 bindings already collected for that part, including a document-level `w14`
@@ -1833,7 +1834,8 @@ differential stays pending.
 part, both relationships, and both content-type overrides through the
 bibliography store sequence. The call returns the braced item id. An occupied
 conventional name is not overwritten. Item bytes must be one well-formed
-element. An empty schema list writes an empty `ds:schemaRefs`. Each schema URI
+XML element. That check includes attribute syntax and unique attribute names.
+Valid item bytes stay verbatim. An empty schema list writes an empty `ds:schemaRefs`. Each schema URI
 is stored in caller order and is not fetched. `Document::set_content_control_binding`
 writes `w:dataBinding` with `w:prefixMappings` when a mapping is present, then
 `w:xpath`, then `w:storeItemID`. `None` and an empty mapping omit

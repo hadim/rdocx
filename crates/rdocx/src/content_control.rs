@@ -1687,6 +1687,7 @@ impl Document {
                 "content control move destination is inside the source".to_owned(),
             ));
         }
+        destination_accepts_control(&dest.xml, &dest.range, &bytes)?;
         let original_len = updated.len();
         updated.drain(source_range.clone());
         let dest_range = shift_after_removal(&dest.range, &source_range);
@@ -1717,6 +1718,7 @@ impl Document {
         candidate.flush_to_package()?;
         let fresh = freshen_control(&mut candidate, &bytes)?;
         let dest = nested_destination(&candidate, destination)?;
+        destination_accepts_control(&dest.xml, &dest.range, &fresh)?;
         let mut dest_xml = dest.xml;
         let replacement = insert_into_element(&dest_xml, &dest.range, &fresh)?;
         dest_xml.splice(dest.range, replacement);
@@ -1826,7 +1828,8 @@ fn validate_store_item(xml: &[u8]) -> Result<()> {
     let mut depth = 0usize;
     loop {
         match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(_)) => {
+            Ok(Event::Start(start)) => {
+                reject_store_attributes(&start)?;
                 if depth == 0 {
                     roots += 1;
                     if roots > 1 {
@@ -1835,7 +1838,8 @@ fn validate_store_item(xml: &[u8]) -> Result<()> {
                 }
                 depth += 1;
             }
-            Ok(Event::Empty(_)) => {
+            Ok(Event::Empty(start)) => {
+                reject_store_attributes(&start)?;
                 if depth == 0 {
                     roots += 1;
                     if roots > 1 {
@@ -1873,6 +1877,13 @@ fn validate_store_item(xml: &[u8]) -> Result<()> {
         return Err(Error::Other(
             "custom XML item is not one element".to_owned(),
         ));
+    }
+    Ok(())
+}
+
+fn reject_store_attributes(start: &BytesStart<'_>) -> Result<()> {
+    for attribute in start.attributes() {
+        attribute.map_err(|error| Error::Other(format!("custom XML item is not XML: {error}")))?;
     }
     Ok(())
 }
@@ -2810,6 +2821,37 @@ fn xml_space(bytes: &[u8]) -> bool {
     bytes
         .iter()
         .all(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+}
+
+fn destination_accepts_control(
+    parent_xml: &[u8],
+    parent_range: &Range<usize>,
+    control: &[u8],
+) -> Result<()> {
+    let elems = index_elements(parent_xml)?;
+    let parent = element_at(&elems, parent_range)?;
+    let inner = sdt_content_bytes(control, &(0..control.len()))?;
+    if inner_matches_slot(element_slot(&elems, parent), &inner)? {
+        Ok(())
+    } else {
+        Err(Error::Other(
+            "content control placement does not match its parent".to_owned(),
+        ))
+    }
+}
+
+fn element_slot(elems: &[XmlElem], elem: &XmlElem) -> ParentSlot {
+    match elem.local.as_slice() {
+        b"sdt" | b"sdtContent" => parent_slot(elems, elem.id),
+        b"p" | b"hyperlink" | b"fldSimple" | b"ins" | b"del" | b"moveFrom" | b"moveTo" => {
+            ParentSlot::Inline
+        }
+        b"tbl" => ParentSlot::Table,
+        b"tr" => ParentSlot::Row,
+        b"body" | b"hdr" | b"ftr" | b"footnote" | b"endnote" | b"comment" | b"txbxContent"
+        | b"tc" => ParentSlot::Block,
+        _ => ParentSlot::Other,
+    }
 }
 
 fn nested_destination(document: &Document, destination: &ContentLocation) -> Result<PartRange> {

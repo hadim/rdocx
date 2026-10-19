@@ -26211,6 +26211,170 @@ fn content_control_move_and_clone_keep_or_refresh_identity() {
 }
 
 #[test]
+fn content_control_move_and_clone_refuse_mismatched_destinations() {
+    let mut document = Document::new();
+    document.add_paragraph("host");
+    document.add_paragraph("other");
+    document.add_table(1, 1);
+    document.add_table(1, 1);
+    let paragraph_with_text = |document: &Document, text: &str| {
+        document
+            .story_items(&body_story(document))
+            .unwrap()
+            .into_iter()
+            .find(|item| {
+                item.kind() == StoryItemKind::Paragraph
+                    && item.text().unwrap().as_deref() == Some(text)
+            })
+            .unwrap_or_else(|| panic!("missing paragraph {text}"))
+            .location()
+            .clone()
+    };
+    let tables = |document: &Document| {
+        document
+            .story_items(&body_story(document))
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.kind() == StoryItemKind::Table)
+            .map(|item| item.location().clone())
+            .collect::<Vec<_>>()
+    };
+    let row_destination = |table: &rdocx::ContentLocation| {
+        let mut path = table.index_path().to_vec();
+        path.push(0);
+        rdocx::ContentLocation::new(table.story().clone(), StoryItemKind::Table, path)
+    };
+    let tag_ids = |document: &Document, tag: &str| {
+        document
+            .content_controls_by_tag(tag)
+            .into_iter()
+            .map(|control| control.id().unwrap())
+            .collect::<Vec<_>>()
+    };
+    let table_xml = |document: &Document, index: usize| {
+        let xml = document
+            .story_items(&body_story(document))
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.kind() == StoryItemKind::Table)
+            .nth(index)
+            .unwrap()
+            .xml()
+            .unwrap()
+            .into_owned();
+        String::from_utf8(xml).unwrap()
+    };
+
+    let first_table = tables(&document)[0].clone();
+    document
+        .insert_content_control(
+            &first_table,
+            content_control_spec(
+                rdocx::ContentControlPlacement::Row,
+                rdocx_oxml::content_control::SdtType::RichText,
+                "row-shell",
+            ),
+        )
+        .unwrap();
+    let table = tables(&document)[0].clone();
+    let cell_parent = row_destination(&table);
+    document
+        .insert_content_control(
+            &cell_parent,
+            content_control_spec(
+                rdocx::ContentControlPlacement::Cell,
+                rdocx_oxml::content_control::SdtType::PlainText,
+                "cell-shell",
+            ),
+        )
+        .unwrap();
+    let host = paragraph_with_text(&document, "host");
+    document
+        .insert_content_control(
+            &host,
+            content_control_spec(
+                rdocx::ContentControlPlacement::Inline,
+                rdocx_oxml::content_control::SdtType::RichText,
+                "inline-shell",
+            ),
+        )
+        .unwrap();
+
+    let before = document.to_bytes().unwrap();
+    let refuse = |document: &mut Document,
+                  source_tag: &str,
+                  destination: &rdocx::ContentLocation,
+                  clone: bool| {
+        let source = control_by_tag(document, source_tag);
+        let error = if clone {
+            document
+                .clone_content_control(&source, destination)
+                .unwrap_err()
+        } else {
+            document
+                .move_content_control(&source, destination)
+                .unwrap_err()
+        };
+        assert!(error.to_string().contains("does not match"), "{error}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+    };
+    let host = paragraph_with_text(&document, "host");
+    let placed_tables = tables(&document);
+    refuse(&mut document, "row-shell", &host, true);
+    refuse(&mut document, "cell-shell", &placed_tables[0], true);
+    refuse(&mut document, "cell-shell", &placed_tables[1], false);
+    refuse(&mut document, "inline-shell", &placed_tables[1], true);
+    let stale = rdocx::ContentLocation::new(
+        body_story(&document),
+        StoryItemKind::ContentControl,
+        vec![9999],
+    );
+    let second_table = tables(&document)[1].clone();
+    let stale_error = document
+        .move_content_control(&stale, &second_table)
+        .unwrap_err();
+    assert_eq!(document.to_bytes().unwrap(), before, "{stale_error}");
+
+    let row_id = tag_ids(&document, "row-shell")[0];
+    let row = control_by_tag(&document, "row-shell");
+    let same_table = tables(&document)[0].clone();
+    document.clone_content_control(&row, &same_table).unwrap();
+    let cloned_rows = tag_ids(&document, "row-shell");
+    assert_eq!(cloned_rows.len(), 2, "{cloned_rows:?}");
+    assert!(cloned_rows.contains(&row_id), "{cloned_rows:?}");
+    assert_ne!(cloned_rows[0], cloned_rows[1]);
+    let row = control_by_tag(&document, "row-shell");
+    let other_table = tables(&document)[1].clone();
+    document.move_content_control(&row, &other_table).unwrap();
+    let moved_rows = tag_ids(&document, "row-shell");
+    assert!(moved_rows.contains(&row_id), "{moved_rows:?}");
+    let original_id = format!("w:id w:val=\"{row_id}\"");
+    let first_xml = table_xml(&document, 0);
+    let second_xml = table_xml(&document, 1);
+    assert!(second_xml.contains(&original_id), "{second_xml}");
+    assert!(!first_xml.contains(&original_id), "{first_xml}");
+
+    let cell_id = tag_ids(&document, "cell-shell")[0];
+    let cell = control_by_tag(&document, "cell-shell");
+    let table = tables(&document)[0].clone();
+    let cell_parent = row_destination(&table);
+    document.clone_content_control(&cell, &cell_parent).unwrap();
+    let cloned_cells = tag_ids(&document, "cell-shell");
+    assert_eq!(cloned_cells.len(), 2, "{cloned_cells:?}");
+    assert!(cloned_cells.contains(&cell_id), "{cloned_cells:?}");
+    assert_ne!(cloned_cells[0], cloned_cells[1]);
+
+    let inline_id = tag_ids(&document, "inline-shell")[0];
+    let inline = control_by_tag(&document, "inline-shell");
+    let other = paragraph_with_text(&document, "other");
+    document.clone_content_control(&inline, &other).unwrap();
+    let cloned_inline = tag_ids(&document, "inline-shell");
+    assert_eq!(cloned_inline.len(), 2, "{cloned_inline:?}");
+    assert!(cloned_inline.contains(&inline_id), "{cloned_inline:?}");
+    assert_ne!(cloned_inline[0], cloned_inline[1]);
+}
+
+#[test]
 fn content_control_remove_is_atomic() {
     let mut document = document_with_body_inner(
         r#"<w:sdt><w:sdtPr><w:tag w:val="delete-me"/><w:id w:val="2"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>gone</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="unwrap-me"/><w:id w:val="3"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>kept</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
@@ -26906,6 +27070,19 @@ fn custom_xml_store_round_trips_item_and_schema() {
     refuse_store(&mut document, b"<a/><b/>", &["urn:schema"], "fragment");
     refuse_store(&mut document, b"<a", &["urn:schema"], "not XML");
     refuse_store(&mut document, b"<root/>", &[""], "empty");
+    refuse_store(
+        &mut document,
+        br#"<root a="1" a="2"/>"#,
+        &["urn:schema"],
+        "duplicat",
+    );
+    refuse_store(
+        &mut document,
+        br#"<root><child a="1" a="2"/></root>"#,
+        &["urn:schema"],
+        "duplicat",
+    );
+    refuse_store(&mut document, br#"<root a=1/>"#, &["urn:schema"], "not XML");
 
     let item = br#"<ns:root xmlns:ns="urn:example"><ns:child>old</ns:child></ns:root>"#;
     let schema = "urn:schema?a=1&b=2";
@@ -27005,6 +27182,24 @@ fn custom_xml_store_round_trips_item_and_schema() {
         part_bytes(&mut bibliography, "/customXml/item1.xml"),
         bibliography_item
     );
+    let mut attributed = Document::new();
+    let plain_attributes = br#"<root a="1" b="2"/>"#;
+    let unbound_prefix = br#"<root a:b="1"/>"#;
+    attributed
+        .add_custom_xml_store(plain_attributes, &[])
+        .unwrap();
+    assert_eq!(
+        part_bytes(&mut attributed, "/customXml/item1.xml"),
+        plain_attributes
+    );
+    attributed
+        .add_custom_xml_store(unbound_prefix, &[])
+        .unwrap();
+    assert_eq!(
+        part_bytes(&mut attributed, "/customXml/item2.xml"),
+        unbound_prefix
+    );
+
     assert_eq!(
         part_bytes(&mut bibliography, "/customXml/itemProps1.xml"),
         bibliography_properties

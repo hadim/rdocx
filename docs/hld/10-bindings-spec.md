@@ -2581,9 +2581,13 @@ Placeholder is `bool` or `None`, and any other type is `TypeError`.
 `set_content_control_placeholder` each take a location and an optional value.
 An omitted value or `None` clears that field and does not replace content.
 `remove_content_control` and `unwrap_content_control` use the same location.
-Python returns `None`. Rust returns `Result<()>`. A refusal is `Error::Other`
-and does not publish. `ContentControl` stays a frozen snapshot. Move and clone
-stay on the Rust facade. WASM and CLI gain no method.
+Python `move_content_control(source, destination)` and
+`clone_content_control(source, destination)` take two `ContentLocation`
+values. Move keeps the id and stays inside one story. Clone allocates a new
+id and drops `w14:paraId` and `w14:textId`. A destination whose parent cannot
+hold the control content refuses before publication. Python returns `None`.
+Rust returns `Result<()>`. A refusal is `Error::Other` and does not publish.
+`ContentControl` stays a frozen snapshot. WASM and CLI gain no method.
 
 `Document::set_content_control_type(location, payload)` and
 `Document::repeat_content_control(location)` use the same location.

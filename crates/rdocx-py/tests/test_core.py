@@ -6442,6 +6442,98 @@ def test_f285_content_control_shell_metadata_and_refusal():
         assert b"hello" not in package.read("word/document.xml")
 
 
+def test_f285_move_and_clone_content_control_identity_and_refusal():
+    import rdocx
+
+    def located(document, predicate):
+        return _content_location(document, predicate)
+
+    def by_tag(document, tag):
+        needle = f'w:val="{tag}"'.encode()
+
+        def predicate(item):
+            if item.kind != "content_control":
+                return False
+            xml = item.xml
+            tag_at = xml.find(needle)
+            content_at = xml.find(b"<w:sdtContent")
+            return tag_at != -1 and (content_at == -1 or tag_at < content_at)
+
+        return located(document, predicate)
+
+    def tables(document):
+        return [
+            rdocx.ContentLocation(item.story, item.kind, item.index_path)
+            for item in document.story_items
+            if item.kind == "table"
+        ]
+
+    def paragraph(document, text):
+        return located(
+            document,
+            lambda item: item.kind == "paragraph" and item.text == text,
+        )
+
+    def tag_ids(document, tag):
+        return [control.id for control in document.content_controls() if control.tag == tag]
+
+    def table_xml(document, index):
+        return [item for item in document.story_items if item.kind == "table"][index].xml
+
+    document = rdocx.Document()
+    body = next(story for story in document.stories if story.kind == "body")
+    document.add_paragraph("host")
+    document.add_paragraph("other")
+    document.add_table(1, 1)
+    document.add_table(1, 1)
+    document.insert_content_control(tables(document)[0], "row", "rich_text", tag="row-shell")
+    table = tables(document)[0]
+    document.insert_content_control(
+        rdocx.ContentLocation(table.story, "table", list(table.index_path) + [0]),
+        "cell",
+        "plain_text",
+        tag="cell-shell",
+    )
+    document.insert_content_control(paragraph(document, "host"), "inline", "rich_text", tag="inline-shell")
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="does not match"):
+        document.clone_content_control(by_tag(document, "row-shell"), paragraph(document, "host"))
+    assert document.to_bytes() == before
+    with pytest.raises(rdocx.RdocxError, match="does not match"):
+        document.clone_content_control(by_tag(document, "cell-shell"), tables(document)[0])
+    assert document.to_bytes() == before
+    with pytest.raises(rdocx.RdocxError, match="does not match"):
+        document.move_content_control(by_tag(document, "cell-shell"), tables(document)[1])
+    assert document.to_bytes() == before
+    with pytest.raises(rdocx.RdocxError, match="does not match"):
+        document.clone_content_control(by_tag(document, "inline-shell"), tables(document)[1])
+    assert document.to_bytes() == before
+    with pytest.raises(rdocx.RdocxError):
+        document.move_content_control(
+            rdocx.ContentLocation(body, "content_control", [9999]),
+            tables(document)[1],
+        )
+    assert document.to_bytes() == before
+
+    row_id = tag_ids(document, "row-shell")[0]
+    document.move_content_control(by_tag(document, "row-shell"), tables(document)[1])
+    assert tag_ids(document, "row-shell") == [row_id]
+    assert f'w:id w:val="{row_id}"'.encode() in table_xml(document, 1)
+    assert f'w:id w:val="{row_id}"'.encode() not in table_xml(document, 0)
+    inline_id = tag_ids(document, "inline-shell")[0]
+    document.clone_content_control(by_tag(document, "inline-shell"), paragraph(document, "other"))
+    inline_ids = tag_ids(document, "inline-shell")
+    assert inline_id in inline_ids and len(inline_ids) == 2 and len(set(inline_ids)) == 2
+    cell_id = tag_ids(document, "cell-shell")[0]
+    table = tables(document)[0]
+    document.clone_content_control(
+        by_tag(document, "cell-shell"),
+        rdocx.ContentLocation(table.story, "table", list(table.index_path) + [0]),
+    )
+    cell_ids = tag_ids(document, "cell-shell")
+    assert cell_id in cell_ids and len(cell_ids) == 2 and len(set(cell_ids)) == 2
+
+
 def test_fx204_tag_fill_keeps_alias_and_late_refusal_atomic():
     import rdocx
     document = _replace_document_body(rdocx.Document(), '<w:sdt><w:sdtPr><w:tag w:val="client"/><w:alias w:val="alias"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>before</w:t></w:r></w:p></w:sdtContent></w:sdt>')
