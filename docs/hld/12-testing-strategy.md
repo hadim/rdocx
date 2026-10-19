@@ -121,6 +121,12 @@ a Word oracle. The authentic Word differential for those controls stays pending
 until the repo records Word provenance, the Word version, and the input
 identity. A package this workspace writes is not that evidence.
 
+Custom XML store creation and binding are checked by round trip. The tests
+observe the item id, schema reference order, a free conventional name, the
+binding attributes, byte-identical unknown item spans, xpath refusal, and
+rollback of a failed sibling fill. They are not a Word oracle. The hash
+harness stays unchanged for a document that does not call the API.
+
 The table style and conditional formatting story compares against a pinned
 `w:tblStylePr` reference tree built as source XML, for the same reason. Word
 GUI capture is not available on the development machine, so confirming that

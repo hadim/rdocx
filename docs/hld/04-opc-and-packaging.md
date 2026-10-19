@@ -991,6 +991,13 @@ element when needed, and retains every unrelated custom XML byte exactly.
 Display and custom-part changes are staged together and committed only after
 all selected bindings serialize and reparse successfully.
 
+Public store creation uses that same graph. `add_custom_xml_store` reserves
+`/customXml/item1.xml` and `/customXml/itemProps1.xml` when those names are
+free, and otherwise the next free name in each family. The properties root is
+`ds:datastoreItem` with attribute `ds:itemID`, then child `ds:schemaRefs`, then
+one `ds:schemaRef` per supplied URI. The item id is the braced uppercase form
+from the existing allocator. Schema URIs are stored and not fetched.
+
 ## Part naming
 
 **Numeric suffixes are allocated after the greatest positive parsed suffix,

@@ -1419,6 +1419,74 @@ impl Document {
         Ok(())
     }
 
+    /// Stage one custom XML item and its properties part.
+    ///
+    /// The returned value is the braced item id. An empty URI list writes an
+    /// empty `ds:schemaRefs`. Invalid item bytes and an empty schema URI
+    /// publish nothing.
+    pub fn add_custom_xml_store(
+        &mut self,
+        item_xml: &[u8],
+        schema_uris: &[&str],
+    ) -> Result<String> {
+        validate_store_item(item_xml)?;
+        for uri in schema_uris {
+            if uri.is_empty() {
+                return Err(Error::Other("custom XML schema URI is empty".to_owned()));
+            }
+            oxml_core::xml::reject_non_xml_characters("custom XML schema URI", uri)?;
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.prepare_staged_package()?;
+        let staged =
+            crate::bibliography::stage_custom_xml_store(&mut candidate, item_xml, schema_uris)?;
+        let mut reopened = candidate.reopen_prepared_staged().map_err(control_fault)?;
+        reopened.invalidate_layout();
+        let item_id = staged.item_id;
+        self.commit_staged_mutation(reopened);
+        Ok(item_id)
+    }
+
+    /// Attach `w:dataBinding` to one control after the store and path resolve.
+    ///
+    /// `None` and an empty mapping string omit `w:prefixMappings`. A failed
+    /// check publishes nothing.
+    pub fn set_content_control_binding(
+        &mut self,
+        location: &ContentLocation,
+        store_item_id: &str,
+        xpath: &str,
+        prefix_mappings: Option<&str>,
+    ) -> Result<()> {
+        let mappings_text = prefix_mappings.filter(|value| !value.is_empty());
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let mappings = parse_prefix_mappings(mappings_text.unwrap_or(""))?;
+        let steps = parse_xpath(xpath, &mappings)?;
+        let part_name =
+            resolve_custom_xml_part(&candidate.package, &candidate.doc_part_name, store_item_id)?;
+        {
+            let item = candidate
+                .package
+                .get_part(&part_name)
+                .ok_or_else(|| Error::Other(format!("custom XML part {part_name} is missing")))?;
+            select_xml_element(item, &steps)?;
+        }
+        let (part, mut xml, range, _) = control_item(&candidate, location)?;
+        let updated = edit_sdt_property(
+            &xml,
+            &range,
+            PropertyEdit::DataBinding {
+                prefix_mappings: mappings_text.map(str::to_owned),
+                xpath: xpath.to_owned(),
+                store_item_id: store_item_id.to_owned(),
+            },
+        )?;
+        xml.splice(range, updated);
+        candidate.write_story_part(&part, xml)?;
+        self.publish_candidate(candidate)
+    }
+
     /// Set or clear `w:tag` without rewriting `sdtContent`.
     pub fn set_content_control_tag(
         &mut self,
@@ -1728,6 +1796,11 @@ enum PropertyEdit {
     Lock(Option<ContentControlLock>),
     Appearance(Option<ContentControlAppearance>),
     Placeholder(Option<bool>),
+    DataBinding {
+        prefix_mappings: Option<String>,
+        xpath: String,
+        store_item_id: String,
+    },
 }
 
 enum ControlRewrite {
@@ -1738,6 +1811,68 @@ enum ControlRewrite {
 fn reject_control_text(what: &str, value: Option<&str>) -> Result<()> {
     if let Some(value) = value {
         oxml_core::xml::reject_non_xml_characters(what, value)?;
+    }
+    Ok(())
+}
+
+fn validate_store_item(xml: &[u8]) -> Result<()> {
+    if xml.is_empty() {
+        return Err(Error::Other("custom XML item is empty".to_owned()));
+    }
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut roots = 0usize;
+    let mut depth = 0usize;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_)) => {
+                if depth == 0 {
+                    roots += 1;
+                    if roots > 1 {
+                        return Err(Error::Other("custom XML item is a fragment".to_owned()));
+                    }
+                }
+                depth += 1;
+            }
+            Ok(Event::Empty(_)) => {
+                if depth == 0 {
+                    roots += 1;
+                    if roots > 1 {
+                        return Err(Error::Other("custom XML item is a fragment".to_owned()));
+                    }
+                }
+            }
+            Ok(Event::End(_)) => {
+                if depth == 0 {
+                    return Err(Error::Other(
+                        "custom XML item is not one element".to_owned(),
+                    ));
+                }
+                depth -= 1;
+            }
+            Ok(Event::Text(text)) => {
+                if depth == 0 && !is_xml_whitespace(text.as_ref()) {
+                    return Err(Error::Other("custom XML item is a fragment".to_owned()));
+                }
+            }
+            Ok(Event::CData(text)) => {
+                if depth == 0 && !is_xml_whitespace(text.as_ref()) {
+                    return Err(Error::Other("custom XML item is a fragment".to_owned()));
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => {
+                return Err(Error::Other(format!("custom XML item is not XML: {error}")));
+            }
+        }
+        buffer.clear();
+    }
+    if roots != 1 || depth != 0 {
+        return Err(Error::Other(
+            "custom XML item is not one element".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -2343,6 +2478,7 @@ fn property_matches(elem: &XmlElem, edit: &PropertyEdit) -> bool {
         PropertyEdit::Lock(_) => elem.word && elem.local == b"lock",
         PropertyEdit::Appearance(_) => elem.w15 && elem.local == b"appearance",
         PropertyEdit::Placeholder(_) => elem.word && elem.local == b"showingPlcHdr",
+        PropertyEdit::DataBinding { .. } => elem.word && elem.local == b"dataBinding",
     }
 }
 
@@ -2364,6 +2500,7 @@ fn property_insert_rank(edit: &PropertyEdit) -> u8 {
         PropertyEdit::Tag(_) => 2,
         PropertyEdit::Lock(_) => 4,
         PropertyEdit::Placeholder(_) => 7,
+        PropertyEdit::DataBinding { .. } => 8,
         PropertyEdit::Appearance(_) => 21,
     }
 }
@@ -2433,10 +2570,50 @@ fn property_markup(prefix: &str, edit: &PropertyEdit) -> Result<String> {
         PropertyEdit::Lock(Some(lock)) => Ok(prefixed_val(prefix, "lock", lock.as_str())),
         PropertyEdit::Placeholder(Some(true)) => Ok(prefixed_marker(prefix, "showingPlcHdr")),
         PropertyEdit::Appearance(_) => appearance_markup(edit),
+        PropertyEdit::DataBinding {
+            prefix_mappings,
+            xpath,
+            store_item_id,
+        } => Ok(data_binding_markup(
+            prefix,
+            prefix_mappings.as_deref(),
+            xpath,
+            store_item_id,
+        )),
         _ => Err(Error::Other(
             "content control property value is missing".to_owned(),
         )),
     }
+}
+
+fn data_binding_markup(
+    prefix: &str,
+    mappings: Option<&str>,
+    xpath: &str,
+    store_item_id: &str,
+) -> String {
+    let qualify = |local: &str| {
+        if prefix.is_empty() {
+            local.to_owned()
+        } else {
+            format!("{prefix}:{local}")
+        }
+    };
+    let mut attrs = String::new();
+    if let Some(mappings) = mappings.filter(|value| !value.is_empty()) {
+        attrs.push_str(&format!(
+            " {}=\"{}\"",
+            qualify("prefixMappings"),
+            xml_attr(mappings)
+        ));
+    }
+    attrs.push_str(&format!(" {}=\"{}\"", qualify("xpath"), xml_attr(xpath)));
+    attrs.push_str(&format!(
+        " {}=\"{}\"",
+        qualify("storeItemID"),
+        xml_attr(store_item_id)
+    ));
+    format!("<{}{attrs}/>", qualify("dataBinding"))
 }
 
 fn appearance_markup(edit: &PropertyEdit) -> Result<String> {

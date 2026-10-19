@@ -26843,3 +26843,463 @@ fn repeating_item_requires_a_repeating_section_parent() {
     assert!(error.to_string().contains("repeating section"), "{error}");
     assert_eq!(body.to_bytes().unwrap(), before);
 }
+
+const CUSTOM_XML_REL_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
+const CUSTOM_XML_PROPS_REL_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps";
+const CUSTOM_XML_PROPS_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.customXmlProperties+xml";
+const BIB_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/bibliography";
+
+fn package_of(document: &mut Document) -> OpcPackage {
+    OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap()
+}
+
+fn part_bytes(document: &mut Document, name: &str) -> Vec<u8> {
+    package_of(document)
+        .get_part(name)
+        .unwrap_or_else(|| panic!("missing part {name}"))
+        .to_vec()
+}
+
+fn part_text(document: &mut Document, name: &str) -> String {
+    String::from_utf8(part_bytes(document, name)).unwrap()
+}
+
+fn reopen_package(package: OpcPackage) -> Document {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(bytes.get_ref()).unwrap()
+}
+
+fn properties_xml(identity: &str) -> String {
+    format!(
+        "<ds:datastoreItem xmlns:ds=\"http://schemas.openxmlformats.org/officeDocument/2006/customXml\" ds:itemID=\"{identity}\"><ds:schemaRefs/></ds:datastoreItem>"
+    )
+}
+
+fn refuse_store(document: &mut Document, item: &[u8], uris: &[&str], needle: &str) {
+    let before = document.to_bytes().unwrap();
+    let error = document.add_custom_xml_store(item, uris).unwrap_err();
+    assert!(error.to_string().contains(needle), "{error}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+fn bind_rich(
+    document: &mut Document,
+    tag: &str,
+    store_id: &str,
+    xpath: &str,
+    mappings: Option<&str>,
+) {
+    let location = control_by_tag(document, tag);
+    document
+        .set_content_control_binding(&location, store_id, xpath, mappings)
+        .unwrap();
+}
+
+#[test]
+fn custom_xml_store_round_trips_item_and_schema() {
+    let mut document = Document::new();
+    refuse_store(&mut document, b"", &["urn:schema"], "empty");
+    refuse_store(&mut document, b"<a/><b/>", &["urn:schema"], "fragment");
+    refuse_store(&mut document, b"<a", &["urn:schema"], "not XML");
+    refuse_store(&mut document, b"<root/>", &[""], "empty");
+
+    let item = br#"<ns:root xmlns:ns="urn:example"><ns:child>old</ns:child></ns:root>"#;
+    let schema = "urn:schema?a=1&b=2";
+    let id = document.add_custom_xml_store(item, &[schema]).unwrap();
+    assert_eq!(id, "{00000000-0000-4000-8000-000000000000}");
+    let mut document = reopen_document(&mut document);
+    assert_eq!(part_bytes(&mut document, "/customXml/item1.xml"), item);
+    let properties = part_text(&mut document, "/customXml/itemProps1.xml");
+    assert!(properties.contains(&format!("ds:itemID=\"{id}\"")));
+    assert!(properties.contains("ds:uri=\"urn:schema?a=1&amp;b=2\""));
+    assert!(
+        package_of(&mut document)
+            .get_part("/customXml/item2.xml")
+            .is_none()
+    );
+
+    let first_item = part_bytes(&mut document, "/customXml/item1.xml");
+    let first_properties = part_bytes(&mut document, "/customXml/itemProps1.xml");
+    let second = document
+        .add_custom_xml_store(b"<again/>", &["urn:repeat", "urn:repeat"])
+        .unwrap();
+    assert_eq!(second, "{00000000-0000-4000-8000-000000000001}");
+    assert_ne!(second, id);
+    assert_eq!(
+        part_bytes(&mut document, "/customXml/item1.xml"),
+        first_item
+    );
+    assert_eq!(
+        part_bytes(&mut document, "/customXml/itemProps1.xml"),
+        first_properties
+    );
+    let repeated = part_text(&mut document, "/customXml/itemProps2.xml");
+    assert_eq!(repeated.matches("<ds:schemaRef ").count(), 2);
+    assert!(repeated.find("urn:repeat").unwrap() < repeated.rfind("urn:repeat").unwrap());
+    assert!(
+        package_of(&mut document)
+            .get_part("/customXml/item3.xml")
+            .is_none()
+    );
+
+    let mut holed = package_of(&mut Document::new());
+    let seeded = br#"<seed xmlns="urn:seed">kept</seed>"#;
+    holed.set_part("/customXml/item2.xml", seeded.to_vec());
+    holed.set_part(
+        "/customXml/itemProps2.xml",
+        properties_xml("{00000000-0000-4000-8000-000000000005}").into_bytes(),
+    );
+    holed
+        .content_types
+        .add_override("/customXml/item2.xml", "application/xml");
+    holed
+        .content_types
+        .add_override("/customXml/itemProps2.xml", CUSTOM_XML_PROPS_TYPE);
+    holed
+        .get_or_create_part_rels("/word/document.xml")
+        .add(CUSTOM_XML_REL_TYPE, "../customXml/item2.xml");
+    holed
+        .get_or_create_part_rels("/customXml/item2.xml")
+        .add(CUSTOM_XML_PROPS_REL_TYPE, "itemProps2.xml");
+    let mut holed = reopen_package(holed);
+    let filled = holed.add_custom_xml_store(b"<root/>", &[]).unwrap();
+    assert_eq!(filled, "{00000000-0000-4000-8000-000000000000}");
+    assert_eq!(part_bytes(&mut holed, "/customXml/item2.xml"), seeded);
+    assert!(package_of(&mut holed).contains_part("/customXml/item1.xml"));
+    assert!(!package_of(&mut holed).contains_part("/customXml/item3.xml"));
+    assert!(part_text(&mut holed, "/customXml/itemProps1.xml").contains("<ds:schemaRefs/>"));
+    assert!(!part_text(&mut holed, "/customXml/itemProps1.xml").contains("<ds:schemaRef "));
+
+    let mut bibliography = Document::new();
+    bibliography
+        .add_bibliography_source(&rdocx::BibliographySource {
+            tag: "Book1".to_owned(),
+            guid: "{11111111-1111-4111-8111-111111111111}".to_owned(),
+            kind: rdocx::BibliographySourceKind::Book,
+            locale: None,
+            contributors: Vec::new(),
+            properties: vec![rdocx::BibliographyProperty {
+                field: rdocx::BibliographySourceField::Title,
+                value: "Example".to_owned(),
+            }],
+        })
+        .unwrap();
+    let bibliography_item = part_bytes(&mut bibliography, "/customXml/item1.xml");
+    let bibliography_properties = part_bytes(&mut bibliography, "/customXml/itemProps1.xml");
+    let bibliography_text = String::from_utf8(bibliography_item.clone()).unwrap();
+    assert!(bibliography_text.contains(&format!("<b:Sources xmlns:b=\"{BIB_NS}\">")));
+    assert!(
+        String::from_utf8(bibliography_properties.clone())
+            .unwrap()
+            .contains("<ds:schemaRefs/>")
+    );
+    let added = bibliography
+        .add_custom_xml_store(b"<root/>", &["urn:other"])
+        .unwrap();
+    assert_ne!(added, "{00000000-0000-4000-8000-000000000000}");
+    assert_eq!(
+        part_bytes(&mut bibliography, "/customXml/item1.xml"),
+        bibliography_item
+    );
+    assert_eq!(
+        part_bytes(&mut bibliography, "/customXml/itemProps1.xml"),
+        bibliography_properties
+    );
+    assert_eq!(bibliography.bibliography_sources().unwrap()[0].tag, "Book1");
+}
+
+#[test]
+fn custom_xml_binding_updates_the_addressed_store() {
+    let mut missing = rich_shell("missing");
+    let before = missing.to_bytes().unwrap();
+    let error = missing
+        .set_content_control_binding(
+            &control_by_tag(&missing, "missing"),
+            "{00000000-0000-4000-8000-000000000000}",
+            "/ns:root/ns:child",
+            Some("xmlns:ns='urn:example'"),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("was not found"), "{error}");
+    assert_eq!(missing.to_bytes().unwrap(), before);
+
+    let mut document = rich_shell("bound");
+    let item = br#"<ns:root xmlns:ns="urn:example"><ns:child>old</ns:child></ns:root>"#;
+    let id = document
+        .add_custom_xml_store(item, &["urn:schema"])
+        .unwrap();
+    bind_rich(
+        &mut document,
+        "bound",
+        &id,
+        "/ns:root/ns:child",
+        Some("xmlns:ns='urn:example'"),
+    );
+    let mut document = reopen_document(&mut document);
+    let xml = story_control_xml(&document, &body_story(&document), "bound");
+    assert_order(&xml, "showingPlcHdr", "dataBinding");
+    assert_order(&xml, "dataBinding", "richText");
+    assert_order(&xml, "w:prefixMappings=", "w:xpath=");
+    assert_order(&xml, "w:xpath=", "w:storeItemID=");
+    assert!(xml.contains("w:prefixMappings=\"xmlns:ns=&apos;urn:example&apos;\""));
+    assert!(xml.contains("w:xpath=\"/ns:root/ns:child\""));
+    assert!(xml.contains(&format!("w:storeItemID=\"{id}\"")));
+    document
+        .set_content_control_value_by_tag("bound", "filled")
+        .unwrap();
+    assert_eq!(document.content_controls()[0].text(), "filled");
+    let mut document = reopen_document(&mut document);
+    assert_eq!(document.content_controls()[0].text(), "filled");
+    assert!(
+        part_text(&mut document, "/customXml/item1.xml").contains("<ns:child>filled</ns:child>")
+    );
+    assert!(part_text(&mut document, "/customXml/itemProps1.xml").contains("urn:schema"));
+}
+
+#[test]
+fn custom_xml_unknown_bytes_stay_identical() {
+    let mut document = rich_shell("bound");
+    let item = br#"<ns:root xmlns:ns="urn:example"><ns:child>old</ns:child><!--keep-me--><d:side xmlns:d="urn:other">stay</d:side></ns:root>"#;
+    let id = document.add_custom_xml_store(item, &[]).unwrap();
+    bind_rich(
+        &mut document,
+        "bound",
+        &id,
+        "/ns:root/ns:child",
+        Some("xmlns:ns='urn:example'"),
+    );
+    document
+        .set_content_control_value_by_tag("bound", "new")
+        .unwrap();
+    let updated = part_text(&mut document, "/customXml/item1.xml");
+    assert_eq!(
+        updated,
+        "<ns:root xmlns:ns=\"urn:example\"><ns:child>new</ns:child><!--keep-me--><d:side xmlns:d=\"urn:other\">stay</d:side></ns:root>"
+    );
+    let mut document = reopen_document(&mut document);
+    assert_eq!(part_text(&mut document, "/customXml/item1.xml"), updated);
+
+    let mut empty = rich_shell("empty");
+    let empty_item = br#"<ns:root xmlns:ns="urn:example"><ns:child/><!--keep-me--></ns:root>"#;
+    let empty_id = empty.add_custom_xml_store(empty_item, &[]).unwrap();
+    bind_rich(
+        &mut empty,
+        "empty",
+        &empty_id,
+        "/ns:root/ns:child",
+        Some("xmlns:ns='urn:example'"),
+    );
+    empty
+        .set_content_control_value_by_tag("empty", "filled")
+        .unwrap();
+    assert_eq!(
+        part_text(&mut empty, "/customXml/item1.xml"),
+        "<ns:root xmlns:ns=\"urn:example\"><ns:child>filled</ns:child><!--keep-me--></ns:root>"
+    );
+}
+
+#[test]
+fn custom_xml_xpath_stays_inside_the_existing_subset() {
+    let mut document = rich_shell("indexed");
+    let item = br#"<ns:root xmlns:ns="urn:example"><ns:child>one</ns:child><ns:child>two</ns:child></ns:root>"#;
+    let id = document.add_custom_xml_store(item, &[]).unwrap();
+    let location = control_by_tag(&document, "indexed");
+    let mappings = Some("xmlns:ns='urn:example'");
+    for xpath in [
+        "//ns:root/ns:child",
+        "/ns:root//ns:child",
+        "/ns:root/ns:child/text()",
+        "/ns:root/*",
+    ] {
+        let before = document.to_bytes().unwrap();
+        let error = document
+            .set_content_control_binding(&location, &id, xpath, mappings)
+            .unwrap_err();
+        assert!(error.to_string().contains("XPath"), "{xpath}: {error}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+    document
+        .set_content_control_binding(&location, &id, "/ns:root/ns:child[2]", mappings)
+        .unwrap();
+    document
+        .set_content_control_value_by_tag("indexed", "updated")
+        .unwrap();
+    assert_eq!(
+        part_text(&mut document, "/customXml/item1.xml"),
+        "<ns:root xmlns:ns=\"urn:example\"><ns:child>one</ns:child><ns:child>updated</ns:child></ns:root>"
+    );
+}
+
+#[test]
+fn custom_xml_bind_failure_rolls_back_display_and_store() {
+    let identity = "{00000000-0000-4000-8000-000000000004}";
+    let item =
+        br#"<ns:root xmlns:ns="urn:example"><ns:child>stored</ns:child><!--keep--></ns:root>"#;
+    let mapping = "xmlns:ns='urn:example'";
+    let control = |tag: &str, id: i32, xpath: &str, text: &str| {
+        format!(
+            "<w:sdt><w:sdtPr><w:tag w:val=\"{tag}\"/><w:id w:val=\"{id}\"/><w:dataBinding w:prefixMappings=\"{mapping}\" w:xpath=\"{xpath}\" w:storeItemID=\"{identity}\"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:sdtContent></w:sdt>"
+        )
+    };
+    let document = document_with_body_inner(&format!(
+        "{}{}",
+        control("ok", 1, "/ns:root/ns:child", "old-ok"),
+        control("bad", 2, "/ns:root/ns:missing", "old-bad")
+    ));
+    let mut package = package_of(&mut document.clone_for_staging());
+    package.set_part("/customXml/item1.xml", item.to_vec());
+    package.set_part(
+        "/customXml/itemProps1.xml",
+        properties_xml(identity).into_bytes(),
+    );
+    package
+        .content_types
+        .add_override("/customXml/item1.xml", "application/xml");
+    package
+        .content_types
+        .add_override("/customXml/itemProps1.xml", CUSTOM_XML_PROPS_TYPE);
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(CUSTOM_XML_REL_TYPE, "../customXml/item1.xml");
+    package
+        .get_or_create_part_rels("/customXml/item1.xml")
+        .add(CUSTOM_XML_PROPS_REL_TYPE, "itemProps1.xml");
+    let mut document = reopen_package(package);
+    let mut proved = document.clone_for_staging();
+    proved
+        .set_content_control_value_by_tag("ok", "next")
+        .unwrap();
+    assert_eq!(proved.content_controls()[0].text(), "next");
+    assert!(part_text(&mut proved, "/customXml/item1.xml").contains("<ns:child>next</ns:child>"));
+    assert_eq!(document.content_controls()[1].text(), "old-bad");
+
+    let before = document.to_bytes().unwrap();
+    let mut values = HashMap::new();
+    values.insert("ok".to_owned(), "next".to_owned());
+    values.insert("bad".to_owned(), "nope".to_owned());
+    let error = document.bind_content_controls(&values).unwrap_err();
+    assert!(error.to_string().contains("selected no"), "{error}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert_eq!(document.content_controls()[0].text(), "old-ok");
+    assert_eq!(document.content_controls()[1].text(), "old-bad");
+    assert_eq!(part_bytes(&mut document, "/customXml/item1.xml"), item);
+}
+
+#[test]
+fn custom_xml_identity_matching_stays_namespace_aware() {
+    let mut document = rich_shell("real");
+    let item = br#"<ns:root xmlns:ns="urn:example" xmlns:d="urn:decoy"><ns:child>real</ns:child><d:child>decoy</d:child></ns:root>"#;
+    let id = document.add_custom_xml_store(item, &[]).unwrap();
+    let saved = document.to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+    package.set_part(
+        "/customXml/item9.xml",
+        package.get_part("/customXml/item1.xml").unwrap().to_vec(),
+    );
+    package.set_part(
+        "/customXml/itemProps9.xml",
+        package
+            .get_part("/customXml/itemProps1.xml")
+            .unwrap()
+            .to_vec(),
+    );
+    package
+        .content_types
+        .add_override("/customXml/item9.xml", "application/xml");
+    package
+        .content_types
+        .add_override("/customXml/itemProps9.xml", CUSTOM_XML_PROPS_TYPE);
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add(CUSTOM_XML_REL_TYPE, "../customXml/item9.xml");
+    package
+        .get_or_create_part_rels("/customXml/item9.xml")
+        .add(CUSTOM_XML_PROPS_REL_TYPE, "itemProps9.xml");
+    let mut ambiguous = reopen_package(package);
+    let before = ambiguous.to_bytes().unwrap();
+    let error = ambiguous
+        .set_content_control_binding(
+            &control_by_tag(&ambiguous, "real"),
+            &id,
+            "/ns:root/ns:child",
+            Some("xmlns:ns='urn:example'"),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("ambiguous"), "{error}");
+    assert_eq!(ambiguous.to_bytes().unwrap(), before);
+
+    let decoy_id = "{00000000-0000-4000-8000-000000000009}";
+    let mut decoy = package_of(&mut rich_shell("decoy"));
+    decoy.set_part(
+        "/customXml/item1.xml",
+        b"<x:root xmlns:x=\"urn:decoy\"><x:child>no</x:child></x:root>".to_vec(),
+    );
+    decoy.set_part(
+        "/customXml/itemProps1.xml",
+        format!(
+            "<ds:datastoreItem xmlns:ds=\"http://schemas.openxmlformats.org/officeDocument/2006/customXml\" xmlns:x=\"urn:decoy\" x:itemID=\"{decoy_id}\"><ds:schemaRefs/></ds:datastoreItem>"
+        )
+        .into_bytes(),
+    );
+    decoy
+        .content_types
+        .add_override("/customXml/item1.xml", "application/xml");
+    decoy
+        .content_types
+        .add_override("/customXml/itemProps1.xml", CUSTOM_XML_PROPS_TYPE);
+    decoy
+        .get_or_create_part_rels("/word/document.xml")
+        .add(CUSTOM_XML_REL_TYPE, "../customXml/item1.xml");
+    decoy
+        .get_or_create_part_rels("/customXml/item1.xml")
+        .add(CUSTOM_XML_PROPS_REL_TYPE, "itemProps1.xml");
+    let mut decoy = reopen_package(decoy);
+    let before = decoy.to_bytes().unwrap();
+    let error = decoy
+        .set_content_control_binding(
+            &control_by_tag(&decoy, "decoy"),
+            decoy_id,
+            "/x:root/x:child",
+            Some("xmlns:x='urn:decoy'"),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("was not found"), "{error}");
+    assert_eq!(decoy.to_bytes().unwrap(), before);
+
+    let mut namespaced = rich_shell("named");
+    let named = br#"<root xmlns="urn:example"><child>real</child><d:child xmlns:d="urn:decoy">decoy</d:child></root>"#;
+    let named_id = namespaced.add_custom_xml_store(named, &[]).unwrap();
+    bind_rich(
+        &mut namespaced,
+        "named",
+        &named_id,
+        "/ns:root/ns:child",
+        Some("xmlns:ns='urn:example'"),
+    );
+    namespaced
+        .set_content_control_value_by_tag("named", "changed")
+        .unwrap();
+    assert_eq!(
+        part_text(&mut namespaced, "/customXml/item1.xml"),
+        "<root xmlns=\"urn:example\"><child>changed</child><d:child xmlns:d=\"urn:decoy\">decoy</d:child></root>"
+    );
+
+    let mut prefixed = rich_shell("prefixed");
+    let prefixed_item = br#"<ns:root xmlns:ns="urn:example"><ns:child>real</ns:child></ns:root>"#;
+    let prefixed_id = prefixed.add_custom_xml_store(prefixed_item, &[]).unwrap();
+    bind_rich(
+        &mut prefixed,
+        "prefixed",
+        &prefixed_id,
+        "/ns:root/ns:child",
+        Some("xmlns:ns='urn:example'"),
+    );
+    prefixed
+        .set_content_control_value_by_tag("prefixed", "same")
+        .unwrap();
+    assert!(part_text(&mut prefixed, "/customXml/item1.xml").contains("<ns:child>same</ns:child>"));
+}

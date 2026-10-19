@@ -3118,9 +3118,12 @@ provenance, version, and input identity are not in the repo, so that
 observation stays pending. Local tests do not certify Word.
 
 ### F-287, Custom XML stores and data binding authoring (L)
-Create custom XML data stores, item properties, schema references, namespace
-mappings, XPath bindings, and two-way controlled updates without exposing raw
-package surgery.
+`add_custom_xml_store` creates one custom XML item and its properties part
+through the bibliography relationship sequence and returns the braced item id.
+Schema URIs are stored in caller order and are not fetched.
+`set_content_control_binding` writes the three `CT_DataBinding` strings onto an
+existing shell. Value updates stay on the existing tag and bind setters.
+Unknown item bytes stay byte-identical. Bibliography keeps its own item bytes.
 **Depends on**: F-285.
 **Test gate**: round-trip. Bound controls resolve, update, and reopen against the
 correct store while unknown store content remains byte-identical.

@@ -2598,6 +2598,15 @@ alias, and bind setters. Picture and group still refuse a text value. The last
 repeating item refuses `remove_content_control` and publishes nothing. WASM
 and CLI gain no method. The authentic Word differential stays pending.
 
+`Document::add_custom_xml_store(item_xml, schema_uris)` returns the braced item
+id. Python `Document.add_custom_xml_store(item_xml, schema_uris=())` takes
+`bytes` and a sequence of strings.
+`Document::set_content_control_binding(location, store_item_id, xpath, prefix_mappings)`
+and Python
+`Document.set_content_control_binding(location, store_item_id, xpath, prefix_mappings=None)`
+use the three `CT_DataBinding` strings. There is no new binding object. WASM
+and CLI gain no method.
+
 Native Word callers inspect direct body order through
 `Document::body_items`. Each `BodyItemRef` borrows one paragraph, table,
 body-level content control, or preserved unsupported XML child. It does not

@@ -1821,6 +1821,23 @@ A refusal returns `Error::Other` and publishes nothing. Python exposes
 method. Layout and render keep the existing content walk. The authentic Word
 differential stays pending.
 
+`Document::add_custom_xml_store` stages one custom XML item, its properties
+part, both relationships, and both content-type overrides through the
+bibliography store sequence. The call returns the braced item id. An occupied
+conventional name is not overwritten. Item bytes must be one well-formed
+element. An empty schema list writes an empty `ds:schemaRefs`. Each schema URI
+is stored in caller order and is not fetched. `Document::set_content_control_binding`
+writes `w:dataBinding` with `w:prefixMappings` when a mapping is present, then
+`w:xpath`, then `w:storeItemID`. `None` and an empty mapping omit
+`w:prefixMappings`. The store must resolve to one part, and the path must
+select one simple element through the existing absolute child-path subset. A
+refusal returns `Error::Other` and publishes nothing.
+`set_content_control_value_by_tag` and `bind_content_controls` still update the
+display and the store together. A failed sibling rolls both back. Unknown
+sibling bytes stay byte-identical. Bibliography keeps its own item bytes and
+still returns the part name from its private caller. The helper stays in
+`rdocx`. Python exposes both methods. WASM and CLI gain no method.
+
 `DocumentFragment` owns a package-authoritative half-open block selection from
 any supported story owner. Existing two-segment paragraph paths inside block
 controls resolve their enclosing control content. Source and destination keep

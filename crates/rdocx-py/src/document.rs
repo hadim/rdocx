@@ -8137,6 +8137,48 @@ impl PyDocument {
         )
     }
 
+    #[pyo3(signature = (item_xml, schema_uris=Vec::new()))]
+    fn add_custom_xml_store(
+        &mut self,
+        py: Python<'_>,
+        item_xml: &[u8],
+        schema_uris: Vec<String>,
+    ) -> PyResult<String> {
+        let mut candidate = self.inner.clone_for_staging();
+        let item_id = py
+            .detach(|| {
+                let uris = schema_uris.iter().map(String::as_str).collect::<Vec<_>>();
+                candidate.add_custom_xml_store(item_xml, &uris)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.publish_api_candidate(py, candidate, "Document.add_custom_xml_store")?;
+        Ok(item_id)
+    }
+
+    #[pyo3(signature = (location, store_item_id, xpath, prefix_mappings=None))]
+    fn set_content_control_binding(
+        &mut self,
+        py: Python<'_>,
+        location: PyRef<'_, PyContentLocation>,
+        store_item_id: String,
+        xpath: String,
+        prefix_mappings: Option<String>,
+    ) -> PyResult<()> {
+        self.edit_content_control(
+            py,
+            &location,
+            "Document.set_content_control_binding",
+            move |document, location| {
+                document.set_content_control_binding(
+                    location,
+                    &store_item_id,
+                    &xpath,
+                    prefix_mappings.as_deref(),
+                )
+            },
+        )
+    }
+
     fn set_content_control_value_by_alias(
         &mut self,
         py: Python<'_>,

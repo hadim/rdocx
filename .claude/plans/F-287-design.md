@@ -130,11 +130,19 @@ Unchanged.
 
 ## Implementation checklist
 
-- [ ] Wait for the F-285 prefix checkpoint and for F-286 to leave the shared files.
-- [ ] Add a RED test that a missing public create still cannot bind a new store.
-- [ ] Implement the store and binding methods on the existing resolver.
-- [ ] Update the HLD list and obtain a zero-finding microscope.
+- [x] Wait for the F-285 prefix checkpoint and for F-286 to leave the shared files.
+- [x] Add a RED test that a missing public create still cannot bind a new store.
+- [x] Implement the store and binding methods on the existing resolver.
+- [x] Update the HLD list and obtain a zero-finding microscope.
 - [ ] Leave the hash harness for the final union.
+
+## Deviations
+
+The F-285 prefix checkpoint is integrated at `e7f3e98f` and the F-286 file lease ended at integration `9237b484`. The dependency-readiness sentence stays as written.
+
+A missing `add_custom_xml_store` is not a semantic RED at compile time. `custom_xml_binding_updates_the_addressed_store` keeps the missing-store fill refusal beside the additive create checks. There is no separate RED commit.
+
+The private helper is `stage_custom_xml_store` in `bibliography.rs`. `create_collection` calls it and still returns the part name. Empty schema properties bytes stay on that path.
 
 ## Contract closure
 

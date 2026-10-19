@@ -9518,3 +9518,47 @@ def test_issue391_textbox_paragraph_handles_preserve_physical_custody():
     story = rdocx.Story(kind="body", part_name="/word/document.xml", owner_index=0)
     built = rdocx.StoryItem(story=story, kind="paragraph", index_path=(0,), text="built")
     assert built.paragraph is None
+
+
+def test_f287_custom_xml_store_binding_and_refusal():
+    import rdocx
+    document = rdocx.Document()
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="empty"):
+        document.add_custom_xml_store(b"")
+    with pytest.raises(rdocx.RdocxError, match="fragment"):
+        document.add_custom_xml_store(b"<a/><b/>", ["urn:schema"])
+    with pytest.raises(rdocx.RdocxError, match="empty"):
+        document.add_custom_xml_store(b"<root/>", [""])
+    assert document.to_bytes() == before
+
+    item = b'<ns:root xmlns:ns="urn:example"><ns:child>old</ns:child></ns:root>'
+    item_id = document.add_custom_xml_store(item, ["urn:schema?a=1&b=2"])
+    assert item_id == "{00000000-0000-4000-8000-000000000000}"
+    second = document.add_custom_xml_store(b"<again/>", ["urn:repeat", "urn:repeat"])
+    assert second != item_id
+    body = next(story for story in document.stories if story.kind == "body")
+    document.insert_content_control(
+        rdocx.ContentLocation.end(body), "block", "rich_text", tag="bound"
+    )
+    location = _content_location(document, lambda item: item.kind == "content_control")
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="XPath"):
+        document.set_content_control_binding(
+            location, item_id, "//ns:root/ns:child", "xmlns:ns='urn:example'"
+        )
+    assert document.to_bytes() == before
+    document.set_content_control_binding(
+        location, item_id, "/ns:root/ns:child", "xmlns:ns='urn:example'"
+    )
+    document.set_content_control_value_by_tag("bound", "filled")
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.content_controls()[0].text == "filled"
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(reopened.to_bytes())) as archive:
+        stored = archive.read("customXml/item1.xml")
+        properties = archive.read("customXml/itemProps1.xml")
+    assert b"<ns:child>filled</ns:child>" in stored
+    assert b"urn:schema?a=1&amp;b=2" in properties
+    assert item_id.encode() in properties
