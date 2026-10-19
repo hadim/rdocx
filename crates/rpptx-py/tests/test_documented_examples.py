@@ -1556,7 +1556,7 @@ def test_paragraph_bullet_reads_each_choice_and_a_character_replaces_a_picture_b
     assert '<a:buFontTx/><a:buChar char="-"/>' in body
 
 
-def test_add_run_returns_a_live_run_and_stales_the_paragraph_handle_once():
+def test_add_run_returns_a_live_run_and_keeps_the_paragraph_handle():
     import rpptx
 
     presentation = _textbox_presentation(rpptx)
@@ -1565,7 +1565,7 @@ def test_add_run_returns_a_live_run_and_stales_the_paragraph_handle_once():
     assert run.text == " world"
     run.font.bold = True
     assert run.font.bold is True
-    _assert_stale_after_exactly_one_bump(rpptx, lambda: paragraph.text)
+    assert paragraph.text == "hello world"
 
     paragraph = presentation.slides[0].shapes[0].text_frame.paragraphs[0]
     assert paragraph.text == "hello world"
@@ -4797,8 +4797,7 @@ def test_cell_text_frame_structural_edits_stale_every_earlier_nested_handle():
     retired_runs = new_paragraph.runs
     new_run = new_paragraph.add_run("new run")
     assert new_run.text == "new run"
-    with pytest.raises(StaleElementError, match=r"First invalidated by Paragraph.add_run at committed revision"):
-        _ = new_paragraph.text
+    assert new_paragraph.text == "new run"
     with pytest.raises(StaleElementError, match=r"First invalidated by Paragraph.add_run at committed revision"):
         len(retired_runs)
     assert fresh_frame.paragraphs[1].text == "new run"
@@ -11735,3 +11734,88 @@ def test_fx254_whole_part_exception_keeps_physical_shape_identity(change):
         assert prs.to_bytes() == before
         assert element.xml == xml
         assert held.shape_id == first_id and held.text == "before"
+
+
+def test_issue388_ppt_append_owner_identity():
+    """Expected on old source: the paragraph handle and the earlier run become
+    stale after the first add_run. The contract is that both stay usable
+    across a second add_run and add_field, and the new run addresses itself.
+    """
+    import rpptx
+
+    presentation = _textbox_presentation(rpptx)
+    paragraph = presentation.slides[0].shapes[0].text_frame.paragraphs[0]
+    earlier = paragraph.runs[0]
+    assert earlier.text == "hello"
+    first = paragraph.add_run(" one")
+    assert earlier.text == "hello"
+    assert first.text == " one"
+    assert paragraph.text == "hello one"
+    paragraph.add_field("slidenum", "2")
+    second = paragraph.add_run(" two")
+    assert earlier.text == "hello"
+    assert first.text == " one"
+    assert second.text == " two"
+    assert paragraph.text == "hello one2 two"
+    assert paragraph.runs[0].text == "hello"
+    assert paragraph.runs[1].text == " one"
+    assert paragraph.runs[2].text == " two"
+
+
+def test_issue388_ppt_append_collection_contract():
+    """Expected on old source: add_paragraph retires the earlier run and the
+    already materialised paragraph. The contract keeps those owners live, leaves
+    the materialised collection at its earlier length, and shows the new
+    paragraph only to a later iteration.
+    """
+    import rpptx
+
+    presentation = _textbox_presentation(rpptx)
+    frame = presentation.slides[0].shapes[0].text_frame
+    earlier_run = frame.paragraphs[0].runs[0]
+    materialised = list(frame.paragraphs)
+    assert len(materialised) == 1
+    assert materialised[0].text == "hello"
+    frame.add_paragraph()
+    assert earlier_run.text == "hello"
+    assert materialised[0].text == "hello"
+    assert len(materialised) == 1
+    again = list(frame.paragraphs)
+    assert len(again) == 2
+    assert again[0].text == "hello"
+    assert again[1].text == ""
+    assert earlier_run.text == "hello"
+
+
+def test_issue389_local_edits_do_not_scale_with_unrelated_package():
+    """The five PowerPoint operations edit one text box on a one-slide deck
+    and on a deck of 40 slides with 40 text boxes. The edited shape changes.
+    A shape on the last slide does not. The visit bound is a library test.
+    The release ratio is final-sprint evidence.
+    """
+    import rpptx
+    from rpptx.enum.dml import MSO_FILL_TYPE
+
+    for slides, boxes in ((1, 0), (40, 40)):
+        presentation = rpptx.Presentation()
+        for _ in range(slides):
+            presentation.slides.add_slide(presentation.slide_layouts[6])
+        for slide in presentation.slides:
+            for _ in range(boxes):
+                slide.shapes.add_textbox(0, 0, 100, 100)
+        shape = presentation.slides[0].shapes.add_textbox(0, 0, 100, 100)
+        shape.alt_text = "alt"
+        assert shape.alt_text == "alt"
+        shape.left = 200_000
+        assert int(shape.left) == 200_000
+        shape.fill.solid()
+        assert shape.fill.type == MSO_FILL_TYPE.SOLID
+        xml = shape.element.xml
+        assert "TextBox " in xml
+        shape.element.replace_xml(xml.replace("TextBox ", "TextBax ", 1))
+        assert "TextBax " in shape.element.xml
+        if slides > 1:
+            other = presentation.slides[-1].shapes[0]
+            assert other.alt_text in (None, "")
+            assert "TextBox " in other.element.xml
+            assert int(other.left) == 0

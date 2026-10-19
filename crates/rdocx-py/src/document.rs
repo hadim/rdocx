@@ -1,6 +1,30 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
+
+#[cfg(test)]
+thread_local! {
+    static FX260_WORD_VISITS: Cell<usize> = const { Cell::new(0) };
+}
+
+fn note_fx260_word(count: usize) {
+    #[cfg(test)]
+    FX260_WORD_VISITS.with(|cell| cell.set(cell.get().saturating_add(count)));
+    #[cfg(not(test))]
+    let _ = count;
+}
+
+#[cfg(test)]
+fn fx260_word_visits() -> usize {
+    FX260_WORD_VISITS.with(|cell| cell.get())
+}
+
+#[cfg(test)]
+fn reset_fx260_word_visits() {
+    FX260_WORD_VISITS.with(|cell| cell.set(0));
+}
 
 use oxml_py_support::{
     ContentPath, PathSeg, PreparedRevision, RevisionCounter, RevisionScope, RevisionState,
@@ -4078,6 +4102,48 @@ fn same_story_owner(a: &rdocx::StoryId, b: &rdocx::StoryId) -> bool {
     a.kind() == b.kind() && a.part_name() == b.part_name() && a.owner_index() == b.owner_index()
 }
 
+fn shift_content_location(
+    location: rdocx::ContentLocation,
+    removed: usize,
+) -> rdocx::ContentLocation {
+    let mut path = location.index_path().to_vec();
+    if location.story().kind() == rdocx::StoryKind::Body
+        && path.first().is_some_and(|root| *root > removed)
+    {
+        path[0] -= 1;
+    }
+    rdocx::ContentLocation::new(location.story().clone(), location.item_kind(), path)
+}
+
+fn shift_word_owner_location(location: WordOwnerLocation, removed: usize) -> WordOwnerLocation {
+    match location {
+        WordOwnerLocation::Paragraph(location) => {
+            WordOwnerLocation::Paragraph(shift_content_location(location, removed))
+        }
+        WordOwnerLocation::Run(location, path) => {
+            WordOwnerLocation::Run(shift_content_location(location, removed), path)
+        }
+        WordOwnerLocation::Table(location) => {
+            WordOwnerLocation::Table(shift_content_location(location, removed))
+        }
+        WordOwnerLocation::Cell {
+            table,
+            row,
+            cell,
+            story,
+        } => WordOwnerLocation::Cell {
+            table: shift_content_location(table, removed),
+            row,
+            cell,
+            story,
+        },
+        WordOwnerLocation::Hyperlink(location, index) => {
+            WordOwnerLocation::Hyperlink(shift_content_location(location, removed), index)
+        }
+        WordOwnerLocation::Section(index) => WordOwnerLocation::Section(index),
+    }
+}
+
 fn same_content_owner(a: &rdocx::ContentLocation, b: &rdocx::ContentLocation) -> bool {
     same_story_owner(a.story(), b.story())
         && a.item_kind() == b.item_kind()
@@ -4197,6 +4263,7 @@ fn word_owner_locations(
     document: &rdocx::Document,
     mut form_sources: Option<&mut FormSources>,
 ) -> rdocx::Result<Vec<WordOwnerAddress>> {
+    note_fx260_word(document.content_count().max(1));
     let mut result = Vec::new();
     let mut table_ordinals = HashMap::new();
     let (snapshots, cell_snapshots, paragraph_snapshots, link_snapshots) =
@@ -4714,6 +4781,204 @@ fn word_route_key(
 #[cfg(test)]
 thread_local! {
     static FX237_ROUTE_WORK: std::cell::Cell<[usize; 8]> = const { std::cell::Cell::new([0; 8]) };
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum PropertyOwnerKey {
+    Table {
+        story_kind: rdocx::StoryKind,
+        part_name: String,
+        path: Vec<usize>,
+        cell: Option<(usize, usize)>,
+    },
+    Cell {
+        story_kind: rdocx::StoryKind,
+        part_name: String,
+        path: Vec<usize>,
+        row: usize,
+        column: usize,
+        parent_cell: Option<(usize, usize)>,
+    },
+    InCell {
+        story_kind: rdocx::StoryKind,
+        part_name: String,
+        depth: usize,
+        cell: (usize, usize),
+        run: Option<rdocx_oxml::text::AcceptedRunPath>,
+    },
+    BodyItem {
+        story_kind: rdocx::StoryKind,
+        part_name: String,
+        kind: rdocx::StoryItemKind,
+        path: Vec<usize>,
+    },
+    BodyRun {
+        story_kind: rdocx::StoryKind,
+        part_name: String,
+        path: Vec<usize>,
+        run: rdocx_oxml::text::AcceptedRunPath,
+    },
+    Section(usize),
+    Hyperlink {
+        story_kind: rdocx::StoryKind,
+        part_name: String,
+        path: Vec<usize>,
+        index: usize,
+    },
+}
+
+fn containing_cell(
+    addresses: &[WordOwnerAddress],
+    mut parent: Option<usize>,
+) -> Option<(usize, usize)> {
+    while let Some(index) = parent {
+        if let WordOwnerLocation::Cell { row, cell, .. } = &addresses[index].location {
+            return Some((*row, *cell));
+        }
+        parent = addresses[index].parent;
+    }
+    None
+}
+
+fn story_part(location: &rdocx::ContentLocation) -> (rdocx::StoryKind, String) {
+    let story = location.story();
+    (story.kind(), story.part_name().to_owned())
+}
+
+fn property_owner_key(addresses: &[WordOwnerAddress], index: usize) -> PropertyOwnerKey {
+    let address = &addresses[index];
+    let cell = containing_cell(addresses, address.parent);
+    match &address.location {
+        WordOwnerLocation::Table(location) => {
+            let (story_kind, part_name) = story_part(location);
+            PropertyOwnerKey::Table {
+                story_kind,
+                part_name,
+                path: location.index_path().to_vec(),
+                cell,
+            }
+        }
+        WordOwnerLocation::Cell {
+            table,
+            row,
+            cell: column,
+            ..
+        } => {
+            let (story_kind, part_name) = story_part(table);
+            PropertyOwnerKey::Cell {
+                story_kind,
+                part_name,
+                path: table.index_path().to_vec(),
+                row: *row,
+                column: *column,
+                parent_cell: cell,
+            }
+        }
+        WordOwnerLocation::Paragraph(location) => {
+            let (story_kind, part_name) = story_part(location);
+            if let Some(cell) = cell {
+                PropertyOwnerKey::InCell {
+                    story_kind,
+                    part_name,
+                    depth: location.index_path().len(),
+                    cell,
+                    run: None,
+                }
+            } else {
+                PropertyOwnerKey::BodyItem {
+                    story_kind,
+                    part_name,
+                    kind: location.item_kind(),
+                    path: location.index_path().to_vec(),
+                }
+            }
+        }
+        WordOwnerLocation::Run(location, path) => {
+            let (story_kind, part_name) = story_part(location);
+            if let Some(cell) = cell {
+                PropertyOwnerKey::InCell {
+                    story_kind,
+                    part_name,
+                    depth: location.index_path().len(),
+                    cell,
+                    run: Some(path.clone()),
+                }
+            } else {
+                PropertyOwnerKey::BodyRun {
+                    story_kind,
+                    part_name,
+                    path: location.index_path().to_vec(),
+                    run: path.clone(),
+                }
+            }
+        }
+        WordOwnerLocation::Section(index) => PropertyOwnerKey::Section(*index),
+        WordOwnerLocation::Hyperlink(location, index) => {
+            let (story_kind, part_name) = story_part(location);
+            PropertyOwnerKey::Hyperlink {
+                story_kind,
+                part_name,
+                path: location.index_path().to_vec(),
+                index: *index,
+            }
+        }
+    }
+}
+
+fn relocated_property_owners(
+    old: &[WordOwner],
+    new_addresses: &[WordOwnerAddress],
+) -> Option<Vec<WordOwner>> {
+    if old.len() != new_addresses.len() {
+        return None;
+    }
+    let old_addresses = old
+        .iter()
+        .map(|owner| WordOwnerAddress {
+            location: owner.location.clone(),
+            parent: owner.parent,
+            body_slot: owner.body_slot,
+            projection_ordinal: owner.projection_ordinal,
+        })
+        .collect::<Vec<_>>();
+    let mut buckets: HashMap<PropertyOwnerKey, Vec<usize>> = HashMap::new();
+    for index in 0..old_addresses.len() {
+        buckets
+            .entry(property_owner_key(&old_addresses, index))
+            .or_default()
+            .push(index);
+    }
+    let mut cursors: HashMap<PropertyOwnerKey, usize> = HashMap::new();
+    let mut owners = Vec::with_capacity(new_addresses.len());
+    for index in 0..new_addresses.len() {
+        let key = property_owner_key(new_addresses, index);
+        let bucket = buckets.get(&key)?;
+        let cursor = cursors.entry(key).or_insert(0);
+        if *cursor >= bucket.len() {
+            return None;
+        }
+        let previous = &old[bucket[*cursor]];
+        *cursor += 1;
+        let address = &new_addresses[index];
+        owners.push(WordOwner {
+            location: address.location.clone(),
+            parent: address.parent,
+            body_slot: address.body_slot,
+            projection_ordinal: address.projection_ordinal,
+            owner: previous.owner.clone(),
+            content: previous.content.clone(),
+            properties: previous.properties.clone(),
+            grid: previous.grid.clone(),
+        });
+    }
+    if cursors.len() != buckets.len()
+        || cursors
+            .iter()
+            .any(|(key, cursor)| buckets.get(key).map(Vec::len) != Some(*cursor))
+    {
+        return None;
+    }
+    Some(owners)
 }
 
 fn indexed_inventory_matches(
@@ -5522,6 +5787,194 @@ impl PyDocument {
             })
     }
 
+    fn publish_plain_body_removal(&mut self, removed: usize) -> PyResult<()> {
+        note_fx260_word(1);
+        let mut dropped = vec![false; self.owners.len()];
+        for (index, owner) in self.owners.iter().enumerate() {
+            if owner.body_slot == Some(removed) {
+                dropped[index] = true;
+            }
+        }
+        loop {
+            let mut changed = false;
+            for (index, owner) in self.owners.iter().enumerate() {
+                if !dropped[index] && owner.parent.is_some_and(|parent| dropped[parent]) {
+                    dropped[index] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut map = vec![None; self.owners.len()];
+        let mut cursor = 0;
+        for (index, drop_owner) in dropped.iter().enumerate() {
+            if !*drop_owner {
+                map[index] = Some(cursor);
+                cursor += 1;
+            }
+        }
+        let previous = std::mem::take(&mut self.owners);
+        let mut retired = previous
+            .iter()
+            .flat_map(WordOwner::states)
+            .collect::<Vec<_>>();
+        retired.push(self.snapshot_scope.clone());
+        let mut addresses = Vec::with_capacity(cursor);
+        for (index, mut owner) in previous.into_iter().enumerate() {
+            if dropped[index] {
+                continue;
+            }
+            let original_slot = owner.body_slot;
+            if let Some(slot) = owner.body_slot.as_mut()
+                && *slot > removed
+            {
+                *slot -= 1;
+            }
+            if let WordOwnerLocation::Paragraph(location) = &owner.location
+                && location.story().kind() == rdocx::StoryKind::Body
+                && original_slot.is_some_and(|slot| slot > removed)
+                && let Some(ordinal) = owner.projection_ordinal.as_mut()
+            {
+                *ordinal = ordinal.saturating_sub(1);
+            }
+            owner.location = shift_word_owner_location(owner.location, removed);
+            owner.parent = owner
+                .parent
+                .map(|parent| map[parent].expect("a surviving owner keeps its parent"));
+            addresses.push(WordOwnerAddress {
+                location: owner.location,
+                parent: owner.parent,
+                body_slot: owner.body_slot,
+                projection_ordinal: owner.projection_ordinal,
+            });
+        }
+        let mut births = addresses
+            .iter()
+            .flat_map(|address| address.location.scopes().iter().copied())
+            .collect::<Vec<_>>();
+        births.push(RevisionScope::Text);
+        let revision = self
+            .revisions
+            .prepare_scopes("Document.remove_content", &retired, &births)
+            .map_err(revision_to_pyerr)?;
+        let owner_states = births.len() - 1;
+        let mut states = Vec::with_capacity(owner_states);
+        for index in 0..owner_states {
+            states.push(revision.born(index).expect("plain removal birth"));
+        }
+        let snapshot_scope = revision
+            .born(owner_states)
+            .expect("plain removal snapshot birth");
+        let owners = word_owners_with_states(addresses, &states);
+        self.revisions
+            .commit_scopes(revision)
+            .map_err(revision_to_pyerr)?;
+        self.owners = owners;
+        self.snapshot_scope = snapshot_scope;
+        Ok(())
+    }
+
+    pub(crate) fn plain_paragraph_slot(&self, location: &rdocx::ContentLocation) -> Option<usize> {
+        self.owners.iter().find_map(|owner| match &owner.location {
+            WordOwnerLocation::Paragraph(owned) if same_content_owner(owned, location) => {
+                owner.body_slot
+            }
+            _ => None,
+        })
+    }
+
+    pub(crate) fn publish_plain_paragraph_xml(
+        &mut self,
+        location: &rdocx::ContentLocation,
+    ) -> PyResult<()> {
+        note_fx260_word(1);
+        let selected = self
+            .owners
+            .iter()
+            .position(|owner| {
+                matches!(
+                    &owner.location,
+                    WordOwnerLocation::Paragraph(owned) if same_content_owner(owned, location)
+                )
+            })
+            .ok_or_else(|| {
+                PyValueError::new_err("checked XML owner has no current physical authority")
+            })?;
+        let mut descendant = vec![false; self.owners.len()];
+        loop {
+            let mut changed = false;
+            for (index, owner) in self.owners.iter().enumerate() {
+                if !descendant[index]
+                    && owner
+                        .parent
+                        .is_some_and(|parent| parent == selected || descendant[parent])
+                {
+                    descendant[index] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut retired = Vec::new();
+        if let Some(content) = &self.owners[selected].content {
+            retired.push(content.clone());
+        }
+        if let Some(properties) = &self.owners[selected].properties {
+            retired.push(properties.clone());
+        }
+        for (index, owner) in self.owners.iter().enumerate() {
+            if descendant[index] {
+                retired.extend(owner.states());
+            }
+        }
+        retired.push(self.snapshot_scope.clone());
+        let births = retired.iter().map(RevisionState::scope).collect::<Vec<_>>();
+        let revision = self
+            .revisions
+            .prepare_local_scopes("Paragraph.replace_xml", &retired, &births)
+            .map_err(revision_to_pyerr)?;
+        let mut born = 0;
+        if self.owners[selected].content.is_some() {
+            self.owners[selected].content =
+                Some(revision.born(born).expect("paragraph content birth"));
+            born += 1;
+        }
+        if self.owners[selected].properties.is_some() {
+            self.owners[selected].properties =
+                Some(revision.born(born).expect("paragraph property birth"));
+            born += 1;
+        }
+        for (index, is_descendant) in descendant.iter().enumerate() {
+            if !is_descendant {
+                continue;
+            }
+            self.owners[index].owner = revision.born(born).expect("run owner birth");
+            born += 1;
+            if self.owners[index].content.is_some() {
+                self.owners[index].content = Some(revision.born(born).expect("run content birth"));
+                born += 1;
+            }
+            if self.owners[index].properties.is_some() {
+                self.owners[index].properties =
+                    Some(revision.born(born).expect("run property birth"));
+                born += 1;
+            }
+            if self.owners[index].grid.is_some() {
+                self.owners[index].grid = Some(revision.born(born).expect("run grid birth"));
+                born += 1;
+            }
+        }
+        self.snapshot_scope = revision.born(born).expect("paragraph snapshot birth");
+        self.revisions
+            .commit_scopes(revision)
+            .map_err(revision_to_pyerr)?;
+        Ok(())
+    }
+
     pub(crate) fn prepare_word_revision(
         &self,
         py: Python<'_>,
@@ -5784,6 +6237,25 @@ impl PyDocument {
         self.commit_word_revision(prepared)?;
         self.inner = candidate;
         Ok(())
+    }
+
+    /// Keep live handles when a property edit only moves existing physical
+    /// addresses. A real insert, removal or replacement keeps the conservative
+    /// publication.
+    pub(crate) fn adopt_property_edit(
+        &mut self,
+        py: Python<'_>,
+        candidate: rdocx::Document,
+        operation: &'static str,
+    ) -> PyResult<()> {
+        let locations =
+            word_owner_locations(&candidate, None).map_err(|error| rdocx_to_pyerr(py, error))?;
+        if let Some(owners) = relocated_property_owners(&self.owners, &locations) {
+            self.owners = owners;
+            self.inner = candidate;
+            return Ok(());
+        }
+        self.publish_owner_candidate(py, candidate, operation, WordPublication::Conservative)
     }
 
     fn remove_note_by_id(
@@ -10306,6 +10778,15 @@ impl PyDocument {
     }
 
     fn remove_content(&mut self, py: Python<'_>, index: usize) -> PyResult<bool> {
+        if self.inner.plain_direct_paragraph(index) {
+            let removed = py
+                .detach(|| self.inner.try_remove_content(index))
+                .map_err(|error| rdocx_to_pyerr(py, error))?;
+            if removed {
+                self.publish_plain_body_removal(index)?;
+            }
+            return Ok(removed);
+        }
         let mut candidate = self.inner.clone_for_staging();
         let removed = py
             .detach(|| candidate.try_remove_content(index))
@@ -10320,6 +10801,37 @@ impl PyDocument {
             self.commit_word_revision(prepared)?;
             self.inner = candidate;
         }
+        Ok(removed)
+    }
+
+    fn remove_content_range(
+        &mut self,
+        py: Python<'_>,
+        start: usize,
+        end: usize,
+    ) -> PyResult<usize> {
+        let len = self.inner.content_count();
+        if start > end || end > len {
+            return Err(rdocx_to_pyerr(
+                py,
+                rdocx::Error::Other("content range is reversed or out of range".to_owned()),
+            ));
+        }
+        if start == end {
+            return Ok(0);
+        }
+        let mut candidate = self.inner.clone_for_staging();
+        let removed = py
+            .detach(|| candidate.remove_content_range(start, end))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = self.prepare_word_revision(
+            py,
+            &candidate,
+            "Document.remove_content_range",
+            crate::document::WordPublication::Conservative,
+        )?;
+        self.commit_word_revision(prepared)?;
+        self.inner = candidate;
         Ok(removed)
     }
 
@@ -12108,4 +12620,41 @@ impl PyDocument {
         document.inner = candidate;
         Ok(result)
     }
+}
+
+#[test]
+fn issue389_local_edits_do_not_scale_with_unrelated_package() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        for count in [50usize, 800] {
+            let mut native = rdocx::Document::new();
+            for index in 0..count {
+                native.add_paragraph(&format!("p{index}"));
+            }
+            let document = Py::new(py, PyDocument::from_document(native, py)?)?;
+            let path = {
+                let borrowed = document.borrow(py);
+                borrowed
+                    .revisions
+                    .capture(smallvec![PathSeg::Body(0), PathSeg::Para(0)])
+            };
+            let paragraph = Py::new(
+                py,
+                crate::paragraph::PyParagraph::new(document.clone_ref(py), path)
+                    .bind_current(py, None)?,
+            )?;
+            let xml = paragraph.borrow(py).xml(py)?;
+            let changed = xml.replace(">p0<", ">q0<");
+            assert_ne!(xml, changed);
+            reset_fx260_word_visits();
+            paragraph.borrow(py).replace_xml(py, &changed)?;
+            assert_eq!(fx260_word_visits(), 1, "replace count={count}");
+            reset_fx260_word_visits();
+            let removed = document.borrow_mut(py).remove_content(py, 1)?;
+            assert!(removed);
+            assert_eq!(fx260_word_visits(), 1, "remove count={count}");
+        }
+        Ok(())
+    })
+    .unwrap();
 }

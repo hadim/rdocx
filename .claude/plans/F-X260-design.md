@@ -59,7 +59,7 @@ No new crate, module or file. Python changes stay in `crates/rdocx-py/src/docume
 
 ## Dependency readiness
 
-`BACKLOG.md` records F-X211c and F-X237 as `done`. Those are the formal edges. F-X259 is not a formal dependency. Its integrated head `4879e58a` is an ancestor of claim base `c776041c`. This story is implementation-ready on those edges. The file lease still places it before F-X261 and F-X262. Approval of this plan does not complete the story. The running worker `work/f-x260-grok` predates the behavior-contract revision. Its owner records that revision in the worker progress file before further implementation. Dirty worker files stay in the worker. A5, the HLD update and the microscope stay open.
+`BACKLOG.md` records F-X211c and F-X237 as `done`. Those are the formal edges. F-X259 is not a formal dependency. Its integrated head `4879e58a` is an ancestor of claim base `c776041c`. This story is implementation-ready on those edges. The file lease still places it before F-X261 and F-X262. Approval of this plan does not complete the story. The running worker `work/f-x260-grok` predates the behavior-contract revision. Its owner recorded that revision in the worker progress file before further implementation. The local visit gate, the HLD update and microscope pass 2 are recorded. The release ratio of 3 stays final evidence.
 
 ## Acceptance criteria
 
@@ -105,7 +105,13 @@ CLI and WASM are unaffected. They do not hold these Python owner inventories. Na
 | local scoped | regression | A6 and A7 | One transaction, atomic refusal, shared media kept |
 | final sprint | risk rider | installed `rdocx` and `rpptx` suites, release ratio samples, full hash harness | No Word hash delta. No new public surface beyond the approved range method |
 
-Local commands are the existing Python files `crates/rdocx-py/tests/test_formatting_tables.py` and `crates/rpptx-py/tests/test_documented_examples.py`, plus a native test in the existing `rdocx` integration entrypoint. No new test binary.
+Local commands are the existing Python files `crates/rdocx-py/tests/test_formatting_tables.py` and `crates/rpptx-py/tests/test_documented_examples.py`, plus the visit assertion in the existing library unit tests named under Deviations. No new test binary.
+
+## Deviations
+
+The visit counter is `cfg(test)` state inside `rdocx`, `rpptx`, `rdocx-py` and `rpptx-py`. An integration binary and pytest do not compile that state, so the visit assertion lives in each library's existing unit tests under the A5 name. The same name in the two Python files checks that the edited owner changes and an unrelated owner does not.
+
+The affected-owner paths also edit `crates/rdocx/src/document.rs`, `crates/rdocx-py/src/paragraph.rs`, `crates/rpptx/src/lib.rs`, `crates/rpptx-py/src/shape.rs` and `crates/rpptx-py/src/dml.rs`. Those files already own the operations. No new crate, module or file was added.
 
 ## HLD impact
 
@@ -133,15 +139,15 @@ Unchanged. A Word or PowerPoint byte change that is not required by the owner re
 
 ## Implementation checklist
 
-- [ ] Inspect the integrated owner providers after F-X259 lands. Re-read PR393 at the pinned head.
-- [ ] Record old-source RED for A1 through A5. The release ratio is a final observation, and debug timings do not pass A5.
-- [ ] Implement through the existing inventories and publication path.
-- [ ] Update the HLD impact list and obtain a zero-finding microscope.
+- [x] Inspect the integrated owner providers after F-X259 lands. Re-read PR393 at the pinned head.
+- [x] Record old-source RED for A1 through A5. The release ratio is a final observation, and debug timings do not pass A5.
+- [x] Implement through the existing inventories and publication path.
+- [x] Update the HLD impact list and obtain a zero-finding microscope.
 - [ ] Leave the release ratio and installed suites for the final sprint union.
 
 ## Contract closure
 
-R4 in `.claude/reviews/S95.3-design-quality-pass-1.md` does not change A1 through A7. The running worker acknowledges the canonical plan, including the behavior contracts added after claim base `c776041c`, in its progress file before further implementation. A5, the HLD update and the microscope stay explicit and unfinished. The release ratio of 3 stays final evidence.
+R4 in `.claude/reviews/S95.3-design-quality-pass-1.md` does not change A1 through A7. The running worker acknowledged the canonical plan, including the behavior contracts added after claim base `c776041c`, in its progress file before further implementation. The local visit gate, the HLD update and microscope pass 2 are recorded. The release ratio of 3 stays final evidence.
 
 ## Open questions
 

@@ -12791,6 +12791,28 @@ fn remove_content_out_of_bounds() {
 }
 
 #[test]
+fn remove_content_range_is_half_open_and_atomic() {
+    let mut doc = Document::new();
+    doc.add_paragraph("zero");
+    doc.add_paragraph("one");
+    doc.add_paragraph("two");
+    doc.add_paragraph("three");
+    assert_eq!(doc.remove_content_range(1, 1).unwrap(), 0);
+    assert_eq!(doc.remove_content_range(4, 4).unwrap(), 0);
+    assert_eq!(doc.content_count(), 4);
+    assert_eq!(doc.remove_content_range(1, 3).unwrap(), 2);
+    assert_eq!(doc.content_count(), 2);
+    assert_eq!(doc.paragraphs()[0].text(), "zero");
+    assert_eq!(doc.paragraphs()[1].text(), "three");
+    let bytes = doc.to_bytes().unwrap();
+    assert!(doc.remove_content_range(2, 1).is_err());
+    assert!(doc.remove_content_range(0, 3).is_err());
+    assert_eq!(doc.to_bytes().unwrap(), bytes);
+    assert_eq!(doc.paragraphs()[0].text(), "zero");
+    assert_eq!(doc.paragraphs()[1].text(), "three");
+}
+
+#[test]
 fn find_content_index_returns_none_for_missing() {
     let mut doc = Document::new();
     doc.add_paragraph("Hello");

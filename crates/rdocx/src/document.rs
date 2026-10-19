@@ -6574,6 +6574,72 @@ thread_local! {
     static FX237_CELL_VISITS: Cell<usize> = const { Cell::new(0) };
     static FX211_PROFILE: Cell<[usize; 12]> = const { Cell::new([0; 12]) };
     static FX211_PROFILE_CONTEXT: Cell<usize> = const { Cell::new(0) };
+    static FX260_BODY_VISITS: Cell<usize> = const { Cell::new(0) };
+}
+
+fn note_fx260_body(count: usize) {
+    #[cfg(test)]
+    FX260_BODY_VISITS.with(|cell| cell.set(cell.get().saturating_add(count)));
+    #[cfg(not(test))]
+    let _ = count;
+}
+
+#[cfg(test)]
+fn fx260_body_visits() -> usize {
+    FX260_BODY_VISITS.with(|cell| cell.get())
+}
+
+#[cfg(test)]
+fn reset_fx260_body_visits() {
+    FX260_BODY_VISITS.with(|cell| cell.set(0));
+}
+
+fn direct_body_paragraph_slot(location: &ContentLocation) -> Option<usize> {
+    if location.story().kind() != StoryKind::Body || location.index_path().len() != 1 {
+        return None;
+    }
+    location.index_path().first().copied()
+}
+
+fn paragraph_is_plain(paragraph: &CT_P) -> bool {
+    paragraph.comment_ranges.is_empty()
+        && paragraph.content_controls.is_empty()
+        && paragraph.hyperlinks.is_empty()
+        && paragraph.revisions.is_empty()
+        && paragraph.equations.is_empty()
+        && paragraph.rubies.is_empty()
+        && paragraph.extra_xml.is_empty()
+        && paragraph.bookmark_markers.is_empty()
+        && paragraph.runs.iter().all(|run| {
+            run.extra_xml.is_empty()
+                && run.alt_drawings.is_empty()
+                && run.content.iter().all(|content| {
+                    matches!(
+                        content,
+                        RunContent::Text(_)
+                            | RunContent::Tab
+                            | RunContent::Break(_)
+                            | RunContent::Symbol { .. }
+                            | RunContent::SpecialCharacter(_)
+                    )
+                })
+        })
+}
+
+fn direct_body_paragraph_context(_document: &Document) -> EditedParagraphContext {
+    let mut context = EditedParagraphContext::default();
+    // `CT_P::to_xml` writes these prefixes, and `CT_Document::to_xml` declares
+    // them on `w:document`. Stored `xmlns` records are attribute names, not
+    // prefixes, so they are not copied into this map.
+    for (prefix, uri) in [
+        ("w", W_NS),
+        ("r", rdocx_oxml::namespace::R_NS),
+        ("mc", MC_NS),
+        ("wp", drawing_ns::WP),
+    ] {
+        context.namespaces.insert(prefix.to_owned(), uri.to_owned());
+    }
+    context
 }
 
 #[cfg(test)]
@@ -23183,6 +23249,13 @@ impl Document {
     #[doc(hidden)]
     pub fn replace_paragraph_xml(&mut self, location: &ContentLocation, xml: &str) -> Result<()> {
         self.validate_model_resource_limits()?;
+        if let Some(slot) = direct_body_paragraph_slot(location) {
+            match self.try_replace_plain_body_paragraph(slot, xml)? {
+                None => {}
+                Some(_) => return Ok(()),
+            }
+        }
+        note_fx260_body(self.document.body.content.len().max(1));
         let selected = self.story_range_paragraph_snapshot(location)?;
         if selected.xml() == xml.as_bytes() {
             return Ok(());
@@ -26737,6 +26810,80 @@ impl Document {
 
     /// Remove the content at the given body index.
     ///
+    /// A direct body paragraph with no comments, drawings, fields, or other
+    /// owned companions. Local removal and replacement read only that child.
+    #[doc(hidden)]
+    pub fn plain_direct_paragraph(&self, index: usize) -> bool {
+        self.comments.is_none()
+            && self.comments_extended.is_none()
+            && self
+                .document
+                .body
+                .content
+                .get(index)
+                .is_some_and(|content| match content {
+                    BodyContent::Paragraph(paragraph) => paragraph_is_plain(paragraph),
+                    _ => false,
+                })
+    }
+
+    /// Replace one plain direct body paragraph without scanning the other
+    /// body children. `None` leaves the document unchanged so the caller can
+    /// keep the package transaction. `Some(false)` is an equal paragraph and
+    /// `Some(true)` means the stored paragraph was replaced.
+    #[doc(hidden)]
+    pub fn try_replace_plain_body_paragraph(
+        &mut self,
+        slot: usize,
+        xml: &str,
+    ) -> Result<Option<bool>> {
+        if !self.plain_direct_paragraph(slot) {
+            return Ok(None);
+        }
+        let stored = {
+            let BodyContent::Paragraph(paragraph) = &self.document.body.content[slot] else {
+                return Ok(None);
+            };
+            paragraph.clone()
+        };
+        let mut stored_xml = Vec::new();
+        stored.to_xml(&mut Writer::new(&mut stored_xml))?;
+        let incoming = CT_P::from_xml_fragment_checked(xml.as_bytes())?;
+        if stored_xml == xml.as_bytes() || stored == incoming {
+            note_fx260_body(1);
+            return Ok(Some(false));
+        }
+        if !paragraph_is_plain(&incoming)
+            || stored.accepted_run_paths() != incoming.accepted_run_paths()
+        {
+            return Ok(None);
+        }
+        let stored_section = stored
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.sect_pr.clone());
+        let incoming_section = incoming
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.sect_pr.clone());
+        if stored_section != incoming_section {
+            return Err(Error::Other(
+                "element XML changed or introduced paragraph-owned section properties are unsupported, use the checked section owner".into(),
+            ));
+        }
+        let context = direct_body_paragraph_context(self);
+        admit_edited_paragraph(&stored_xml, xml.as_bytes(), &context)?;
+        let story = StoryId::new(StoryKind::Body, self.doc_part_name.clone(), 0);
+        validate_element_owner_relationships(self, &story, WordXmlOwner::Paragraph(&incoming))?;
+        validate_element_xml_identity_change(self, &story, &stored_xml, xml.as_bytes())?;
+        note_fx260_body(1);
+        if let BodyContent::Paragraph(paragraph) = &mut self.document.body.content[slot] {
+            *paragraph = incoming;
+        }
+        self.invalidate_layout();
+        Ok(Some(true))
+    }
+
     /// Returns false when the index is absent or safe removal is refused.
     /// Use [`Self::try_remove_content`] to distinguish a refusal from an absent index.
     pub fn remove_content(&mut self, index: usize) -> bool {
@@ -26749,12 +26896,44 @@ impl Document {
         if index >= self.document.body.content.len() {
             return Ok(false);
         }
+        if self.plain_direct_paragraph(index) {
+            note_fx260_body(1);
+            self.document.body.remove(index);
+            self.invalidate_layout();
+            return Ok(true);
+        }
+        note_fx260_body(self.document.body.content.len().max(1));
         let mut candidate = self.clone_for_staging();
         candidate.document.body.remove(index);
         candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(true)
+    }
+
+    /// Remove the half-open direct body range `[start, end)`.
+    ///
+    /// An empty range removes nothing and returns 0. A reversed or
+    /// out-of-bounds range returns an error and leaves the document unchanged.
+    /// The call does not walk into tables.
+    pub fn remove_content_range(&mut self, start: usize, end: usize) -> Result<usize> {
+        let len = self.document.body.content.len();
+        if start > end || end > len {
+            return Err(Error::Other(
+                "content range is reversed or out of range".to_owned(),
+            ));
+        }
+        if start == end {
+            return Ok(0);
+        }
+        let mut candidate = self.clone_for_staging();
+        for index in (start..end).rev() {
+            candidate.document.body.remove(index);
+        }
+        candidate.reconcile_comment_removal(self)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(end - start)
     }
 
     // ---- Image support ----
@@ -55935,6 +56114,40 @@ mod tests {
         );
         assert_eq!(*images[0].2, oxml_layout::MediaId::from_bytes(png));
         assert_eq!(images[0].2, images[1].2);
+    }
+
+    #[test]
+    fn issue389_local_edits_do_not_scale_with_unrelated_package() {
+        for count in [50usize, 800] {
+            let mut document = Document::new();
+            for index in 0..count {
+                document.add_paragraph(&format!("p{index}"));
+            }
+            let snapshots = document.story_item_snapshots().unwrap();
+            let snapshot = snapshots
+                .iter()
+                .find(|item| item.location().item_kind() == StoryItemKind::Paragraph)
+                .unwrap();
+            let location = snapshot.location().clone();
+            let xml = String::from_utf8(
+                document
+                    .story_range_paragraph_snapshot(&location)
+                    .unwrap()
+                    .xml()
+                    .to_vec(),
+            )
+            .unwrap();
+            let changed = xml.replace(">p0<", ">q0<");
+            assert_ne!(xml, changed);
+            reset_fx260_body_visits();
+            document.replace_paragraph_xml(&location, &changed).unwrap();
+            assert_eq!(fx260_body_visits(), 1, "replace count={count}");
+            assert_eq!(document.paragraph(0).unwrap().text(), "q0");
+            reset_fx260_body_visits();
+            assert!(document.remove_content(1));
+            assert_eq!(fx260_body_visits(), 1, "remove count={count}");
+            assert_eq!(document.paragraph_count(), count - 1);
+        }
     }
 }
 

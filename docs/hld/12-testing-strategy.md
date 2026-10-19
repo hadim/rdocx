@@ -3323,6 +3323,18 @@ required, and no binary fixture enters the repository.
 
 ## Binding tests
 
+`issue389_local_edits_do_not_scale_with_unrelated_package` runs in the
+`rdocx`, `rpptx`, `rdocx-py` and `rpptx-py` libraries. The Word packages hold
+50 and 800 paragraphs. The PowerPoint property packages hold one edited text
+box, or 40 slides of 40 text boxes. `add_textbox` is also run on a deck with
+one blank slide and on a deck that already holds 40 slides of 40 text boxes.
+Each measured call records one visit of the edited slide or body block.
+Walking the in-memory owner vector is not a visit. A debug timing does not
+pass this gate. The release-build large-to-small ratio below 3 for the same
+seven operations is final-sprint evidence. The same test name in the existing
+Python files checks that the edited owner changes and an unrelated owner does
+not.
+
 Numbering replacement-level controls exercise both bullet-over-decimal refusal
 and decimal-over-bullet restart and continuation after reopen. A bounded native
 counter control requires one source build, owner discovery, item discovery and

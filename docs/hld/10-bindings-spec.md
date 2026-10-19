@@ -755,6 +755,20 @@ unchanged. `pop_content` refuses a commented fragment rather than detaching
 anchors from their definitions. Native `Cell::try_set_text` exposes checked
 errors, while its legacy setter leaves the cell unchanged on refusal.
 
+`Document.remove_content_range(start, end)` returns how many direct body
+children it removed. The range is half-open. An empty range returns 0. A
+reversed or out-of-bounds range raises `RdocxError` and publishes nothing.
+The call does not recurse into tables.
+
+A plain direct body `Paragraph.replace_xml` and a plain `Document.remove_content`
+publish the affected owner without rebuilding the inventory from every body
+child. PowerPoint `ShapeCollection.add_textbox`, `Shape.alt_text`, `Shape.left`,
+`FillFormat.solid` on a shape, and a stable `Shape.element.replace_xml` do the
+same for one slide child when the edit does not change relationships, connectors,
+or owner identity. Each local publication validates that child and advances the
+revision once. An edit that must read the rest of the package uses the existing
+staged transaction.
+
 
 `Document.add_picture` accepts in-memory bytes, a safe filename, optional
 paired EMU dimensions, and an optional checked `StoryItem` placement. Omitted

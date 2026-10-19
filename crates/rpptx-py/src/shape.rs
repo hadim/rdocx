@@ -355,23 +355,55 @@ impl PyShape {
         let current = presentation
             .current_path(&self.path)
             .ok_or_else(|| PyIndexError::new_err("shape owner absent"))?;
-        let mut candidate = presentation.inner.clone();
-        let mut shape = native_shape_mut_at(&mut candidate, &current)
-            .ok_or_else(|| PyIndexError::new_err("shape index out of range"))?;
-        change(&mut shape).map_err(|e| rpptx_to_pyerr(py, e))?;
-        drop(shape);
-        if candidate.to_bytes().map_err(|e| rpptx_to_pyerr(py, e))?
-            == presentation
+        let owner = shape_owner(&current)?;
+        let shape_path = shape_indices(&current).collect::<Vec<_>>();
+        let before_xml = presentation
+            .inner
+            .shape_xml_at(owner, &shape_path)
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        let before_identity = {
+            let shape = native_shape_ref_at(&presentation.inner, &current)
+                .ok_or_else(|| PyIndexError::new_err("shape index out of range"))?;
+            (shape.non_visual_id(), shape.kind(), shape.table().is_some())
+        };
+        let changed = {
+            let mut shape = native_shape_mut_at(&mut presentation.inner, &current)
+                .ok_or_else(|| PyIndexError::new_err("shape index out of range"))?;
+            change(&mut shape)
+        };
+        if let Err(error) = changed {
+            let original = std::str::from_utf8(&before_xml)
+                .map_err(|_| PyValueError::new_err("physical XML snapshot is not UTF-8"))?;
+            presentation
                 .inner
-                .to_bytes()
-                .map_err(|e| rpptx_to_pyerr(py, e))?
-        {
+                .replace_shape_xml_at(owner, &shape_path, original)
+                .map_err(|restore| rpptx_to_pyerr(py, restore))?;
+            return Err(rpptx_to_pyerr(py, error));
+        }
+        let after_identity = {
+            let shape = native_shape_ref_at(&presentation.inner, &current)
+                .ok_or_else(|| PyIndexError::new_err("shape index out of range"))?;
+            (shape.non_visual_id(), shape.kind(), shape.table().is_some())
+        };
+        if before_identity != after_identity {
+            let original = std::str::from_utf8(&before_xml)
+                .map_err(|_| PyValueError::new_err("physical XML snapshot is not UTF-8"))?;
+            presentation
+                .inner
+                .replace_shape_xml_at(owner, &shape_path, original)
+                .map_err(|error| rpptx_to_pyerr(py, error))?;
+            return Err(PyValueError::new_err(
+                "survival proof changes physical owner identity",
+            ));
+        }
+        let after_xml = presentation
+            .inner
+            .shape_xml_at(owner, &shape_path)
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        if before_xml == after_xml {
             return Ok(());
         }
-        let survivors = presentation.unchanged_owners()?;
-        let prepared =
-            presentation.prepare_owners(&candidate, operation, &survivors, false, false, false)?;
-        presentation.publish_owners(candidate, prepared)
+        presentation.publish_local_property(operation)
     }
 
     fn read<T>(&self, py: Python<'_>, read: impl FnOnce(rpptx::ShapeRef<'_>) -> T) -> PyResult<T> {
@@ -445,12 +477,21 @@ impl PyShape {
             .current_path(&self.path)
             .ok_or_else(|| PyIndexError::new_err("shape owner absent"))?;
         let path = shape_indices(&current).collect::<Vec<_>>();
+        let owner = shape_owner(&current)?;
+        if shape_ref_at(&presentation, &self.path)
+            .is_some_and(|shape| shape.position().is_some() && shape.size().is_some())
+        {
+            return presentation
+                .inner
+                .effective_geometry_at(owner, &path)
+                .map_err(|error| rpptx_to_pyerr(py, error));
+        }
         let mut candidate = presentation.inner.clone();
         candidate
-            .materialize_owner_geometry(shape_owner(&current)?, &path)
+            .materialize_owner_geometry(owner, &path)
             .map_err(|e| rpptx_to_pyerr(py, e))?;
         candidate
-            .effective_geometry_at(shape_owner(&current)?, &path)
+            .effective_geometry_at(owner, &path)
             .map_err(|e| rpptx_to_pyerr(py, e))
     }
 
@@ -482,7 +523,10 @@ impl PyShape {
     }
 
     #[getter]
-    fn element(&self, py: Python<'_>) -> PyResult<Py<crate::presentation::PyPptElement>> {
+    pub(crate) fn element(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<Py<crate::presentation::PyPptElement>> {
         self.read(py, |_| ())?;
         let presentation = self.presentation.borrow(py);
         let current = presentation
@@ -741,7 +785,7 @@ impl PyShape {
     }
 
     #[setter]
-    fn set_alt_text(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+    pub(crate) fn set_alt_text(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
         self.edit(py, "Shape.alt_text", |shape| shape.set_alt_text(value))
     }
 
@@ -836,7 +880,7 @@ impl PyShape {
     }
 
     #[setter]
-    fn set_left(&self, py: Python<'_>, value: i64) -> PyResult<()> {
+    pub(crate) fn set_left(&self, py: Python<'_>, value: i64) -> PyResult<()> {
         check_coordinate("left", value, MIN_COORDINATE)?;
         let top = self
             .prepared_geometry(py)?
@@ -999,7 +1043,7 @@ impl PyShape {
     }
 
     #[getter]
-    fn fill(&self, py: Python<'_>) -> PyResult<Py<PyFillFormat>> {
+    pub(crate) fn fill(&self, py: Python<'_>) -> PyResult<Py<PyFillFormat>> {
         self.require_shape_properties(py, "fill")?;
         let current = self
             .presentation
@@ -1695,6 +1739,29 @@ impl PyShapeCollection {
     ) -> PyResult<Py<PyShape>> {
         let (slide_index, group) = self.target(py)?;
         let index = self.len(py)?;
+        if operation == "ShapeCollection.add_textbox"
+            && group.is_empty()
+            && let rpptx::ShapeOwner::Slide(slide) = slide_index
+        {
+            let mut presentation = self.presentation.borrow_mut(py);
+            {
+                let mut shapes = presentation
+                    .inner
+                    .shapes_mut_at(slide_index, &group)
+                    .map_err(|error| rpptx_to_pyerr(py, error))?;
+                add(&mut shapes).map_err(|error| rpptx_to_pyerr(py, error))?;
+            }
+            let prepared = presentation.publish_appended_textbox(operation, slide, index)?;
+            let mut segments = presentation
+                .current_path(&self.path)
+                .ok_or_else(|| PyIndexError::new_err("owner is absent"))?
+                .segs;
+            segments.push(PathSeg::Shape(index));
+            let path = presentation.capture_prepared_path(&prepared, segments, None)?;
+            let result = Py::new(py, PyShape::new(self.presentation.clone_ref(py), path))?;
+            presentation.commit_prepared(prepared)?;
+            return Ok(result);
+        }
         let mut presentation = self.presentation.borrow_mut(py);
         let mut candidate = presentation.inner.clone();
         {
@@ -2060,7 +2127,7 @@ impl PyShapeCollection {
         Ok(result)
     }
 
-    fn add_textbox(
+    pub(crate) fn add_textbox(
         &mut self,
         py: Python<'_>,
         left: i64,

@@ -199,6 +199,19 @@ fn write_fill(
         return write_line(py, presentation, path, target, line);
     }
     let owner = fill_owner(presentation, path, target)?;
+    if matches!(target, FillTarget::Shape)
+        && !matches!(fill, rpptx::Fill::Blip(_))
+        && !matches!(
+            current_fill(presentation, path, target)?,
+            Some(rpptx::Fill::Blip(_))
+        )
+    {
+        presentation
+            .inner
+            .set_fill_at(&owner, fill)
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        return presentation.publish_local_property("FillFormat.fill");
+    }
     let mut candidate = presentation.inner.clone();
     candidate
         .set_fill_at(&owner, fill)
@@ -565,7 +578,7 @@ impl PyFillFormat {
     }
 
     /// Sets a solid fill, keeping an existing solid fill and its colour.
-    fn solid(&self, py: Python<'_>) -> PyResult<()> {
+    pub(crate) fn solid(&self, py: Python<'_>) -> PyResult<()> {
         if matches!(self.fill(py)?, Some(rpptx::Fill::Solid(_))) {
             return Ok(());
         }
