@@ -3335,6 +3335,15 @@ seven operations is final-sprint evidence. The same test name in the existing
 Python files checks that the edited owner changes and an unrelated owner does
 not.
 
+Issue 392 local tests cover placeholder idx gaps, ties-to-even percentage
+boundaries, generated `upArrow` geometry, painted table-row growth with
+unchanged stored height, `TextFrame.clear`, empty text followed by one new
+run, cell-run slide hyperlinks, point and percent bullet size, and
+kind-checked style removal. Installed `rpptx` suites, the pinned viewer, the
+PowerPoint pixel baseline, the wasm check, and the hash harness remain
+final-sprint evidence. The Word hash and the Word seven-pixel baseline stay
+unchanged.
+
 Numbering replacement-level controls exercise both bullet-over-decimal refusal
 and decimal-over-bullet restart and continuation after reopen. A bounded native
 counter control requires one source build, owner discovery, item discovery and

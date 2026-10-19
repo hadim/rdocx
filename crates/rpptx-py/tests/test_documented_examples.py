@@ -2292,9 +2292,7 @@ def test_auto_shape_type_reads_like_python_pptx_and_replaces_the_preset(tmp_path
     with pytest.raises(ValueError, match="shape is not an auto shape"):
         _ = shapes[-1].auto_shape_type
     assert MSO_SHAPE.from_xml("wedgeRoundRectCallout") is MSO_SHAPE.BALLOON
-    # Pins a known gap: the ECMA preset table has no upArrow, python-pptx has UP_ARROW.
-    with pytest.raises(ValueError, match="MSO_SHAPE has no XML mapping for 'upArrow'"):
-        MSO_SHAPE.from_xml("upArrow")
+    assert MSO_SHAPE.from_xml("upArrow") is MSO_SHAPE.UP_ARROW
 
     rounded = shapes[3]
     identity = (rounded.shape_id, rounded.name, rounded.left, rounded.width)
@@ -2309,10 +2307,11 @@ def test_auto_shape_type_reads_like_python_pptx_and_replaces_the_preset(tmp_path
     for index in (2, 5, 6, 7):
         with pytest.raises(ValueError, match="shape is not an auto shape"):
             shapes[index].auto_shape_type = MSO_SHAPE.RECTANGLE
-    with pytest.raises(ValueError, match="unsupported MSO_SHAPE value"):
-        rounded.auto_shape_type = 35
-    with pytest.raises(rpptx.RpptxError, match="unknown DrawingML preset geometry: upArrow"):
-        rounded.auto_shape_type = "upArrow"
+    rounded.auto_shape_type = 35
+    assert rounded.auto_shape_type is MSO_SHAPE.UP_ARROW
+    rounded.auto_shape_type = "upArrow"
+    assert rounded.auto_shape_type is MSO_SHAPE.UP_ARROW
+    rounded.auto_shape_type = MSO_SHAPE.OVAL
 
     target = tmp_path / "changed.pptx"
     prs.save(target)
@@ -3841,7 +3840,7 @@ def test_add_shape_accepts_preset_names_and_every_mso_shape_member(tmp_path):
     from rpptx.enum.shapes import MSO_AUTO_SHAPE_TYPE, MSO_CONNECTOR, MSO_CONNECTOR_TYPE, MSO_SHAPE, MSO_SHAPE_TYPE
 
     assert MSO_AUTO_SHAPE_TYPE is MSO_SHAPE and MSO_CONNECTOR is MSO_CONNECTOR_TYPE
-    assert len(MSO_SHAPE) == 181
+    assert len(MSO_SHAPE) == 182
     assert (MSO_SHAPE.PENTAGON, MSO_SHAPE.CHEVRON) == (51, 52)
     assert MSO_SHAPE(5) is MSO_SHAPE.ROUNDED_RECTANGLE
     assert MSO_SHAPE.ROUNDED_RECTANGLE.xml_value == "roundRect"
@@ -3867,7 +3866,7 @@ def test_add_shape_accepts_preset_names_and_every_mso_shape_member(tmp_path):
 
     pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
     oracle_members = {member.name: member for member in pptx.enum.shapes.MSO_AUTO_SHAPE_TYPE}
-    assert set(oracle_members) - {member.name for member in MSO_SHAPE} == {"UP_ARROW"}
+    assert set(oracle_members) - {member.name for member in MSO_SHAPE} == set()
     for member in MSO_SHAPE:
         assert (oracle_members[member.name].value, oracle_members[member.name].xml_value) == (
             member.value,
@@ -11417,6 +11416,338 @@ def test_fx254_python_save_refusal_is_atomic(tmp_path, suffix):
         prs.save(output)
     assert not output.exists()
     assert prs.to_bytes() == before
+
+
+def _slide_xml(data):
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        return archive.read("ppt/slides/slide1.xml").decode()
+
+
+def _rewrite_placeholder_gap(xml):
+    shapes = list(re.finditer(r"<p:sp\b.*?</p:sp>", xml, re.DOTALL))
+    placeholders = [shape for shape in shapes if "<p:ph" in shape.group(0)]
+    if len(placeholders) < 2:
+        return xml
+    first, second = placeholders[0], placeholders[1]
+    first_xml = first.group(0).replace('idx="1"', 'idx="2"', 1)
+    second_xml = second.group(0).replace('idx="1"', 'idx="2"', 1)
+    return (
+        xml[: first.start()]
+        + second_xml
+        + xml[first.end() : second.start()]
+        + first_xml
+        + xml[second.end() :]
+    )
+
+
+def _part_from_relationship(owner_part, target):
+    parts = owner_part.rsplit("/", 1)[0].split("/")
+    for piece in target.split("/"):
+        if piece == "..":
+            parts.pop()
+        elif piece not in ("", "."):
+            parts.append(piece)
+    return "/".join(parts)
+
+
+def _relationship_target(rels_xml, type_suffix):
+    for relationship in re.finditer(r"<Relationship\b([^>]*)/?>", rels_xml):
+        attributes = dict(re.findall(r'([A-Za-z]+)="([^"]*)"', relationship.group(1)))
+        if attributes.get("Type", "").endswith(type_suffix):
+            return attributes["Target"]
+    raise AssertionError(f"missing relationship {type_suffix}")
+
+
+def test_issue392_placeholder_iteration_crosses_index_gaps(tmp_path):
+    import rpptx
+
+    presentation = rpptx.Presentation()
+    presentation.slides.add_slide(presentation.slide_layouts[0])
+    source = tmp_path / "gaps-source.pptx"
+    presentation.save(source)
+    with zipfile.ZipFile(source) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+    slide_rels = parts["ppt/slides/_rels/slide1.xml.rels"].decode()
+    layout_part = _part_from_relationship(
+        "ppt/slides/slide1.xml",
+        _relationship_target(slide_rels, "/slideLayout"),
+    )
+    layout_rels = parts[layout_part.rsplit("/", 1)[0] + "/_rels/" + layout_part.rsplit("/", 1)[1] + ".rels"].decode()
+    master_part = _part_from_relationship(
+        layout_part,
+        _relationship_target(layout_rels, "/slideMaster"),
+    )
+    for part_name in ("ppt/slides/slide1.xml", layout_part, master_part):
+        parts[part_name] = _rewrite_placeholder_gap(parts[part_name].decode()).encode()
+    gapped = tmp_path / "gaps.pptx"
+    with zipfile.ZipFile(gapped, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in parts.items():
+            archive.writestr(name, data)
+
+    opened = rpptx.Presentation(gapped)
+    slide = opened.slides[0]
+
+    def tree_indexes(owner):
+        return [shape.placeholder_format.idx for shape in owner.shapes if shape.is_placeholder]
+
+    def iterated_indexes(owner):
+        return [shape.placeholder_format.idx for shape in owner.placeholders]
+
+    slide_tree = tree_indexes(slide)
+    slide_order = iterated_indexes(slide)
+    assert 0 in slide_tree and 2 in slide_tree and 1 not in slide_tree
+    assert slide_order == sorted(slide_tree)
+    assert slide_order != slide_tree
+    assert len(slide.placeholders) == len(slide_tree)
+    assert slide.placeholders[0].placeholder_format.idx == 0
+    assert slide.placeholders[2].placeholder_format.idx == 2
+    with pytest.raises(IndexError):
+        _ = slide.placeholders[1]
+
+    layout = slide.slide_layout
+    master = layout.slide_master
+    for owner in (layout, master):
+        owner_tree = tree_indexes(owner)
+        assert iterated_indexes(owner) == owner_tree
+        assert owner_tree != sorted(owner_tree)
+        assert len(owner.placeholders) == len(owner_tree)
+        present = set(owner_tree)
+        assert 0 in present
+        assert owner.placeholders[0].placeholder_format.idx == 0
+        for index in present:
+            assert owner.placeholders[index].placeholder_format.idx == index
+        if 1 not in present:
+            with pytest.raises(IndexError):
+                _ = owner.placeholders[1]
+    notes = slide.notes_slide
+    assert not hasattr(notes, "placeholders")
+
+
+def test_issue392_percentage_rounding_has_explicit_boundaries():
+    import rpptx
+    from rpptx.dml.color import RGBColor
+
+    presentation = rpptx.Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    expected_alpha = {
+        0.8: "20000",
+        0.998085: "192",
+        0.994255: "574",
+        0.57: "43000",
+    }
+    for value in expected_alpha:
+        shape = slide.shapes.add_shape(1, 0, 0, 100, 100)
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = RGBColor(1, 2, 3)
+        shape.fill.transparency = value
+    for value in (0.000015, 0.000025):
+        shape = slide.shapes.add_shape(1, 0, 0, 100, 100)
+        shape.fill.gradient()
+        shape.fill.gradient_stops[0].position = value
+    box = slide.shapes.add_textbox(0, 0, 1000000, 500000)
+    box.text_frame.text = "tie"
+    paragraph = box.text_frame.paragraphs[0]
+    paragraph.bullet_size = 0.250015
+    second = paragraph.add_run(" next")
+    second_paragraph = box.text_frame.add_paragraph()
+    second_paragraph.bullet_size = 0.250025
+    paragraph.runs[0].font.baseline = -0.000015
+    second.font.baseline = -0.000025
+    xml = _slide_xml(presentation.to_bytes())
+    for alpha in expected_alpha.values():
+        assert f'<a:alpha val="{alpha}"/>' in xml
+    assert '<a:alpha val="575"/>' not in xml
+    assert '<a:alpha val="19999"/>' not in xml
+    assert xml.count('pos="2"') == 2
+    assert 'pos="3"' not in xml
+    assert xml.count('<a:buSzPct val="25002"/>') == 2
+    assert '<a:buSzPct val="25003"/>' not in xml
+    assert xml.count('baseline="-2"') == 2
+    assert 'baseline="-3"' not in xml
+
+    before = presentation.to_bytes()
+    with pytest.raises(TypeError, match="rejects bool"):
+        slide.shapes[0].fill.transparency = True
+    with pytest.raises(TypeError, match="rejects bool"):
+        slide.shapes[4].fill.gradient_stops[0].position = False
+    with pytest.raises(TypeError, match="rejects bool"):
+        paragraph.bullet_size = True
+    with pytest.raises(TypeError, match="rejects bool"):
+        paragraph.runs[0].font.baseline = False
+    with pytest.raises(ValueError):
+        paragraph.runs[0].font.baseline = float("nan")
+    assert presentation.to_bytes() == before
+
+
+def test_issue392_up_arrow_has_reproducible_geometry(tmp_path):
+    import rpptx
+    from rpptx.enum.shapes import MSO_SHAPE
+
+    assert (int(MSO_SHAPE.UP_ARROW), MSO_SHAPE.UP_ARROW.xml_value) == (35, "upArrow")
+    presentation = rpptx.Presentation()
+    presentation.slides.add_slide(presentation.slide_layouts[6])
+    shape = presentation.slides[0].shapes.add_shape(MSO_SHAPE.UP_ARROW, 0, 0, 100, 100)
+    assert shape.auto_shape_type is MSO_SHAPE.UP_ARROW
+    assert list(shape.adjustments) == [0.5, 0.5]
+    output = tmp_path / "up-arrow.pptx"
+    presentation.save(output)
+    reopened = rpptx.Presentation(output)
+    imported = reopened.slides[0].shapes[0]
+    assert imported.auto_shape_type is MSO_SHAPE.UP_ARROW
+    assert list(imported.adjustments) == [0.5, 0.5]
+    named = reopened.slides[0].shapes.add_shape("upArrow", 0, 0, 10, 10)
+    assert named.auto_shape_type is MSO_SHAPE.UP_ARROW
+    assert 'prst="upArrow"' in _slide_xml(reopened.to_bytes())
+
+
+def test_issue392_text_frame_clear_preserves_approved_properties():
+    import rpptx
+
+    presentation = rpptx.Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = slide.shapes.add_textbox(0, 0, 1000000, 400000)
+    paragraph = box.text_frame.paragraphs[0]
+    paragraph.alignment = rpptx.PP_ALIGN.CENTER
+    paragraph.add_run("one")
+    held = paragraph.add_run("two")
+    other = slide.shapes.add_textbox(0, 500000, 1000000, 400000)
+    other.text = "stay"
+    other_run = other.text_frame.paragraphs[0].runs[0]
+    table = slide.shapes.add_table(1, 1, 0, 800000, 1000000, 400000)
+    cell = table.table.cell(0, 0).text_frame
+    cell.paragraphs[0].alignment = rpptx.PP_ALIGN.RIGHT
+    cell.paragraphs[0].add_run("cell-one")
+    cell_run = cell.paragraphs[0].add_run("cell-two")
+
+    box.text_frame.clear()
+    cell.clear()
+    assert box.text_frame.paragraphs[0].alignment is rpptx.PP_ALIGN.CENTER
+    assert cell.paragraphs[0].alignment is rpptx.PP_ALIGN.RIGHT
+    assert (len(box.text_frame.paragraphs), len(box.text_frame.paragraphs[0].runs)) == (1, 0)
+    assert (len(cell.paragraphs), len(cell.paragraphs[0].runs)) == (1, 0)
+    assert box.text_frame.text == ""
+    assert cell.text == ""
+    with pytest.raises(rpptx.StaleElementError, match="TextFrame.clear"):
+        _ = held.text
+    with pytest.raises(rpptx.StaleElementError, match="TextFrame.clear"):
+        _ = cell_run.text
+    assert other_run.text == "stay"
+    xml = _slide_xml(presentation.to_bytes())
+    assert 'algn="ctr"' in xml
+    assert 'algn="r"' in xml
+
+
+def test_issue392_empty_text_then_append_has_one_new_run():
+    import rpptx
+
+    presentation = rpptx.Presentation()
+    presentation.slides.add_slide(presentation.slide_layouts[6])
+    frame = presentation.slides[0].shapes.add_textbox(0, 0, 1000000, 400000).text_frame
+    frame.text = "hello"
+    frame.text = ""
+    assert len(frame.paragraphs[0].runs) == 0
+    added = frame.paragraphs[0].add_run("next")
+    assert [run.text for run in frame.paragraphs[0].runs] == ["next"]
+    assert added.text == "next"
+    xml = _slide_xml(presentation.to_bytes())
+    assert "<a:t>next</a:t>" in xml
+    assert "<a:t/>" not in xml
+    assert "<a:t></a:t>" not in xml
+
+
+def test_issue392_cell_run_hyperlinks_use_the_actual_slide_scope(tmp_path):
+    import rpptx
+
+    presentation = rpptx.Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    table = slide.shapes.add_table(1, 1, 0, 0, 1000000, 400000)
+    cell_run = table.table.cell(0, 0).text_frame.paragraphs[0].add_run("cell")
+    box = slide.shapes.add_textbox(0, 500000, 1000000, 400000)
+    box_run = box.text_frame.paragraphs[0].add_run("box")
+    before = presentation.to_bytes()
+    with pytest.raises(rpptx.RpptxError, match="control characters"):
+        cell_run.hyperlink.address = "https://example.com/\nnext"
+    with pytest.raises(ValueError, match="cell hyperlink assignment is not supported"):
+        cell_run.hyperlink.target_slide = slide
+    assert presentation.to_bytes() == before
+    cell_run.hyperlink.address = "https://example.com/cell"
+    cell_run.hyperlink.address = "https://example.com/changed"
+    box_run.hyperlink.address = "https://example.com/box"
+    assert cell_run.hyperlink.address == "https://example.com/changed"
+    assert box_run.hyperlink.address == "https://example.com/box"
+    assert _slide_hyperlink_targets(presentation.to_bytes()) == [
+        "https://example.com/box",
+        "https://example.com/changed",
+    ]
+    cell_run.hyperlink.address = None
+    assert cell_run.hyperlink.address is None
+    assert _slide_hyperlink_targets(presentation.to_bytes()) == ["https://example.com/box"]
+    cell_run.hyperlink.address = "https://example.com/kept"
+    output = tmp_path / "cell-link.pptx"
+    presentation.save(output)
+    reopened = rpptx.Presentation(output)
+    reopened_run = reopened.slides[0].shapes[0].table.cell(0, 0).text_frame.paragraphs[0].runs[0]
+    assert reopened_run.hyperlink.address == "https://example.com/kept"
+
+
+def test_issue392_bullet_size_distinguishes_points_from_percent():
+    import rpptx
+    from rpptx.util import Pt
+
+    presentation = rpptx.Presentation()
+    presentation.slides.add_slide(presentation.slide_layouts[6])
+    frame = presentation.slides[0].shapes.add_textbox(0, 0, 1000000, 400000).text_frame
+    points = frame.paragraphs[0]
+    percent = frame.add_paragraph()
+    cleared = frame.add_paragraph()
+    refused = frame.add_paragraph()
+    points.bullet_size = Pt(17.85)
+    percent.bullet_size = 0.29
+    refused.bullet_size = 1.0
+    before = presentation.to_bytes()
+    with pytest.raises(ValueError, match="0.25 to 4.0"):
+        refused.bullet_size = 0.1
+    with pytest.raises(TypeError, match="rejects bool"):
+        refused.bullet_size = False
+    assert presentation.to_bytes() == before
+    cleared.bullet_size = 0.5
+    cleared.bullet_size = None
+    assert isinstance(points.bullet_size, rpptx.Length)
+    assert int(points.bullet_size) == 1785 * 127
+    assert percent.bullet_size == 0.29
+    assert cleared.bullet_size is None
+    xml = _slide_xml(presentation.to_bytes())
+    assert '<a:buSzPts val="1785"/>' in xml
+    assert '<a:buSzPct val="29000"/>' in xml
+    assert xml.count("<a:buSz") == 3
+
+
+def test_issue392_style_removal_is_kind_checked():
+    import rpptx
+    from rpptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
+
+    presentation = rpptx.Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, 100, 100)
+    connector = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, 0, 0, 10, 10)
+    plain = slide.shapes.add_textbox(0, 0, 100, 100)
+    picture = slide.shapes.add_picture(io.BytesIO(_tiny_png()), 0, 0)
+    group = slide.shapes.add_group_shape()
+    table = slide.shapes.add_table(1, 1, 0, 0, 100, 100)
+    assert _slide_xml(presentation.to_bytes()).count("<p:style") == 2
+    assert shape.remove_style() is None
+    assert connector.remove_style() is None
+    assert _slide_xml(presentation.to_bytes()).count("<p:style") == 0
+    unchanged = presentation.to_bytes()
+    assert plain.remove_style() is None
+    assert shape.remove_style() is None
+    assert connector.remove_style() is None
+    assert presentation.to_bytes() == unchanged
+    for unsupported in (picture, group, table):
+        before = presentation.to_bytes()
+        with pytest.raises(rpptx.RpptxError, match="remove_style is not supported"):
+            unsupported.remove_style()
+        assert presentation.to_bytes() == before
 
 
 @pytest.mark.parametrize("axis", ["slide_width", "slide_height"])

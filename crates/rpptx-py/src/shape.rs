@@ -547,6 +547,15 @@ impl PyShape {
         self.read(py, |shape| shape.placeholder_idx().is_some())
     }
 
+    /// Removes `p:style` from a shape or connector. Absence is not an error.
+    ///
+    /// A picture, table, group, or alternate content raises and does not publish.
+    fn remove_style(&self, py: Python<'_>) -> PyResult<()> {
+        self.edit(py, "Shape.remove_style", |shape| {
+            shape.clear_style().map(drop)
+        })
+    }
+
     #[getter]
     fn placeholder_format(&self, py: Python<'_>) -> PyResult<PyPlaceholderFormat> {
         if !self.is_placeholder(py)? {
@@ -2459,6 +2468,55 @@ impl PyPlaceholderCollection {
     pub(crate) fn new(presentation: Py<PyPresentation>, path: ContentPath) -> Self {
         Self { presentation, path }
     }
+
+    /// Shape indexes in iteration order.
+    ///
+    /// A slide owner uses ascending placeholder idx, with equal indexes keeping
+    /// document order. A layout or master owner keeps document order. Lookup
+    /// by idx stays on `__getitem__`.
+    fn ordered_placeholder_indices(&self, py: Python<'_>) -> PyResult<Vec<usize>> {
+        let presentation = self.presentation.borrow(py);
+        validate_path(
+            py,
+            &presentation,
+            &self.path,
+            "placeholder collection",
+            ".placeholders",
+        )?;
+        let resolved = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("shape owner is absent"))?;
+        let owner = shape_owner(&resolved)?;
+        let by_idx = resolved
+            .segs
+            .iter()
+            .any(|segment| matches!(segment, PathSeg::Slide(_)))
+            && !resolved
+                .segs
+                .iter()
+                .any(|segment| matches!(segment, PathSeg::Layout(_) | PathSeg::Master(_)));
+        let parent = shape_indices(&resolved).collect::<Vec<_>>();
+        drop(presentation);
+        let collection = PyShapeCollection::new(self.presentation.clone_ref(py), self.path.clone());
+        let mut found = Vec::new();
+        for index in 0..collection.len(py)? {
+            let presentation = self.presentation.borrow(py);
+            let mut path = parent.clone();
+            path.push(index);
+            if let Some(idx) = presentation
+                .inner
+                .part_shape_at(owner, &path)
+                .ok()
+                .and_then(|shape| shape.placeholder_idx())
+            {
+                found.push((index, idx));
+            }
+        }
+        if by_idx {
+            found.sort_by(|left, right| left.1.cmp(&right.1).then(left.0.cmp(&right.0)));
+        }
+        Ok(found.into_iter().map(|(index, _)| index).collect())
+    }
 }
 
 #[pymethods]
@@ -2487,6 +2545,20 @@ impl PyPlaceholderCollection {
             .ok_or_else(|| PyIndexError::new_err("placeholder index out of range"))?;
         drop(presentation);
         collection.item(py, shape_index)
+    }
+
+    fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
+        Ok(self.ordered_placeholder_indices(py)?.len())
+    }
+
+    fn __iter__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyIterator>> {
+        let indices = self.ordered_placeholder_indices(py)?;
+        let collection = PyShapeCollection::new(self.presentation.clone_ref(py), self.path.clone());
+        let items = PyList::empty(py);
+        for index in indices {
+            items.append(collection.item(py, index)?)?;
+        }
+        items.try_iter()
     }
 }
 

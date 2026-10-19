@@ -1428,6 +1428,18 @@ impl CT_Shape {
         Ok(())
     }
 
+    /// Removes `p:style` when it is present.
+    ///
+    /// Returns false when the element is already absent. The remaining
+    /// children stay in schema order.
+    pub fn clear_style(&mut self) -> bool {
+        if self.raw.style.is_none() {
+            return false;
+        }
+        self.raw.style = None;
+        true
+    }
+
     /// Returns whether `p:cNvSpPr/@txBox` marks this shape as a text box.
     pub fn is_textbox(&self) -> bool {
         let mut reader = Reader::from_reader(self.raw.non_visual_shape_properties.as_slice());

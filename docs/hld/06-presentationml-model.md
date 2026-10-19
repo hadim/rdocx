@@ -436,7 +436,9 @@ values on preset geometry. `ShapeMut::set_auto_shape_type(preset)` replaces an
 ordinary shape's or picture's geometry in the same `a:spPr` slot, removes
 custom geometry, and resets adjustments to defaults. Text, fill, line,
 effects, identity, and z-order remain. Text boxes and unsupported kinds are
-refused.
+refused. `ShapeMut::clear_style` removes `p:style` from a shape or connector
+and returns false when that element is already absent. A picture, graphic
+frame, group, or alternate content is refused without a package change.
 
 `ShapeRef::effects` reads and `ShapeMut::set_effects` replaces or removes the
 direct `a:effectLst` of shapes, pictures, connectors, and groups. Group
@@ -461,7 +463,10 @@ TextParagraphMut::add_run(&mut self, text: &str) -> TextRunMut<'_>;
 ```
 
 `TextFrame` also reads and replaces whole-frame text. Whole-frame text assigns
-one paragraph per line feed, and a vertical tab creates an `a:br`. This shared
+one paragraph per line feed, and a vertical tab creates an `a:br`. Empty text
+leaves the paragraph properties and drops every run. `TextFrame.clear` uses
+that empty assignment, leaves one paragraph, and retires held runs of that
+frame. Runs on other shapes stay live. This shared
 setter also serves shape, table cell, notes, comment, SmartArt, chart and
 imported text. The ODP importer maps `text:line-break` to a vertical tab so it
 remains a soft break. Paragraph handles replace

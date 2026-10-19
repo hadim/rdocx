@@ -791,10 +791,9 @@ occurs at the affected structural or text owner, with an explicit stale error
 when that owner is no longer valid. Pure-Python
 `Length`, `Inches`, `Pt`, `RGBColor`, and the `MSO_SHAPE`, `MSO_SHAPE_TYPE`,
 `MSO_CONNECTOR_TYPE`, and `MSO_FILL_TYPE` enumerations keep native inheritance
-outside the limited ABI. `MSO_SHAPE` carries the 181 python-pptx
-`MSO_AUTO_SHAPE_TYPE` members whose preset rpptx can author, each with its
-preset name as `xml_value`. `UP_ARROW` is absent because the generated preset
-table has no `upArrow`.
+outside the limited ABI. `MSO_SHAPE` carries the 182 python-pptx
+`MSO_AUTO_SHAPE_TYPE` members, each with its preset name as `xml_value`.
+`UP_ARROW` is value 35 and its preset name is `upArrow`.
 
 Presentation `Shape` handles expose optional `Length` values for left, top,
 width, and height plus optional non-visual id and name. Those values are the
@@ -903,11 +902,13 @@ assignment truncates as python-pptx does. `auto_shape_type` reads the
 first member in definition order when two share a preset. A picture reports
 its mask or `None`, and a shape without an auto-shape preset raises
 `ValueError`. Custom geometry raises too, as python-pptx does, although issue
-#217 asked for `None`. A shape with `prst="upArrow"` also raises `ValueError`,
-where python-pptx returns `UP_ARROW`. The generated preset table has no
-`upArrow`. rpptx accepts an `MSO_SHAPE` member or preset name to replace the
-geometry and reset adjustments. A text box or unsupported shape kind raises
-`ValueError`. An unknown preset raises `RpptxError`.
+#217 asked for `None`. A shape with `prst="upArrow"` reads as `UP_ARROW`.
+rpptx accepts an `MSO_SHAPE` member or preset name to replace the geometry and
+reset adjustments. `Shape.remove_style` removes `p:style` from a shape or
+connector and returns `None`. Absence does not publish. A picture, graphic
+frame, group, or alternate content raises `RpptxError` and does not publish.
+A text box or unsupported shape kind raises `ValueError` for an auto-shape
+assignment. An unknown preset raises `RpptxError`.
 
 `theme_effect_index` reads the `a:effectRef` index of an ordinary shape or
 connector style, or `None` without one. Writing 0 removes the theme effect,
@@ -1025,8 +1026,9 @@ the operation preserves them. Formatting and run-value edits preserve text
 identity. Failed or no-match edits do not retire scopes. `Cell.vertical_anchor`
 reads and writes the direct `a:tcPr` anchor, independently of
 `Cell.text_frame.vertical_anchor` on `a:bodyPr`. Both retain physical text
-handles. Cell hyperlink reads use the owning body, while assigning an internal
-slide target refuses before relationship mutation.
+handles. Cell hyperlink reads use the owning body. Assigning `address` uses
+the same slide-scoped external relationship as a text-box run. Assigning
+`target_slide` on a cell refuses before relationship mutation.
 
 python-pptx has no public API to add or remove table rows and columns, and its
 users call `table._tbl.add_tr(height)`, which appends a row without cell
@@ -1055,7 +1057,10 @@ other decompressed parts and validate internal relationship targets after the
 edit. A style GUID supplied this way is a package-level edit, not a Python
 `Table` API operation.
 
-`TextFrame.autofit`
+`TextFrame.clear` leaves one paragraph, keeps its properties, and drops its
+runs. Held runs of that frame become stale. Other shapes stay live. Assigning
+empty text writes a paragraph with no runs, so the next `add_run` is the only
+run. `TextFrame.autofit`
 reports `none`, `normal`, or `shape` when the body carries an explicit choice.
 `Run.font` reads the run's direct Latin name and size and exposes its live
 colour format, while the
@@ -4032,9 +4037,11 @@ Font.baseline reads float or None and accepts fractions from-1 to1. Font.spacing
 reads Length or None. Font.language, east_asian_name and complex_script_name
 read direct source values. Paragraph.auto_number accepts any of the41 admitted
 DrawingML schemes with start_at from1 to32767. bullet_color, bullet_size and
-bullet_font remain independently editable. Fractional bullet size accepts
-0.25 to4.0, while an imported absolute point size reads None without implying
-a follows-text policy. Table first_row, last_row, first_col, last_col,
+bullet_font remain independently editable. A fractional bullet size from 0.25
+to 4.0 writes `buSzPct` with ties-to-even rounding. A `Length` writes
+`buSzPts`, and `Pt(17.85)` is 1785 centipoints. `None` removes the size. The
+getter returns a float for a percentage and a `Length` for points. A bool is
+refused. Table first_row, last_row, first_col, last_col,
 horz_banding, vert_banding and style_id preserve grid and cell ownership.
 
 FillFormat.gradient_stops exposes checked live stops with runtime identity
@@ -4042,7 +4049,10 @@ independent of XML IDs. Equal-valued stops remain distinct, reordering retains
 identity, and deletion refuses when fewer than two would remain. Shape and
 slide picture fills use the actual owning slide's relationship allocation.
 FillFormat.transparency reads float or None without creating a fill and writes
-only a solid fill. Rejected writes are atomic.
+only a solid fill. Transparency, gradient-stop position, percentage bullet
+size, and baseline round ties to even into percentage thousandths. `0.8`
+writes alpha `20000`. EMU, twips, time, and adjustment values still truncate.
+Rejected writes are atomic.
 
 Presentation.core_properties, app_properties and custom_properties are checked
 live views. Sections and Slide.media return immutable snapshots.
@@ -4168,7 +4178,11 @@ cannot be revived by a same-route or equal-text form result.
 
 Presentation.slide_masters and slide_master expose live physical part owners.
 SlideMaster exposes slide_layouts, shapes, placeholders, background, theme and
-text_styles. SlideLayout exposes writable name, shapes, placeholders, background,
+text_styles. Slide placeholder iteration yields every placeholder in ascending
+idx and does not stop at a missing idx. Layout and master placeholder
+iteration follows document order. `placeholders[idx]` remains an idx lookup on
+every owner. `shapes` stays in tree order. Notes slides do not expose a
+placeholder collection. SlideLayout exposes writable name, shapes, placeholders, background,
 optional show_master_shapes, follow_master_background, slide_master and actual
 used_by_slides. Duplicate and remove operate on the live layout collection.
 Used or unsafe layout removal refuses without publishing revisions.

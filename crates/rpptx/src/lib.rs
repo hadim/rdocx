@@ -12264,6 +12264,46 @@ impl Presentation {
             OPERATION,
             slide_index,
             (shape_id, paragraph_index, run_index),
+            RunClickHost::Shape,
+            address.map(ShapeClickTarget::Address),
+        )
+    }
+
+    /// Points one table-cell run's click hyperlink at an external `address`.
+    ///
+    /// The relationship is the same slide-scoped external hyperlink a text-box
+    /// run uses. An empty address, a control character, or a missing cell run
+    /// is rejected before the slide or its relationships are published.
+    pub fn set_cell_run_hyperlink(
+        &mut self,
+        slide_index: usize,
+        shape_id: u32,
+        cell: (usize, usize),
+        paragraph_index: usize,
+        run_index: usize,
+        address: Option<&str>,
+    ) -> Result<()> {
+        const OPERATION: &str = "set cell run hyperlink";
+        self.require_slide_index(slide_index)?;
+        if address.is_some_and(|address| {
+            address.is_empty()
+                || address.chars().any(|character| {
+                    character.is_control() || matches!(character, '\u{FFFE}' | '\u{FFFF}')
+                })
+        }) {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                "a hyperlink address must be non-empty text without control characters",
+            ));
+        }
+        self.set_run_click(
+            OPERATION,
+            slide_index,
+            (shape_id, paragraph_index, run_index),
+            RunClickHost::Cell {
+                row: cell.0,
+                column: cell.1,
+            },
             address.map(ShapeClickTarget::Address),
         )
     }
@@ -12285,6 +12325,7 @@ impl Presentation {
             "set run target slide",
             slide_index,
             (shape_id, paragraph_index, run_index),
+            RunClickHost::Shape,
             target_slide_index.map(ShapeClickTarget::Slide),
         )
     }
@@ -12350,6 +12391,7 @@ impl Presentation {
         operation: &'static str,
         slide_index: usize,
         (shape_id, paragraph_index, run_index): (u32, usize, usize),
+        host: RunClickHost,
         target: Option<ShapeClickTarget<'_>>,
     ) -> Result<()> {
         let record = &self.slides[slide_index];
@@ -12376,16 +12418,22 @@ impl Presentation {
             .unwrap_or_default();
         let had_click = {
             let missing = || {
-                invalid_shape_mutation(
-                    operation,
-                    format!(
+                let detail = match host {
+                    RunClickHost::Shape => format!(
                         "shape id {shape_id} has no ordinary shape run {run_index} in paragraph {paragraph_index}"
                     ),
-                )
+                    RunClickHost::Cell { row, column } => format!(
+                        "shape id {shape_id} has no table cell run {run_index} in paragraph {paragraph_index} at row {row} column {column}"
+                    ),
+                };
+                invalid_shape_mutation(operation, detail)
             };
-            let body = find_shape_mut(&mut slide.common_slide_data.shape_tree.children, shape_id)
-                .and_then(|shape| shape.text_body.as_mut())
-                .ok_or_else(missing)?;
+            let body = click_text_body_mut(
+                &mut slide.common_slide_data.shape_tree.children,
+                shape_id,
+                host,
+            )
+            .ok_or_else(missing)?;
             let mut paragraph = TextFrame { body }
                 .into_paragraph_mut(paragraph_index)
                 .ok_or_else(missing)?;
@@ -15134,17 +15182,42 @@ fn find_shape(children: &[ShapeTreeChild], shape_id: u32) -> Option<&CT_Shape> {
     })
 }
 
-fn find_shape_mut(children: &mut [ShapeTreeChild], shape_id: u32) -> Option<&mut CT_Shape> {
+#[derive(Clone, Copy)]
+enum RunClickHost {
+    Shape,
+    Cell { row: usize, column: usize },
+}
+
+fn click_text_body_mut(
+    children: &mut [ShapeTreeChild],
+    shape_id: u32,
+    host: RunClickHost,
+) -> Option<&mut CT_TextBody> {
     for child in children {
         let id = child.non_visual_id();
-        match child {
-            ShapeTreeChild::Shape(shape) if id == Some(shape_id) => return Some(shape),
-            ShapeTreeChild::GroupShape(group) => {
-                if let Some(shape) = find_shape_mut(&mut group.children, shape_id) {
-                    return Some(shape);
+        if id == Some(shape_id) {
+            match host {
+                RunClickHost::Shape => {
+                    if let ShapeTreeChild::Shape(shape) = child {
+                        return shape.text_body.as_mut();
+                    }
+                }
+                RunClickHost::Cell { row, column } => {
+                    if let ShapeTreeChild::GraphicFrame(frame) = child {
+                        return frame
+                            .graphic_data
+                            .table_mut()
+                            .and_then(|table| table.rows.get_mut(row))
+                            .and_then(|row| row.cells.get_mut(column))
+                            .and_then(|cell| cell.text_body.as_mut());
+                    }
                 }
             }
-            _ => {}
+        }
+        if let ShapeTreeChild::GroupShape(group) = child
+            && let Some(body) = click_text_body_mut(&mut group.children, shape_id, host)
+        {
+            return Some(body);
         }
     }
     None
@@ -22939,6 +23012,23 @@ impl<'a> ShapeMut<'a> {
     pub fn set_auto_shape_type(&mut self, preset: &str) -> Result<()> {
         self.apply_geometry(GeometryEdit::Preset(preset.to_owned()))
     }
+
+    /// Removes `p:style` from a shape or connector.
+    ///
+    /// Returns false when the element is already absent. A picture, graphic
+    /// frame, group, or alternate content is refused and the package is left
+    /// unchanged.
+    pub fn clear_style(&mut self) -> Result<bool> {
+        let shape_kind = self.kind();
+        match self.leaf_mut() {
+            ShapeTreeChild::Shape(shape) => Ok(shape.clear_style()),
+            ShapeTreeChild::Connector(connector) => Ok(connector.clear_style()),
+            _ => Err(Error::UnsupportedShapeMutation {
+                operation: "remove_style",
+                shape_kind,
+            }),
+        }
+    }
     /// Sets both direct DrawingML flip flags and stages incoming glue with the owner.
     pub fn set_flips(&mut self, horizontal: bool, vertical: bool) -> Result<()> {
         self.apply_geometry(GeometryEdit::Flips(horizontal, vertical))
@@ -29062,6 +29152,9 @@ fn field_paragraph(template: Option<&CT_TextBody>, mut field: CT_TextField) -> C
         field.run_properties = properties;
     }
     paragraph.set_text("");
+    if paragraph.runs.is_empty() {
+        paragraph.add_run("");
+    }
     if let Some(first) = paragraph.runs.first_mut() {
         *first = TextRun::Field(Box::new(field));
     }

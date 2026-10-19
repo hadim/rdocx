@@ -27613,7 +27613,17 @@ fn auto_shape_type_reads_and_replaces_the_preset_keeping_the_shape() {
             }) if shape_kind == kind
         ));
     }
-    for (index, preset) in [(1, "rect"), (0, "upArrow"), (0, "")] {
+    slide
+        .shape_mut(0)
+        .unwrap()
+        .set_auto_shape_type("upArrow")
+        .unwrap();
+    slide
+        .shape_mut(0)
+        .unwrap()
+        .set_auto_shape_type("ellipse")
+        .unwrap();
+    for (index, preset) in [(1, "rect"), (0, "")] {
         assert!(matches!(
             slide.shape_mut(index).unwrap().set_auto_shape_type(preset),
             Err(Error::InvalidShapeMutation {

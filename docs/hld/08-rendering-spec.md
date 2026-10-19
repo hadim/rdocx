@@ -528,7 +528,7 @@ downloaded as `ECMA-376-1_5th_edition_december_2016.zip`. The source inside it
 is `OfficeOpenXML-DrawingMLGeometries.zip/presetShapeDefinitions.xml`. It has
 187 preset shape definitions and SHA-256
 `2f7c868d857c1e3c4b5a6068759fe0e07d77ad58377a6618d1b02ba3507b6939`.
-The generator refuses a different count or digest.
+The generator refuses a different count or digest. The ECMA source lists `upDownArrow` twice and omits `upArrow`. When that name is absent, the generator inserts the published `upArrow` definition, including adjustment defaults `50000` and `50000`. The checked-in table then contains 187 generated names. The source digest, the direct definition count of 187, and the 186 unique source names stay unchanged.
 
 The [Ecma software policy](https://ecma-international.org/policies/by-ipr/ecma-international-policy-on-submission-inclusion-and-licensing-of-software/)
 identifies XML data sets as source code and makes software incorporated in a
@@ -867,6 +867,8 @@ group transform to each annotation rectangle. Unsupported actions never create
 an annotation, but their visible text remains in the line.
 
 ## Tables
+
+PresentationML table paint keeps each stored `a:tr/@h` value. The painted row grows when wrapped text, a span, cell margins, or unwrapped vertical text needs more room than the current span. The extra height is added to the last row of that span while later cells are measured. Fills, borders, the table background, and text then use those grown offsets together. A short cell stays at the stored height. Wrapped vertical text does not grow when its longest oriented line already fits the current content height.
 
 Table lowering derives cumulative row and column offsets from the resolved
 active grid columns. A preserved historical table-grid change is inspection and

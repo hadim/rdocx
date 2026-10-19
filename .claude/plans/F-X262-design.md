@@ -151,15 +151,29 @@ Word 49 hash and the Word seven-pixel baseline stay unchanged. PowerPoint paint 
 ## Implementation checklist
 
 - [ ] Re-read the functional parent after F-X259, F-X260 and F-X261 have left the shared files.
-- [ ] Measure the genuine percentage ties against python-pptx 1.0.2 before writing expected integers.
+- [x] Measure the genuine percentage ties against python-pptx 1.0.2 before writing expected integers.
 - [ ] Record old-source RED for transparency, placeholders, empty text and bullet size.
-- [ ] Regenerate presets and implement the nine rows in the existing crates.
-- [ ] Update the HLD list and obtain a zero-finding microscope.
+- [x] Regenerate presets and implement the nine rows in the existing crates.
+- [x] Update the HLD list and obtain a zero-finding microscope.
 - [ ] Leave the pixel baseline, viewer and wasm check for the final union.
 
 ## Contract closure
 
 R4's stale source sentence is corrected in Problem. F-X259 is integrated at `4879e58a`. This story's own questions stay answered. It still waits on the F-X260 and F-X261 file lease. No product contract changed in this pass.
+
+## Deviations
+
+The file lease named above is met. F-X260 is integrated at `883080bbe0277689ac48785f4a44ca24eb8db38c` and F-X261 at `6adb7258e7565969a58c55d3971d724519a59cd8`. That second commit is the parent of claim `2fdb6bf38aea54053096236bd837d5940fc45c64`. No product contract changed.
+
+PR394 head `e9f9fbe7b86388b8702af5757bdfa7e4e4fc6596` and functional parent `f9d165e77392b57a58223046d8cd551220c61a3a` are not in this repository. `gh pr view 394` returned HTTP 401. The functional parent was not re-read. The approved plan stayed the source. The re-read checklist item stays open.
+
+`set_cell_run_hyperlink` takes the cell as one `(row, column)` argument so the public method stays within the existing argument limit. The slide-scoped relationship behaviour is unchanged.
+
+The layout and master lookup assertion checks each present idx. Comparing `placeholders[0]` with the first document-order idx would have required positional lookup, which Q4 keeps separate.
+
+HLD 15 is unchanged. Its preset pin text does not name the generated count or the source digest.
+
+Old-source RED was not recorded. The local tests are fixed-source GREEN only. The pixel baseline, pinned viewer and wasm check stay for the final union.
 
 ## Open questions
 
