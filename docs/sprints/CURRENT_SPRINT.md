@@ -29,7 +29,7 @@ developer-days, not an unchanged sprint-capacity promise.
 | F-X262 | Resolve PowerPoint authoring and table-render contributions | L | in-progress | grok |
 | F-285 | Content control creation and lifecycle | L | done | - |
 | F-286 | Rich, repeating, and typed content controls | L | in-progress | grok |
-| F-287 | Custom XML stores and data binding authoring | L | pending | - |
+| F-287 | Custom XML stores and data binding authoring | L | in-progress | grok |
 
 ## Sequencing note
 
