@@ -1662,7 +1662,11 @@ concrete `oxml-core` types. Property creation, replacement, selective custom
 property removal, and whole-part removal all run on a staged document clone so
 the part, package relationship, content type, and typed model publish together.
 An empty custom-properties part is pruned only when the current facade created
-it. Settings mutations use the same staged boundary and keep the existing
+it. Python lists those custom properties on the existing class in part order.
+Iteration yields each property, length is the count, items yield the name and
+the property, and name lookup raises `KeyError` when the name is absent. An
+absent part has length 0. There is no `keys` method and no second collection
+type. Settings mutations use the same staged boundary and keep the existing
 relationship-resolved target. Web settings mutations reuse that boundary and
 allocate a collision-safe part only on the first authored value, and the part,
 its relationship and its content-type override are pruned together when the
@@ -1695,11 +1699,7 @@ Word writes a text box twice in a run's
 `mc:Fallback`. That text box is one text-box story, read from the first
 Choice that holds a text box, the one layout draws. Any other Choice and the
 Fallback stay opaque, and the Choice drawing adds no drawing item to the story
-that holds it. A story edit of that text box changes that Choice only. A
-reader of the VML Fallback, such as Word 2007 or a converter like mammoth.js,
-keeps seeing the text the box had before the edit. A later replacement edits
-every copy, see `10-bindings-spec.md`, which aligns the replaced text of the
-Fallback and not the rest of the edit.
+that holds it. A paragraph replacement in a qualified alternate text box updates every admitted copy of that paragraph in one transaction, or changes none. Matching topology and accepted text are required. An asymmetric pair refuses before publication. A text box outside alternate content changes only its own paragraph. The Python handle that published the edit retires, so a later read of that handle fails. Document-wide text replacement still edits every copy, see `10-bindings-spec.md`.
 
 `StoryItemRef::links` returns modeled hyperlinks in item source order. Display
 text comes from the existing story text projection, while relationship targets
@@ -2076,6 +2076,7 @@ paragraph, as `w15:commentEx` keys it, each line of a comment text is one
 paragraph. Resolution applies to the thread root, and removal deletes the
 selected comment plus descendant replies without
 deleting unrelated runs or producer XML.
+`CommentRef::resolved` is `Option<bool>`. `None` means the comment has no `commentsExtended` entry. A present entry without `w15:done` is `Some(false)`, including a comment this library just wrote. `Some(true)` means the entry is done. Python exposes the same three states as `bool` or `None`. The CLI lists a comment as resolved only when the value is `Some(true)`.
 Whole-story header/footer setters stage the complete text, raw XML or image
 operation and reconcile removed comment ownership. A clone of that candidate
 prepares and reopens the complete output once before the original candidate

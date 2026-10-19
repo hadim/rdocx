@@ -1528,7 +1528,7 @@ pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
             Ok(json!({
                 "id": comment.id(), "author": comment.author(), "initials": comment.initials(),
                 "date": comment.date(), "text": comment.text(), "parent_id": comment.parent_id(),
-                "resolved": comment.resolved(), "anchor_text": anchor_text, "anchor": anchor,
+                "resolved": comment.resolved() == Some(true), "anchor_text": anchor_text, "anchor": anchor,
             }))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1547,7 +1547,7 @@ pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
                 "{}\t{}\t{}\t{}",
                 comment.id(),
                 comment.author().unwrap_or(""),
-                if comment.resolved() {
+                if comment.resolved() == Some(true) {
                     "resolved"
                 } else {
                     "open"

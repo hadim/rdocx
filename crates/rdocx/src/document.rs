@@ -51,8 +51,8 @@ use rdocx_oxml::shared::{ST_Jc, ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::{CT_Styles, StyleType};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent, ST_VerticalJc, VMerge};
 use rdocx_oxml::text::{
-    CT_P, CT_R, RangeAnchor, RunContent, SpecialCharacter, story_field_instruction_has_name,
-    story_simple_field_is_typed,
+    CT_P, CT_R, RangeAnchor, RunContent, SpecialCharacter, declare_w14_on_part_root,
+    story_field_instruction_has_name, story_simple_field_is_typed,
 };
 use rdocx_oxml::units::Twips;
 use rdocx_oxml::web_settings::CT_WebSettings;
@@ -5838,6 +5838,34 @@ fn hdr_ftr_type_order(value: HdrFtrType) -> u8 {
     }
 }
 
+/// Every attribute value of an XML part. A relationship named by `r:embed`,
+/// `r:id`, `o:relid` or any other producer attribute counts as referenced.
+fn xml_attribute_values(xml: &[u8]) -> Result<HashSet<String>> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut values = HashSet::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                for attribute in element.attributes() {
+                    let attribute = attribute
+                        .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+                    let value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+                    values.insert(value.into_owned());
+                }
+            }
+            Event::Eof => return Ok(values),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
 pub(crate) fn xml_relationship_ids_in_order(xml: &[u8]) -> Result<Vec<String>> {
     xml_relationship_ids_in_order_with_bindings(xml, &[])
 }
@@ -6527,6 +6555,19 @@ const FONT_TABLE_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml";
 const EMBEDDED_FONT_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.obfuscatedFont";
+/// Plain sfnt faces, as Google Docs and LibreOffice store them. These parts
+/// are copied when the body already has an sfnt header.
+const PLAIN_EMBEDDED_FONT_CONTENT_TYPES: [&str; 9] = [
+    "application/x-font-ttf",
+    "application/x-font-otf",
+    "application/x-font-truetype",
+    "application/x-font-opentype",
+    "application/font-sfnt",
+    "application/vnd.ms-opentype",
+    "font/ttf",
+    "font/otf",
+    "font/sfnt",
+];
 const DEFAULT_FONT_TABLE_XML: &str = concat!(
     r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
     r#"<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
@@ -10122,7 +10163,9 @@ pub(crate) fn set_story_source_xml(
         // default namespace and every body declaration, and binds the root
         // `w`, `r` and `mc` prefixes to their canonical URIs. The save path's
         // check on those declarations keeps retained content of the replaced
-        // part in its namespace.
+        // part in its namespace. A checked paragraph write emits canonical
+        // `w14:paraId` without a local declaration, so the part root binds
+        // that prefix before this source is parsed again.
         let rewritten_root_declarations: Vec<_> = document
             .root_namespace_declarations
             .iter()
@@ -10140,6 +10183,8 @@ pub(crate) fn set_story_source_xml(
                 "cannot serialize a modified document with a shadowed `{prefix}` namespace"
             )));
         }
+        let mut xml = xml;
+        declare_w14_on_part_root(&mut xml)?;
         let namespace_scopes = document_namespace_scopes(&xml)?;
         document.document = CT_Document::from_xml(&xml)?;
         document.package.set_part(part_name, xml);
@@ -21473,6 +21518,20 @@ impl Document {
     /// serializes the main document once and scans each story owner once for
     /// the complete snapshot.
     pub fn story_item_snapshots(&self) -> Result<Vec<StoryItemSnapshot>> {
+        self.collect_story_item_snapshots(false)
+    }
+
+    /// [`Document::story_item_snapshots`] with each item's XML standalone.
+    ///
+    /// Every item declares the namespaces in scope at its start, as
+    /// [`Document::story_range_paragraph_snapshot`] does, so it parses alone.
+    /// The exact-slice API stays [`Document::story_item_snapshots`].
+    #[doc(hidden)]
+    pub fn standalone_story_item_snapshots(&self) -> Result<Vec<StoryItemSnapshot>> {
+        self.collect_story_item_snapshots(true)
+    }
+
+    fn collect_story_item_snapshots(&self, standalone: bool) -> Result<Vec<StoryItemSnapshot>> {
         let mut snapshots = Vec::new();
         let mut seen = HashSet::new();
         for source in self.story_sources()? {
@@ -21517,9 +21576,13 @@ impl Document {
             }
             let item_scopes = story_namespace_scopes_at(
                 source.xml.as_ref(),
-                inventories
-                    .iter()
-                    .flat_map(|(_, items, _)| items.iter().map(|item| item.scan.start)),
+                inventories.iter().flat_map(|(_, items, _)| {
+                    items.iter().flat_map(|item| {
+                        [item.scan.start]
+                            .into_iter()
+                            .chain((standalone && !item.complex_field).then_some(item.full.start))
+                    })
+                }),
             )?;
             for (story, items, direct_items) in inventories {
                 let mut direct_cursor = 0usize;
@@ -21541,6 +21604,13 @@ impl Document {
                         story_item_text_with_scope(source.xml.as_ref(), item, scope, &items)?;
                     let xml = if item.complex_field {
                         complex_story_field_xml(source.xml.as_ref(), item)?
+                    } else if standalone {
+                        let scope = item_scopes.get(&item.full.start).ok_or_else(|| {
+                            Error::Other(
+                                "story item namespace scope was not inventoried".to_owned(),
+                            )
+                        })?;
+                        close_content_fragment_namespaces(&source.xml[item.full.clone()], scope)?
                     } else {
                         source.xml[item.full.clone()].to_vec()
                     };
@@ -23044,6 +23114,12 @@ impl Document {
         reject_section_owning_content_fragment(&fragment)?;
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
+        let owner = if location.item_kind == StoryItemKind::Paragraph {
+            let (_, owner) = candidate.story_source_and_owner(&location.story)?;
+            Some(owner.clone())
+        } else {
+            None
+        };
         let (source, item) = if location.item_kind == StoryItemKind::Paragraph {
             candidate.story_range_paragraph_source(location)?
         } else {
@@ -23057,11 +23133,38 @@ impl Document {
             .into());
         }
         let part_name = source.part_name.clone();
-        let scope = story_namespace_scope_at(&source.xml, item.full.start)?;
-        let mut xml = source.xml.into_owned();
+        let item_range = item.full.clone();
+        let source_xml = source.xml.clone().into_owned();
+        drop(source);
+        let paired = match &owner {
+            Some(owner)
+                if source_xml
+                    .windows(b"AlternateContent".len())
+                    .any(|window| window == b"AlternateContent") =>
+            {
+                paired_scoped_ranges(&source_xml, owner, &item_range)?
+            }
+            _ => None,
+        };
         let replacement = content_fragment_for_insertion(&candidate, &location.story, &fragment)?;
-        let replacement = close_content_fragment_namespaces(&replacement, &scope)?;
-        xml.splice(item.full, replacement);
+        let mut xml = source_xml;
+        if let Some(ranges) = paired {
+            let mut edits = Vec::with_capacity(ranges.len());
+            for range in ranges {
+                let scope = story_namespace_scope_at(&xml, range.start)?;
+                edits.push((
+                    range,
+                    close_content_fragment_namespaces(&replacement, &scope)?,
+                ));
+            }
+            for (range, bytes) in edits.into_iter().rev() {
+                xml.splice(range, bytes);
+            }
+        } else {
+            let scope = story_namespace_scope_at(&xml, item_range.start)?;
+            let replacement = close_content_fragment_namespaces(&replacement, &scope)?;
+            xml.splice(item_range, replacement);
+        }
         set_story_source_xml(&mut candidate, &part_name, xml)?;
         candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
@@ -23112,6 +23215,10 @@ impl Document {
                 format!(r#"<w:document xmlns:w="{WORD_NAMESPACE}"><w:body>"#).into_bytes();
             wrapped.extend_from_slice(xml);
             wrapped.extend_from_slice(b"</w:body></w:document>");
+            // Checked paragraph XML writes canonical `w14:paraId` without a
+            // local declaration. The wrapper root has to bind that prefix
+            // before the section-profile parse, or the attribute is unbound.
+            declare_w14_on_part_root(&mut wrapped)?;
             let document = CT_Document::from_xml(&wrapped)?;
             let mut profiles = Vec::new();
             visit_body_paragraphs(&document.body.content, false, &mut |paragraph| {
@@ -26904,7 +27011,11 @@ impl Document {
         }
         note_fx260_body(self.document.body.content.len().max(1));
         let mut candidate = self.clone_for_staging();
+        let referenced_before = xml_attribute_values(&candidate.document.to_xml()?)?;
         candidate.document.body.remove(index);
+        let referenced_after = xml_attribute_values(&candidate.document.to_xml()?)?;
+        let owner = candidate.doc_part_name.clone();
+        candidate.release_unreferenced_images(&owner, &referenced_before, &referenced_after);
         candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
@@ -26927,9 +27038,13 @@ impl Document {
             return Ok(0);
         }
         let mut candidate = self.clone_for_staging();
+        let referenced_before = xml_attribute_values(&candidate.document.to_xml()?)?;
         for index in (start..end).rev() {
             candidate.document.body.remove(index);
         }
+        let referenced_after = xml_attribute_values(&candidate.document.to_xml()?)?;
+        let owner = candidate.doc_part_name.clone();
+        candidate.release_unreferenced_images(&owner, &referenced_before, &referenced_after);
         candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
@@ -28907,6 +29022,68 @@ impl Document {
             part_name,
             removed.iter().map(|relationship| relationship.id.clone()),
         );
+        self.remove_unreachable_image_parts(part_name, &removed);
+    }
+
+    /// Drop image relationships of `owner` that the removed content named and
+    /// that no remaining attribute names. A part the owner did not name before
+    /// the edit stays, as does every non-image relationship.
+    fn release_unreferenced_images(
+        &mut self,
+        owner: &str,
+        referenced_before: &HashSet<String>,
+        referenced_after: &HashSet<String>,
+    ) {
+        let Some(relationships) = self.package.get_part_rels_mut(owner) else {
+            return;
+        };
+        let mut removed = Vec::new();
+        relationships.items.retain(|relationship| {
+            let released = relationship.rel_type == rel_types::IMAGE
+                && relationship_is_internal(relationship)
+                && referenced_before.contains(&relationship.id)
+                && !referenced_after.contains(&relationship.id);
+            if released {
+                removed.push(relationship.clone());
+            }
+            !released
+        });
+        if removed.is_empty() {
+            return;
+        }
+        if relationships.items.is_empty() {
+            self.package.remove_part_rels(owner);
+        }
+        if let Some(preserved) = self
+            .identifiers
+            .preserved_relationship_ids
+            .get_mut(&relationship_owner_identity(owner))
+        {
+            for relationship in &removed {
+                preserved.remove(&relationship.id);
+            }
+        }
+        self.identifiers.retire_authored_story_relationships(
+            owner,
+            removed.iter().map(|relationship| relationship.id.clone()),
+        );
+        for relationship in &removed {
+            self.identifiers
+                .preserved_part_names
+                .remove(&part_name_identity(&OpcPackage::resolve_rel_target(
+                    owner,
+                    &relationship.target,
+                )));
+        }
+        self.remove_unreachable_image_parts(owner, &removed);
+    }
+
+    /// Remove internal image targets that no remaining relationship reaches.
+    fn remove_unreachable_image_parts(
+        &mut self,
+        part_name: &str,
+        removed: &[oxml_opc::relationship::Relationship],
+    ) {
         let mut image_parts = removed
             .iter()
             .filter(|relationship| {
@@ -29320,6 +29497,112 @@ impl Document {
         candidate.invalidate_layout();
         self.commit_staged_mutation(candidate);
         Ok(())
+    }
+
+    /// The document default paragraph properties, `w:pPrDefault`.
+    ///
+    /// The value is the stored `CT_PPr`, including every parsed line rule.
+    pub fn default_paragraph_properties(&self) -> Option<&CT_PPr> {
+        self.styles.doc_defaults.as_ref()?.ppr.as_ref()
+    }
+
+    /// Replace `w:pPrDefault`. `None` removes the paragraph defaults and
+    /// keeps `w:rPrDefault` plus unrelated `w:docDefaults` source.
+    pub fn set_default_paragraph_properties(&mut self, properties: Option<CT_PPr>) -> Result<()> {
+        if self.default_paragraph_properties() == properties.as_ref() {
+            return Ok(());
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.reserve_styles_bundle()?;
+        candidate
+            .styles
+            .doc_defaults
+            .get_or_insert_with(Default::default)
+            .ppr = properties;
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// The package a save would write now, staged on a copy.
+    fn staged_output_package(&self) -> Result<OpcPackage> {
+        self.validate_model_resource_limits()?;
+        let mut candidate = self.clone_for_staging();
+        candidate.prepare_staged_output()?;
+        crate::embedded::persist_invalidated_package_signature(
+            &mut candidate.package,
+            candidate.package_signatures_invalidated,
+        )?;
+        Ok(candidate.package)
+    }
+
+    /// Package part names a save would write, each with a leading slash,
+    /// in lexicographic order. The order includes parts with no relationship.
+    pub fn part_names(&self) -> Result<Vec<String>> {
+        let mut names = self
+            .staged_output_package()?
+            .parts
+            .into_keys()
+            .collect::<Vec<_>>();
+        names.sort();
+        Ok(names)
+    }
+
+    /// UTF-8 XML of one package part as a save would write it now.
+    ///
+    /// The name may omit its leading slash and matches without regard to
+    /// case. A missing, binary, or non-UTF-8 part returns an error that names
+    /// the part and its content type. A UTF-8 BOM is stripped. UTF-16 is not
+    /// decoded.
+    pub fn part_xml(&self, part_name: &str) -> Result<String> {
+        let requested = format!(
+            "/{}",
+            part_name
+                .trim()
+                .strip_prefix('/')
+                .unwrap_or(part_name.trim())
+        );
+        let package = self.staged_output_package()?;
+        let Some(stored) = package
+            .parts
+            .keys()
+            .find(|name| name.eq_ignore_ascii_case(&requested))
+            .cloned()
+        else {
+            let content_type = package
+                .content_types
+                .content_type_for(&requested)
+                .unwrap_or("none");
+            return Err(Error::Other(format!(
+                "part {requested} is missing (content type {content_type})"
+            )));
+        };
+        let content_type = package
+            .content_types
+            .content_type_for(&stored)
+            .unwrap_or("none");
+        let data = package.get_part(&stored).expect("listed package part");
+        let xml_type = content_type.to_ascii_lowercase().contains("xml");
+        if !xml_type {
+            return Err(Error::Other(format!(
+                "part {stored} has content type {content_type} and is not UTF-8 XML"
+            )));
+        }
+        let body = data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(data);
+        // UTF-16 text without a BOM is ASCII bytes interleaved with NUL.
+        // Those bytes are valid UTF-8, and XML 1.0 forbids NUL, so a NUL is
+        // the non-UTF-8 refusal for an XML content type.
+        let Ok(xml) = String::from_utf8(body.to_vec()) else {
+            return Err(Error::Other(format!(
+                "part {stored} has content type {content_type} and is not UTF-8 XML"
+            )));
+        };
+        if xml.contains('\0') {
+            return Err(Error::Other(format!(
+                "part {stored} has content type {content_type} and is not UTF-8 XML"
+            )));
+        }
+        Ok(xml)
     }
 
     /// Add a bullet list item at the given indentation level (0-based).
@@ -33316,10 +33599,11 @@ impl Document {
                     .embedded_fonts
                     .iter()
                     .map(|reference| {
-                        let (_, bytes) = self.checked_embedded_font_source(reference)?;
+                        let (part, bytes) = self.checked_embedded_font_source(reference)?;
                         Ok(EmbeddedFont {
                             kind: reference.kind.into(),
-                            data: deobfuscate_odttf_with_key(bytes, &reference.font_key)
+                            data: self
+                                .embedded_font_face(&part, bytes, &reference.font_key)
                                 .unwrap_or_default(),
                             font_key: reference.font_key.clone(),
                             subsetted: reference.subsetted.unwrap_or(false),
@@ -33367,6 +33651,50 @@ impl Document {
         &self,
         reference: &EmbeddedFontReference,
     ) -> Result<(String, &[u8])> {
+        let (part, bytes) = self.embedded_font_source(reference)?;
+        if self.embedded_font_storage(&part).is_none() {
+            let content_type = self
+                .package
+                .content_types
+                .content_type_for(&part)
+                .unwrap_or("none");
+            return Err(Error::Other(format!(
+                "embedded font part {part} has an unsupported content type {content_type}"
+            )));
+        }
+        Ok((part, bytes))
+    }
+
+    /// `Some(true)` is an obfuscated face, `Some(false)` a plain sfnt type,
+    /// and `None` a type this reader does not accept.
+    fn embedded_font_storage(&self, part: &str) -> Option<bool> {
+        let content_type = self.package.content_types.content_type_for(part)?;
+        if content_type == EMBEDDED_FONT_CONTENT_TYPE {
+            Some(true)
+        } else {
+            PLAIN_EMBEDDED_FONT_CONTENT_TYPES
+                .iter()
+                .any(|plain| content_type.eq_ignore_ascii_case(plain))
+                .then_some(false)
+        }
+    }
+
+    /// Face bytes of a checked font part. A plain part with an sfnt header is
+    /// copied as stored, including under a null key. Every other accepted
+    /// part is de-obfuscated.
+    fn embedded_font_face(&self, part: &str, body: &[u8], font_key: &str) -> Option<Vec<u8>> {
+        if self.embedded_font_storage(part) == Some(false) && looks_like_sfnt(body) {
+            let mut face = Vec::new();
+            face.try_reserve_exact(body.len()).ok()?;
+            face.extend_from_slice(body);
+            return Some(face);
+        }
+        deobfuscate_odttf_with_key(body, font_key)
+    }
+
+    /// Resolve an embedded font reference to its stored part, whatever its
+    /// content type.
+    fn embedded_font_source(&self, reference: &EmbeddedFontReference) -> Result<(String, &[u8])> {
         if reference.relationship_id.len() > 4096 || reference.font_key.len() > 4096 {
             return Err(Error::Other(
                 "embedded font metadata exceeds its bound".to_owned(),
@@ -33407,11 +33735,6 @@ impl Document {
             .keys()
             .find(|part| part.eq_ignore_ascii_case(&target))
             .ok_or_else(|| Error::Other("embedded font part is missing".to_owned()))?;
-        if self.package.content_types.content_type_for(part) != Some(EMBEDDED_FONT_CONTENT_TYPE) {
-            return Err(Error::Other(
-                "embedded font part has an unsupported content type".to_owned(),
-            ));
-        }
         Ok((
             part.clone(),
             self.package.get_part(part).expect("checked font part"),
@@ -33848,7 +34171,7 @@ impl Document {
         else {
             return Ok(None);
         };
-        let (_, data) = self.checked_embedded_font_source(reference)?;
+        let (part, data) = self.checked_embedded_font_source(reference)?;
         if data.len() > 64 * 1024 * 1024
             || reference.font_key.len() > 4096
             || reference
@@ -33862,7 +34185,9 @@ impl Document {
         }
         let removed = EmbeddedFont {
             kind,
-            data: deobfuscate_odttf_with_key(data, &reference.font_key).unwrap_or_default(),
+            data: self
+                .embedded_font_face(&part, data, &reference.font_key)
+                .unwrap_or_default(),
             font_key: reference.font_key.clone(),
             subsetted: reference.subsetted.unwrap_or(false),
             license: FontEmbeddingLicense {
@@ -37667,7 +37992,12 @@ impl Document {
         let mut alias_bytes = 0usize;
         for font in table.fonts() {
             for reference in &font.embedded_fonts {
-                let (part, body) = self.checked_embedded_font_source(reference)?;
+                let (part, body) = self.embedded_font_source(reference)?;
+                // An unsupported content type stays in the package and renders
+                // with the fallback face. Listing still reports that type.
+                if self.embedded_font_storage(&part).is_none() {
+                    continue;
+                }
                 if body.len() > 64 * 1024 * 1024
                     || font.name.len() > 4096
                     || reference.font_key.len() > 4096
@@ -37717,7 +38047,7 @@ impl Document {
         for (part, key, aliases) in groups {
             let body = self.package.get_part(&part).expect("preflighted font part");
             // Unsupported producer bytes remain in the original package and use fallback.
-            if let Some(data) = deobfuscate_odttf_with_key(body, &key) {
+            if let Some(data) = self.embedded_font_face(&part, body, &key) {
                 sources.push((aliases, Arc::from(data)));
             }
         }
@@ -57676,6 +58006,152 @@ mod reader_fact_tests {
 mod odttf_tests {
     use super::*;
 
+    fn package_bytes(package: &OpcPackage) -> Vec<u8> {
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut cursor).unwrap();
+        cursor.into_inner()
+    }
+
+    fn embedded_plain_face(content_type: &str, body: &[u8], font_key: &str) -> Document {
+        let licensed = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let mut document = Document::new();
+        document.add_paragraph("font owner");
+        document
+            .embed_font(
+                "Plain face",
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Regular,
+                    licensed.to_vec(),
+                    "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+                    FontEmbeddingLicense::new(true, "Apache-2.0: Caladea"),
+                ),
+            )
+            .unwrap();
+        let reference = document
+            .font_table
+            .as_ref()
+            .unwrap()
+            .fonts()
+            .iter()
+            .find(|font| font.name == "Plain face")
+            .unwrap()
+            .embedded_fonts[0]
+            .clone();
+        let (part, _) = document.embedded_font_source(&reference).unwrap();
+        let table_part = document.font_table_part_name.clone().unwrap();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        package.content_types.add_override(&part, content_type);
+        package.set_part(&part, body.to_vec());
+        let table = String::from_utf8(package.get_part(&table_part).unwrap().to_vec()).unwrap();
+        package.set_part(
+            &table_part,
+            table
+                .replace("{00112233-4455-6677-8899-AABBCCDDEEFF}", font_key)
+                .into_bytes(),
+        );
+        let reopened = Document::from_bytes(&package_bytes(&package)).unwrap();
+        assert_eq!(
+            reopened.package.content_types.content_type_for(&part),
+            Some(content_type),
+            "reopen kept the imported font content type"
+        );
+        reopened
+    }
+
+    #[test]
+    fn issue390_plain_fonts_share_decoding_and_diagnostics() {
+        let licensed = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let null_key = "{00000000-0000-0000-0000-000000000000}";
+        let splitting_key = "{AABBCCDD-EEFF-0011-2233-445566778899}";
+        assert!(font_key_bytes(null_key).is_some());
+        let splitting_guid = font_key_bytes(splitting_key).unwrap();
+        let obfuscated = obfuscate_odttf_with_key(licensed, &splitting_guid);
+        assert_ne!(obfuscated.as_slice(), licensed.as_slice());
+        assert_eq!(
+            deobfuscate_odttf_with_key(&obfuscated, splitting_key).as_deref(),
+            Some(licensed.as_slice())
+        );
+        let mut plain = embedded_plain_face("font/ttf", licensed, splitting_key);
+        let listed = plain
+            .try_fonts()
+            .unwrap()
+            .into_iter()
+            .find(|font| font.name == "Plain face")
+            .unwrap();
+        assert_eq!(listed.embedded_fonts[0].data, licensed);
+        let layout = plain.extract_embedded_fonts().unwrap();
+        assert_eq!(layout.len(), 1);
+        assert_eq!(layout[0].1.as_ref(), licensed);
+        let removed = plain
+            .remove_embedded_font("Plain face", EmbeddedFontKind::Regular)
+            .unwrap()
+            .unwrap();
+        assert_eq!(removed.data, licensed);
+
+        let mut otto = licensed.to_vec();
+        otto[..4].copy_from_slice(b"OTTO");
+        let otto_document = embedded_plain_face("application/x-font-otf", &otto, splitting_key);
+        let null_plain = embedded_plain_face("font/ttf", licensed, null_key);
+        let null_listed = null_plain
+            .try_fonts()
+            .unwrap()
+            .into_iter()
+            .find(|font| font.name == "Plain face")
+            .unwrap();
+        assert_eq!(null_listed.embedded_fonts[0].data, licensed);
+        let otto_listed = otto_document
+            .try_fonts()
+            .unwrap()
+            .into_iter()
+            .find(|font| font.name == "Plain face")
+            .unwrap();
+        assert_eq!(otto_listed.embedded_fonts[0].data, otto);
+        assert_eq!(
+            otto_document.extract_embedded_fonts().unwrap()[0]
+                .1
+                .as_ref(),
+            otto.as_slice()
+        );
+
+        let mut unsupported = embedded_plain_face("application/octet-stream", licensed, null_key);
+        let unsupported_face = unsupported
+            .font_table
+            .as_ref()
+            .unwrap()
+            .fonts()
+            .iter()
+            .find(|font| font.name == "Plain face")
+            .unwrap()
+            .embedded_fonts[0]
+            .clone();
+        let (part_name, _) = unsupported.embedded_font_source(&unsupported_face).unwrap();
+        let listed_error = unsupported.try_fonts().unwrap_err().to_string();
+        assert!(listed_error.contains(&part_name), "{listed_error}");
+        assert!(
+            listed_error.contains("application/octet-stream"),
+            "{listed_error}"
+        );
+        assert!(unsupported.extract_embedded_fonts().unwrap().is_empty());
+        assert!(
+            unsupported
+                .fonts()
+                .iter()
+                .all(|font| { font.embedded_fonts.iter().all(|face| face.data != licensed) })
+        );
+        let removal_error = unsupported
+            .remove_embedded_font("Plain face", EmbeddedFontKind::Regular)
+            .unwrap_err()
+            .to_string();
+        assert!(removal_error.contains(&part_name), "{removal_error}");
+        assert!(
+            removal_error.contains("application/octet-stream"),
+            "{removal_error}"
+        );
+        unsupported.add_paragraph("still opens");
+        assert!(unsupported.package.get_part(&part_name).is_some());
+    }
+
     #[test]
     fn fx251_authored_font_requires_name_table_before_key_or_part() {
         let licensed = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
@@ -59461,6 +59937,21 @@ fn validate_document_package(package: OpcPackage) -> Result<ValidationReport> {
                         "relationship {} points at missing part {target}",
                         rel.id
                     ));
+                    continue;
+                }
+                for kind in [HeaderFooterKind::Header, HeaderFooterKind::Footer] {
+                    let content_type = package.content_types.content_type_for(&target);
+                    if rel.rel_type == kind.relationship_type()
+                        && content_type != Some(kind.content_type())
+                    {
+                        errors.push(format!(
+                            "{} relationship {} points at {target}, which is not a WordprocessingML {} part (content type {})",
+                            kind.part_stem(),
+                            rel.id,
+                            kind.part_stem(),
+                            content_type.unwrap_or("none"),
+                        ));
+                    }
                 }
             }
         }

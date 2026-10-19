@@ -4731,6 +4731,8 @@ the measurements. A separate fresh debug-guarded opt-level2 wheel executes the
 complete Word Python suite with its existing runtime and font prerequisites.
 Release timing does not replace guarded correctness acceptance.
 
+Word package preservation rows cover custom-property order, unmodelled style-root children, proved-unreachable picture media, plain embedded font bytes, an invalid header target, the three comment resolved states, declared root-attribute order, standalone story-item XML, read-only part inspection, default paragraph line rules, and a paired text-box paragraph edit. The private unreduced control-owner document stays unqualified. Six reduced rows do not close that report. Installed product suites, deterministic font render, both WASM graphs and the unchanged hash harness remain final-sprint evidence. A local row does not claim those gates.
+
 ## Notes owners and unit refusal qualification
 
 Notes controls distinguish absent parts, empty bodies, missing placeholders

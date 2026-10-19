@@ -1506,8 +1506,10 @@ list output cannot express it, without claiming unrestricted Word numbering
 parity in that format.
 
 Relationship-resolved embedded font faces enter `LayoutInput.embedded_fonts` under the
-font-table record name. Their OOXML font key deobfuscates the package bytes
-before shaping. This explicit document input has priority over bundled fallback
+font-table record name. A plain sfnt content type is copied as stored, including
+under a null font key. Every other accepted face is deobfuscated with its OOXML
+font key before shaping. An unsupported content type names the part and supplies
+no face bytes. This explicit document input has priority over bundled fallback
 and needs no system-font discovery. Authored major and minor theme typefaces
 therefore resolve to the embedded face in deterministic layout. Theme or font
 mutation invalidates completed normal and deterministic layouts while reusable

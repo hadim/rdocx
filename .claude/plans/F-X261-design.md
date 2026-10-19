@@ -161,10 +161,10 @@ Unchanged Word 49 hash and seven pixel baseline. A paint change is a stop, not a
 
 ## Implementation checklist
 
-- [ ] Re-read both functional parents after F-X259 is integrated.
-- [ ] Record old-source RED for every reduced row.
-- [ ] Implement in the existing files and keep one pruning policy with F-X260.
-- [ ] Update the HLD list and obtain a zero-finding microscope.
+- [x] Re-read both functional parents after F-X259 is integrated.
+- [x] Record old-source RED for every reduced row.
+- [x] Implement in the existing files and keep one pruning policy with F-X260.
+- [x] Update the HLD list and obtain a zero-finding microscope.
 - [ ] Leave installed, font, wasm and hash evidence for the final union.
 
 ## Contract closure

@@ -662,6 +662,7 @@ passes the supplied formatting, base style and next style through native
 setter compares counted style-graph defects before publishing. Existing producer
 defects remain, while new defects reject the edit. A repeated style ID resolves
 to its first definition, and Python handles stay valid. Unknown or wrong-type style references fail before mutation.
+`set_style`, `add_style` and `insert_document` keep unmodelled style-root children, including `w:latentStyles`, in schema order ahead of `w:style`. Empty style records and foreign attributes on those children round-trip through those edits.
 The update surface does not clear a theme font or theme colour inherited from
 an existing Word style. Its formatting changes are additive overrides.
 
@@ -1554,7 +1555,9 @@ control or a field inside a paragraph.
 location against a staged package and publishes only a serialized and reopened
 candidate. These additions are native Rust APIs on the pre-1.0 `rdocx` crate.
 Python exposes story and story item snapshots, including each item's `xml` as
-bytes. Cached complex-field text agrees between owned bulk snapshots and direct
+bytes. That snapshot carries the namespace declarations `Paragraph.xml` already
+writes, so the item parses alone. The native exact-slice API stays the separate
+source excerpt. Cached complex-field text agrees between owned bulk snapshots and direct
 native reads when the field spans sibling runs or nests inside another field.
 Snapshot reads preserve source locations, XML, direct-body coordinates and the
 document revision, leaving held live handles valid. Valid empty comment owners
@@ -2102,8 +2105,7 @@ A replacement can therefore change a Fallback and report 0. When no Choice
 holds a text box, a Fallback text box is replaced and counted as any other
 text box. Replacement handles `mc:AlternateContent` at any depth outside
 another text box, while the story walkers read it only as a child of a run.
-A story edit of such a text box changes the Choice only, see
-`03-architecture.md`. `redact_text` removes the literal from every copy and
+A story-item paragraph edit of such a text box uses the paired transaction below, so both admitted copies change or neither does. The handle that published the edit retires. `redact_text` removes the literal from every copy and
 still counts each copy.
 
 A positive checked scoped replacement in a qualified alternate text box maps
@@ -2336,7 +2338,7 @@ without change. A field whose parts are all in the
 paragraph is one run and is removed whole. A removal advances the binding
 revision. `CommentRef` exposes
 comment metadata, text, parent identity, resolved state and checked accepted-view
-anchor access without permitting part-local mutation. Frozen Python `Comment`
+anchor access without permitting part-local mutation. `resolved` is `Option<bool>` in Rust and `bool` or `None` in Python. A missing `commentsExtended` entry is `None`. A library-written comment that still has an extension is `False`. The CLI treats only `Some(true)` as resolved. Frozen Python `Comment`
 snapshots retain the seven original keyword arguments and add optional
 `anchor_text` and `anchor` values, both defaulting to `None` for manually
 constructed records. Equality retains the original seven metadata fields, since
@@ -4095,7 +4097,17 @@ assignment, deletion and membership reuse checked set, delete and get. Names
 are case-sensitive str without coercion. Empty assignment raises ValueError,
 empty membership is false, and missing or empty deletion raises KeyError.
 Existing delete returns bool and get returns an immutable CustomProperty.
-Membership and failed operations create no properties part. AppProperties and presence-sensitive track_revisions are live document-owned handles. Equations return immutable source snapshots, ordered per-child conversion results and native loss diagnostics. Tag and alias control updates stage all selected qualified values once. Runtime constructors, explicit exports and strict stubs describe the same public classes and defaults.
+`__iter__` yields each `CustomProperty` in native part order. `__len__` is the
+count. `items` yields each name and property in that order. `__getitem__(name)`
+returns the property and raises `KeyError` when the name is absent. An absent
+part has length 0. `keys` is not added.
+Membership and failed operations create no properties part.
+
+Python `part_names` returns a tuple of package paths with a leading slash, in lexicographic order, including a part with no relationship. `part_xml` returns the UTF-8 text of one staged part. Rust returns `Result`. A missing, binary, or non-UTF-8 part raises `RdocxError` and names the part and content type. The read sees unsaved staged parts, returns no mutable handle, and has no WASM surface.
+
+Python `DefaultParagraphFormat` exposes `space_before`, `space_after` and `line_spacing` on `Length`. An omitted keyword keeps the stored value. A keyword set to `None` clears only that property. Rust `default_paragraph_properties` and `set_default_paragraph_properties` expose the stored `CT_PPr`. Clearing the whole native object preserves `w:rPrDefault` and unrelated opaque source. A float, int, or bool assigned to `line_spacing` refuses and does not publish. Assigning a `Length` writes `w:line` in twips and `w:lineRule="exact"`. The twip conversion divides EMU by 635 toward zero, so `Pt(12)` is 240 twips. Assigning `None` clears both `w:line` and `w:lineRule`. The getter returns a `Length` for `exact` and `atLeast`, the stored integer divided by 240 as a float for `auto` and for a missing rule, and `None` when `w:line` is absent or the rule is any other string. Omitting the keyword keeps `atLeast`, a missing rule, and an unknown rule.
+
+AppProperties and presence-sensitive track_revisions are live document-owned handles. Equations return immutable source snapshots, ordered per-child conversion results and native loss diagnostics. Tag and alias control updates stage all selected qualified values once. Runtime constructors, explicit exports and strict stubs describe the same public classes and defaults.
 
 Python `Document.legacy_form_fields()` returns a tuple of frozen owned
 LegacyFormField snapshots. Each exposes source_part, ordinal, optional name,
@@ -4227,6 +4239,7 @@ Paragraph, regular Run, Table, Cell, Shape, TextFrame, Slide, SlideLayout and
 SlideMaster expose element. Legacy Shape.xml remains bytes. Reads capture the
 actual source owner and close required inherited namespace bindings. Public
 replacement validates the live owner before native resolution and publication.
+A Word paragraph, table, or cell root attribute binds when its prefix is declared on that same root, in either attribute order. An unbound prefix refuses and leaves the target bytes unchanged. A checked paragraph write emits canonical `w14:paraId` without a local declaration, so the part root binds `w14` before the section-profile parse and before that source is parsed again.
 
 A checked replacement preserves its proven selected logical owner and retires
 unsafe former descendants, even when counts or values match. Table XML keeps

@@ -8946,3 +8946,442 @@ def test_f284_wrong_intermediate_default_and_inserted_text_are_literal():
     literal.add_paragraph("{{name}} / {{other}}")
     assert literal.render_template({"name": "{{other}}\ue000rdocx-template-0\ue001", "other": "DATA"}, grammar_version=1) == 2
     assert literal.paragraphs[0].text == "{{other}}\ue000rdocx-template-0\ue001 / DATA"
+
+
+W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
+PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000d49444154789c63f8cfc0f01f00050001ff89993d1d0000000049454e44ae426082"
+)
+
+
+def _fx261_replace_part(document, name, transform):
+    import rdocx
+
+    source = io.BytesIO(document.to_bytes())
+    output = io.BytesIO()
+    with zipfile.ZipFile(source) as source_zip, zipfile.ZipFile(output, "w") as result_zip:
+        for info in source_zip.infolist():
+            data = source_zip.read(info.filename)
+            if info.filename == name:
+                data = transform(data)
+            result_zip.writestr(info, data)
+    return rdocx.Document.from_bytes(output.getvalue())
+
+
+def _fx261_add_part(document, name, payload, content_type):
+    import rdocx
+
+    source = io.BytesIO(document.to_bytes())
+    output = io.BytesIO()
+    with zipfile.ZipFile(source) as source_zip, zipfile.ZipFile(output, "w") as result_zip:
+        for info in source_zip.infolist():
+            data = source_zip.read(info.filename)
+            if info.filename == "[Content_Types].xml":
+                override = (
+                    f'<Override PartName="/{name}" ContentType="{content_type}"/>'
+                ).encode()
+                data = data.replace(b"</Types>", override + b"</Types>")
+            result_zip.writestr(info, data)
+        result_zip.writestr(name, payload)
+    return rdocx.Document.from_bytes(output.getvalue())
+
+
+def _fx261_set_doc_defaults(document, defaults):
+    block = f"<w:docDefaults>{defaults}</w:docDefaults>"
+
+    def transform(data):
+        text = data.decode()
+        text, count = re.subn(r"<w:docDefaults\b[^>]*/>", block, text, count=1)
+        if count == 0:
+            text, count = re.subn(
+                r"<w:docDefaults\b.*?</w:docDefaults>", block, text, count=1, flags=re.S
+            )
+        if count == 0:
+            root = text.find("<w:styles")
+            root_end = text.find(">", root) + 1
+            text = text[:root_end] + block + text[root_end:]
+        return text.encode()
+
+    return _fx261_replace_part(document, "word/styles.xml", transform)
+
+
+def _fx261_defaults(xml):
+    start = xml.find("<w:docDefaults")
+    end = xml.find("</w:docDefaults>")
+    return xml[start:end]
+
+
+def _fx261_declared(xml, declaration_first):
+    end = xml.find(">")
+    declaration = f' xmlns:w14="{W14}"'
+    attribute = ' w14:paraId="388B6825"'
+    if declaration_first:
+        return xml[:end] + declaration + attribute + xml[end:]
+    return xml[:end] + attribute + declaration + xml[end:]
+
+
+def _fx261_without_comments_extended(document):
+    import rdocx
+
+    source = io.BytesIO(document.to_bytes())
+    output = io.BytesIO()
+    with zipfile.ZipFile(source) as source_zip, zipfile.ZipFile(output, "w") as result_zip:
+        for info in source_zip.infolist():
+            if info.filename == "word/commentsExtended.xml":
+                continue
+            data = source_zip.read(info.filename)
+            if info.filename == "[Content_Types].xml":
+                data = re.sub(rb"<Override[^>]*commentsExtended\.xml[^>]*/>", b"", data)
+            if info.filename == "word/_rels/document.xml.rels":
+                data = re.sub(rb"<Relationship[^>]*commentsExtended\.xml[^>]*/>", b"", data)
+            result_zip.writestr(info, data)
+    return rdocx.Document.from_bytes(output.getvalue())
+
+
+def test_issue387_custom_properties_are_enumerable():
+    import rdocx
+
+    document = rdocx.Document()
+    properties = document.custom_properties
+    assert len(properties) == 0
+    assert list(properties) == []
+    assert properties.items() == ()
+    with pytest.raises(KeyError):
+        properties["Zebra"]
+    properties.set("Zebra", "z")
+    properties.set("Alpha", 2)
+    assert [item.name for item in document.custom_properties] == ["Zebra", "Alpha"]
+    assert [name for name, _item in document.custom_properties.items()] == ["Zebra", "Alpha"]
+    assert document.custom_properties["Alpha"].value == 2
+    assert document.custom_properties["Zebra"].value == "z"
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [item.name for item in reopened.custom_properties] == ["Zebra", "Alpha"]
+
+
+def test_issue390_comment_resolution_preserves_unknown_state():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Comment target")
+    comment_id = document.add_comment(
+        rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=0, run_index=0),
+            end=rdocx.RunPosition(body_index=0, run_index=1),
+        ),
+        author="Alice",
+        text="Review this",
+        initials="AL",
+    )
+    assert document.comments[0].resolved is False
+    assert document.resolve_comment(comment_id, resolved=True) is True
+    assert document.comments[0].resolved is True
+    unknown = _fx261_without_comments_extended(document)
+    assert unknown.comments[0].resolved is None
+    assert unknown.comments[0].text == "Review this"
+    explicit = rdocx.Comment(
+        id=comment_id,
+        author="Alice",
+        initials="AL",
+        date=None,
+        text="Review this",
+        parent_id=None,
+        resolved=None,
+    )
+    assert explicit.resolved is None
+    assert rdocx.Document.from_bytes(document.to_bytes()).comments[0].resolved is True
+
+
+def test_issue391_part_inspection_reflects_current_package():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("inspect")
+    document = _fx261_add_part(
+        document,
+        "word/a-unreferenced.xml",
+        b"<?xml version=\"1.0\"?><orphan/>",
+        "application/xml",
+    )
+    names = document.part_names()
+    assert names == tuple(sorted(names))
+    assert all(name.startswith("/") for name in names)
+    assert "/word/a-unreferenced.xml" in names
+    assert document.part_xml("WORD/A-UNREFERENCED.XML") == '<?xml version="1.0"?><orphan/>'
+    document.add_style("Inspected", "paragraph")
+    assert "Inspected" in document.part_xml("/word/styles.xml")
+    after_style = document.part_names()
+    assert tuple(name for name in after_style if name in names) == names
+    document.add_paragraph("rewritten")
+    assert document.part_names() == after_style
+    with pytest.raises(rdocx.RdocxError, match="missing"):
+        document.part_xml("/word/missing.xml")
+    pictured = rdocx.Document()
+    pictured.add_picture(PNG, "pixel.png", rdocx.Pt(1), rdocx.Pt(1))
+    media = next(name for name in pictured.part_names() if "/media/" in name)
+    with pytest.raises(rdocx.RdocxError, match="not UTF-8"):
+        pictured.part_xml(media)
+    utf16 = _fx261_add_part(
+        document,
+        "word/utf16.xml",
+        "<?xml version=\"1.0\"?><orphan/>".encode("utf-16"),
+        "application/xml",
+    )
+    with pytest.raises(rdocx.RdocxError, match="not UTF-8"):
+        utf16.part_xml("/word/utf16.xml")
+    bom = _fx261_add_part(
+        rdocx.Document(),
+        "word/bom.xml",
+        b"\xef\xbb\xbf<bom/>",
+        "application/xml",
+    )
+    assert bom.part_xml("/word/bom.xml") == "<bom/>"
+
+
+def test_issue391_default_paragraph_format_is_owned_and_atomic():
+    import rdocx
+
+    document = _fx261_set_doc_defaults(
+        rdocx.Document(),
+        '<w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri"/></w:rPr></w:rPrDefault>'
+        '<w:pPrDefault><w:pPr><w:spacing w:before="120" w:after="240" '
+        'w:line="360" w:lineRule="auto"/></w:pPr></w:pPrDefault>'
+        "<!--opaque-default-->",
+    )
+    current = document.default_paragraph_format
+    assert current.space_before == rdocx.Pt(6)
+    assert current.space_after == rdocx.Pt(12)
+    assert current.line_spacing == 1.5
+    before = document.to_bytes()
+    document.set_default_paragraph_format(space_before=rdocx.Pt(6))
+    assert document.to_bytes() == before
+    document.set_default_paragraph_format(space_before=None)
+    defaults = _fx261_defaults(document.part_xml("/word/styles.xml"))
+    assert 'w:ascii="Calibri"' in defaults
+    assert "<!--opaque-default-->" in defaults
+    assert 'w:before="120"' not in defaults
+    assert 'w:after="240"' in defaults
+    assert 'w:line="360"' in defaults
+    before = document.to_bytes()
+    for value in (1.5, 12, True, "12"):
+        with pytest.raises(TypeError):
+            document.set_default_paragraph_format(line_spacing=value)
+        assert document.to_bytes() == before
+    document.set_default_paragraph_format(line_spacing=rdocx.Pt(12))
+    defaults = _fx261_defaults(document.part_xml("/word/styles.xml"))
+    assert 'w:line="240"' in defaults
+    assert 'w:lineRule="exact"' in defaults
+    assert 'w:ascii="Calibri"' in defaults
+
+
+def test_issue391_default_paragraph_line_rules_keep_imported_states():
+    import rdocx
+
+    def opened(spacing):
+        return _fx261_set_doc_defaults(
+            rdocx.Document(),
+            f"<w:pPrDefault><w:pPr><w:spacing {spacing}/></w:pPr></w:pPrDefault>",
+        )
+
+    assert opened('w:line="360" w:lineRule="auto"').default_paragraph_format.line_spacing == 1.5
+    assert opened('w:line="259" w:lineRule="auto"').default_paragraph_format.line_spacing == 259 / 240
+    assert opened('w:line="240" w:lineRule="exact"').default_paragraph_format.line_spacing == rdocx.Pt(12)
+    assert opened('w:line="240" w:lineRule="atLeast"').default_paragraph_format.line_spacing == rdocx.Pt(12)
+    assert opened('w:line="480"').default_paragraph_format.line_spacing == 2.0
+    assert opened('w:before="120"').default_paragraph_format.line_spacing is None
+    assert opened('w:line="240" w:lineRule="precise"').default_paragraph_format.line_spacing is None
+
+    at_least = opened('w:line="240" w:lineRule="atLeast"')
+    before = at_least.to_bytes()
+    at_least.set_default_paragraph_format(space_before=rdocx.Pt(6))
+    defaults = _fx261_defaults(at_least.part_xml("/word/styles.xml"))
+    assert 'w:lineRule="atLeast"' in defaults
+    assert 'w:line="240"' in defaults
+    missing_rule = opened('w:line="480"')
+    missing_rule.set_default_paragraph_format(space_after=rdocx.Pt(6))
+    defaults = _fx261_defaults(missing_rule.part_xml("/word/styles.xml"))
+    assert 'w:line="480"' in defaults
+    assert "w:lineRule" not in defaults
+    precise = opened('w:line="240" w:lineRule="precise"')
+    precise.set_default_paragraph_format(space_before=rdocx.Pt(6))
+    defaults = _fx261_defaults(precise.part_xml("/word/styles.xml"))
+    assert 'w:lineRule="precise"' in defaults
+
+    assigned = opened('w:line="360" w:lineRule="auto"')
+    assigned.set_default_paragraph_format(line_spacing=rdocx.Pt(12))
+    defaults = _fx261_defaults(assigned.part_xml("/word/styles.xml"))
+    assert 'w:line="240"' in defaults and 'w:lineRule="exact"' in defaults
+    assigned.set_default_paragraph_format(line_spacing=None)
+    defaults = _fx261_defaults(assigned.part_xml("/word/styles.xml"))
+    assert "w:line" not in defaults and "w:lineRule" not in defaults
+    refused = opened('w:line="360" w:lineRule="auto"')
+    before = refused.to_bytes()
+    with pytest.raises(TypeError):
+        refused.set_default_paragraph_format(line_spacing=1.5)
+    assert refused.to_bytes() == before
+
+
+def test_issue391_root_attributes_use_declared_namespace_scope():
+    import xml.etree.ElementTree as ET
+
+    import rdocx
+
+    def assert_bound(owner, declaration_first):
+        document = rdocx.Document()
+        document.add_paragraph("held")
+        document.add_table(1, 1).cell(0, 0).text = "cell"
+        target = {
+            "paragraph": document.paragraphs[0],
+            "table": document.tables[0],
+            "cell": document.tables[0].cell(0, 0),
+        }[owner]
+        target.replace_xml(_fx261_declared(target.xml, declaration_first))
+        root = ET.fromstring(_document_xml(document))
+        found = [
+            element
+            for element in root.iter()
+            if element.get(f"{{{W14}}}paraId") == "388B6825"
+        ]
+        assert found, owner
+
+    for owner in ("paragraph", "table", "cell"):
+        assert_bound(owner, True)
+        assert_bound(owner, False)
+        document = rdocx.Document()
+        document.add_paragraph("held")
+        document.add_table(1, 1).cell(0, 0).text = "cell"
+        target = {
+            "paragraph": document.paragraphs[0],
+            "table": document.tables[0],
+            "cell": document.tables[0].cell(0, 0),
+        }[owner]
+        end = target.xml.find(">")
+        unbound = target.xml[:end] + ' w14:paraId="388B6825"' + target.xml[end:]
+        before = document.to_bytes()
+        with pytest.raises(rdocx.RdocxError, match="unbound"):
+            target.replace_xml(unbound)
+        assert document.to_bytes() == before
+
+
+def test_issue391_story_item_snapshots_are_namespace_complete():
+    import xml.etree.ElementTree as ET
+
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("body paragraph")
+    document.add_table(1, 1).cell(0, 0).text = "cell paragraph"
+    document.set_header("header paragraph")
+    content = "<w:txbxContent><w:p><w:r><w:t>box paragraph</w:t></w:r></w:p></w:txbxContent>"
+    extra = (
+        '<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml">'
+        f'<v:shape id="only"><v:textbox>{content}</v:textbox></v:shape>'
+        "</w:pict></w:r></w:p>"
+    )
+
+    def insert(data):
+        text = data.decode()
+        marker = text.rfind("<w:sectPr")
+        if marker < 0:
+            marker = text.rfind("</w:body>")
+        return (text[:marker] + extra + text[marker:]).encode()
+
+    document = _fx261_replace_part(document, "word/document.xml", insert)
+    kinds = {(item.story.kind, item.kind) for item in document.story_items}
+    assert ("body", "paragraph") in kinds
+    assert ("body", "table") in kinds
+    assert ("table_cell", "paragraph") in kinds
+    assert ("header", "paragraph") in kinds
+    assert ("text_box", "paragraph") in kinds
+    for item in document.story_items:
+        ET.fromstring(item.xml)
+        if item.text:
+            assert item.text.encode() in item.xml or item.text in item.xml.decode()
+
+
+def _fx261_text_box(kind):
+    import rdocx
+
+    content = "<w:txbxContent><w:p><w:r><w:t>box NEEDLE</w:t></w:r></w:p></w:txbxContent>"
+    drawing = (
+        '<w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
+        '<wp:inline><wp:extent cx="914400" cy="457200"/>'
+        '<wp:docPr id="1" name="box"/><a:graphic><a:graphicData '
+        'uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
+        f"<wps:wsp><wps:txbx>{content}</wps:txbx></wps:wsp>"
+        "</a:graphicData></a:graphic></wp:inline></w:drawing>"
+    )
+    vml = (
+        '<w:pict xmlns:v="urn:schemas-microsoft-com:vml">'
+        f'<v:shape id="fallback"><v:textbox>{content}</v:textbox></v:shape></w:pict>'
+    )
+    if kind == "drawing":
+        inner = drawing
+    elif kind == "vml":
+        inner = vml
+    else:
+        inner = (
+            '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+            f"<mc:Choice Requires=\"wps\">{drawing}</mc:Choice>"
+            f"<mc:Fallback>{vml}<!--preserve alternate producer--></mc:Fallback></mc:AlternateContent>"
+        )
+    body = f'<w:p><w:r><w:t>held outside</w:t></w:r></w:p><w:p><w:r>{inner}</w:r></w:p>'
+    return _replace_document_body(rdocx.Document(), body)
+
+
+def test_issue391_textbox_paragraph_handles_preserve_physical_custody():
+    import rdocx
+
+    def box_paragraph(document):
+        return next(
+            item.paragraph
+            for item in document.story_items
+            if item.story.kind == "text_box" and item.kind == "paragraph"
+        )
+
+    for kind, copies in (("vml", 1), ("drawing", 1), ("pair", 2)):
+        document = _fx261_text_box(kind)
+        held = box_paragraph(document)
+        held.paragraph_format.space_before = rdocx.Pt(18)
+        xml = _document_xml(document)
+        assert xml.count(b'w:before="360"') == copies
+        assert b"box NEEDLE" in xml
+        with pytest.raises(rdocx.StaleElementError):
+            _ = held.text
+        reopened = rdocx.Document.from_bytes(document.to_bytes())
+        assert _document_xml(reopened).count(b'w:before="360"') == copies
+
+    paired = _fx261_text_box("pair")
+    outside = paired.paragraphs[0]
+    outside.paragraph_format.space_before = rdocx.Pt(6)
+    xml = _document_xml(paired)
+    assert xml.count(b'w:before="120"') == 1
+    assert b"box NEEDLE" in xml
+
+    source = _document_xml(_fx261_text_box("pair")).decode()
+    changed = source.replace(
+        "<v:textbox><w:txbxContent><w:p><w:r><w:t>box NEEDLE</w:t></w:r></w:p></w:txbxContent></v:textbox>",
+        "<v:textbox><w:txbxContent><w:p><w:r><w:t>different text</w:t></w:r></w:p></w:txbxContent></v:textbox>",
+        1,
+    )
+    assert changed != source
+    refused = _fx261_replace_part(
+        rdocx.Document.from_bytes(_fx261_text_box("pair").to_bytes()),
+        "word/document.xml",
+        lambda _data: changed.encode(),
+    )
+    selected = box_paragraph(refused)
+    before = refused.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="asymmetric"):
+        selected.paragraph_format.space_before = rdocx.Pt(18)
+    assert refused.to_bytes() == before
+
+    table_document = rdocx.Document()
+    table_document.add_table(1, 1)
+    table_item = next(item for item in table_document.story_items if item.kind == "table")
+    assert table_item.paragraph is None
+    story = rdocx.Story(kind="body", part_name="/word/document.xml", owner_index=0)
+    built = rdocx.StoryItem(story=story, kind="paragraph", index_path=(0,), text="built")
+    assert built.paragraph is None
