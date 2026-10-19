@@ -3874,6 +3874,24 @@ fn unsafe_nested_namespace_prefix(owners: &[NestedNamespaceOwner]) -> Option<Str
     })
 }
 
+/// True when a later modified save must fail closed. A scan error blocks the
+/// local edit as well, because the save path cannot prove the prefix is safe.
+fn plain_local_edit_is_blocked(
+    root_declarations: &[(String, String)],
+    body_declarations: &[(String, String)],
+    document_xml: &[u8],
+) -> bool {
+    if unsafe_serializer_namespace_prefix(root_declarations, body_declarations, Some(document_xml))
+        .is_some()
+    {
+        return true;
+    }
+    match nested_modeled_namespace_owners(document_xml) {
+        Ok(owners) => unsafe_nested_namespace_prefix(&owners).is_some(),
+        Err(_) => true,
+    }
+}
+
 fn replay_nested_namespace_declarations(
     xml: &[u8],
     owners: &[NestedNamespaceOwner],
@@ -6430,6 +6448,9 @@ pub struct Document {
     body_namespace_declarations: Vec<(String, String)>,
     /// Namespace declarations in scope on the original document body.
     body_namespace_bindings: Vec<(String, String)>,
+    /// The opened or saved package retains a shadowed serializer prefix, so a
+    /// plain child edit must use the staged transaction instead of a local write.
+    plain_local_edit_blocked: bool,
     pub(crate) styles: CT_Styles,
     pub(crate) numbering: Option<CT_Numbering>,
     /// Boxed, because debug builds keep many copies of `Document` on deep
@@ -10195,6 +10216,11 @@ pub(crate) fn set_story_source_xml(
         declare_w14_on_part_root(&mut xml)?;
         let namespace_scopes = document_namespace_scopes(&xml)?;
         document.document = CT_Document::from_xml(&xml)?;
+        document.plain_local_edit_blocked = plain_local_edit_is_blocked(
+            &namespace_scopes.root_declarations,
+            &namespace_scopes.body_declarations,
+            &xml,
+        );
         document.package.set_part(part_name, xml);
         document.root_namespace_declarations = namespace_scopes.root_declarations;
         document.body_namespace_declarations = namespace_scopes.body_declarations;
@@ -17081,6 +17107,7 @@ impl Document {
             root_namespace_declarations: Vec::new(),
             body_namespace_declarations: Vec::new(),
             body_namespace_bindings: Vec::new(),
+            plain_local_edit_blocked: false,
             styles,
             numbering: None,
             core_properties,
@@ -17167,6 +17194,7 @@ impl Document {
             root_namespace_declarations: self.root_namespace_declarations.clone(),
             body_namespace_declarations: self.body_namespace_declarations.clone(),
             body_namespace_bindings: self.body_namespace_bindings.clone(),
+            plain_local_edit_blocked: self.plain_local_edit_blocked,
             styles: self.styles.clone(),
             numbering: self.numbering.clone(),
             core_properties: self.core_properties.clone(),
@@ -18475,6 +18503,11 @@ impl Document {
             .get_part(&doc_part_name)
             .ok_or(Error::NoDocumentPart)?;
         let namespace_scopes = document_namespace_scopes(doc_xml)?;
+        let plain_local_edit_blocked = plain_local_edit_is_blocked(
+            &namespace_scopes.root_declarations,
+            &namespace_scopes.body_declarations,
+            doc_xml,
+        );
         let document = CT_Document::from_xml(doc_xml)?;
 
         // Resolve the part a relationship of the given type points at.
@@ -18631,6 +18664,7 @@ impl Document {
             root_namespace_declarations: namespace_scopes.root_declarations,
             body_namespace_declarations: namespace_scopes.body_declarations,
             body_namespace_bindings: namespace_scopes.body_bindings,
+            plain_local_edit_blocked,
             styles,
             numbering,
             core_properties,
@@ -19444,6 +19478,7 @@ impl Document {
         self.root_namespace_declarations = namespace_scopes.root_declarations;
         self.body_namespace_declarations = namespace_scopes.body_declarations;
         self.body_namespace_bindings = namespace_scopes.body_bindings;
+        self.plain_local_edit_blocked = typed_document_is_unchanged && unsafe_prefix.is_some();
         Ok(())
     }
 
@@ -26986,8 +27021,12 @@ impl Document {
     ///
     /// A direct body paragraph with no comments, drawings, fields, or other
     /// owned companions. Local removal and replacement read only that child.
+    /// A package that retains a shadowed serializer prefix is not local.
     #[doc(hidden)]
     pub fn plain_direct_paragraph(&self, index: usize) -> bool {
+        if self.plain_local_edit_blocked {
+            return false;
+        }
         self.comments.is_none()
             && self.comments_extended.is_none()
             && self

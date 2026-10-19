@@ -79,10 +79,13 @@ errors. The native facades retain ownership of relationships, geometry and
 package authoring, while bindings reuse that publication protocol.
 
 A plain direct body paragraph replacement or removal edits that one child.
-Admission binds `w`, `r`, `mc` and `wp`, the prefixes `w:document` always
-declares. Stored `xmlns` records are attribute names and do not replace those
-prefixes. The call does not read the other body children. A paragraph that is
-not plain, a relationship change, or a removal whose media ownership is not
+A package that retains a shadowed serializer prefix does not take that local
+path. The staged transaction then fails closed and leaves the bytes unchanged.
+The prefix is recorded when the package is opened or saved, so the call does
+not read the other body children. Admission binds `w`, `r`, `mc` and `wp`,
+the prefixes `w:document` always declares. Stored `xmlns` records are
+attribute names and do not replace those prefixes. A paragraph that is not
+plain, a relationship change, or a removal whose media ownership is not
 proved keeps the staged package transaction. `Document::remove_content_range`
 also keeps that transaction. It removes a half-open range of direct body
 children and does not recurse into tables.

@@ -763,7 +763,8 @@ The call does not recurse into tables.
 
 A plain direct body `Paragraph.replace_xml` and a plain `Document.remove_content`
 publish the affected owner without rebuilding the inventory from every body
-child. PowerPoint `ShapeCollection.add_textbox`, `Shape.alt_text`, `Shape.left`,
+child. A retained shadowed serializer prefix refuses that local publication
+and leaves the package unchanged. PowerPoint `ShapeCollection.add_textbox`, `Shape.alt_text`, `Shape.left`,
 `FillFormat.solid` on a shape, and a stable `Shape.element.replace_xml` do the
 same for one slide child when the edit does not change relationships, connectors,
 or owner identity. Each local publication validates that child and advances the

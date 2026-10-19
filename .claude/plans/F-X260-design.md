@@ -113,6 +113,8 @@ The visit counter is `cfg(test)` state inside `rdocx`, `rpptx`, `rdocx-py` and `
 
 The affected-owner paths also edit `crates/rdocx/src/document.rs`, `crates/rdocx-py/src/paragraph.rs`, `crates/rpptx/src/lib.rs`, `crates/rpptx-py/src/shape.rs` and `crates/rpptx-py/src/dml.rs`. Those files already own the operations. No new crate, module or file was added.
 
+The final workspace suite rejected a plain removal in a package that retains a shadowed `wp` prefix. The local path now stays closed for that package. The decision is stored when the package is opened or saved, so the edit itself still reads one child.
+
 ## HLD impact
 
 - `docs/hld/03-architecture.md`
