@@ -175,6 +175,8 @@ HLD 15 is unchanged. Its preset pin text does not name the generated count or th
 
 Old-source RED was not recorded. The local tests are fixed-source GREEN only. The pixel baseline, pinned viewer and wasm check stay for the final union.
 
+Notes text assignment keeps the notes body's first regular run when a line is empty. The general empty-text assignment still drops runs.
+
 ## Open questions
 
 | ID | Affected F-IDs and A-IDs | Decision and recommendation | Status and answer/source |

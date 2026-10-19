@@ -130,6 +130,9 @@ are not added. The change is staged and publishes only after the staged
 package reopens.
 
 `SlideMut::set_notes_text` edits an existing notes slide and fails without one.
+An empty line keeps the notes body's first regular run, with empty text, so
+that run's formatting and unmodelled content stay. A line with text uses that
+same run.
 `Presentation::set_notes_text` also creates the notes slide when it is absent,
 as python-pptx does. The new part relates to the notes master and back to the
 slide, carries `p:clrMapOvr` with `a:masterClrMapping`, and clones the master
@@ -467,9 +470,10 @@ one paragraph per line feed, and a vertical tab creates an `a:br`. Empty text
 leaves the paragraph properties and drops every run. `TextFrame.clear` uses
 that empty assignment, leaves one paragraph, and retires held runs of that
 frame. Runs on other shapes stay live. This shared
-setter also serves shape, table cell, notes, comment, SmartArt, chart and
-imported text. The ODP importer maps `text:line-break` to a vertical tab so it
-remains a soft break. Paragraph handles replace
+setter also serves shape, table cell, comment, SmartArt, chart and
+imported text. A notes line that has text uses it too. An empty notes line
+keeps the notes body's first regular run, with empty text. The ODP importer
+maps `text:line-break` to a vertical tab so it remains a soft break. Paragraph handles replace
 text, paragraph properties, and bullets. Replaced text keeps the formatting of
 the paragraph's first regular run. A paragraph without one formats the new run
 with its `a:endParaRPr`, without hyperlinks, as PowerPoint formats text typed

@@ -21531,16 +21531,34 @@ impl<'a> SlideMut<'a> {
                 operation: "set notes text",
                 message: "notes slide has no body placeholder".to_owned(),
             })?;
-        body.set_text(text);
-        // The general DrawingML setter treats CRLF as a paragraph separator.
-        // Notes authoring retains the caller's exact line endings instead.
+        let formatting_run = body.paragraphs().iter().find_map(|paragraph| {
+            paragraph.runs.iter().find_map(|run| match run {
+                TextRun::Run(run) => Some(run.clone()),
+                TextRun::Break(_) | TextRun::Field(_) => None,
+            })
+        });
+        // An empty first line would drop the formatting run before later
+        // paragraphs copy it. A space keeps that copy, and the line loop
+        // writes the caller's text afterwards.
+        let seeded = (formatting_run.is_some() && (text.is_empty() || text.starts_with('\n')))
+            .then(|| {
+                text.split('\n')
+                    .map(|line| if line.is_empty() { " " } else { line })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+        body.set_text(seeded.as_deref().unwrap_or(text));
+        // The general DrawingML setter treats CRLF as a paragraph separator
+        // and drops every run when a line is empty. Notes authoring retains
+        // the caller's exact line endings and the first regular run.
         for (index, line) in text.split('\n').enumerate() {
-            body.paragraph_mut(index)
-                .ok_or_else(|| Error::InvalidSlideMutation {
-                    operation: "set notes text",
-                    message: "notes paragraph count changed during staging".to_owned(),
-                })?
-                .set_text(line);
+            let paragraph =
+                body.paragraph_mut(index)
+                    .ok_or_else(|| Error::InvalidSlideMutation {
+                        operation: "set notes text",
+                        message: "notes paragraph count changed during staging".to_owned(),
+                    })?;
+            assign_notes_line(paragraph, line, formatting_run.as_ref());
         }
         candidate
             .to_xml()
@@ -24926,6 +24944,39 @@ fn collect_text(children: &[ShapeTreeChild], output: &mut Vec<String>) {
         }
         collect_text(shape.child_slice(), output);
     }
+}
+
+/// Writes one notes line and keeps the body's first regular run.
+///
+/// An empty line stores that run with empty text, so its formatting and
+/// unmodelled content stay. A line with text uses the same run. Without one,
+/// the general paragraph assignment applies, including its empty-text drop.
+fn assign_notes_line(
+    paragraph: &mut CT_TextParagraph,
+    line: &str,
+    formatting: Option<&CT_RegularTextRun>,
+) {
+    let has_regular_run = paragraph
+        .runs
+        .iter()
+        .any(|run| matches!(run, TextRun::Run(_)));
+    if (line.is_empty() || !has_regular_run)
+        && let Some(source) = formatting
+    {
+        let mut run = source.clone();
+        run.set_text("");
+        if !paragraph.runs.is_empty() {
+            paragraph.set_text("");
+        }
+        paragraph.add_run("");
+        if let Some(slot) = paragraph.runs.first_mut() {
+            *slot = TextRun::Run(run);
+        }
+        if line.is_empty() {
+            return;
+        }
+    }
+    paragraph.set_text(line);
 }
 
 fn first_notes_body_mut(children: &mut [ShapeTreeChild]) -> Option<&mut CT_TextBody> {
