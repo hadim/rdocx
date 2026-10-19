@@ -6309,6 +6309,92 @@ def test_fx204_counted_regex_preserves_failed_noop_and_empty_handles():
         _ = held.text
 
 
+def _content_location(document, predicate):
+    import rdocx
+    item = next(item for item in document.story_items if predicate(item))
+    return rdocx.ContentLocation(item.story, item.kind, item.index_path)
+
+
+def test_f286_typed_content_control_payload_repeat_and_refusal():
+    import rdocx
+    document = rdocx.Document()
+    body = next(story for story in document.stories if story.kind == "body")
+    document.insert_content_control(
+        rdocx.ContentLocation.end(body), "block", "rich_text", tag="typed"
+    )
+    location = _content_location(document, lambda item: item.kind == "content_control")
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="empty"):
+        document.set_content_control_type(
+            location, rdocx.ContentControlTypePayload.drop_down_list([])
+        )
+    assert document.to_bytes() == before
+    with pytest.raises(rdocx.RdocxError, match="repeated"):
+        document.set_content_control_type(
+            location,
+            rdocx.ContentControlTypePayload.combo_box([("One", "same"), ("Two", "same")]),
+        )
+    assert document.to_bytes() == before
+    document.set_content_control_type(location, rdocx.ContentControlTypePayload.checkbox())
+    document = rdocx.Document.from_bytes(document.to_bytes())
+    assert document.content_controls()[0].type == "checkbox"
+    document.set_content_control_value_by_tag("typed", "yes")
+    assert document.content_controls()[0].text == "\u2612"
+    location = _content_location(document, lambda item: item.kind == "content_control")
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="repeating section"):
+        document.repeat_content_control(location)
+    assert document.to_bytes() == before
+
+    empty = _replace_document_body(
+        rdocx.Document(),
+        '<w:sdt><w:sdtPr><w:tag w:val="empty"/><w:id w:val="1"/><w:richText/></w:sdtPr><w:sdtContent/></w:sdt>',
+    )
+    location = _content_location(empty, lambda item: item.kind == "content_control")
+    before = empty.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="no item"):
+        empty.set_content_control_type(
+            location, rdocx.ContentControlTypePayload.repeating_section()
+        )
+    assert empty.to_bytes() == before
+
+    section = rdocx.Document()
+    body = next(story for story in section.stories if story.kind == "body")
+    section.insert_content_control(
+        rdocx.ContentLocation.end(body), "block", "rich_text", tag="section"
+    )
+    location = _content_location(section, lambda item: item.kind == "content_control")
+    section.set_content_control_type(
+        location, rdocx.ContentControlTypePayload.repeating_section()
+    )
+    location = _content_location(
+        section, lambda item: item.kind == "content_control" and b'w:val="section"' in item.xml
+    )
+    section.repeat_content_control(location)
+    section = rdocx.Document.from_bytes(section.to_bytes())
+    items = [
+        item
+        for item in section.story_items
+        if item.kind == "content_control"
+        and b"repeatingSectionItem" in item.xml
+        and b'w:val="section"' not in item.xml
+    ]
+    assert len(items) == 2
+    section.remove_content_control(
+        rdocx.ContentLocation(items[0].story, items[0].kind, items[0].index_path)
+    )
+    survivor = _content_location(
+        section,
+        lambda item: item.kind == "content_control"
+        and b"repeatingSectionItem" in item.xml
+        and b'w:val="section"' not in item.xml,
+    )
+    before = section.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="last repeating"):
+        section.remove_content_control(survivor)
+    assert section.to_bytes() == before
+
+
 def test_f285_content_control_shell_metadata_and_refusal():
     import rdocx
     document = rdocx.Document()

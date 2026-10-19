@@ -225,7 +225,12 @@ impl CT_SdtPr {
                 };
                 Ok((display, bound, Some(full_date)))
             }
-            Some(SdtType::DropDownList) => {
+            Some(SdtType::DropDownList | SdtType::ComboBox) => {
+                let label = if self.control_type == Some(SdtType::ComboBox) {
+                    "combo box"
+                } else {
+                    "dropdown"
+                };
                 let children = self.value_children()?;
                 let items: Vec<_> = children
                     .iter()
@@ -243,13 +248,13 @@ impl CT_SdtPr {
                             (Some(display), Some(bound)) => (display.to_owned(), bound.to_owned()),
                             _ => {
                                 return Err(OxmlError::InvalidValue(format!(
-                                    "dropdown item has no value, choices: {choices:?}"
+                                    "{label} item has no value, choices: {choices:?}"
                                 )));
                             }
                         };
                         if selected.as_ref().is_some_and(|previous| previous != &pair) {
                             return Err(OxmlError::InvalidValue(format!(
-                                "ambiguous dropdown value, choices: {choices:?}"
+                                "ambiguous {label} value, choices: {choices:?}"
                             )));
                         }
                         selected = Some(pair);
@@ -257,7 +262,7 @@ impl CT_SdtPr {
                 }
                 let (display, bound) = selected.ok_or_else(|| {
                     OxmlError::InvalidValue(format!(
-                        "unknown dropdown value {value:?}, choices: {choices:?}"
+                        "unknown {label} value {value:?}, choices: {choices:?}"
                     ))
                 })?;
                 Ok((display, bound, None))
@@ -2729,14 +2734,25 @@ mod tests {
                     .is_err()
             );
         }
-        assert_eq!(
+        assert!(
             make("", "comboBox")
                 .properties
                 .unwrap()
                 .prepare_text_value("free")
-                .unwrap(),
-            ("free".into(), "free".into(), None)
+                .is_err()
         );
+        let combo = make(
+            r#"<w:listItem w:displayText="Shown" w:value="stored"/>"#,
+            "comboBox",
+        );
+        let combo = combo.properties.as_ref().unwrap();
+        for input in ["Shown", "stored"] {
+            assert_eq!(
+                combo.prepare_text_value(input).unwrap(),
+                ("Shown".into(), "stored".into(), None)
+            );
+        }
+        assert!(combo.prepare_text_value("free").is_err());
     }
 
     #[test]

@@ -153,12 +153,22 @@ Unchanged.
 
 ## Implementation checklist
 
-- [ ] Wait for the F-285 dependency-prefix checkpoint.
+- [x] Wait for the F-285 dependency-prefix checkpoint.
 - [ ] Keep the Word differential pending until provenance, version and input identity exist.
-- [ ] Add RED coverage for one missing payload and one bad list value.
-- [ ] Implement `set_content_control_type` and `repeat_content_control` on the existing property model. Last-item removal stays on F-285 `remove_content_control`.
-- [ ] Update the HLD list and obtain a zero-finding microscope.
+- [x] Add RED coverage for one missing payload and one bad list value.
+- [x] Implement `set_content_control_type` and `repeat_content_control` on the existing property model. Last-item removal stays on F-285 `remove_content_control`.
+- [x] Update the HLD list and obtain a zero-finding microscope.
 - [ ] Leave the live Word compare, if the pin must change, to the final union.
+
+## Deviations
+
+The F-285 prefix checkpoint is met. Its integration commit is `e7f3e98f`, the ledger commit is `0c020da0`, and this claim is `e615dd73`. The dependency-readiness sentence above still says `BACKLOG.md` records F-285 as pending. That sentence is historical.
+
+Combo and drop-down fill share `prepare_text_value`. The previous combo assertion accepted any free string. A4 rejects an unknown combo value, so that assertion now expects a refusal. There is no second value engine.
+
+Citation, equation, bibliography, and document-part kinds have no payload variant. Creation still refuses them through the F-285 insert path.
+
+A missing API is not a semantic RED. The bad-list RED is the combo assertion above, which failed on the previous source. Additive payload tests arrived with the implementation. No separate RED commit was recorded. The Word differential stays pending.
 
 ## Contract closure
 

@@ -1796,6 +1796,31 @@ bindings already collected for that part, including a document-level `w14`
 binding, so a control whose paragraph carries `w14:paraId` stays typed. That
 scan does not start a second per-offset namespace walk.
 
+`Document::set_content_control_type` replaces the type element on a shell from
+`insert_content_control`. The payload is rich text, plain text, date,
+checkbox, combo box, drop-down list, picture, group, repeating section, or
+repeating item. Date writes `w:dateFormat`, then `w:storeMappedDataAs` with
+`text`, then `w:calendar` with `gregorian`, and omits `w:lid`. The format is
+`yyyy-MM-dd` or `dd/MM/yyyy`. Checkbox writes `w14:checked` `0`, then
+`w14:checkedState` `2612` in `MS Gothic`, then `w14:uncheckedState` `2610` in
+`MS Gothic`. List items keep caller order. An empty list, a repeated value, or
+a non-XML character refuses. Picture requires an image relationship the part
+already owns and a drawing in the shell that embeds it. Repeating section
+content must already be one repeating item, or one block sequence that the
+call wraps in one nested repeating item. Empty content refuses. A repeating
+item is legal only when its parent is already a repeating section. Citation,
+equation, bibliography, and document-part kinds stay refused at creation and
+have no payload. Tag, alias, id, lock, appearance, placeholder, and unmodelled
+property children stay. `Document::repeat_content_control` clones the first
+repeating item, assigns a new sdt id, drops `w14:paraId` and `w14:textId`, and
+appends the clone. Zero items refuse. `remove_content_control` deletes one
+item of several and refuses the last item in its section. Combo and drop-down
+fill share the existing list table, so an unknown or ambiguous value refuses.
+A refusal returns `Error::Other` and publishes nothing. Python exposes
+`ContentControlTypePayload` and the same two methods. WASM and CLI gain no
+method. Layout and render keep the existing content walk. The authentic Word
+differential stays pending.
+
 `DocumentFragment` owns a package-authoritative half-open block selection from
 any supported story owner. Existing two-segment paragraph paths inside block
 controls resolve their enclosing control content. Source and destination keep

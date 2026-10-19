@@ -3107,9 +3107,15 @@ creation and mutation with no raw-XML fallback.
 ### F-286, Rich, repeating, and typed content controls (L)
 Author rich text, plain text, date, checkbox, picture, combo, drop-down, group,
 repeating-section, and repeating-item controls with type-specific validation.
+`set_content_control_type` writes the payload onto an F-285 shell.
+`repeat_content_control` clones the first repeating item. The last repeating
+item stays through `remove_content_control`. Citation, equation, bibliography,
+and document-part kinds stay refused.
 **Depends on**: F-285.
 **Test gate**: differential. Every supported control matches the pinned Word
-structure and behavior under replacement and repetition.
+structure and behavior under replacement and repetition. Authentic Word
+provenance, version, and input identity are not in the repo, so that
+observation stays pending. Local tests do not certify Word.
 
 ### F-287, Custom XML stores and data binding authoring (L)
 Create custom XML data stores, item properties, schema references, namespace

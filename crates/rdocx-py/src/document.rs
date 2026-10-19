@@ -5532,6 +5532,86 @@ impl PyLegacyFormField {
     }
 }
 
+/// Type payload for `Document.set_content_control_type`.
+#[pyclass(name = "ContentControlTypePayload", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyContentControlTypePayload {
+    inner: rdocx::ContentControlTypePayload,
+}
+
+#[pymethods]
+impl PyContentControlTypePayload {
+    #[staticmethod]
+    fn rich_text() -> Self {
+        Self {
+            inner: rdocx::ContentControlTypePayload::RichText,
+        }
+    }
+
+    #[staticmethod]
+    fn plain_text() -> Self {
+        Self {
+            inner: rdocx::ContentControlTypePayload::PlainText,
+        }
+    }
+
+    #[staticmethod]
+    fn date(format: String) -> Self {
+        Self {
+            inner: rdocx::ContentControlTypePayload::Date { format },
+        }
+    }
+
+    #[staticmethod]
+    fn checkbox() -> Self {
+        Self {
+            inner: rdocx::ContentControlTypePayload::CheckBox,
+        }
+    }
+
+    #[staticmethod]
+    fn combo_box(items: Vec<(String, String)>) -> Self {
+        Self {
+            inner: rdocx::ContentControlTypePayload::ComboBox { items },
+        }
+    }
+
+    #[staticmethod]
+    fn drop_down_list(items: Vec<(String, String)>) -> Self {
+        Self {
+            inner: rdocx::ContentControlTypePayload::DropDownList { items },
+        }
+    }
+
+    #[staticmethod]
+    fn picture(relationship_id: String) -> Self {
+        Self {
+            inner: rdocx::ContentControlTypePayload::Picture { relationship_id },
+        }
+    }
+
+    #[staticmethod]
+    fn group() -> Self {
+        Self {
+            inner: rdocx::ContentControlTypePayload::Group,
+        }
+    }
+
+    #[staticmethod]
+    fn repeating_section() -> Self {
+        Self {
+            inner: rdocx::ContentControlTypePayload::RepeatingSection,
+        }
+    }
+
+    #[staticmethod]
+    fn repeating_section_item() -> Self {
+        Self {
+            inner: rdocx::ContentControlTypePayload::RepeatingSectionItem,
+        }
+    }
+}
+
 /// One content control of the document body.
 #[pyclass(name = "ContentControl", frozen, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
@@ -8026,6 +8106,34 @@ impl PyDocument {
             &location,
             "Document.unwrap_content_control",
             |document, location| document.unwrap_content_control(location),
+        )
+    }
+
+    fn set_content_control_type(
+        &mut self,
+        py: Python<'_>,
+        location: PyRef<'_, PyContentLocation>,
+        payload: PyRef<'_, PyContentControlTypePayload>,
+    ) -> PyResult<()> {
+        let payload = payload.inner.clone();
+        self.edit_content_control(
+            py,
+            &location,
+            "Document.set_content_control_type",
+            move |document, location| document.set_content_control_type(location, payload),
+        )
+    }
+
+    fn repeat_content_control(
+        &mut self,
+        py: Python<'_>,
+        location: PyRef<'_, PyContentLocation>,
+    ) -> PyResult<()> {
+        self.edit_content_control(
+            py,
+            &location,
+            "Document.repeat_content_control",
+            |document, location| document.repeat_content_control(location),
         )
     }
 

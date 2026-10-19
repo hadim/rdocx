@@ -62,7 +62,7 @@ pub use comparison::{
 };
 pub use content_control::{
     ContentControlAppearance, ContentControlLock, ContentControlPlacement, ContentControlRef,
-    ContentControlSpec,
+    ContentControlSpec, ContentControlTypePayload,
 };
 pub use document::{
     AccessibilityIssue, BodyContentRef, BodyItemRef, ContentFragment, ContentLocation,

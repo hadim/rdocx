@@ -26369,3 +26369,477 @@ fn content_control_typed_payload_is_refused_until_f286() {
         assert_eq!(document.to_bytes().unwrap(), before);
     }
 }
+
+fn control_by_tag(document: &Document, tag: &str) -> rdocx::ContentLocation {
+    let body = body_story(document);
+    let needle = format!("w:val=\"{tag}\"");
+    document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            if item.kind() != StoryItemKind::ContentControl {
+                return false;
+            }
+            let xml = String::from_utf8(item.xml().unwrap().into_owned()).unwrap();
+            let tag_at = xml.find(&needle);
+            let content_at = xml.find("<w:sdtContent").unwrap_or(xml.len());
+            tag_at.is_some_and(|offset| offset < content_at)
+        })
+        .unwrap_or_else(|| panic!("missing content control {tag}"))
+        .location()
+        .clone()
+}
+
+fn reopen_document(document: &mut Document) -> Document {
+    Document::from_bytes(&document.to_bytes().unwrap()).unwrap()
+}
+
+fn rich_shell(tag: &str) -> Document {
+    let mut document = Document::new();
+    document
+        .insert_content_control(
+            &rdocx::ContentLocation::end(body_story(&document)),
+            content_control_spec(
+                rdocx::ContentControlPlacement::Block,
+                rdocx_oxml::content_control::SdtType::RichText,
+                tag,
+            ),
+        )
+        .unwrap();
+    document
+}
+
+#[test]
+fn typed_content_control_payload_round_trips() {
+    let mut document = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><p:kept p:v="1"/><w:alias w:val="kept-alias"/><w:tag w:val="typed"/><w:id w:val="7"/><w:richText/></w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt>"#,
+    );
+    let location = control_by_tag(&document, "typed");
+    let before = document.to_bytes().unwrap();
+    let error = document
+        .set_content_control_type(
+            &location,
+            rdocx::ContentControlTypePayload::Date {
+                format: "MM/dd/yyyy".to_owned(),
+            },
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("date format"), "{error}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    document
+        .set_content_control_type(
+            &location,
+            rdocx::ContentControlTypePayload::Date {
+                format: "yyyy-MM-dd".to_owned(),
+            },
+        )
+        .unwrap();
+    let mut reopened = reopen_document(&mut document);
+    let xml = document_part_xml(&mut reopened);
+    assert_order(&xml, "p:kept", "w:date");
+    assert_order(&xml, "<w:dateFormat", "<w:storeMappedDataAs");
+    assert_order(&xml, "<w:storeMappedDataAs", "<w:calendar");
+    assert!(xml.contains("w:val=\"yyyy-MM-dd\""));
+    assert!(xml.contains("w:val=\"text\""));
+    assert!(xml.contains("w:val=\"gregorian\""));
+    assert!(xml.contains("w:val=\"kept-alias\""));
+    assert!(xml.contains("w:val=\"typed\""));
+    assert!(xml.contains("w:val=\"7\""));
+    assert!(!xml.contains("<w:richText"));
+    assert!(!xml.contains("w:lid"));
+    assert_eq!(
+        reopened.content_controls()[0].control_type(),
+        Some(rdocx_oxml::content_control::SdtType::Date)
+    );
+
+    let location = control_by_tag(&reopened, "typed");
+    reopened
+        .set_content_control_type(&location, rdocx::ContentControlTypePayload::PlainText)
+        .unwrap();
+    let reopened = reopen_document(&mut reopened);
+    let xml = story_control_xml(&reopened, &body_story(&reopened), "typed");
+    assert!(xml.contains("<w:text"));
+    assert!(xml.contains("p:kept"));
+    assert!(!xml.contains("<w:date"));
+}
+
+#[test]
+fn typed_date_control_rejects_bad_calendar_values() {
+    let mut document = rich_shell("when");
+    let location = control_by_tag(&document, "when");
+    document
+        .set_content_control_type(
+            &location,
+            rdocx::ContentControlTypePayload::Date {
+                format: "yyyy-MM-dd".to_owned(),
+            },
+        )
+        .unwrap();
+    document
+        .set_content_control_value_by_tag("when", "2026-10-18")
+        .unwrap();
+    let mut saved = reopen_document(&mut document);
+    assert_eq!(saved.content_controls()[0].text(), "2026-10-18");
+    assert!(document_part_xml(&mut saved).contains("2026-10-18T00:00:00Z"));
+
+    let mut slash = rich_shell("slash");
+    let location = control_by_tag(&slash, "slash");
+    slash
+        .set_content_control_type(
+            &location,
+            rdocx::ContentControlTypePayload::Date {
+                format: "dd/MM/yyyy".to_owned(),
+            },
+        )
+        .unwrap();
+    slash
+        .set_content_control_value_by_tag("slash", "2026-10-18")
+        .unwrap();
+    assert_eq!(
+        reopen_document(&mut slash).content_controls()[0].text(),
+        "18/10/2026"
+    );
+
+    let before = saved.to_bytes().unwrap();
+    let error = saved
+        .set_content_control_value_by_tag("when", "31/02/2026")
+        .unwrap_err();
+    assert!(error.to_string().contains("Gregorian"), "{error}");
+    assert_eq!(saved.to_bytes().unwrap(), before);
+
+    let mut hijri = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="hijri"/><w:id w:val="3"/><w:date><w:dateFormat w:val="yyyy-MM-dd"/><w:calendar w:val="hijri"/></w:date></w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt>"#,
+    );
+    let before = hijri.to_bytes().unwrap();
+    let error = hijri
+        .set_content_control_value_by_tag("hijri", "2026-10-18")
+        .unwrap_err();
+    assert!(error.to_string().contains("calendar"), "{error}");
+    assert_eq!(hijri.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn typed_checkbox_control_uses_existing_vocabulary() {
+    let mut document = rich_shell("check");
+    let location = control_by_tag(&document, "check");
+    document
+        .set_content_control_type(&location, rdocx::ContentControlTypePayload::CheckBox)
+        .unwrap();
+    let mut document = reopen_document(&mut document);
+    let xml = document_part_xml(&mut document);
+    assert_order(&xml, "w14:checked", "w14:checkedState");
+    assert_order(&xml, "w14:checkedState", "w14:uncheckedState");
+    assert!(xml.contains("w14:val=\"2612\""));
+    assert!(xml.contains("w14:val=\"2610\""));
+    assert!(xml.contains("MS Gothic"));
+    assert!(xml.contains("w14:val=\"0\""));
+    for (value, glyph) in [
+        ("true", "\u{2612}"),
+        ("yes", "\u{2612}"),
+        ("1", "\u{2612}"),
+        ("false", "\u{2610}"),
+        ("no", "\u{2610}"),
+        ("0", "\u{2610}"),
+    ] {
+        document
+            .set_content_control_value_by_tag("check", value)
+            .unwrap();
+        assert_eq!(document.content_controls()[0].text(), glyph, "{value}");
+    }
+    let before = document.to_bytes().unwrap();
+    let error = document
+        .set_content_control_value_by_tag("check", "maybe")
+        .unwrap_err();
+    assert!(error.to_string().contains("checkbox"), "{error}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn typed_list_control_rejects_unknown_and_ambiguous_values() {
+    let items = vec![
+        ("Shown".to_owned(), "stored".to_owned()),
+        ("Other".to_owned(), "other".to_owned()),
+    ];
+    for payload in [
+        rdocx::ContentControlTypePayload::DropDownList {
+            items: items.clone(),
+        },
+        rdocx::ContentControlTypePayload::ComboBox {
+            items: items.clone(),
+        },
+    ] {
+        let mut document = rich_shell("choice");
+        let location = control_by_tag(&document, "choice");
+        let before = document.to_bytes().unwrap();
+        let repeated = match &payload {
+            rdocx::ContentControlTypePayload::DropDownList { .. } => {
+                rdocx::ContentControlTypePayload::DropDownList {
+                    items: vec![
+                        ("One".to_owned(), "same".to_owned()),
+                        ("Two".to_owned(), "same".to_owned()),
+                    ],
+                }
+            }
+            _ => rdocx::ContentControlTypePayload::ComboBox {
+                items: vec![
+                    ("One".to_owned(), "same".to_owned()),
+                    ("Two".to_owned(), "same".to_owned()),
+                ],
+            },
+        };
+        let error = document
+            .set_content_control_type(&location, repeated)
+            .unwrap_err();
+        assert!(error.to_string().contains("repeated"), "{error}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let empty = match &payload {
+            rdocx::ContentControlTypePayload::DropDownList { .. } => {
+                rdocx::ContentControlTypePayload::DropDownList { items: Vec::new() }
+            }
+            _ => rdocx::ContentControlTypePayload::ComboBox { items: Vec::new() },
+        };
+        let error = document
+            .set_content_control_type(&location, empty)
+            .unwrap_err();
+        assert!(error.to_string().contains("empty"), "{error}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+
+        document
+            .set_content_control_type(&location, payload)
+            .unwrap();
+        let mut document = reopen_document(&mut document);
+        let xml = document_part_xml(&mut document);
+        assert_order(&xml, "w:displayText=\"Shown\"", "w:displayText=\"Other\"");
+        for key in ["Shown", "stored"] {
+            document
+                .set_content_control_value_by_tag("choice", key)
+                .unwrap();
+            assert_eq!(document.content_controls()[0].text(), "Shown", "{key}");
+        }
+        let before = document.to_bytes().unwrap();
+        let error = document
+            .set_content_control_value_by_tag("choice", "missing")
+            .unwrap_err();
+        assert!(error.to_string().contains("unknown"), "{error}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    let mut document = rich_shell("ambiguous");
+    let location = control_by_tag(&document, "ambiguous");
+    document
+        .set_content_control_type(
+            &location,
+            rdocx::ContentControlTypePayload::DropDownList {
+                items: vec![
+                    ("Same".to_owned(), "a".to_owned()),
+                    ("Same".to_owned(), "b".to_owned()),
+                ],
+            },
+        )
+        .unwrap();
+    let before = document.to_bytes().unwrap();
+    let error = document
+        .set_content_control_value_by_tag("ambiguous", "Same")
+        .unwrap_err();
+    assert!(error.to_string().contains("ambiguous"), "{error}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn typed_picture_control_requires_an_owned_image() {
+    let mut host = Document::new();
+    let relationship_id = host.embed_image(PNG_2_BY_3, "owned.png");
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(host.to_bytes().unwrap())).unwrap();
+    let drawing = format!(
+        "<w:p><w:r><w:drawing xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><wp:inline><wp:extent cx=\"152400\" cy=\"152400\"/><wp:docPr id=\"1\" name=\"owned.png\"/><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:pic><pic:nvPicPr><pic:cNvPr id=\"1\" name=\"owned.png\"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip q:embed=\"{relationship_id}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"152400\" cy=\"152400\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+    );
+    let xml = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:q="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:sdt><w:sdtPr><w:tag w:val="pic"/><w:id w:val="1"/><w:richText/></w:sdtPr><w:sdtContent>{drawing}</w:sdtContent></w:sdt><w:sectPr/></w:body></w:document>"#
+    );
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(&bytes.into_inner()).unwrap();
+    let location = control_by_tag(&document, "pic");
+    let before = document.to_bytes().unwrap();
+    let error = document
+        .set_content_control_type(
+            &location,
+            rdocx::ContentControlTypePayload::Picture {
+                relationship_id: "rIdMissing".to_owned(),
+            },
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("relationship"), "{error}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+    document
+        .set_content_control_type(
+            &location,
+            rdocx::ContentControlTypePayload::Picture {
+                relationship_id: relationship_id.clone(),
+            },
+        )
+        .unwrap();
+    let mut document = reopen_document(&mut document);
+    assert!(document_part_xml(&mut document).contains("<w:picture"));
+    assert_eq!(
+        document.content_controls()[0].control_type(),
+        Some(rdocx_oxml::content_control::SdtType::Picture)
+    );
+    let before = document.to_bytes().unwrap();
+    let error = document
+        .set_content_control_value_by_tag("pic", "caption")
+        .unwrap_err();
+    assert!(error.to_string().contains("text value"), "{error}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn typed_group_control_refuses_text() {
+    let mut document = rich_shell("grouped");
+    let location = control_by_tag(&document, "grouped");
+    document
+        .set_content_control_type(&location, rdocx::ContentControlTypePayload::Group)
+        .unwrap();
+    let mut document = reopen_document(&mut document);
+    assert!(story_control_xml(&document, &body_story(&document), "grouped").contains("<w:group"));
+    let before = document.to_bytes().unwrap();
+    let error = document
+        .set_content_control_value_by_tag("grouped", "nope")
+        .unwrap_err();
+    assert!(error.to_string().contains("text value"), "{error}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn repeating_section_clones_the_template_item() {
+    let mut empty = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="empty"/><w:id w:val="1"/><w:richText/></w:sdtPr><w:sdtContent/></w:sdt>"#,
+    );
+    let location = control_by_tag(&empty, "empty");
+    let before = empty.to_bytes().unwrap();
+    let error = empty
+        .set_content_control_type(
+            &location,
+            rdocx::ContentControlTypePayload::RepeatingSection,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("no item"), "{error}");
+    assert_eq!(empty.to_bytes().unwrap(), before);
+
+    let mut one = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="one"/><w:id w:val="4"/><w:richText/></w:sdtPr><w:sdtContent><w:p w14:paraId="11111111"><w:r><w:t>template</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let location = control_by_tag(&one, "one");
+    one.set_content_control_type(
+        &location,
+        rdocx::ContentControlTypePayload::RepeatingSection,
+    )
+    .unwrap();
+    let mut one = reopen_document(&mut one);
+    let xml = document_part_xml(&mut one);
+    assert_eq!(xml.matches("repeatingSectionItem").count(), 1);
+    assert!(xml.contains("11111111"));
+    let location = control_by_tag(&one, "one");
+    one.repeat_content_control(&location).unwrap();
+    let mut one = reopen_document(&mut one);
+    let xml = document_part_xml(&mut one);
+    assert_eq!(xml.matches("repeatingSectionItem").count(), 2);
+    assert_eq!(xml.matches("11111111").count(), 1);
+    assert_eq!(xml.matches("template").count(), 2);
+
+    let item = |tag: &str, id: i32, text: &str| {
+        format!(
+            "<w:sdt><w:sdtPr><w:tag w:val=\"{tag}\"/><w:id w:val=\"{id}\"/><w15:repeatingSectionItem xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:sdtContent></w:sdt>"
+        )
+    };
+    let mut many = document_with_body_inner(&format!(
+        "<w:sdt><w:sdtPr><w:tag w:val=\"many\"/><w:id w:val=\"1\"/><w15:repeatingSection xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"/></w:sdtPr><w:sdtContent>{}{}{}</w:sdtContent></w:sdt>",
+        item("item-a", 2, "a"),
+        item("item-b", 3, "b"),
+        item("item-c", 4, "c")
+    ));
+    let location = control_by_tag(&many, "many");
+    many.repeat_content_control(&location).unwrap();
+    let mut many = reopen_document(&mut many);
+    assert_eq!(
+        document_part_xml(&mut many)
+            .matches("repeatingSectionItem")
+            .count(),
+        4
+    );
+    let remove = control_by_tag(&many, "item-b");
+    many.remove_content_control(&remove).unwrap();
+    let mut many = reopen_document(&mut many);
+    assert!(story_control_xml(&many, &body_story(&many), "item-a").contains("item-a"));
+    assert!(
+        many.story_items(&body_story(&many))
+            .unwrap()
+            .iter()
+            .all(|item| {
+                let xml = String::from_utf8(item.xml().unwrap().into_owned()).unwrap();
+                let tag_at = xml.find("w:val=\"item-b\"");
+                let content_at = xml.find("<w:sdtContent").unwrap_or(xml.len());
+                !tag_at.is_some_and(|offset| offset < content_at)
+            })
+    );
+    for tag in ["item-c", "item-a"] {
+        let location = control_by_tag(&many, tag);
+        many.remove_content_control(&location).unwrap();
+        many = reopen_document(&mut many);
+    }
+    let last = many
+        .story_items(&body_story(&many))
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            if item.kind() != StoryItemKind::ContentControl {
+                return false;
+            }
+            let xml = String::from_utf8(item.xml().unwrap().into_owned()).unwrap();
+            xml.contains("repeatingSectionItem") && !xml.contains("w:val=\"many\"")
+        })
+        .unwrap()
+        .location()
+        .clone();
+    let before = many.to_bytes().unwrap();
+    let error = many.remove_content_control(&last).unwrap_err();
+    assert!(error.to_string().contains("last repeating"), "{error}");
+    assert_eq!(many.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn repeating_item_requires_a_repeating_section_parent() {
+    let mut nested = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="section"/><w:id w:val="1"/><w15:repeatingSection xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"/></w:sdtPr><w:sdtContent><w:sdt><w:sdtPr><w:tag w:val="inner"/><w:id w:val="2"/><w:richText/></w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt></w:sdtContent></w:sdt>"#,
+    );
+    let location = control_by_tag(&nested, "inner");
+    nested
+        .set_content_control_type(
+            &location,
+            rdocx::ContentControlTypePayload::RepeatingSectionItem,
+        )
+        .unwrap();
+    let nested = reopen_document(&mut nested);
+    let xml = story_control_xml(&nested, &body_story(&nested), "inner");
+    assert!(xml.contains("repeatingSectionItem"));
+    assert!(xml.contains("w:val=\"inner\""));
+
+    let mut body = rich_shell("body-item");
+    let location = control_by_tag(&body, "body-item");
+    let before = body.to_bytes().unwrap();
+    let error = body
+        .set_content_control_type(
+            &location,
+            rdocx::ContentControlTypePayload::RepeatingSectionItem,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("parent"), "{error}");
+    assert_eq!(body.to_bytes().unwrap(), before);
+    let error = body.repeat_content_control(&location).unwrap_err();
+    assert!(error.to_string().contains("repeating section"), "{error}");
+    assert_eq!(body.to_bytes().unwrap(), before);
+}

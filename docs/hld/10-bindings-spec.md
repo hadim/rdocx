@@ -2584,6 +2584,20 @@ Python returns `None`. Rust returns `Result<()>`. A refusal is `Error::Other`
 and does not publish. `ContentControl` stays a frozen snapshot. Move and clone
 stay on the Rust facade. WASM and CLI gain no method.
 
+`Document::set_content_control_type(location, payload)` and
+`Document::repeat_content_control(location)` use the same location.
+`ContentControlTypePayload` is rich text, plain text, date, checkbox, combo
+box, drop-down list, picture, group, repeating section, or repeating item.
+Python constructs that payload with `rich_text`, `plain_text`, `date`,
+`checkbox`, `combo_box`, `drop_down_list`, `picture`, `group`,
+`repeating_section`, and `repeating_section_item`, then passes it to
+`Document.set_content_control_type`. `insert_content_control` does not grow a
+payload argument. Citation, equation, bibliography, and document-part kinds
+stay refused. Combo and drop-down values still go through the existing tag,
+alias, and bind setters. Picture and group still refuse a text value. The last
+repeating item refuses `remove_content_control` and publishes nothing. WASM
+and CLI gain no method. The authentic Word differential stays pending.
+
 Native Word callers inspect direct body order through
 `Document::body_items`. Each `BodyItemRef` borrows one paragraph, table,
 body-level content control, or preserved unsupported XML child. It does not

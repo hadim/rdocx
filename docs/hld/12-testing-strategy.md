@@ -115,6 +115,12 @@ the bytes as written is what the no-op save contract requires.
 `explicit_font_priority_divergence_from_word_is_deliberate` asserts our side so
 a later change cannot drop the decision silently.
 
+Typed content-control replacement and repetition are checked in source. The
+local tests observe child order, refusal, and repetition counts. They are not
+a Word oracle. The authentic Word differential for those controls stays pending
+until the repo records Word provenance, the Word version, and the input
+identity. A package this workspace writes is not that evidence.
+
 The table style and conditional formatting story compares against a pinned
 `w:tblStylePr` reference tree built as source XML, for the same reason. Word
 GUI capture is not available on the development machine, so confirming that

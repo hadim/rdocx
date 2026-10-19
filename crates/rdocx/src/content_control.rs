@@ -1289,7 +1289,9 @@ fn validate_xml(xml: &[u8]) -> Result<()> {
     }
 }
 
+const W14_NS: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
 const W15_NS: &str = "http://schemas.microsoft.com/office/word/2012/wordml";
+const REL_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
 /// Where a new content control is inserted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1337,6 +1339,21 @@ impl ContentControlAppearance {
             Self::Hidden => "hidden",
         }
     }
+}
+
+/// Type payload written onto an existing rich or plain shell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContentControlTypePayload {
+    RichText,
+    PlainText,
+    Date { format: String },
+    CheckBox,
+    ComboBox { items: Vec<(String, String)> },
+    DropDownList { items: Vec<(String, String)> },
+    Picture { relationship_id: String },
+    Group,
+    RepeatingSection,
+    RepeatingSectionItem,
 }
 
 /// Fields for one rich-text or plain-text shell.
@@ -1451,9 +1468,107 @@ impl Document {
         self.edit_control_property(location, PropertyEdit::Placeholder(placeholder))
     }
 
+    /// Replace the type element on an existing shell.
+    ///
+    /// Tag, alias, id, lock, appearance, placeholder, and unmodelled property
+    /// children stay. A refusal publishes nothing.
+    pub fn set_content_control_type(
+        &mut self,
+        location: &ContentLocation,
+        payload: ContentControlTypePayload,
+    ) -> Result<()> {
+        validate_type_payload(&payload)?;
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (part, mut xml, mut range, _) = control_item(&candidate, location)?;
+        match &payload {
+            ContentControlTypePayload::RepeatingSectionItem => {
+                let elems = index_elements(&xml)?;
+                let sdt = element_at(&elems, &range)?;
+                if ancestor_repeating_section(&elems, sdt.id).is_none() {
+                    return Err(Error::Other(
+                        "repeating section item requires a repeating section parent".to_owned(),
+                    ));
+                }
+            }
+            ContentControlTypePayload::Picture { relationship_id } => {
+                if !part_owns_image(&candidate, &part, relationship_id) {
+                    return Err(Error::Other(
+                        "content control picture relationship is missing".to_owned(),
+                    ));
+                }
+                if !content_embeds_relationship(&xml, &range, relationship_id)? {
+                    return Err(Error::Other(
+                        "content control picture content does not embed that relationship"
+                            .to_owned(),
+                    ));
+                }
+            }
+            ContentControlTypePayload::RepeatingSection => match repeating_content(&xml, &range)? {
+                RepeatingContent::Empty => {
+                    return Err(Error::Other("repeating section has no item".to_owned()));
+                }
+                RepeatingContent::NotBlock => {
+                    return Err(Error::Other(
+                        "repeating section content is not a block sequence".to_owned(),
+                    ));
+                }
+                RepeatingContent::AlreadyItem => {}
+                RepeatingContent::Wrap => {
+                    let id = candidate.smallest_content_control_id()?;
+                    (xml, range) = wrap_repeating_item(&xml, &range, id)?;
+                }
+            },
+            _ => {}
+        }
+        let markup = type_markup(&payload)?;
+        let updated = replace_control_type_markup(&xml, &range, markup.as_bytes())?;
+        xml.splice(range, updated);
+        candidate.write_story_part(&part, xml)?;
+        self.publish_candidate(candidate)
+    }
+
+    /// Clone the first repeating item inside a repeating section and append it.
+    pub fn repeat_content_control(&mut self, location: &ContentLocation) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (part, mut xml, range, _) = control_item(&candidate, location)?;
+        let elems = index_elements(&xml)?;
+        let section = element_at(&elems, &range)?;
+        if !sdt_is_repeating_section(&elems, section) {
+            return Err(Error::Other(
+                "repeat_content_control addresses a repeating section".to_owned(),
+            ));
+        }
+        let Some(item_range) = first_repeating_item_range(&elems, section) else {
+            return Err(Error::Other(
+                "repeating section has no item to clone".to_owned(),
+            ));
+        };
+        let bytes = xml
+            .get(item_range)
+            .ok_or_else(|| Error::Other("content control bytes are missing".to_owned()))?
+            .to_vec();
+        let fresh = freshen_control(&mut candidate, &bytes)?;
+        let elems = index_elements(&xml)?;
+        let section = element_at(&elems, &range)?;
+        let content = sdt_content_elem(&elems, section)
+            .ok_or_else(|| Error::Other("repeating section has no item to clone".to_owned()))?;
+        let content_range = content.range.clone();
+        let replacement = insert_into_element(&xml, &content_range, &fresh)?;
+        xml.splice(content_range, replacement);
+        candidate.write_story_part(&part, xml)?;
+        self.publish_candidate(candidate)
+    }
+
     /// Delete one control, including the content inside it.
     pub fn remove_content_control(&mut self, location: &ContentLocation) -> Result<()> {
         let (_part, xml, range, direct) = control_item(self, location)?;
+        if last_repeating_item(&xml, &range)? {
+            return Err(Error::Other(
+                "cannot remove the last repeating section item".to_owned(),
+            ));
+        }
         if direct && control_parent_is_block(&xml, &range)? {
             refuse_cell_without_paragraph(self, location.story(), &xml, &range, b"")?;
             return self
@@ -1930,6 +2045,7 @@ struct XmlElem {
     parent: Option<usize>,
     local: Vec<u8>,
     word: bool,
+    w14: bool,
     w15: bool,
     range: Range<usize>,
     open_end: usize,
@@ -1950,6 +2066,7 @@ fn index_elements(xml: &[u8]) -> Result<Vec<XmlElem>> {
             .read_resolved_event_into(&mut buffer)
             .map_err(|error| Error::Other(format!("content control XML is invalid: {error}")))?;
         let word = is_word(&namespace);
+        let w14 = is_w14(&namespace);
         let w15 = is_w15(&namespace);
         drop(namespace);
         let after = reader.buffer_position() as usize;
@@ -1965,6 +2082,7 @@ fn index_elements(xml: &[u8]) -> Result<Vec<XmlElem>> {
                     parent,
                     local: element.local_name().as_ref().to_vec(),
                     word,
+                    w14,
                     w15,
                     range: before..before,
                     open_end: after,
@@ -1980,6 +2098,7 @@ fn index_elements(xml: &[u8]) -> Result<Vec<XmlElem>> {
                     parent: stack.last().map(|frame| frame.0),
                     local: element.local_name().as_ref().to_vec(),
                     word,
+                    w14,
                     w15,
                     range: before..after,
                     open_end: after,
@@ -2017,6 +2136,10 @@ fn index_elements(xml: &[u8]) -> Result<Vec<XmlElem>> {
 
 fn is_word(namespace: &ResolveResult<'_>) -> bool {
     matches!(namespace, ResolveResult::Bound(Namespace(uri)) if *uri == W_NS.as_bytes())
+}
+
+fn is_w14(namespace: &ResolveResult<'_>) -> bool {
+    matches!(namespace, ResolveResult::Bound(Namespace(uri)) if *uri == W14_NS.as_bytes())
 }
 
 fn is_w15(namespace: &ResolveResult<'_>) -> bool {
@@ -2594,6 +2717,470 @@ fn word_paragraph_in_span(xml: &[u8], span: Range<usize>) -> Result<bool> {
             && elem.range.start >= span.start
             && elem.range.end <= span.end
     }))
+}
+
+fn validate_type_payload(payload: &ContentControlTypePayload) -> Result<()> {
+    match payload {
+        ContentControlTypePayload::Date { format } => {
+            if format != "yyyy-MM-dd" && format != "dd/MM/yyyy" {
+                return Err(Error::Other(
+                    "content control date format must be yyyy-MM-dd or dd/MM/yyyy".to_owned(),
+                ));
+            }
+        }
+        ContentControlTypePayload::ComboBox { items }
+        | ContentControlTypePayload::DropDownList { items } => validate_list_items(items)?,
+        ContentControlTypePayload::Picture { relationship_id } => {
+            if relationship_id.is_empty() {
+                return Err(Error::Other(
+                    "content control picture relationship is missing".to_owned(),
+                ));
+            }
+            oxml_core::xml::reject_non_xml_characters(
+                "content control picture relationship",
+                relationship_id,
+            )?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_list_items(items: &[(String, String)]) -> Result<()> {
+    if items.is_empty() {
+        return Err(Error::Other("content control list is empty".to_owned()));
+    }
+    let mut seen = HashSet::new();
+    for (display, value) in items {
+        oxml_core::xml::reject_non_xml_characters("content control list display", display)?;
+        oxml_core::xml::reject_non_xml_characters("content control list value", value)?;
+        if !seen.insert(value.clone()) {
+            return Err(Error::Other(
+                "content control list value is repeated".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn type_markup(payload: &ContentControlTypePayload) -> Result<String> {
+    match payload {
+        ContentControlTypePayload::RichText => Ok("<w:richText/>".to_owned()),
+        ContentControlTypePayload::PlainText => Ok("<w:text/>".to_owned()),
+        ContentControlTypePayload::Date { format } => Ok(format!(
+            "<w:date><w:dateFormat w:val=\"{}\"/><w:storeMappedDataAs w:val=\"text\"/><w:calendar w:val=\"gregorian\"/></w:date>",
+            xml_attr(format)
+        )),
+        ContentControlTypePayload::CheckBox => Ok(format!(
+            "<w14:checkbox xmlns:w14=\"{W14_NS}\"><w14:checked w14:val=\"0\"/><w14:checkedState w14:val=\"2612\" w14:font=\"MS Gothic\"/><w14:uncheckedState w14:val=\"2610\" w14:font=\"MS Gothic\"/></w14:checkbox>"
+        )),
+        ContentControlTypePayload::ComboBox { items } => Ok(list_markup("w:comboBox", items)),
+        ContentControlTypePayload::DropDownList { items } => {
+            Ok(list_markup("w:dropDownList", items))
+        }
+        ContentControlTypePayload::Picture { .. } => Ok("<w:picture/>".to_owned()),
+        ContentControlTypePayload::Group => Ok("<w:group/>".to_owned()),
+        ContentControlTypePayload::RepeatingSection => {
+            Ok(format!("<w15:repeatingSection xmlns:w15=\"{W15_NS}\"/>"))
+        }
+        ContentControlTypePayload::RepeatingSectionItem => Ok(format!(
+            "<w15:repeatingSectionItem xmlns:w15=\"{W15_NS}\"/>"
+        )),
+    }
+}
+
+fn list_markup(name: &str, items: &[(String, String)]) -> String {
+    let mut xml = format!("<{name}>");
+    for (display, value) in items {
+        xml.push_str(&format!(
+            "<w:listItem w:displayText=\"{}\" w:value=\"{}\"/>",
+            xml_attr(display),
+            xml_attr(value)
+        ));
+    }
+    xml.push_str("</");
+    xml.push_str(name);
+    xml.push('>');
+    xml
+}
+
+fn part_owns_image(document: &Document, part: &str, id: &str) -> bool {
+    document.package.get_part_rels(part).is_some_and(|rels| {
+        rels.items
+            .iter()
+            .any(|rel| rel.id == id && rel.rel_type == oxml_opc::relationship::rel_types::IMAGE)
+    })
+}
+
+fn content_embeds_relationship(xml: &[u8], sdt_range: &Range<usize>, rel_id: &str) -> Result<bool> {
+    let elems = index_elements(xml)?;
+    let sdt = element_at(&elems, sdt_range)?;
+    let Some(content) = sdt_content_elem(&elems, sdt) else {
+        return Ok(false);
+    };
+    let Some(inner_end) = content.inner_end else {
+        return Ok(false);
+    };
+    drawing_embeds(xml, content.open_end..inner_end, rel_id)
+}
+
+fn drawing_embeds(xml: &[u8], inner: Range<usize>, rel_id: &str) -> Result<bool> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut drawing_depth = 0i32;
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| {
+                Error::Other(format!(
+                    "content control picture content is invalid: {error}"
+                ))
+            })?;
+        let word = is_word(&namespace);
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        let in_content = before >= inner.start && after <= inner.end;
+        match event {
+            Event::Start(element) => {
+                let drawing = word && element.local_name().as_ref() == b"drawing";
+                if in_content && drawing {
+                    drawing_depth += 1;
+                }
+                if in_content && drawing_depth > 0 && embed_matches(&reader, &element, rel_id)? {
+                    return Ok(true);
+                }
+            }
+            Event::Empty(element) => {
+                let drawing = word && element.local_name().as_ref() == b"drawing";
+                if in_content
+                    && (drawing_depth > 0 || drawing)
+                    && embed_matches(&reader, &element, rel_id)?
+                {
+                    return Ok(true);
+                }
+            }
+            Event::End(element) => {
+                if in_content
+                    && word
+                    && element.local_name().as_ref() == b"drawing"
+                    && drawing_depth > 0
+                {
+                    drawing_depth -= 1;
+                }
+            }
+            Event::Eof => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn embed_matches(reader: &NsReader<&[u8]>, element: &BytesStart<'_>, rel_id: &str) -> Result<bool> {
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| {
+            Error::Other(format!(
+                "content control picture content is invalid: {error}"
+            ))
+        })?;
+        let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+        let relationships =
+            matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == REL_NS.as_bytes());
+        if relationships && local.as_ref() == b"embed" {
+            let value = attribute
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                .map_err(|error| {
+                    Error::Other(format!(
+                        "content control picture content is invalid: {error}"
+                    ))
+                })?;
+            if value.as_ref() == rel_id {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+enum RepeatingContent {
+    Empty,
+    NotBlock,
+    AlreadyItem,
+    Wrap,
+}
+
+fn repeating_content(xml: &[u8], sdt_range: &Range<usize>) -> Result<RepeatingContent> {
+    let elems = index_elements(xml)?;
+    let sdt = element_at(&elems, sdt_range)?;
+    let Some(content) = sdt_content_elem(&elems, sdt) else {
+        return Ok(RepeatingContent::Empty);
+    };
+    let Some(inner_end) = content.inner_end else {
+        return Ok(RepeatingContent::Empty);
+    };
+    let children: Vec<&XmlElem> = elems
+        .iter()
+        .filter(|elem| elem.parent == Some(content.id))
+        .collect();
+    let inner = &xml[content.open_end..inner_end];
+    if inner_has_nonspace_text(inner)? {
+        return Ok(RepeatingContent::NotBlock);
+    }
+    if children.is_empty() {
+        return Ok(RepeatingContent::Empty);
+    }
+    if children
+        .iter()
+        .any(|child| !child_allowed(ParentSlot::Block, child.word, &child.local))
+    {
+        return Ok(RepeatingContent::NotBlock);
+    }
+    if children.len() == 1
+        && children[0].word
+        && children[0].local == b"sdt"
+        && sdt_is_repeating_item(&elems, children[0])
+    {
+        return Ok(RepeatingContent::AlreadyItem);
+    }
+    Ok(RepeatingContent::Wrap)
+}
+
+fn inner_has_nonspace_text(inner: &[u8]) -> Result<bool> {
+    let mut wrapped = Vec::new();
+    wrapped.extend_from_slice(b"<w:root xmlns:w=\"");
+    wrapped.extend_from_slice(W_NS.as_bytes());
+    wrapped.extend_from_slice(b"\">");
+    wrapped.extend_from_slice(inner);
+    wrapped.extend_from_slice(b"</w:root>");
+    let mut reader = Reader::from_reader(wrapped.as_slice());
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_)) => depth += 1,
+            Ok(Event::End(_)) => {
+                if depth == 0 {
+                    return Err(Error::Other(
+                        "repeating section content is not a block sequence".to_owned(),
+                    ));
+                }
+                depth -= 1;
+            }
+            Ok(Event::Text(text)) if depth == 1 && !xml_space(text.as_ref()) => return Ok(true),
+            Ok(Event::CData(text)) if depth == 1 && !xml_space(text.as_ref()) => return Ok(true),
+            Ok(Event::Eof) => return Ok(false),
+            Ok(_) => {}
+            Err(error) => {
+                return Err(Error::Other(format!(
+                    "repeating section content is invalid: {error}"
+                )));
+            }
+        }
+        buffer.clear();
+    }
+}
+
+fn wrap_repeating_item(
+    xml: &[u8],
+    sdt_range: &Range<usize>,
+    id: i32,
+) -> Result<(Vec<u8>, Range<usize>)> {
+    let elems = index_elements(xml)?;
+    let sdt = element_at(&elems, sdt_range)?;
+    let content = sdt_content_elem(&elems, sdt)
+        .ok_or_else(|| Error::Other("repeating section has no item".to_owned()))?;
+    let inner_end = content
+        .inner_end
+        .ok_or_else(|| Error::Other("repeating section has no item".to_owned()))?;
+    let inner = &xml[content.open_end..inner_end];
+    let inner = std::str::from_utf8(inner)
+        .map_err(|error| Error::Other(format!("repeating section content is invalid: {error}")))?;
+    let wrapper = format!(
+        "<w:sdt><w:sdtPr><w:id w:val=\"{id}\"/><w15:repeatingSectionItem xmlns:w15=\"{W15_NS}\"/></w:sdtPr><w:sdtContent>{inner}</w:sdtContent></w:sdt>"
+    );
+    let growth = wrapper.len() - (inner_end - content.open_end);
+    let mut updated = xml.to_vec();
+    updated.splice(content.open_end..inner_end, wrapper.into_bytes());
+    Ok((updated, sdt_range.start..sdt_range.end + growth))
+}
+
+fn replace_control_type_markup(
+    xml: &[u8],
+    sdt_range: &Range<usize>,
+    markup: &[u8],
+) -> Result<Vec<u8>> {
+    let elems = index_elements(xml)?;
+    let sdt = element_at(&elems, sdt_range)?;
+    let sdt_pr = elems
+        .iter()
+        .find(|elem| elem.parent == Some(sdt.id) && elem.word && elem.local == b"sdtPr")
+        .ok_or_else(|| Error::Other("content control has no properties".to_owned()))?;
+    let mut type_ranges: Vec<Range<usize>> = elems
+        .iter()
+        .filter(|elem| elem.parent == Some(sdt_pr.id) && is_type_child(elem))
+        .map(|elem| elem.range.clone())
+        .collect();
+    type_ranges.sort_by_key(|range| range.start);
+    if sdt_pr.inner_end.is_none() {
+        let expanded = expand_empty(&xml[sdt_pr.range.clone()], markup)?;
+        return splice_absolute(xml, sdt_range, &sdt_pr.range, &expanded);
+    }
+    let insert_at = type_ranges
+        .first()
+        .map(|range| range.start)
+        .unwrap_or_else(|| {
+            elems
+                .iter()
+                .filter(|elem| elem.parent == Some(sdt_pr.id))
+                .find(|elem| property_rank(elem).is_some_and(|child| child > 20))
+                .map(|elem| elem.range.start)
+                .unwrap_or(sdt_pr.inner_end.unwrap_or(sdt_pr.range.end))
+        });
+    let mut updated = Vec::new();
+    let mut cursor = sdt_range.start;
+    let mut inserted = false;
+    let mut skips = type_ranges.into_iter().peekable();
+    while cursor < sdt_range.end {
+        if !inserted && cursor == insert_at {
+            updated.extend_from_slice(markup);
+            inserted = true;
+        }
+        if skips.peek().is_some_and(|skip| cursor == skip.start) {
+            cursor = skips.next().unwrap().end;
+            continue;
+        }
+        updated.push(xml[cursor]);
+        cursor += 1;
+    }
+    if !inserted {
+        updated.extend_from_slice(markup);
+    }
+    Ok(updated)
+}
+
+fn is_type_child(elem: &XmlElem) -> bool {
+    if elem.word {
+        return matches!(
+            elem.local.as_slice(),
+            b"richText"
+                | b"text"
+                | b"date"
+                | b"picture"
+                | b"comboBox"
+                | b"dropDownList"
+                | b"citation"
+                | b"group"
+                | b"bibliography"
+                | b"equation"
+                | b"docPartList"
+                | b"docPartObj"
+        );
+    }
+    if elem.w15 {
+        return matches!(
+            elem.local.as_slice(),
+            b"repeatingSection" | b"repeatingSectionItem"
+        );
+    }
+    elem.w14 && elem.local.as_slice() == b"checkbox"
+}
+
+fn sdt_content_elem<'a>(elems: &'a [XmlElem], sdt: &XmlElem) -> Option<&'a XmlElem> {
+    elems
+        .iter()
+        .find(|elem| elem.parent == Some(sdt.id) && elem.word && elem.local == b"sdtContent")
+}
+
+fn sdt_has_direct_type(
+    elems: &[XmlElem],
+    sdt: &XmlElem,
+    local: &[u8],
+    w15: bool,
+    w14: bool,
+) -> bool {
+    let Some(properties) = elems
+        .iter()
+        .find(|elem| elem.parent == Some(sdt.id) && elem.word && elem.local == b"sdtPr")
+    else {
+        return false;
+    };
+    elems.iter().any(|elem| {
+        elem.parent == Some(properties.id)
+            && elem.local.as_slice() == local
+            && if w15 {
+                elem.w15
+            } else if w14 {
+                elem.w14
+            } else {
+                elem.word
+            }
+    })
+}
+
+fn sdt_is_repeating_section(elems: &[XmlElem], sdt: &XmlElem) -> bool {
+    sdt_has_direct_type(elems, sdt, b"repeatingSection", true, false)
+}
+
+fn sdt_is_repeating_item(elems: &[XmlElem], sdt: &XmlElem) -> bool {
+    sdt_has_direct_type(elems, sdt, b"repeatingSectionItem", true, false)
+}
+
+fn ancestor_repeating_section(elems: &[XmlElem], sdt_id: usize) -> Option<&XmlElem> {
+    let mut current = elems.iter().find(|elem| elem.id == sdt_id)?;
+    while let Some(parent_id) = current.parent {
+        let parent = elems.iter().find(|elem| elem.id == parent_id)?;
+        if parent.word && parent.local == b"sdt" && sdt_is_repeating_section(elems, parent) {
+            return Some(parent);
+        }
+        current = parent;
+    }
+    None
+}
+
+fn direct_repeating_items<'a>(elems: &'a [XmlElem], section: &XmlElem) -> Vec<&'a XmlElem> {
+    let Some(content) = sdt_content_elem(elems, section) else {
+        return Vec::new();
+    };
+    elems
+        .iter()
+        .filter(|elem| {
+            elem.parent == Some(content.id)
+                && elem.word
+                && elem.local == b"sdt"
+                && sdt_is_repeating_item(elems, elem)
+        })
+        .collect()
+}
+
+fn first_repeating_item_range(elems: &[XmlElem], section: &XmlElem) -> Option<Range<usize>> {
+    let content = sdt_content_elem(elems, section)?;
+    let end = content.inner_end.unwrap_or(content.range.end);
+    elems
+        .iter()
+        .filter(|elem| {
+            elem.word
+                && elem.local == b"sdt"
+                && elem.range.start >= content.open_end
+                && elem.range.end <= end
+                && sdt_is_repeating_item(elems, elem)
+        })
+        .min_by_key(|elem| elem.range.start)
+        .map(|elem| elem.range.clone())
+}
+
+fn last_repeating_item(xml: &[u8], sdt_range: &Range<usize>) -> Result<bool> {
+    let elems = index_elements(xml)?;
+    let sdt = element_at(&elems, sdt_range)?;
+    if !sdt_is_repeating_item(&elems, sdt) {
+        return Ok(false);
+    }
+    let Some(section) = ancestor_repeating_section(&elems, sdt.id) else {
+        return Ok(false);
+    };
+    let items = direct_repeating_items(&elems, section);
+    Ok(items.len() == 1 && items.iter().any(|item| item.range == sdt.range))
 }
 
 fn freshen_control(document: &mut Document, sdt_bytes: &[u8]) -> Result<Vec<u8>> {
