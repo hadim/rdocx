@@ -767,7 +767,7 @@ child. A retained shadowed serializer prefix refuses that local publication
 and leaves the package unchanged. PowerPoint `ShapeCollection.add_textbox`, `Shape.alt_text`, `Shape.left`,
 `FillFormat.solid` on a shape, and a stable `Shape.element.replace_xml` do the
 same for one slide child when the edit does not change relationships, connectors,
-or owner identity. Each local publication validates that child and advances the
+or owner identity, and the package has no retained signature. Each local publication validates that child and advances the
 revision once. An edit that must read the rest of the package uses the existing
 staged transaction.
 

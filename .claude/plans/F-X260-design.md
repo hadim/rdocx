@@ -115,6 +115,8 @@ The affected-owner paths also edit `crates/rdocx/src/document.rs`, `crates/rdocx
 
 The final workspace suite rejected a plain removal in a package that retains a shadowed `wp` prefix. The local path now stays closed for that package. The decision is stored when the package is opened or saved, so the edit itself still reads one child.
 
+The same suite rejected a signed PowerPoint run replacement that stayed cryptographically valid. A retained package signature keeps the staged transaction, which publishes the part and leaves the signature parts in place.
+
 ## HLD impact
 
 - `docs/hld/03-architecture.md`

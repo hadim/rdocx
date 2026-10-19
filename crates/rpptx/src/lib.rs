@@ -6096,6 +6096,16 @@ impl Presentation {
         if ppt_xml_known_owner_equivalent(before, xml.as_bytes())? {
             return Ok(true);
         }
+        // A retained package signature has to observe the forced part bytes.
+        // The local model write does not publish that part or the invalidation.
+        if self
+            .package
+            .package_rels
+            .get_by_type(rel_types::DIGITAL_SIGNATURE_ORIGIN)
+            .is_some()
+        {
+            return Ok(false);
+        }
         let part = owner.part();
         let path = match owner {
             PptXmlOwner::Shape(_, path)

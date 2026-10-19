@@ -93,9 +93,9 @@ children and does not recurse into tables.
 PowerPoint edits one child for `add_textbox` on a connector-free slide, for
 alt text, for non-connector geometry, for a non-blip shape fill, and for a
 shape XML replacement whose relationship facts and owner signature stay the
-same. A connector, a blip fill, a relationship change, a group refit, or a
-whole-part replacement keeps the staged package transaction. These local edits
-do not read unrelated slides.
+same. A connector, a blip fill, a relationship change, a group refit, a
+retained package signature, or a whole-part replacement keeps the staged
+package transaction. These local edits do not read unrelated slides.
 
 Word binding admission refuses PDF save paths, duplicate stored tab positions,
 page breaks in actual physical headers and malformed authored language values
