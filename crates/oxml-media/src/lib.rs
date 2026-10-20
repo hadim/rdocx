@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 /// Allocates collision-free numbered media part names.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MediaNamer {
     directory: String,
     stem: String,

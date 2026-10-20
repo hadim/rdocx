@@ -10555,6 +10555,39 @@ impl PyDocument {
         Ok(removed)
     }
 
+    /// Removes the direct body blocks `start` to `stop`, excluding `stop`, in
+    /// one publication, the counterpart of `insert_document`. Returns the
+    /// number of removed blocks. An empty range changes nothing.
+    fn remove_content_range(
+        &mut self,
+        py: Python<'_>,
+        start: usize,
+        stop: usize,
+    ) -> PyResult<usize> {
+        let count = self.inner.content_count();
+        if start > stop || stop > count {
+            return Err(PyIndexError::new_err(format!(
+                "content range {start}..{stop} is outside 0..{count}"
+            )));
+        }
+        if start == stop {
+            return Ok(0);
+        }
+        let mut candidate = self.inner.clone_for_staging();
+        let removed = py
+            .detach(|| candidate.try_remove_content_range(start..stop))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = self.prepare_word_revision(
+            py,
+            &candidate,
+            "Document.remove_content_range",
+            crate::document::WordPublication::Conservative,
+        )?;
+        self.commit_word_revision(prepared)?;
+        self.inner = candidate;
+        Ok(removed)
+    }
+
     fn find_content_index(
         slf: Py<Self>,
         py: Python<'_>,

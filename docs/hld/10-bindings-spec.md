@@ -764,6 +764,12 @@ unchanged. `pop_content` refuses a commented fragment rather than detaching
 anchors from their definitions. Native `Cell::try_set_text` exposes checked
 errors, while its legacy setter leaves the cell unchanged on refusal.
 
+`Document.remove_content_range(start, stop)` removes the direct body blocks
+from `start` up to `stop` in one staged publication and returns their count,
+the counterpart of `insert_document`. A range outside the body raises
+`IndexError` and an empty range publishes nothing. A refused comment cut in
+any block leaves the whole range, its handles and the package bytes unchanged.
+
 
 `Document.add_picture` accepts in-memory bytes, a safe filename, optional
 paired EMU dimensions, and an optional checked `StoryItem` placement. Omitted

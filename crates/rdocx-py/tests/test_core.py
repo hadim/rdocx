@@ -1818,6 +1818,59 @@ def test_failed_removal_does_not_stale_live_handles():
     assert held.text == "live"
 
 
+def test_remove_content_range_removes_body_blocks_in_one_publication():
+    import rdocx
+
+    doc = rdocx.Document()
+    for text in ("zero", "one", "two", "three", "four"):
+        doc.add_paragraph(text)
+    doc.add_table(1, 1)
+    held = doc.paragraphs[0]
+
+    assert doc.remove_content_range(1, 6) == 5
+    assert [paragraph.text for paragraph in doc.paragraphs] == ["zero"]
+    assert len(doc.tables) == 0
+    with pytest.raises(rdocx.StaleElementError):
+        _ = held.text
+
+    held = doc.paragraphs[0]
+    before = doc.to_bytes()
+    assert doc.remove_content_range(1, 1) == 0
+    for start, stop in ((0, 2), (1, 0)):
+        with pytest.raises(IndexError, match="content range"):
+            doc.remove_content_range(start, stop)
+    assert doc.to_bytes() == before
+    assert held.text == "zero"
+
+
+def test_remove_content_range_keeps_or_removes_whole_comment_threads():
+    import rdocx
+
+    def commented():
+        document = rdocx.Document()
+        for text in ("first", "last", "after"):
+            document.add_paragraph(text)
+        document.add_comment(rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=0, run_index=0),
+            end=rdocx.RunPosition(body_index=1, run_index=1),
+        ), author="Ada", text="spans two blocks")
+        return document
+
+    document = commented()
+    held = document.paragraphs[0]
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="comment"):
+        document.remove_content_range(0, 1)
+    assert document.to_bytes() == before
+    assert held.text == "first"
+
+    assert document.remove_content_range(0, 2) == 2
+    assert document.comments == ()
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.comments == ()
+    assert [paragraph.text for paragraph in reopened.paragraphs] == ["after"]
+
+
 def test_python_indexed_content_mutation_is_counted_and_atomic():
     import rdocx
 

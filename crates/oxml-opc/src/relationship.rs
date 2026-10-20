@@ -140,7 +140,7 @@ pub struct Relationship {
 }
 
 /// A collection of relationships parsed from a `.rels` file.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Relationships {
     pub items: Vec<Relationship>,
     next_id: u32,
