@@ -4247,6 +4247,137 @@ fn repeated_drawing_ids_in_one_part_do_not_block_document_open() {
     }
 }
 
+fn issue_390_media_state(document: &mut Document) -> (Vec<String>, Vec<String>) {
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let mut media = package
+        .parts
+        .keys()
+        .filter(|part| part.starts_with("/word/media/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    media.sort();
+    let mut relationships = package
+        .part_rels
+        .iter()
+        .flat_map(|(owner, relationships)| {
+            relationships
+                .items
+                .iter()
+                .map(move |relationship| format!("{owner} {}", relationship.rel_type))
+        })
+        .filter(|relationship| relationship.ends_with("/image"))
+        .collect::<Vec<_>>();
+    relationships.sort();
+    (media, relationships)
+}
+
+#[test]
+fn issue_390_remove_content_drops_the_image_relationship_and_media_of_its_picture() {
+    let picture = f_x204_picture_fixture(b"issue-390");
+    let mut document = Document::new();
+    document.add_paragraph("before");
+    document.add_picture(&picture, "a.png", Length::cm(2.0), Length::cm(2.0));
+    document.add_paragraph("after");
+    // embed_image keeps an image no element names yet, and keeps it.
+    document.embed_image(b"kept unused image", "unused.png");
+    let (media, relationships) = issue_390_media_state(&mut document);
+    assert_eq!(media.len(), 2, "{media:?}");
+    assert_eq!(relationships.len(), 2, "{relationships:?}");
+
+    // A popped picture keeps its relationship for its reinsertion.
+    let body = f254_story(&document, StoryKind::Body);
+    let popped = document
+        .remove_content_at(&f254_item(&document, &body, 1))
+        .unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_content(&ContentLocation::end(body), popped)
+        .unwrap();
+    assert_eq!(
+        issue_390_media_state(&mut document),
+        (media.clone(), relationships.clone())
+    );
+
+    document.set_header_image(&picture, "h.png", Length::cm(1.0), Length::cm(1.0));
+    assert!(document.remove_content(2));
+    let (kept_media, kept) = issue_390_media_state(&mut document);
+    assert_eq!(kept_media.len(), 2, "{kept_media:?}");
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    assert!(
+        kept.iter().any(|kept| kept.starts_with("/word/header")),
+        "{kept:?}"
+    );
+    let saved =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    assert!(
+        saved
+            .parts
+            .values()
+            .any(|part| part.as_slice() == b"kept unused image")
+    );
+    // Only the header picture and the unused image remain.
+    assert!(
+        saved
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .iter()
+            .filter(|relationship| {
+                relationship.rel_type == oxml_opc::relationship::rel_types::IMAGE
+            })
+            .all(|relationship| {
+                saved.get_part(&oxml_opc::OpcPackage::resolve_rel_target(
+                    "/word/document.xml",
+                    &relationship.target,
+                )) == Some(b"kept unused image".as_slice())
+            })
+    );
+    let relationships = saved.get_part_rels("/word/document.xml").unwrap();
+    for kept in [
+        oxml_opc::relationship::rel_types::STYLES,
+        oxml_opc::relationship::rel_types::HEADER,
+    ] {
+        assert!(relationships.get_by_type(kept).is_some(), "{kept}");
+    }
+    Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+}
+
+#[test]
+fn issue_390_remove_content_keeps_an_image_another_attribute_names() {
+    let picture = f_x204_picture_fixture(b"issue-390-vml");
+    let mut document = Document::new();
+    document.add_picture(&picture, "a.png", Length::cm(2.0), Length::cm(2.0));
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let id = package
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .get_by_type(oxml_opc::relationship::rel_types::IMAGE)
+        .unwrap()
+        .id
+        .clone();
+    // A second paragraph names the same image through VML o:relid only.
+    let main = word_part_xml(&package, "/word/document.xml");
+    let vml = format!(
+        r#"<w:p><w:r><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office" style="width:10pt;height:10pt"><v:imagedata o:relid="{id}"/></v:shape></w:pict></w:r></w:p><w:sectPr"#
+    );
+    package.set_part(
+        "/word/document.xml",
+        main.replacen("<w:sectPr", &vml, 1).into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut reopened = Document::from_bytes(bytes.get_ref()).unwrap();
+    assert!(reopened.remove_content(0));
+    let (media, relationships) = issue_390_media_state(&mut reopened);
+    assert_eq!(media.len(), 1);
+    assert_eq!(relationships.len(), 1);
+}
+
 #[test]
 fn an_edit_may_not_add_an_occurrence_of_a_repeated_drawing_id() {
     let mut document = Document::from_bytes(&repeated_drawing_id_package("7", false)).unwrap();
@@ -11477,6 +11608,48 @@ fn issue_243_both_reporter_style_packages_accept_every_style_mutator() {
         );
         let saved = document.to_bytes().unwrap();
         Document::from_bytes(&saved).unwrap();
+    }
+}
+
+#[test]
+fn issue_390_style_mutators_keep_latent_styles() {
+    const LATENT: &str = concat!(
+        r#"<w:latentStyles w:defLockedState="0" w:count="276">"#,
+        r#"<w:lsdException w:name="heading 1" w:uiPriority="9" w:qFormat="1"/></w:latentStyles>"#,
+    );
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+        Document::new().to_bytes().unwrap(),
+    ))
+    .unwrap();
+    let styles = word_part_xml(&package, "/word/styles.xml").replacen(
+        "</w:docDefaults>",
+        &format!("</w:docDefaults>{LATENT}"),
+        1,
+    );
+    assert!(styles.contains(LATENT));
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let mut source = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut source).unwrap();
+    let source = source.into_inner();
+
+    let mut added = Document::from_bytes(&source).unwrap();
+    added
+        .add_style(StyleBuilder::paragraph("Spare", "Spare").based_on("Normal"))
+        .unwrap();
+    let mut updated = Document::from_bytes(&source).unwrap();
+    updated
+        .set_style(StyleBuilder::paragraph("Normal", "Normal").priority(1))
+        .unwrap();
+    for (label, mut document) in [("add_style", added), ("set_style", updated)] {
+        let saved =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        let styles = word_part_xml(&saved, "/word/styles.xml");
+        let latent = styles
+            .find(LATENT)
+            .unwrap_or_else(|| panic!("{label}: {styles}"));
+        assert!(styles.find("</w:docDefaults>").unwrap() < latent, "{label}");
+        assert!(latent < styles.find("<w:style ").unwrap(), "{label}");
     }
 }
 
@@ -21126,7 +21299,7 @@ fn a_ranged_comment_reply_and_resolution_keep_one_intact_thread() {
     assert_eq!(comments.len(), 2);
     assert_eq!(comments[0].id(), comment_id);
     assert_eq!(comments[0].text(), "Please review");
-    assert!(comments[0].resolved());
+    assert_eq!(comments[0].resolved(), Some(true));
     assert_eq!(comments[1].id(), reply_id);
     assert_eq!(comments[1].text(), "Looks good");
     assert_eq!(comments[1].parent_id(), Some(comment_id));
@@ -21178,7 +21351,7 @@ fn comments_keep_standard_content_type_ids_dates_and_threads() {
             (reply, Some(second), Some("2026-09-16T11:00:00+01:00")),
         ]
     );
-    assert!(comments[0].resolved());
+    assert_eq!(comments[0].resolved(), Some(true));
 
     let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
     assert_eq!(
@@ -39502,7 +39675,10 @@ fn fragment_import_preserves_unmodeled_xml_and_reopens() {
     let comments = reopened.comments();
     assert_eq!(comments.len(), 4);
     assert_eq!(
-        comments.iter().filter(|comment| comment.resolved()).count(),
+        comments
+            .iter()
+            .filter(|comment| comment.resolved() == Some(true))
+            .count(),
         2
     );
     assert_eq!(
@@ -62477,13 +62653,14 @@ fn comment_moves_cover_related_owners_and_refuse_invalid_graphs_atomically() {
                 .parent_id(),
             Some(id)
         );
-        assert!(
+        assert_eq!(
             document
                 .comments()
                 .iter()
                 .find(|comment| comment.id() == id)
                 .unwrap()
-                .resolved()
+                .resolved(),
+            Some(true)
         );
         document.validate_comment_ownership().unwrap();
         document.move_comment_to_text(id, "RETURN", 0).unwrap();
@@ -401470,6 +401647,45 @@ fn fx201_even_story_creation_publishes_settings_and_owner_together() {
             .unwrap()
             .is_some()
     );
+}
+
+#[test]
+fn issue_390_validate_reports_a_header_relationship_to_a_non_xml_part() {
+    use rdocx::ValidationSeverity;
+    let mut source = Document::new();
+    source.add_paragraph("x");
+    source.set_header("kept header");
+    assert!(source.validate().unwrap().is_valid());
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "rId99",
+            oxml_opc::relationship::rel_types::HEADER,
+            "header9.bin",
+        );
+    package
+        .content_types
+        .add_override("/word/header9.bin", "application/octet-stream");
+    package.set_part("/word/header9.bin", b"not XML".to_vec());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let report = document.validate().unwrap();
+    let findings = report
+        .findings
+        .iter()
+        .filter(|finding| finding.message.starts_with("header relationship"))
+        .collect::<Vec<_>>();
+    assert_eq!(findings.len(), 1, "{:?}", report.findings);
+    assert_eq!(findings[0].severity, ValidationSeverity::Error);
+    assert_eq!(
+        findings[0].message,
+        "header relationship rId99 points at /word/header9.bin, which is not a WordprocessingML header part (content type application/octet-stream)"
+    );
+    assert!(!report.is_valid());
 }
 
 #[test]

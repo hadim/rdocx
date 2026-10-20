@@ -4665,6 +4665,29 @@ def test_comment_removal_paths_preserve_atomicity_and_revisions():
     assert held.text == "first"
 
 
+def test_comment_resolved_is_none_without_a_comments_extended_entry():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("A paragraph.")
+    document.add_comment_on_text("A paragraph.", author="A", text="note")
+    assert [comment.resolved for comment in document.comments] == [False]
+    source = zipfile.ZipFile(io.BytesIO(document.to_bytes()))
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as package:
+        for name in source.namelist():
+            if name == "word/commentsExtended.xml":
+                continue
+            data = source.read(name)
+            if name in ("word/_rels/document.xml.rels", "[Content_Types].xml"):
+                data = re.sub(rb"<(?:Relationship|Override) [^>]*commentsExtended[^>]*/>", b"", data)
+            package.writestr(name, data)
+    reopened = rdocx.Document.from_bytes(output.getvalue())
+    assert [comment.resolved for comment in reopened.comments] == [None]
+    assert rdocx.Comment(id=1, author=None, initials=None, date=None, text="",
+                         parent_id=None, resolved=None).resolved is None
+
+
 def test_comment_anchor_fields_preserve_constructor_compatibility():
     import rdocx
 

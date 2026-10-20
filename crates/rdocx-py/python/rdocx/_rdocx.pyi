@@ -194,7 +194,7 @@ class Comment:
         date: str | None,
         text: str,
         parent_id: int | None,
-        resolved: bool,
+        resolved: bool | None,
         anchor_text: str | None = None,
         anchor: StoryRunRange | None = None,
     ) -> Comment: ...
@@ -211,7 +211,7 @@ class Comment:
     @property
     def parent_id(self) -> int | None: ...
     @property
-    def resolved(self) -> bool: ...
+    def resolved(self) -> bool | None: ...
     @property
     def anchor_text(self) -> str | None: ...
     @property

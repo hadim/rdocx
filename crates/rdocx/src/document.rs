@@ -5838,6 +5838,35 @@ fn hdr_ftr_type_order(value: HdrFtrType) -> u8 {
     }
 }
 
+/// Every attribute value of an XML part, whatever its namespace, so that a
+/// relationship named by `r:embed`, `r:id`, `o:relid` or any producer
+/// attribute counts as referenced.
+fn xml_attribute_values(xml: &[u8]) -> Result<HashSet<String>> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut values = HashSet::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                for attribute in element.attributes() {
+                    let attribute = attribute
+                        .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+                    let value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+                    values.insert(value.into_owned());
+                }
+            }
+            Event::Eof => return Ok(values),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
 pub(crate) fn xml_relationship_ids_in_order(xml: &[u8]) -> Result<Vec<String>> {
     xml_relationship_ids_in_order_with_bindings(xml, &[])
 }
@@ -6527,6 +6556,19 @@ const FONT_TABLE_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml";
 const EMBEDDED_FONT_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.obfuscatedFont";
+/// Content types of an embedded face stored as a plain sfnt body, as Google
+/// Docs and LibreOffice write it. Such a part is read without de-obfuscation.
+const PLAIN_EMBEDDED_FONT_CONTENT_TYPES: [&str; 9] = [
+    "application/x-font-ttf",
+    "application/x-font-otf",
+    "application/x-font-truetype",
+    "application/x-font-opentype",
+    "application/font-sfnt",
+    "application/vnd.ms-opentype",
+    "font/ttf",
+    "font/otf",
+    "font/sfnt",
+];
 const DEFAULT_FONT_TABLE_XML: &str = concat!(
     r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
     r#"<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
@@ -26838,7 +26880,14 @@ impl Document {
             return Ok(false);
         }
         let mut candidate = self.clone_for_staging();
+        let referenced_before = xml_attribute_values(&candidate.document.to_xml()?)?;
         candidate.document.body.remove(index);
+        let referenced_after = xml_attribute_values(&candidate.document.to_xml()?)?;
+        candidate.release_unreferenced_images(
+            &candidate.doc_part_name.clone(),
+            &referenced_before,
+            &referenced_after,
+        );
         candidate.reconcile_comment_removal(self)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
@@ -28816,6 +28865,70 @@ impl Document {
             part_name,
             removed.iter().map(|relationship| relationship.id.clone()),
         );
+        self.remove_unreachable_image_parts(part_name, &removed);
+    }
+
+    /// Drop the image relationships of `owner` that the removed content named
+    /// and that no attribute of the owner names any more, with the media parts
+    /// they leave unreachable. A producer orphan, which the owner did not name
+    /// before the removal either, and every other relationship type stay.
+    fn release_unreferenced_images(
+        &mut self,
+        owner: &str,
+        referenced_before: &HashSet<String>,
+        referenced_after: &HashSet<String>,
+    ) {
+        let Some(relationships) = self.package.get_part_rels_mut(owner) else {
+            return;
+        };
+        let mut removed = Vec::new();
+        relationships.items.retain(|relationship| {
+            let released = relationship.rel_type == rel_types::IMAGE
+                && relationship_is_internal(relationship)
+                && referenced_before.contains(&relationship.id)
+                && !referenced_after.contains(&relationship.id);
+            if released {
+                removed.push(relationship.clone());
+            }
+            !released
+        });
+        if removed.is_empty() {
+            return;
+        }
+        if relationships.items.is_empty() {
+            self.package.remove_part_rels(owner);
+        }
+        if let Some(preserved) = self
+            .identifiers
+            .preserved_relationship_ids
+            .get_mut(&relationship_owner_identity(owner))
+        {
+            for relationship in &removed {
+                preserved.remove(&relationship.id);
+            }
+        }
+        self.identifiers.retire_authored_story_relationships(
+            owner,
+            removed.iter().map(|relationship| relationship.id.clone()),
+        );
+        for relationship in &removed {
+            self.identifiers
+                .preserved_part_names
+                .remove(&part_name_identity(&OpcPackage::resolve_rel_target(
+                    owner,
+                    &relationship.target,
+                )));
+        }
+        self.remove_unreachable_image_parts(owner, &removed);
+    }
+
+    /// Remove the internal image targets of removed relationships that no
+    /// relationship of the package reaches any more.
+    fn remove_unreachable_image_parts(
+        &mut self,
+        part_name: &str,
+        removed: &[oxml_opc::relationship::Relationship],
+    ) {
         let mut image_parts = removed
             .iter()
             .filter(|relationship| {
@@ -33253,10 +33366,11 @@ impl Document {
                     .embedded_fonts
                     .iter()
                     .map(|reference| {
-                        let (_, bytes) = self.checked_embedded_font_source(reference)?;
+                        let (part, bytes) = self.checked_embedded_font_source(reference)?;
                         Ok(EmbeddedFont {
                             kind: reference.kind.into(),
-                            data: deobfuscate_odttf_with_key(bytes, &reference.font_key)
+                            data: self
+                                .embedded_font_face(&part, bytes, &reference.font_key)
                                 .unwrap_or_default(),
                             font_key: reference.font_key.clone(),
                             subsetted: reference.subsetted.unwrap_or(false),
@@ -33304,6 +33418,45 @@ impl Document {
         &self,
         reference: &EmbeddedFontReference,
     ) -> Result<(String, &[u8])> {
+        let (part, bytes) = self.embedded_font_source(reference)?;
+        if self.embedded_font_storage(&part).is_none() {
+            return Err(Error::Other(
+                "embedded font part has an unsupported content type".to_owned(),
+            ));
+        }
+        Ok((part, bytes))
+    }
+
+    /// Whether a font part stores an obfuscated face (`Some(true)`), a plain
+    /// sfnt face (`Some(false)`), or neither.
+    fn embedded_font_storage(&self, part: &str) -> Option<bool> {
+        let content_type = self.package.content_types.content_type_for(part)?;
+        if content_type == EMBEDDED_FONT_CONTENT_TYPE {
+            Some(true)
+        } else {
+            PLAIN_EMBEDDED_FONT_CONTENT_TYPES
+                .iter()
+                .any(|plain| content_type.eq_ignore_ascii_case(plain))
+                .then_some(false)
+        }
+    }
+
+    /// The face bytes of a checked font part. A plain part is taken as it is
+    /// when it carries an sfnt header, whatever its key, and is otherwise
+    /// de-obfuscated like an obfuscated part.
+    fn embedded_font_face(&self, part: &str, body: &[u8], font_key: &str) -> Option<Vec<u8>> {
+        if self.embedded_font_storage(part) == Some(false) && looks_like_sfnt(body) {
+            let mut face = Vec::new();
+            face.try_reserve_exact(body.len()).ok()?;
+            face.extend_from_slice(body);
+            return Some(face);
+        }
+        deobfuscate_odttf_with_key(body, font_key)
+    }
+
+    /// Resolve an embedded font reference to its stored part, whatever its
+    /// content type.
+    fn embedded_font_source(&self, reference: &EmbeddedFontReference) -> Result<(String, &[u8])> {
         if reference.relationship_id.len() > 4096 || reference.font_key.len() > 4096 {
             return Err(Error::Other(
                 "embedded font metadata exceeds its bound".to_owned(),
@@ -33344,11 +33497,6 @@ impl Document {
             .keys()
             .find(|part| part.eq_ignore_ascii_case(&target))
             .ok_or_else(|| Error::Other("embedded font part is missing".to_owned()))?;
-        if self.package.content_types.content_type_for(part) != Some(EMBEDDED_FONT_CONTENT_TYPE) {
-            return Err(Error::Other(
-                "embedded font part has an unsupported content type".to_owned(),
-            ));
-        }
         Ok((
             part.clone(),
             self.package.get_part(part).expect("checked font part"),
@@ -33785,7 +33933,7 @@ impl Document {
         else {
             return Ok(None);
         };
-        let (_, data) = self.checked_embedded_font_source(reference)?;
+        let (part, data) = self.checked_embedded_font_source(reference)?;
         if data.len() > 64 * 1024 * 1024
             || reference.font_key.len() > 4096
             || reference
@@ -33799,7 +33947,9 @@ impl Document {
         }
         let removed = EmbeddedFont {
             kind,
-            data: deobfuscate_odttf_with_key(data, &reference.font_key).unwrap_or_default(),
+            data: self
+                .embedded_font_face(&part, data, &reference.font_key)
+                .unwrap_or_default(),
             font_key: reference.font_key.clone(),
             subsetted: reference.subsetted.unwrap_or(false),
             license: FontEmbeddingLicense {
@@ -37604,7 +37754,12 @@ impl Document {
         let mut alias_bytes = 0usize;
         for font in table.fonts() {
             for reference in &font.embedded_fonts {
-                let (part, body) = self.checked_embedded_font_source(reference)?;
+                let (part, body) = self.embedded_font_source(reference)?;
+                // A face of an unsupported content type is not loaded, so
+                // its text renders with the fallback face.
+                if self.embedded_font_storage(&part).is_none() {
+                    continue;
+                }
                 if body.len() > 64 * 1024 * 1024
                     || font.name.len() > 4096
                     || reference.font_key.len() > 4096
@@ -37654,7 +37809,7 @@ impl Document {
         for (part, key, aliases) in groups {
             let body = self.package.get_part(&part).expect("preflighted font part");
             // Unsupported producer bytes remain in the original package and use fallback.
-            if let Some(data) = deobfuscate_odttf_with_key(body, &key) {
+            if let Some(data) = self.embedded_font_face(&part, body, &key) {
                 sources.push((aliases, Arc::from(data)));
             }
         }
@@ -57546,6 +57701,84 @@ mod odttf_tests {
     }
 
     #[test]
+    fn issue_390_plain_embedded_face_reads_and_an_unsupported_one_falls_back() {
+        let body = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let mut source = Document::new();
+        source.add_paragraph("embedded");
+        source
+            .embed_font(
+                "Issue390 Face",
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Regular,
+                    body.to_vec(),
+                    "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+                    FontEmbeddingLicense::new(true, "OFL 1.1"),
+                ),
+            )
+            .unwrap();
+        let reference = source
+            .font_table
+            .as_ref()
+            .unwrap()
+            .fonts()
+            .iter()
+            .find(|font| font.name == "Issue390 Face")
+            .unwrap()
+            .embedded_fonts[0]
+            .clone();
+        let (part, _) = source.checked_embedded_font_source(&reference).unwrap();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap())).unwrap();
+        // Google Docs stores the face as is, under a null key.
+        package.set_part(&part, body.to_vec());
+        let font_table = String::from_utf8(
+            package
+                .get_part(source.font_table_part_name.as_deref().unwrap())
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap()
+        .replace(
+            "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+            "{00000000-0000-0000-0000-000000000000}",
+        );
+        package.set_part(
+            source.font_table_part_name.as_deref().unwrap(),
+            font_table.into_bytes(),
+        );
+        let with_type = |package: &mut OpcPackage, content_type: &str| {
+            package.content_types.add_override(&part, content_type);
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            Document::from_bytes(bytes.get_ref()).unwrap()
+        };
+
+        let plain = with_type(&mut package, "application/x-font-ttf");
+        let faces = plain
+            .try_fonts()
+            .unwrap()
+            .into_iter()
+            .find(|font| font.name == "Issue390 Face")
+            .unwrap()
+            .embedded_fonts;
+        assert_eq!(faces[0].data.as_slice(), body.as_slice());
+        let sources = plain.extract_embedded_fonts().unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(&*sources[0].1, body.as_slice());
+
+        let unsupported = with_type(&mut package, "application/octet-stream");
+        assert!(
+            unsupported
+                .try_fonts()
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported content type")
+        );
+        assert!(unsupported.extract_embedded_fonts().unwrap().is_empty());
+        unsupported.layout().unwrap();
+    }
+
+    #[test]
     fn fx220_word_faces_flags_and_atomic_invalid_inputs() {
         let body = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
         let mut document = Document::new();
@@ -59220,6 +59453,23 @@ fn validate_document_package(package: OpcPackage) -> Result<ValidationReport> {
                         "relationship {} points at missing part {target}",
                         rel.id
                     ));
+                    continue;
+                }
+                // Layout and the section stories skip a header or footer
+                // relationship to any other part, so its story is lost.
+                for kind in [HeaderFooterKind::Header, HeaderFooterKind::Footer] {
+                    let content_type = package.content_types.content_type_for(&target);
+                    if rel.rel_type == kind.relationship_type()
+                        && content_type != Some(kind.content_type())
+                    {
+                        errors.push(format!(
+                            "{} relationship {} points at {target}, which is not a WordprocessingML {} part (content type {})",
+                            kind.part_stem(),
+                            rel.id,
+                            kind.part_stem(),
+                            content_type.unwrap_or("none"),
+                        ));
+                    }
                 }
             }
         }
