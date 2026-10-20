@@ -173,18 +173,11 @@ pub(crate) enum ParagraphLocation {
 
 impl ParagraphLocation {
     fn refreshed(
-        document: &rdocx::Document,
+        document: &(impl crate::document::LocationSource + ?Sized),
         location: &rdocx::ContentLocation,
     ) -> rdocx::Result<rdocx::ContentLocation> {
-        let owner = location.story();
         let story = document
-            .stories()?
-            .into_iter()
-            .find(|s| {
-                s.kind() == owner.kind()
-                    && s.part_name() == owner.part_name()
-                    && s.owner_index() == owner.owner_index()
-            })
+            .current_story(location.story())?
             .ok_or_else(|| rdocx::Error::Other("rich paragraph owner disappeared".to_owned()))?;
         Ok(rdocx::ContentLocation::new(
             story,
@@ -195,10 +188,10 @@ impl ParagraphLocation {
 
     pub(crate) fn native(
         &self,
-        document: &rdocx::Document,
+        document: &(impl crate::document::LocationSource + ?Sized),
     ) -> rdocx::Result<rdocx::ContentLocation> {
         match self {
-            Self::Body(index) => document.paragraph_story_location(*index)?.ok_or_else(|| {
+            Self::Body(index) => document.body_paragraph_location(*index)?.ok_or_else(|| {
                 rdocx::Error::Other("paragraph has no checked physical owner".to_owned())
             }),
             Self::Cell {
@@ -206,7 +199,7 @@ impl ParagraphLocation {
                 row,
                 cell,
                 paragraph,
-            } => document.cell_paragraph_story_location(*table, *row, *cell, *paragraph),
+            } => document.cell_paragraph_location(*table, *row, *cell, *paragraph),
             Self::Related(location) => Self::refreshed(document, location),
         }
     }
@@ -432,7 +425,7 @@ impl PyParagraph {
         )?;
         {
             let document = self.document.borrow(py);
-            match location.native(&document.inner) {
+            match location.native(&*document) {
                 Ok(location) => {
                     let (path, owner) = document.capture_owner(
                         &crate::document::WordOwnerLocation::Paragraph(location),
@@ -527,7 +520,7 @@ impl PyParagraph {
         let location = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
         let native = location
-            .native(&document.inner)
+            .native(&*document)
             .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         let mut candidate = document.inner.clone_for_staging();
         let position = candidate
@@ -543,7 +536,7 @@ impl PyParagraph {
             "Paragraph.add_internal_hyperlink",
             crate::document::WordPublication::ParagraphAppend(
                 location
-                    .native(&document.inner)
+                    .native(&*document)
                     .map_err(|error| crate::rdocx_to_pyerr(py, error))?,
             ),
         )?;
@@ -570,7 +563,7 @@ impl PyParagraph {
             )?,
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.inner = candidate.into();
         Ok(result)
     }
 
@@ -636,7 +629,7 @@ impl PyParagraph {
                 operation,
                 crate::document::WordPublication::ParagraphAppend(
                     location
-                        .native(&document.inner)
+                        .native(&*document)
                         .map_err(|error| crate::rdocx_to_pyerr(py, error))?,
                 ),
             )?;
@@ -663,7 +656,7 @@ impl PyParagraph {
                 )?,
             )?;
             document.commit_word_revision(prepared)?;
-            document.inner = candidate;
+            document.inner = candidate.into();
             result
         };
         Ok(result)
@@ -821,12 +814,12 @@ impl PyParagraph {
             "Paragraph.add_equation",
             crate::document::WordPublication::ParagraphAppend(
                 location
-                    .native(&document.inner)
+                    .native(&*document)
                     .map_err(|error| crate::rdocx_to_pyerr(py, error))?,
             ),
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.inner = candidate.into();
         Ok(result)
     }
 
@@ -843,7 +836,7 @@ impl PyParagraph {
         let mut document = self.document.borrow_mut(py);
         match location {
             ParagraphLocation::Related(location) => {
-                let location = ParagraphLocation::refreshed(&document.inner, &location)
+                let location = ParagraphLocation::refreshed(&*document, &location)
                     .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
                 document.scoped_replacement(py, "Paragraph.replace_text", |document| {
                     document.try_replace_text_at(&location, old, new, expect)
@@ -903,12 +896,12 @@ impl PyParagraph {
             &candidate,
             "Paragraph.text",
             location
-                .native(&document.inner)
+                .native(&*document)
                 .map(crate::document::WordPublication::ParagraphText)
                 .unwrap_or(crate::document::WordPublication::Conservative),
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.inner = candidate.into();
         Ok(())
     }
 

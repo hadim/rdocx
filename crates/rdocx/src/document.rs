@@ -26727,6 +26727,181 @@ impl Document {
         )))
     }
 
+    /// Resolve every body paragraph at once, in [`Self::paragraphs`] order.
+    ///
+    /// Entry `i` is what [`Self::paragraph_story_location`] returns for `i`
+    /// when that is a location. `None` marks a paragraph that the single
+    /// lookup does not resolve, or resolves to an error; callers that cache
+    /// this inventory ask the single lookup for those. One call costs one
+    /// scan of the body, where a single lookup costs one scan per paragraph.
+    #[doc(hidden)]
+    pub fn paragraph_story_locations(&self) -> Result<Vec<Option<ContentLocation>>> {
+        let mut targets = HashMap::new();
+        for (slot, child) in self.document.body.content.iter().enumerate() {
+            match child {
+                BodyContent::Paragraph(paragraph) => {
+                    targets
+                        .entry(paragraph as *const CT_P)
+                        .or_insert((slot, None));
+                }
+                BodyContent::ContentControl(control) => {
+                    for (ordinal, paragraph) in control
+                        .content
+                        .iter()
+                        .filter_map(|child| match child {
+                            SdtContent::Paragraph(paragraph) => Some(paragraph),
+                            _ => None,
+                        })
+                        .enumerate()
+                    {
+                        targets
+                            .entry(paragraph as *const CT_P)
+                            .or_insert((slot, Some(ordinal)));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let story = self
+            .stories()?
+            .into_iter()
+            .find(|story| story.kind == StoryKind::Body)
+            .ok_or_else(|| Error::Other("document body story is missing".to_owned()))?;
+        let (source, owner) = self.story_source_and_owner(&story)?;
+        let items = scan_story_items(source.xml.as_ref(), &owner, None)?;
+        let direct = items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.direct_owner_child)
+            .collect::<Vec<_>>();
+        Ok(self
+            .document
+            .body
+            .paragraphs()
+            .map(|paragraph| {
+                let (slot, ordinal) = *targets.get(&(paragraph as *const CT_P))?;
+                let (item_index, item) = direct.get(slot)?;
+                let expected_kind = if ordinal.is_some() {
+                    StoryItemKind::ContentControl
+                } else {
+                    StoryItemKind::Paragraph
+                };
+                (item.kind == expected_kind).then(|| {
+                    ContentLocation::new(
+                        story.clone(),
+                        StoryItemKind::Paragraph,
+                        std::iter::once(*item_index).chain(ordinal).collect(),
+                    )
+                })
+            })
+            .collect())
+    }
+
+    /// Resolve the paragraphs of every body table cell at once, keyed by
+    /// (table, row, cell) as [`Self::cell_paragraph_story_location`] takes
+    /// them.
+    ///
+    /// A cell is present when the single lookup resolves its paragraphs; a
+    /// cell it refuses is absent, and callers that cache this inventory ask
+    /// the single lookup for it. The single lookup also reads each returned
+    /// paragraph back; this inventory leaves that check to the caller. One
+    /// call costs one serialization and one owner scan of the body, where a
+    /// single lookup costs them for each paragraph and rescans the body for
+    /// each cell owner before its target.
+    #[doc(hidden)]
+    pub fn cell_paragraph_story_locations(
+        &self,
+    ) -> Result<HashMap<(usize, usize, usize), Vec<ContentLocation>>> {
+        let mut candidate = self.clone_for_staging();
+        let mut addresses = HashMap::<*const CT_Tc, (usize, usize, usize)>::new();
+        for (table_index, table) in candidate.tables().into_iter().enumerate() {
+            for (row_index, row) in table.inner.rows.iter().enumerate() {
+                for (cell_index, cell) in row.cells.iter().enumerate() {
+                    addresses.entry(cell as *const CT_Tc).or_insert((
+                        table_index,
+                        row_index,
+                        cell_index,
+                    ));
+                }
+            }
+        }
+        let xml = candidate.document.to_xml()?;
+        let owners = scan_story_owners(&xml, StoryKind::Body)?;
+        let body = owners
+            .iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
+        let direct_items = direct_story_content_items(&xml, body)?;
+        let mut ordinals = HashMap::<usize, usize>::new();
+        let mut selected = Vec::new();
+        let mut seen = HashSet::new();
+        for owner in owners
+            .iter()
+            .filter(|owner| owner.kind == StoryKind::TableCell)
+        {
+            // The single lookup fails on the first owner it cannot route,
+            // whatever its target, so the inventory stops there too.
+            let Some((content, direct_item)) = direct_items.iter().enumerate().find(|(_, item)| {
+                item.full.start <= owner.full.start && owner.full.end <= item.full.end
+            }) else {
+                break;
+            };
+            if !matches!(
+                direct_item.kind,
+                StoryItemKind::Table | StoryItemKind::ContentControl
+            ) {
+                break;
+            }
+            let counter = ordinals.entry(content).or_insert(0);
+            let mut ordinal = *counter;
+            *counter += 1;
+            let modeled = match candidate.document.body.content.get_mut(content) {
+                Some(BodyContent::Table(table)) => nth_cell_in_table(table, &mut ordinal),
+                Some(BodyContent::ContentControl(control)) => {
+                    nth_cell_in_control(control, &mut ordinal)
+                }
+                _ => None,
+            };
+            let Some((pointer, count)) =
+                modeled.map(|cell| (&*cell as *const CT_Tc, cell.paragraphs().len()))
+            else {
+                continue;
+            };
+            let Some(address) = addresses.get(&pointer) else {
+                continue;
+            };
+            if !seen.insert(*address) {
+                continue;
+            }
+            let story = StoryId {
+                kind: owner.kind,
+                part_name: candidate.doc_part_name.clone(),
+                owner_index: owner.owner_index,
+                fingerprint: owner.fingerprint,
+            };
+            selected.push((*address, count, (story, owner.clone())));
+        }
+        let pairs = selected
+            .iter()
+            .map(|(_, _, pair)| pair.clone())
+            .collect::<Vec<_>>();
+        let spans = story_range_paragraph_spans(&xml, &pairs)?;
+        let mut result = HashMap::with_capacity(selected.len());
+        for ((address, count, _), mut paragraphs) in selected.into_iter().zip(spans) {
+            paragraphs.sort_by_key(|(_, span)| span.start);
+            if paragraphs.len() == count {
+                result.insert(
+                    address,
+                    paragraphs
+                        .into_iter()
+                        .map(|(location, _)| location)
+                        .collect(),
+                );
+            }
+        }
+        Ok(result)
+    }
+
     /// Return the direct body index of the table addressed by `table_index`.
     pub fn content_index_of_table(&self, table_index: usize) -> Option<usize> {
         let target = self.table(table_index)?.inner;
