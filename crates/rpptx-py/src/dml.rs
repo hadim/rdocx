@@ -673,7 +673,7 @@ impl PyFillFormat {
                     | rpptx::ColorTransform::AlphaModulation(_)
             )
         });
-        let opacity = ((1.0 - value) * 100_000.0).trunc() as i32;
+        let opacity = ((1.0 - value) * 100_000.0).round_ties_even() as i32;
         if opacity != 100_000 {
             transforms.push(rpptx::ColorTransform::Alpha(rpptx::Percent1000(opacity)));
         }
@@ -993,7 +993,7 @@ fn stop_position(position: f64) -> PyResult<i32> {
             "gradient stop position must be finite and from 0.0 to 1.0",
         ));
     }
-    Ok((position * 100_000.0).trunc() as i32)
+    Ok((position * 100_000.0).round_ties_even() as i32)
 }
 
 #[pyclass(name = "GradientStop")]

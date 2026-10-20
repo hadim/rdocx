@@ -149,6 +149,13 @@ impl CT_ConnectionShape {
         Ok(())
     }
 
+    /// Removes `p:style`, typed or not, so the connector draws only its
+    /// direct line and effects. Returns whether a style was present.
+    pub fn remove_style(&mut self) -> bool {
+        self.raw.typed_style = None;
+        self.raw.style.take().is_some()
+    }
+
     /// Sets the `idx` of the typed style's `a:effectRef`, the theme effect
     /// style the connector draws. Index 0 references no theme effect.
     ///

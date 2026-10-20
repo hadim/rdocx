@@ -12113,7 +12113,46 @@ impl Presentation {
         self.set_run_click(
             OPERATION,
             slide_index,
-            (shape_id, paragraph_index, run_index),
+            (shape_id, None, paragraph_index, run_index),
+            address.map(ShapeClickTarget::Address),
+        )
+    }
+
+    /// Points the click hyperlink of one text run in a table cell at an
+    /// external `address`, or removes it with `None`, as
+    /// [`Presentation::set_run_hyperlink`] does for an ordinary shape.
+    ///
+    /// The table is the graphic frame whose `p:cNvPr/@id` is `shape_id`,
+    /// inside groups too, and the cell is the zero-based `row` and `column`
+    /// of its grid. The relationship belongs to the slide that holds the
+    /// frame, as PowerPoint and python-pptx write it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_cell_run_hyperlink(
+        &mut self,
+        slide_index: usize,
+        shape_id: u32,
+        (row, column): (usize, usize),
+        paragraph_index: usize,
+        run_index: usize,
+        address: Option<&str>,
+    ) -> Result<()> {
+        const OPERATION: &str = "set cell run hyperlink";
+        self.require_slide_index(slide_index)?;
+        if address.is_some_and(|address| {
+            address.is_empty()
+                || address.chars().any(|character| {
+                    character.is_control() || matches!(character, '\u{FFFE}' | '\u{FFFF}')
+                })
+        }) {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                "a hyperlink address must be non-empty text without control characters",
+            ));
+        }
+        self.set_run_click(
+            OPERATION,
+            slide_index,
+            (shape_id, Some((row, column)), paragraph_index, run_index),
             address.map(ShapeClickTarget::Address),
         )
     }
@@ -12134,7 +12173,7 @@ impl Presentation {
         self.set_run_click(
             "set run target slide",
             slide_index,
-            (shape_id, paragraph_index, run_index),
+            (shape_id, None, paragraph_index, run_index),
             target_slide_index.map(ShapeClickTarget::Slide),
         )
     }
@@ -12199,7 +12238,7 @@ impl Presentation {
         &mut self,
         operation: &'static str,
         slide_index: usize,
-        (shape_id, paragraph_index, run_index): (u32, usize, usize),
+        (shape_id, cell, paragraph_index, run_index): RunLocation,
         target: Option<ShapeClickTarget<'_>>,
     ) -> Result<()> {
         let record = &self.slides[slide_index];
@@ -12233,9 +12272,17 @@ impl Presentation {
                     ),
                 )
             };
-            let body = find_shape_mut(&mut slide.common_slide_data.shape_tree.children, shape_id)
-                .and_then(|shape| shape.text_body.as_mut())
-                .ok_or_else(missing)?;
+            let children = &mut slide.common_slide_data.shape_tree.children;
+            let body = match cell {
+                None => {
+                    find_shape_mut(children, shape_id).and_then(|shape| shape.text_body.as_mut())
+                }
+                Some((row, column)) => find_table_mut(children, shape_id)
+                    .and_then(|table| table.rows.get_mut(row))
+                    .and_then(|row| row.cells.get_mut(column))
+                    .and_then(|cell| cell.text_body.as_mut()),
+            }
+            .ok_or_else(missing)?;
             let mut paragraph = TextFrame { body }
                 .into_paragraph_mut(paragraph_index)
                 .ok_or_else(missing)?;
@@ -14982,6 +15029,28 @@ fn find_shape(children: &[ShapeTreeChild], shape_id: u32) -> Option<&CT_Shape> {
         ShapeTreeChild::GroupShape(group) => find_shape(&group.children, shape_id),
         _ => None,
     })
+}
+
+/// The shape id, optional table cell `(row, column)`, paragraph and run of
+/// one regular text run on a slide.
+type RunLocation = (u32, Option<(usize, usize)>, usize, usize);
+
+fn find_table_mut(children: &mut [ShapeTreeChild], shape_id: u32) -> Option<&mut CT_Table> {
+    for child in children {
+        let id = child.non_visual_id();
+        match child {
+            ShapeTreeChild::GraphicFrame(frame) if id == Some(shape_id) => {
+                return frame.graphic_data.table_mut();
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                if let Some(table) = find_table_mut(&mut group.children, shape_id) {
+                    return Some(table);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn find_shape_mut(children: &mut [ShapeTreeChild], shape_id: u32) -> Option<&mut CT_Shape> {
@@ -22472,6 +22541,22 @@ impl<'a> ShapeMut<'a> {
         }
     }
 
+    /// Removes the `p:style` theme references of an ordinary shape or
+    /// connector, such as the accent line and fill `add_shape` writes, so
+    /// only direct formatting draws. A shape without one is unchanged.
+    pub fn remove_style(&mut self) -> Result<()> {
+        match self.leaf_mut() {
+            ShapeTreeChild::Shape(shape) => {
+                shape.remove_style();
+            }
+            ShapeTreeChild::Connector(connector) => {
+                connector.remove_style();
+            }
+            _ => return Err(self.unsupported("remove style")),
+        }
+        Ok(())
+    }
+
     /// Inserts or replaces one finite preset-geometry adjustment.
     fn set_adjust_value_leaf(&mut self, name: &str, value: f64) -> Result<()> {
         if !value.is_finite() {
@@ -23755,6 +23840,12 @@ impl<'a> TextFrame<'a> {
     /// [`CT_TextBody::set_text`] describes.
     pub fn set_text(&mut self, text: &str) {
         self.body.set_text(text);
+    }
+
+    /// Leaves one paragraph without runs, as [`CT_TextBody::clear`]
+    /// describes.
+    pub fn clear(&mut self) {
+        self.body.clear();
     }
 
     /// Replaces literal text in this text body only and returns the count.
@@ -28840,7 +28931,9 @@ fn field_paragraph(template: Option<&CT_TextBody>, mut field: CT_TextField) -> C
     if field.run_properties.is_none() {
         field.run_properties = properties;
     }
-    paragraph.set_text("");
+    // Any one-run text leaves the single run slot the field takes, with
+    // preserved content in place around it. Empty text would leave none.
+    paragraph.set_text(" ");
     if let Some(first) = paragraph.runs.first_mut() {
         *first = TextRun::Field(Box::new(field));
     }

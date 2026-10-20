@@ -1085,6 +1085,15 @@ impl PyShape {
         })
     }
 
+    /// Removes the shape's `p:style` theme references, such as the accent
+    /// line and fill `add_shape` and `add_connector` write, so only direct
+    /// formatting draws. A shape or connector without a direct line or fill
+    /// then draws none. python-pptx has no equivalent and its users remove
+    /// the element from `shape._element`.
+    fn remove_style(&self, py: Python<'_>) -> PyResult<()> {
+        self.edit(py, "Shape.remove_style", |shape| shape.remove_style())
+    }
+
     /// The shape element serialized on its own, as bytes.
     #[getter]
     fn xml<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
@@ -2392,6 +2401,42 @@ impl PyPlaceholderCollection {
     pub(crate) fn new(presentation: Py<PyPresentation>, path: ContentPath) -> Self {
         Self { presentation, path }
     }
+
+    /// Returns `(shape index, placeholder idx)` for every top-level
+    /// placeholder, in document order, or in `idx` order on a slide as
+    /// python-pptx `SlidePlaceholders` iterates.
+    fn members(&self, py: Python<'_>) -> PyResult<Vec<(usize, u32)>> {
+        let presentation = self.presentation.borrow(py);
+        validate_path(
+            py,
+            &presentation,
+            &self.path,
+            "placeholder collection",
+            ".placeholders",
+        )?;
+        let resolved = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("shape owner is absent"))?;
+        let owner = shape_owner(&resolved)?;
+        drop(presentation);
+        let count =
+            PyShapeCollection::new(self.presentation.clone_ref(py), self.path.clone()).len(py)?;
+        let presentation = self.presentation.borrow(py);
+        let mut members: Vec<(usize, u32)> = (0..count)
+            .filter_map(|index| {
+                presentation
+                    .inner
+                    .part_shape_at(owner, &[index])
+                    .ok()
+                    .and_then(|shape| shape.placeholder_idx())
+                    .map(|idx| (index, idx))
+            })
+            .collect();
+        if matches!(owner, rpptx::ShapeOwner::Slide(_)) {
+            members.sort_by_key(|&(_, idx)| idx);
+        }
+        Ok(members)
+    }
 }
 
 #[pymethods]
@@ -2420,6 +2465,20 @@ impl PyPlaceholderCollection {
             .ok_or_else(|| PyIndexError::new_err("placeholder index out of range"))?;
         drop(presentation);
         collection.item(py, shape_index)
+    }
+
+    fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
+        Ok(self.members(py)?.len())
+    }
+
+    fn __iter__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyIterator>> {
+        let collection = PyShapeCollection::new(self.presentation.clone_ref(py), self.path.clone());
+        let shapes = self
+            .members(py)?
+            .into_iter()
+            .map(|(index, _)| collection.item(py, index))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyList::new(py, shapes)?.try_iter()
     }
 }
 

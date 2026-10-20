@@ -1411,6 +1411,12 @@ impl CT_Shape {
         true
     }
 
+    /// Removes `p:style`, so the shape draws only its direct fill, line,
+    /// effects and font. Returns whether a style was present.
+    pub fn remove_style(&mut self) -> bool {
+        self.raw.style.take().is_some()
+    }
+
     /// Sets `p:style` to the theme references python-pptx writes for a new
     /// autoshape: the first theme line, the third theme fill, and the second
     /// theme effect in `accent1`, and the minor font in `lt1`.

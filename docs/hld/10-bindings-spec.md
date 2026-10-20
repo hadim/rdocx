@@ -776,10 +776,11 @@ occurs at the affected structural or text owner, with an explicit stale error
 when that owner is no longer valid. Pure-Python
 `Length`, `Inches`, `Pt`, `RGBColor`, and the `MSO_SHAPE`, `MSO_SHAPE_TYPE`,
 `MSO_CONNECTOR_TYPE`, and `MSO_FILL_TYPE` enumerations keep native inheritance
-outside the limited ABI. `MSO_SHAPE` carries the 181 python-pptx
+outside the limited ABI. `MSO_SHAPE` carries the 182 python-pptx
 `MSO_AUTO_SHAPE_TYPE` members whose preset rpptx can author, each with its
-preset name as `xml_value`. `UP_ARROW` is absent because the generated preset
-table has no `upArrow`.
+preset name as `xml_value`. The ECMA source of the generated preset table
+omits `upArrow`, so the generator adds it as the vertical mirror of
+`downArrow`.
 
 Presentation `Shape` handles expose optional `Length` values for left, top,
 width, and height plus optional non-visual id and name. Those values are the
@@ -888,9 +889,7 @@ assignment truncates as python-pptx does. `auto_shape_type` reads the
 first member in definition order when two share a preset. A picture reports
 its mask or `None`, and a shape without an auto-shape preset raises
 `ValueError`. Custom geometry raises too, as python-pptx does, although issue
-#217 asked for `None`. A shape with `prst="upArrow"` also raises `ValueError`,
-where python-pptx returns `UP_ARROW`. The generated preset table has no
-`upArrow`. rpptx accepts an `MSO_SHAPE` member or preset name to replace the
+#217 asked for `None`. rpptx accepts an `MSO_SHAPE` member or preset name to replace the
 geometry and reset adjustments. A text box or unsupported shape kind raises
 `ValueError`. An unknown preset raises `RpptxError`.
 
@@ -898,6 +897,10 @@ geometry and reset adjustments. A text box or unsupported shape kind raises
 connector style, or `None` without one. Writing 0 removes the theme effect,
 including a connector's shadow, while retaining its theme line style. The
 setter accepts an `int` only. A shape without a typed style refuses the write.
+`remove_style()` removes the `p:style` of an ordinary shape or connector, such
+as the accent line and fill `add_shape` writes, so only direct formatting
+draws. python-pptx has no such call. A shape without a style is unchanged and
+another shape kind raises.
 `xml` returns the shape element as bytes. A picture's `image` is a frozen
 `Image` snapshot, and `replace_image` changes only that picture through the
 native staged replacement. `crop_left`, `crop_top`, `crop_right`, and
@@ -1010,8 +1013,10 @@ the operation preserves them. Formatting and run-value edits preserve text
 identity. Failed or no-match edits do not retire scopes. `Cell.vertical_anchor`
 reads and writes the direct `a:tcPr` anchor, independently of
 `Cell.text_frame.vertical_anchor` on `a:bodyPr`. Both retain physical text
-handles. Cell hyperlink reads use the owning body, while assigning an internal
-slide target refuses before relationship mutation.
+handles. Cell hyperlink reads use the owning body. Assigning an address
+writes the external relationship on the slide that holds the table, as
+python-pptx does, while assigning an internal slide target refuses before
+relationship mutation.
 
 python-pptx has no public API to add or remove table rows and columns, and its
 users call `table._tbl.add_tr(height)`, which appends a row without cell
@@ -1047,7 +1052,8 @@ colour format, while the
 `Run.text` setter replaces only that run's text and preserves its typed and
 unmodelled properties. `Run.hyperlink` returns a live `Hyperlink` whose
 `address` reads the target of the run's `a:hlinkClick`, or `None`. Assigning
-an address goes through the native `set_run_hyperlink`, which reuses the
+an address goes through the native `set_run_hyperlink`, or
+`set_cell_run_hyperlink` for a run of a table cell, which reuses the
 slide's relationship to the same address and removes the old relationship
 once nothing on the slide names it, so retargeting does not grow the part.
 `None` or an empty string removes the hyperlink, as in python-pptx, an address
@@ -1089,6 +1095,11 @@ place and do not advance the revision. `rpptx` and `rpptx.enum.text` export
   `auto_number` selects the concrete scheme and optional start instead.
   `bullet_char` is a checked alias with the same str, bool or None contract,
   including clear/no-op behavior and atomic invalid-value refusal.
+- `TextFrame.clear()` keeps the first paragraph with its `a:pPr` and
+  `a:endParaRPr`, removes its runs, breaks and fields, and removes every other
+  paragraph, as python-pptx does. Assigning empty text to a text frame or a
+  paragraph likewise leaves a paragraph without runs, so the next appended run
+  is the first one.
 - `Paragraph.add_run(text="")` stages an append and allocates the new returned
   run against prepared successor scopes before publication. An append moves
   no earlier sibling, so the owning paragraph, its text frame and its earlier
@@ -4020,8 +4031,9 @@ reads Length or None. Font.language, east_asian_name and complex_script_name
 read direct source values. Paragraph.auto_number accepts any of the41 admitted
 DrawingML schemes with start_at from1 to32767. bullet_color, bullet_size and
 bullet_font remain independently editable. Fractional bullet size accepts
-0.25 to4.0, while an imported absolute point size reads None without implying
-a follows-text policy. Table first_row, last_row, first_col, last_col,
+0.25 to4.0 and writes `a:buSzPct`. A `Length` from 1 to 4000 points writes
+`a:buSzPts`, rounded to the nearest hundredth of a point, and an absolute
+size reads back as a `Length`. Table first_row, last_row, first_col, last_col,
 horz_banding, vert_banding and style_id preserve grid and cell ownership.
 
 FillFormat.gradient_stops exposes checked live stops with runtime identity

@@ -3956,7 +3956,23 @@ impl CT_TextParagraph {
     /// formats the new run with its end-of-paragraph properties, without
     /// their hyperlinks, as PowerPoint formats text typed into an empty
     /// paragraph.
+    ///
+    /// Empty text leaves the paragraph without runs, as python-pptx writes
+    /// it, so the next appended run is the first one. The first regular
+    /// run's direct formatting becomes the end-of-paragraph properties when
+    /// the paragraph has none, as PowerPoint keeps the formatting of text it
+    /// deletes, so the empty line keeps its height and later text its look.
     pub fn set_text(&mut self, text: &str) {
+        if text.is_empty() {
+            if self.end_properties.is_none() {
+                self.end_properties = self.runs.iter().find_map(|run| match run {
+                    TextRun::Run(run) => run.properties.clone(),
+                    TextRun::Break(_) | TextRun::Field(_) => None,
+                });
+            }
+            self.clear_runs();
+            return;
+        }
         let old_run_count = self.runs.len();
         let retained_run = self.runs.iter().find_map(|run| match run {
             TextRun::Run(run) => Some(run.clone()),
@@ -3986,6 +4002,29 @@ impl CT_TextParagraph {
         run.set_text(text);
         self.runs = vec![TextRun::Run(run)];
         self.split_line_breaks(text);
+    }
+
+    /// Removes every run, line break and field, keeping the paragraph
+    /// properties, the end-of-paragraph properties and unmodelled children,
+    /// as python-pptx `_Paragraph.clear` does. Content preserved between or
+    /// after the old runs stays before the end-of-paragraph properties.
+    pub fn clear_runs(&mut self) {
+        let old_run_count = self.runs.len();
+        let mut raw_children = OrderedRawChildren::default();
+        for boundary in 0..=2 + old_run_count {
+            let new_boundary = if boundary <= 1 {
+                boundary
+            } else if boundary <= 1 + old_run_count {
+                1
+            } else {
+                2
+            };
+            for child in self.raw_children.at(boundary) {
+                raw_children.push(new_boundary, child.to_vec());
+            }
+        }
+        self.raw_children = raw_children;
+        self.runs.clear();
     }
 
     /// Splits the one run `set_text` leaves at each vertical tab of `text`.
@@ -4606,6 +4645,36 @@ mod tests {
         TextAutoNumberScheme, TextBullet, TextBulletCharacter, TextBulletChoice,
         TextBulletSizeValue,
     };
+
+    #[test]
+    fn empty_text_leaves_no_run_and_keeps_the_run_formatting_at_the_end() {
+        let mut paragraph = CT_TextParagraph::from_xml(
+            br#"<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:pPr algn="ctr"/><a:r><a:rPr b="1"/><a:t>old</a:t></a:r><a:br/><a:r><a:t>more</a:t></a:r></a:p>"#,
+        )
+        .unwrap();
+        paragraph.set_text("");
+        assert!(paragraph.runs.is_empty());
+        assert_eq!(
+            String::from_utf8(paragraph.to_xml().unwrap()).unwrap(),
+            r#"<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:pPr algn="ctr"/><a:endParaRPr b="1"/></a:p>"#
+        );
+        paragraph.set_text("new");
+        assert!(
+            String::from_utf8(paragraph.to_xml().unwrap())
+                .unwrap()
+                .contains(r#"<a:r><a:rPr b="1"/><a:t>new</a:t></a:r><a:endParaRPr b="1"/>"#)
+        );
+        let mut kept = CT_TextParagraph::from_xml(
+            br#"<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:r><a:rPr b="1"/><a:t>old</a:t></a:r><a:endParaRPr sz="1200"/></a:p>"#,
+        )
+        .unwrap();
+        kept.clear_runs();
+        kept.set_text("");
+        assert_eq!(
+            String::from_utf8(kept.to_xml().unwrap()).unwrap(),
+            r#"<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:endParaRPr sz="1200"/></a:p>"#
+        );
+    }
 
     #[test]
     fn fx205_language_edits_preserve_other_attributes_and_font_source() {
