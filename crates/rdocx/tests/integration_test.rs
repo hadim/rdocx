@@ -25776,4 +25776,96 @@ fn issue_391_default_paragraph_properties_round_trip() {
     assert_eq!(read.line_spacing, Some(rdocx::Twips(276)));
     assert_eq!(read.line_rule.as_deref(), Some("auto"));
     assert_eq!(reopened.default_font_name(), document.default_font_name());
+
+/// tensorbee/rdocx#398: the batched inventories that the Python binding
+/// caches return what the single lookups return, across direct paragraphs,
+/// block content controls, a controlled table, nested tables and a cell with
+/// several paragraphs.
+#[test]
+fn batched_paragraph_locations_match_the_single_lookups() {
+    fn p(text: &str) -> String {
+        format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>")
+    }
+    fn table(cells: &[&[String]]) -> String {
+        let grid = "<w:gridCol w:w=\"2000\"/>".repeat(cells[0].len());
+        let rows = cells
+            .iter()
+            .map(|row| {
+                let cells = row
+                    .iter()
+                    .map(|cell| format!("<w:tc>{cell}</w:tc>"))
+                    .collect::<String>();
+                format!("<w:tr>{cells}</w:tr>")
+            })
+            .collect::<String>();
+        format!("<w:tbl><w:tblGrid>{grid}</w:tblGrid>{rows}</w:tbl>")
+    }
+    let nested = table(&[&[p("n00"), p("n01")], &[p("n10"), p("n11")]]);
+    let body = [
+        p("first"),
+        format!(
+            "<w:sdt><w:sdtContent>{}{}</w:sdtContent></w:sdt>",
+            p("controlled one"),
+            p("controlled two")
+        ),
+        table(&[
+            &[p("a00"), format!("{}{}", p("a01 one"), p("a01 two"))],
+            &[format!("{}{nested}{}", p("a10"), p("a10 after")), p("a11")],
+        ]),
+        p("between"),
+        format!(
+            "<w:sdt><w:sdtContent>{}</w:sdtContent></w:sdt>",
+            table(&[&[p("c00"), p("c01")]])
+        ),
+        table(&[&[p("b00")], &[p("b10")]]),
+        p("last"),
+    ]
+    .concat();
+    let mut seed = Document::new();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let start = xml.find("<w:body>").unwrap() + "<w:body>".len();
+    let end = xml.find("<w:sectPr").unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!("{}{body}{}", &xml[..start], &xml[end..]).into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+    let batched = document.paragraph_story_locations().unwrap();
+    assert_eq!(batched.len(), document.paragraphs().len());
+    assert!(batched.iter().filter(|location| location.is_some()).count() >= 5);
+    for (index, location) in batched.iter().enumerate() {
+        let single = document.paragraph_story_location(index).ok().flatten();
+        assert_eq!(location.as_ref(), single.as_ref(), "body paragraph {index}");
+    }
+
+    let cells = document.cell_paragraph_story_locations().unwrap();
+    let mut resolved = 0;
+    for (table_index, table) in document.tables().iter().enumerate() {
+        for row in 0..table.row_count() {
+            let mut column = 0;
+            while let Some(cell) = table.cell(row, column) {
+                let single = (0..cell.paragraphs().count())
+                    .map(|paragraph| {
+                        document
+                            .cell_paragraph_story_location(table_index, row, column, paragraph)
+                            .ok()
+                    })
+                    .collect::<Option<Vec<_>>>();
+                assert_eq!(
+                    cells.get(&(table_index, row, column)),
+                    single.as_ref(),
+                    "cell {table_index} {row} {column}"
+                );
+                resolved += usize::from(single.is_some());
+                column += 1;
+            }
+        }
+    }
+    assert_eq!(cells.len(), resolved);
+    assert!(resolved >= 7);
 }

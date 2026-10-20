@@ -1251,6 +1251,79 @@ def test_python_story_inventory_scales_linearly():
     )
 
 
+def _table_document(table_count, paragraphs_per_table=5):
+    import rdocx
+
+    body = []
+    for table in range(table_count):
+        for index in range(paragraphs_per_table):
+            body.append(f"<w:p><w:r><w:t>body {table} {index}</w:t></w:r></w:p>")
+        rows = "".join(
+            "<w:tr>"
+            + "".join(
+                f"<w:tc><w:p><w:r><w:t>cell {table} {row} {cell}</w:t></w:r></w:p></w:tc>"
+                for cell in range(3)
+            )
+            + "</w:tr>"
+            for row in range(3)
+        )
+        grid = '<w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>'
+        body.append(f"<w:tbl>{grid}{rows}</w:tbl>")
+    body.append("<w:p><w:r><w:t>end</w:t></w:r></w:p>")
+    return _replace_document_body(rdocx.Document(), "".join(body))
+
+
+def _handle_walk(document):
+    paragraphs = document.paragraphs
+    texts = [paragraphs[index].text for index in range(len(paragraphs))]
+    for table in document.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                texts.extend(paragraph.text for paragraph in cell.paragraphs)
+    return texts
+
+
+def test_paragraph_and_cell_handles_cost_does_not_grow_with_the_document():
+    # tensorbee/rdocx#398: each handle rescanned (cell paragraphs reserialized)
+    # the whole body, so a walk grew with the square of the document or more.
+    def timed_walk(table_count):
+        document = _table_document(table_count)
+        started = time.perf_counter()
+        texts = _handle_walk(document)
+        return time.perf_counter() - started, texts
+
+    small_elapsed, small_texts = timed_walk(4)
+    large_elapsed, large_texts = timed_walk(16)
+
+    assert len(large_texts) == 4 * (len(small_texts) - 1) + 1
+    assert large_texts[-1] == "cell 15 2 2"
+    assert large_elapsed <= small_elapsed * 6.0 + 0.05, (
+        f"four times the document took {large_elapsed / small_elapsed:.2f} times longer"
+    )
+
+
+def test_handles_read_the_current_document_after_edits():
+    import rdocx
+
+    document = _table_document(2, paragraphs_per_table=2)
+    before = _handle_walk(document)
+    assert before[:2] == ["body 0 0", "body 0 1"]
+    assert "cell 1 2 2" in before
+
+    document.paragraphs[0].text = "renamed"
+    document.insert_paragraph(0, "first")
+    document.tables[1].add_row()
+    document.tables[1].rows[3].cells[0].text = "new cell"
+    document.tables[0].rows[0].cells[0].add_paragraph("second in cell")
+
+    after = _handle_walk(document)
+    assert after[:3] == ["first", "renamed", "body 0 1"]
+    assert after[after.index("cell 0 0 0") + 1] == "second in cell"
+    assert "new cell" in after
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert _handle_walk(reopened) == after
+
+
 def test_update_fields_on_open_sets_clears_and_removes_the_setting():
     import rdocx
 

@@ -69,7 +69,7 @@ impl PyRun {
         )?;
         {
             let document = self.document.borrow(py);
-            match paragraph.native(&document.inner) {
+            match paragraph.native(&*document) {
                 Ok(location) => {
                     let (path, owner) = document.capture_owner(
                         &crate::document::WordOwnerLocation::Run(location, self.run_path.clone()),
@@ -173,7 +173,7 @@ impl PyRun {
                 paragraph.edit_run(&self.run_path, edit)
             })
             .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-        document.inner = candidate;
+        document.inner = candidate.into();
         Ok(())
     }
 }
@@ -309,7 +309,7 @@ impl PyRun {
         let mut document = self.document.borrow_mut(py);
         let position = rdocx::StoryRunPosition {
             location: location
-                .native(&document.inner)
+                .native(&*document)
                 .map_err(|error| crate::rdocx_to_pyerr(py, error))?,
             run_index: index + 1,
         };
@@ -338,7 +338,7 @@ impl PyRun {
             },
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.inner = candidate.into();
         Ok(result)
     }
 
@@ -408,7 +408,7 @@ impl PyRun {
             crate::document::WordPublication::Conservative,
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.inner = candidate.into();
         Ok(())
     }
 
@@ -427,7 +427,7 @@ impl PyRun {
             crate::document::WordPublication::Conservative,
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.inner = candidate.into();
         Ok(())
     }
 
