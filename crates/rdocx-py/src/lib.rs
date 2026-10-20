@@ -14,11 +14,12 @@ use oxml_py_support::StaleElementError;
 
 use document::{
     PyBookmark, PyBoundingBox, PyChart, PyComment, PyComparisonDiagnostic, PyContentFragment,
-    PyCoreProperties, PyDocument, PyFieldEvaluation, PyFieldsUpdateReport, PyHeaderFooter,
-    PyHeaderFooterVariant, PyHyperlink, PyLayoutBackedFieldUpdateReport, PyLayoutFragment,
-    PyLayoutPage, PyListLevel, PyNote, PyRevision, PyRunPosition, PyRunRange, PySection,
-    PySectionHandle, PySettings, PyStory, PyStoryItem, PyStoryRunPosition, PyStoryRunRange,
-    PyStyle, PySvgDiagnostic, PySvgRenderResult, PyTocRebuildReport,
+    PyCoreProperties, PyDefaultParagraphFormat, PyDocument, PyFieldEvaluation,
+    PyFieldsUpdateReport, PyHeaderFooter, PyHeaderFooterVariant, PyHyperlink,
+    PyLayoutBackedFieldUpdateReport, PyLayoutFragment, PyLayoutPage, PyListLevel, PyNote,
+    PyRevision, PyRunPosition, PyRunRange, PySection, PySectionHandle, PySettings, PyStory,
+    PyStoryItem, PyStoryRunPosition, PyStoryRunRange, PyStyle, PySvgDiagnostic, PySvgRenderResult,
+    PyTocRebuildReport,
 };
 use formatting::{PyColorFormat, PyFont, PyParagraphFormat};
 use paragraph::{PyParagraph, PyParagraphCollection};
@@ -198,6 +199,7 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySettings>()?;
     module.add_class::<PyNote>()?;
     module.add_class::<PyStyle>()?;
+    module.add_class::<PyDefaultParagraphFormat>()?;
     module.add_class::<PyListLevel>()?;
     module.add_class::<PyChart>()?;
     module.add_class::<PyParagraph>()?;

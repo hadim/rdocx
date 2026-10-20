@@ -78,7 +78,7 @@ __all__ = [
     "validate_bytes",
     "validate_file",
     "Bookmark", "BoundingBox", "Cell", "CellCollection", "CellParagraphCollection",
-    "Chart", "Comment", "ComparisonDiagnostic", "ContentFragment", "CoreProperties", "Document", "Font", "ColorFormat",
+    "Chart", "Comment", "ComparisonDiagnostic", "ContentFragment", "CoreProperties", "DefaultParagraphFormat", "Document", "Font", "ColorFormat",
     "FootnoteEndnote", "HeaderFooter", "SectionHandle", "Settings",
     "HeaderFooterVariant", "Hyperlink", "FieldEvaluation", "FieldsUpdateReport", "LayoutBackedFieldUpdateReport", "LayoutFragment", "LayoutPage", "ListLevel", "Paragraph", "ParagraphCollection",
     "ParagraphFormat", "Revision", "Row", "RowCollection", "Run", "RunCollection", "RunPosition",
@@ -435,9 +435,18 @@ class StoryItem:
     @property
     def text(self) -> str | None: ...
     @property
-    def xml(self) -> bytes: ...
+    def xml(self) -> bytes:
+        """The item's XML, declaring the namespaces in scope, so it parses alone."""
     @property
     def revision(self) -> int: ...
+    @property
+    def paragraph(self) -> Paragraph | None:
+        """A `Paragraph` handle on this paragraph item, in any story, a text box among them.
+
+        `None` for another kind of item or for one not read from a document.
+        In a text box that Word writes twice, as a DrawingML shape and a VML
+        fallback, a format edit reaches only the copy this item lists.
+        """
 
 
 @_final
@@ -778,6 +787,17 @@ class Style:
 
 
 @_final
+class DefaultParagraphFormat:
+    def __new__(cls, *, _private: _Never) -> DefaultParagraphFormat: ...
+    @property
+    def space_before(self) -> _shared.Length | None: ...
+    @property
+    def space_after(self) -> _shared.Length | None: ...
+    @property
+    def line_spacing(self) -> _shared.Length | float | None: ...
+
+
+@_final
 class Chart:
     def __new__(cls, *, _private: _Never) -> Chart: ...
     @property
@@ -974,6 +994,35 @@ class Document:
     def default_font_size(self) -> _shared.Length | None: ...
     @default_font_size.setter
     def default_font_size(self, value: _shared.Length | int | None) -> None: ...
+    @property
+    def default_paragraph_format(self) -> DefaultParagraphFormat:
+        """A snapshot of the document default paragraph format, `w:pPrDefault`."""
+    def set_default_paragraph_format(
+        self,
+        *,
+        space_before: int | None = None,
+        space_after: int | None = None,
+        line_spacing: _shared.Length | float | None = None,
+    ) -> None:
+        """Update the supplied document default paragraph formatting.
+
+        The keywords mean what they mean to `set_style`: lengths are EMU, a
+        float line spacing is a multiple of single spacing and a length is
+        an exact pitch. Unspecified properties keep their values.
+        """
+    @property
+    def part_names(self) -> tuple[str, ...]:
+        """The names of the package parts, each absolute, sorted.
+
+        Relationship parts and `[Content_Types].xml` are not listed.
+        """
+    def part_xml(self, part_name: str) -> str:
+        """The XML of one package part as a save would write it now.
+
+        Read-only. It reflects every edit since the document was opened.
+        `part_name` may omit its leading slash. Raises `KeyError` when no
+        such part exists and `RdocxError` when the part is not XML.
+        """
     def __new__(cls, path: _Path | _BinaryIO | None = None) -> Document: ...
     @staticmethod
     def open(path: _Path | _BinaryIO) -> Document: ...

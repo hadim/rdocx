@@ -402,6 +402,11 @@ outline_level and bidi, with checked input and retained foreign payload.
 
 `Document.default_font_name` and `default_font_size` edit docDefaults without
 restyling Normal. Size uses Length or integer EMU and returns Length or None.
+`Document.set_default_paragraph_format` edits `w:pPrDefault` with the
+`space_before`, `space_after` and `line_spacing` keywords of `set_style`, and
+`default_paragraph_format` returns a frozen `DefaultParagraphFormat` snapshot of
+them. `Document.part_names` lists the package parts and `part_xml(name)` returns
+one part's XML as a save would write it now, read-only.
 `add_style` and `set_style` accept alignment, line_spacing, underline,
 keep_with_next, keep_together, page_break_before, borders, shading and tab_stops
 in addition to their existing arguments. Omitted values retain source, and
@@ -698,6 +703,10 @@ path of `Document::paragraph_story_location`, the control's story item index
 then the paragraph's position among the control's paragraphs. Comment positions
 and scoped paragraph replacement accept this path. Both paragraph-handle positions and returned comment
 endpoints carry checked accepted paragraph text and nonempty paragraph XML.
+Every `StoryItem.xml` declares the namespaces in scope at the item, as
+`Paragraph.xml` does, so it parses alone. `StoryItem.paragraph` is a
+`Paragraph` handle on a paragraph item of any story, a text box among them, or
+`None` for another kind of item or one not read from a document.
 `Document.add_comment` accepts either range form.
 `Document.add_comment_on_text` comments on the zero-based occurrence of an
 exact text in the main story without run index bookkeeping. The original

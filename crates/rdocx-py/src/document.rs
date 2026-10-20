@@ -914,6 +914,8 @@ pub struct PyStoryItem {
     xml: Vec<u8>,
     revision: u64,
     binding: Option<oxml_py_support::ContentPath>,
+    /// The document that listed this item. A caller-built item has none.
+    document: Option<std::sync::Arc<Py<PyDocument>>>,
 }
 
 #[pymethods]
@@ -938,6 +940,7 @@ impl PyStoryItem {
             xml: xml.unwrap_or_default().to_vec(),
             revision,
             binding: None,
+            document: None,
         }
     }
 
@@ -974,6 +977,31 @@ impl PyStoryItem {
     #[getter]
     fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// A `Paragraph` handle on this paragraph item, in any story, or `None`
+    /// for another kind of item or one not read from a document.
+    #[getter]
+    fn paragraph(&self, py: Python<'_>) -> PyResult<Option<Py<PyParagraph>>> {
+        let (Some(document), "paragraph", [index, ..]) = (
+            &self.document,
+            self.kind.as_str(),
+            self.index_path.as_slice(),
+        ) else {
+            return Ok(None);
+        };
+        let document = document.clone_ref(py);
+        let (location, path) = {
+            let owner = document.borrow(py);
+            let location = owner.native_location(py, self)?;
+            let path = owner.revisions.capture(smallvec![PathSeg::Para(*index)]);
+            (location, path)
+        };
+        Py::new(
+            py,
+            PyParagraph::for_story(document, path, location).bind_current(py, None)?,
+        )
+        .map(Some)
     }
 }
 
@@ -2608,6 +2636,65 @@ impl PySection {
     }
 }
 
+/// A snapshot of the document default paragraph format, `w:pPrDefault`.
+#[pyclass(name = "DefaultParagraphFormat", frozen, skip_from_py_object)]
+pub struct PyDefaultParagraphFormat {
+    space_before: Option<rdocx::Length>,
+    space_after: Option<rdocx::Length>,
+    line_spacing: Option<rdocx::Length>,
+    line_spacing_multiple: Option<f64>,
+}
+
+impl PyDefaultParagraphFormat {
+    fn from_properties(properties: Option<&rdocx::CT_PPr>) -> Self {
+        let length = |twips: rdocx::Twips| rdocx::Length::emu(i64::from(twips.0) * 635);
+        let properties = properties.cloned().unwrap_or_default();
+        // An absent rule is `auto`, a multiple of single line spacing.
+        let multiple = properties
+            .line_rule
+            .as_deref()
+            .is_none_or(|rule| rule == "auto");
+        Self {
+            space_before: properties.space_before.map(length),
+            space_after: properties.space_after.map(length),
+            line_spacing: properties.line_spacing.filter(|_| !multiple).map(length),
+            line_spacing_multiple: properties
+                .line_spacing
+                .filter(|_| multiple)
+                .map(|value| f64::from(value.0) / 240.0),
+        }
+    }
+}
+
+#[pymethods]
+impl PyDefaultParagraphFormat {
+    #[getter]
+    fn space_before(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.space_before
+            .map(|value| crate::length_object(py, value))
+            .transpose()
+    }
+
+    #[getter]
+    fn space_after(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.space_after
+            .map(|value| crate::length_object(py, value))
+            .transpose()
+    }
+
+    /// A `Length` for an exact or at-least line pitch, a float for a
+    /// multiple of single line spacing, as `ParagraphFormat.line_spacing`.
+    #[getter]
+    fn line_spacing(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        if let Some(value) = self.line_spacing {
+            return crate::length_object(py, value).map(Some);
+        }
+        Ok(self
+            .line_spacing_multiple
+            .map(|value| PyFloat::new(py, value).into_any().unbind()))
+    }
+}
+
 #[pyclass(name = "Style", frozen, get_all, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct PyStyle {
@@ -2794,6 +2881,7 @@ impl PyListLevel {
 /// The formatting `Document.add_style` gives a new style. Lengths and the
 /// font size are EMU, as `Length` values are, and `None` leaves a property to
 /// the style's base.
+#[derive(Default)]
 struct StyleFormatting {
     font_name: Option<String>,
     font_size: Option<i64>,
@@ -6262,6 +6350,7 @@ impl PyDocument {
         py: Python<'_>,
         position: &rdocx::StoryRunPosition,
         items: &mut HashMap<rdocx::ContentLocation, rdocx::StoryItemSnapshot>,
+        document: &std::sync::Arc<Py<PyDocument>>,
     ) -> PyResult<PyStoryRunPosition> {
         if !items.contains_key(&position.location) {
             let snapshot = self
@@ -6281,6 +6370,7 @@ impl PyDocument {
                 xml: item.xml().to_vec(),
                 revision: self.revisions.current(),
                 binding: Some(self.capture_snapshot(smallvec![])?),
+                document: Some(document.clone()),
             },
             run_index: position.run_index,
         })
@@ -6290,10 +6380,11 @@ impl PyDocument {
         &self,
         py: Python<'_>,
         location: &rdocx::ContentLocation,
+        document: std::sync::Arc<Py<PyDocument>>,
     ) -> PyResult<PyStoryItem> {
         let item = self
             .inner
-            .story_item_snapshots()
+            .standalone_story_item_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?
             .into_iter()
             .find(|item| item.location() == location)
@@ -6307,6 +6398,7 @@ impl PyDocument {
             xml: item.xml().to_vec(),
             revision: self.revisions.current(),
             binding: Some(self.capture_snapshot(smallvec![])?),
+            document: Some(document),
         })
     }
 
@@ -6323,8 +6415,9 @@ impl PyDocument {
             .paragraph_story_location(paragraph_index)
             .map_err(|error| rdocx_to_pyerr(py, error))?
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
+        let owner = std::sync::Arc::new(paragraph.document.clone_ref(py));
         let [_, _] = location.index_path() else {
-            return document.story_item_snapshot(py, &location);
+            return document.story_item_snapshot(py, &location, owner);
         };
         let item = document
             .inner
@@ -6339,6 +6432,7 @@ impl PyDocument {
             xml: item.xml().to_vec(),
             revision: document.revisions.current(),
             binding: Some(document.capture_snapshot(smallvec![])?),
+            document: Some(owner),
         })
     }
 
@@ -6745,6 +6839,60 @@ impl PyDocument {
         self.inner
             .set_default_font_size_value(value)
             .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    /// The document default paragraph format, `w:pPrDefault`.
+    #[getter]
+    fn default_paragraph_format(&self) -> PyDefaultParagraphFormat {
+        PyDefaultParagraphFormat::from_properties(self.inner.default_paragraph_properties())
+    }
+
+    /// Update the supplied document default paragraph formatting.
+    ///
+    /// The keywords mean what they mean to `set_style`. Unspecified
+    /// properties keep their values.
+    #[pyo3(signature = (*, space_before = None, space_after = None, line_spacing = None))]
+    fn set_default_paragraph_format(
+        &mut self,
+        py: Python<'_>,
+        space_before: Option<i64>,
+        space_after: Option<i64>,
+        line_spacing: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let formatting = StyleFormatting {
+            space_before,
+            space_after,
+            line_spacing: line_spacing
+                .filter(|value| !value.is_none())
+                .map(|value| value.clone().unbind()),
+            ..StyleFormatting::default()
+        };
+        let Some(properties) =
+            formatting.paragraph_properties(py, self.inner.default_paragraph_properties())?
+        else {
+            return Ok(());
+        };
+        self.inner
+            .set_default_paragraph_properties(Some(properties))
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    /// The names of the package parts, each absolute, sorted.
+    #[getter]
+    fn part_names<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let names = self
+            .inner
+            .part_names()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        PyTuple::new(py, names)
+    }
+
+    /// The XML of one package part as a save would write it now.
+    fn part_xml(&self, py: Python<'_>, part_name: &str) -> PyResult<String> {
+        self.inner
+            .part_xml(part_name)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .ok_or_else(|| PyKeyError::new_err(format!("no package part named '{part_name}'")))
     }
 
     #[new]
@@ -7982,19 +8130,22 @@ impl PyDocument {
     }
 
     #[getter]
-    fn comments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        let mut anchors = self
+    fn comments<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyTuple>> {
+        let py = slf.py();
+        let owner = std::sync::Arc::new(slf.clone().unbind());
+        let this = slf.borrow();
+        let mut anchors = this
             .inner
             .comment_anchor_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        let mut items = self
+        let mut items = this
             .inner
-            .story_item_snapshots()
+            .standalone_story_item_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?
             .into_iter()
             .map(|item| (item.location().clone(), item))
             .collect::<HashMap<_, _>>();
-        let records = self
+        let records = this
             .inner
             .comments()
             .into_iter()
@@ -8007,8 +8158,13 @@ impl PyDocument {
                 let anchor = range
                     .map(|range| -> PyResult<PyStoryRunRange> {
                         Ok(PyStoryRunRange {
-                            start: self.comment_story_position(py, &range.start, &mut items)?,
-                            end: self.comment_story_position(py, &range.end, &mut items)?,
+                            start: this.comment_story_position(
+                                py,
+                                &range.start,
+                                &mut items,
+                                &owner,
+                            )?,
+                            end: this.comment_story_position(py, &range.end, &mut items, &owner)?,
                         })
                     })
                     .transpose()?;
@@ -9101,23 +9257,27 @@ impl PyDocument {
     }
 
     #[getter]
-    fn story_items<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        let items = self
+    fn story_items<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyTuple>> {
+        let py = slf.py();
+        let owner = std::sync::Arc::new(slf.clone().unbind());
+        let this = slf.borrow();
+        let items = this
             .inner
-            .story_item_snapshots()
+            .standalone_story_item_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         let snapshots = items
             .into_iter()
             .map(|item| {
                 Ok(PyStoryItem {
-                    story: self.owned_story_snapshot(item.location().story())?,
+                    story: this.owned_story_snapshot(item.location().story())?,
                     kind: story_item_kind_name(item.location().item_kind()).to_owned(),
                     index_path: item.location().index_path().to_vec(),
                     direct_body_index: item.direct_body_index(),
                     text: item.text().map(str::to_owned),
                     xml: item.xml().to_vec(),
-                    revision: self.revisions.current(),
-                    binding: Some(self.capture_snapshot(smallvec![])?),
+                    revision: this.revisions.current(),
+                    binding: Some(this.capture_snapshot(smallvec![])?),
+                    document: Some(owner.clone()),
                 })
             })
             .collect::<PyResult<Vec<_>>>()?;

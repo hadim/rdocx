@@ -8839,6 +8839,15 @@ pub(crate) fn package_authoritative_body_fragment(
     Ok(output)
 }
 
+fn decode_utf16_part(name: &str, body: &[u8], unit: fn([u8; 2]) -> u16) -> Result<String> {
+    if !body.len().is_multiple_of(2) {
+        return Err(Error::Other(format!("part {name} is not UTF-16 XML")));
+    }
+    char::decode_utf16(body.chunks_exact(2).map(|pair| unit([pair[0], pair[1]])))
+        .collect::<std::result::Result<String, _>>()
+        .map_err(|_| Error::Other(format!("part {name} is not UTF-16 XML")))
+}
+
 pub(crate) fn close_content_fragment_namespaces(
     xml: &[u8],
     scope: &BTreeMap<String, String>,
@@ -18738,6 +18747,64 @@ impl Document {
         }
     }
 
+    /// The package a save would write now, staged on a copy.
+    fn staged_output_package(&self) -> Result<OpcPackage> {
+        self.validate_model_resource_limits()?;
+        let mut candidate = self.clone_for_staging();
+        candidate.prepare_staged_output()?;
+        crate::embedded::persist_invalidated_package_signature(
+            &mut candidate.package,
+            candidate.package_signatures_invalidated,
+        )?;
+        Ok(candidate.package)
+    }
+
+    /// The names of the package parts a save would write now, sorted.
+    ///
+    /// Each name is absolute, as `/word/styles.xml`. Relationship parts and
+    /// `[Content_Types].xml` describe the package and are not listed.
+    pub fn part_names(&self) -> Result<Vec<String>> {
+        let mut names = self
+            .staged_output_package()?
+            .parts
+            .into_keys()
+            .collect::<Vec<_>>();
+        names.sort();
+        Ok(names)
+    }
+
+    /// The XML of one package part as a save would write it now.
+    ///
+    /// This is read-only. It serializes the current model, so it reflects
+    /// every edit made since the document was opened. The name may omit its
+    /// leading slash and matches case-insensitively, as OPC part names do.
+    /// Returns `None` when no such part exists and an error when the part is
+    /// not XML, such as an image.
+    pub fn part_xml(&self, part_name: &str) -> Result<Option<String>> {
+        let name = format!("/{}", part_name.strip_prefix('/').unwrap_or(part_name));
+        let package = self.staged_output_package()?;
+        let Some(data) = package.get_part(&name) else {
+            return Ok(None);
+        };
+        if !package
+            .content_types
+            .content_type_for(&name)
+            .is_some_and(|content_type| content_type.to_ascii_lowercase().ends_with("xml"))
+        {
+            return Err(Error::Other(format!("part {name} is not XML")));
+        }
+        let text = if let Some(body) = data.strip_prefix(&[0xFF, 0xFE]) {
+            decode_utf16_part(&name, body, u16::from_le_bytes)?
+        } else if let Some(body) = data.strip_prefix(&[0xFE, 0xFF]) {
+            decode_utf16_part(&name, body, u16::from_be_bytes)?
+        } else {
+            let body = data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(data);
+            String::from_utf8(body.to_vec())
+                .map_err(|_| Error::Other(format!("part {name} is not UTF-8 XML")))?
+        };
+        Ok(Some(text))
+    }
+
     /// The class a save to `path` converts to, or `None` to keep the opened class.
     fn package_class_for_path(&self, path: &Path) -> Result<Option<WordPackageClass>> {
         let Some(target) = WordPackageClass::from_path(path) else {
@@ -21407,6 +21474,19 @@ impl Document {
     /// serializes the main document once and scans each story owner once for
     /// the complete snapshot.
     pub fn story_item_snapshots(&self) -> Result<Vec<StoryItemSnapshot>> {
+        self.collect_story_item_snapshots(false)
+    }
+
+    /// [`Document::story_item_snapshots`] with each item's XML standalone.
+    ///
+    /// Every item declares the namespaces in scope at its start, as
+    /// [`Document::story_range_paragraph_snapshot`] does, so it parses alone.
+    #[doc(hidden)]
+    pub fn standalone_story_item_snapshots(&self) -> Result<Vec<StoryItemSnapshot>> {
+        self.collect_story_item_snapshots(true)
+    }
+
+    fn collect_story_item_snapshots(&self, standalone: bool) -> Result<Vec<StoryItemSnapshot>> {
         let mut snapshots = Vec::new();
         let mut seen = HashSet::new();
         for source in self.story_sources()? {
@@ -21451,9 +21531,13 @@ impl Document {
             }
             let item_scopes = story_namespace_scopes_at(
                 source.xml.as_ref(),
-                inventories
-                    .iter()
-                    .flat_map(|(_, items, _)| items.iter().map(|item| item.scan.start)),
+                inventories.iter().flat_map(|(_, items, _)| {
+                    items.iter().flat_map(|item| {
+                        [item.scan.start]
+                            .into_iter()
+                            .chain((standalone && !item.complex_field).then_some(item.full.start))
+                    })
+                }),
             )?;
             for (story, items, direct_items) in inventories {
                 let mut direct_cursor = 0usize;
@@ -21475,6 +21559,13 @@ impl Document {
                         story_item_text_with_scope(source.xml.as_ref(), item, scope, &items)?;
                     let xml = if item.complex_field {
                         complex_story_field_xml(source.xml.as_ref(), item)?
+                    } else if standalone {
+                        let scope = item_scopes.get(&item.full.start).ok_or_else(|| {
+                            Error::Other(
+                                "story item namespace scope was not inventoried".to_owned(),
+                            )
+                        })?;
+                        close_content_fragment_namespaces(&source.xml[item.full.clone()], scope)?
                     } else {
                         source.xml[item.full.clone()].to_vec()
                     };
@@ -23202,16 +23293,13 @@ impl Document {
             selected.xml(),
             xml.as_bytes(),
         )?;
-        let mut replacement = Vec::new();
-        paragraph.to_xml(&mut Writer::new(&mut replacement))?;
-        let fragment = ContentFragment {
-            kind: StoryItemKind::Paragraph,
-            xml: replacement,
-            namespace_scope: BTreeMap::new(),
-            source_part_name: Some(location.story.part_name.clone()),
-            source_story_kind: Some(location.story.kind),
-            source_owner_index: Some(location.story.owner_index),
-        };
+        // A retained root attribute such as `w14:paraId` relies on its part
+        // root to bind the prefix. The serialized fragment declares what the
+        // part root would, so the spliced paragraph parses in any part.
+        let mut fragment = ContentFragment::paragraph(paragraph)?;
+        fragment.source_part_name = Some(location.story.part_name.clone());
+        fragment.source_story_kind = Some(location.story.kind);
+        fragment.source_owner_index = Some(location.story.owner_index);
         self.replace_checked_element_content(location, fragment)
     }
 
@@ -29138,6 +29226,34 @@ impl Document {
         if candidate.styles == self.styles {
             return Ok(());
         }
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// The document default paragraph properties, `w:pPrDefault`.
+    ///
+    /// Every paragraph inherits them beneath its styles, so a refreshed table
+    /// of contents follows them too.
+    pub fn default_paragraph_properties(&self) -> Option<&CT_PPr> {
+        self.styles.doc_defaults.as_ref()?.ppr.as_ref()
+    }
+
+    /// Replace the document default paragraph properties, `w:pPrDefault`.
+    ///
+    /// The run defaults and the unmodelled content of `w:docDefaults` are
+    /// kept. `None` removes the paragraph defaults.
+    pub fn set_default_paragraph_properties(&mut self, properties: Option<CT_PPr>) -> Result<()> {
+        if self.default_paragraph_properties() == properties.as_ref() {
+            return Ok(());
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.reserve_styles_bundle()?;
+        candidate
+            .styles
+            .doc_defaults
+            .get_or_insert_with(Default::default)
+            .ppr = properties;
         candidate.invalidate_layout();
         self.commit_staged_mutation(candidate);
         Ok(())

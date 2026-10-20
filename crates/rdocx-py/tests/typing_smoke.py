@@ -14,6 +14,7 @@ from rdocx import (
     ComparisonDiagnostic,
     ContentFragment,
     CoreProperties,
+    DefaultParagraphFormat,
     Document,
     HtmlDiagnostic,
     Font,
@@ -337,6 +338,13 @@ def exercise_rdocx_types(path: Path) -> None:
         xml=None,
     )
     assert_type(compatible_story_item.xml, bytes)
+    assert_type(story_items[0].paragraph, Paragraph | None)
+    part_names: tuple[str, ...] = document.part_names
+    styles_xml: str = document.part_xml("word/styles.xml")
+    document.set_default_paragraph_format(space_before=0, space_after=Pt(6), line_spacing=1.15)
+    default_format: DefaultParagraphFormat = document.default_paragraph_format
+    default_space_after: Length | None = default_format.space_after
+    default_line_spacing: Length | float | None = default_format.line_spacing
     text_content_index: int = document.find_content_index("typed")
     text_content_indices: tuple[int, ...] = document.find_content_indices("typed")
     page_fields_updated: int = document.update_page_fields()

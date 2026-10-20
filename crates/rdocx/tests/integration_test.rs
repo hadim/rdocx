@@ -25689,3 +25689,91 @@ fn fx246_both_formats_render_three_distinct_legend_positions() {
         }
     }
 }
+
+#[test]
+fn issue_391_replace_paragraph_xml_binds_a_declared_w14_root_attribute() {
+    let w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
+    let mut document = Document::new();
+    document.add_paragraph("x");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    let xml = format!(
+        r#"<w:p xmlns:w="{w}" xmlns:w14="{w14}" w14:paraId="0000005C"><w:r><w:t>y</w:t></w:r></w:p>"#
+    );
+    document.replace_paragraph_xml(&location, &xml).unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.paragraph(0).unwrap().text(), "y");
+    let location = reopened.paragraph_story_location(0).unwrap().unwrap();
+    let element = reopened.paragraph_element_xml(&location).unwrap();
+    assert!(
+        String::from_utf8(element)
+            .unwrap()
+            .contains(r#"w14:paraId="0000005C""#)
+    );
+}
+
+#[test]
+fn issue_391_standalone_story_item_snapshots_declare_their_scope() {
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    let exact = document.story_item_snapshots().unwrap();
+    let standalone = document.standalone_story_item_snapshots().unwrap();
+    assert_eq!(exact.len(), standalone.len());
+    let paragraph = exact
+        .iter()
+        .position(|item| item.location().item_kind() == StoryItemKind::Paragraph)
+        .unwrap();
+    assert!(!exact[paragraph].xml().starts_with(b"<w:p xmlns"));
+    let closed = standalone[paragraph].xml();
+    assert!(String::from_utf8_lossy(closed).contains("xmlns:w="));
+    assert_eq!(
+        closed,
+        document
+            .paragraph_element_xml(standalone[paragraph].location())
+            .unwrap()
+    );
+}
+
+#[test]
+fn issue_391_part_xml_serializes_the_current_model() {
+    let mut document = Document::new();
+    document.add_paragraph("hello");
+    let names = document.part_names().unwrap();
+    assert!(names.iter().any(|name| name == "/word/styles.xml"));
+    assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
+    document
+        .paragraph_mut(0)
+        .unwrap()
+        .set_text("changed")
+        .unwrap();
+    let xml = document.part_xml("word/document.xml").unwrap().unwrap();
+    assert!(xml.contains("changed") && !xml.contains("hello"));
+    assert_eq!(
+        document.part_xml("/WORD/document.xml").unwrap().unwrap(),
+        xml
+    );
+    assert!(document.part_xml("word/absent.xml").unwrap().is_none());
+}
+
+#[test]
+fn issue_391_default_paragraph_properties_round_trip() {
+    let mut document = Document::new();
+    let properties = CT_PPr {
+        space_after: Some(rdocx::Twips(60)),
+        line_spacing: Some(rdocx::Twips(276)),
+        line_rule: Some("auto".to_owned()),
+        ..document
+            .default_paragraph_properties()
+            .cloned()
+            .unwrap_or_default()
+    };
+    document
+        .set_default_paragraph_properties(Some(properties.clone()))
+        .unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let read = reopened.default_paragraph_properties().unwrap();
+    assert_eq!(read.space_after, Some(rdocx::Twips(60)));
+    assert_eq!(read.line_spacing, Some(rdocx::Twips(276)));
+    assert_eq!(read.line_rule.as_deref(), Some("auto"));
+    assert_eq!(reopened.default_font_name(), document.default_font_name());
+}
