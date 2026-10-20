@@ -1101,7 +1101,7 @@ impl PyTable {
                 crate::document::WordPublication::Conservative,
             )?;
             document.commit_word_revision(prepared)?;
-            document.inner = candidate;
+            document.inner = candidate.into();
             return Ok(());
         }
         document.adopt_property_edit(py, candidate, "Table.set_cell_grid_span")

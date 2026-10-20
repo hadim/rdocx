@@ -25776,6 +25776,7 @@ fn issue_391_default_paragraph_properties_round_trip() {
     assert_eq!(read.line_spacing, Some(rdocx::Twips(276)));
     assert_eq!(read.line_rule.as_deref(), Some("auto"));
     assert_eq!(reopened.default_font_name(), document.default_font_name());
+}
 
 /// tensorbee/rdocx#398: the batched inventories that the Python binding
 /// caches return what the single lookups return, across direct paragraphs,

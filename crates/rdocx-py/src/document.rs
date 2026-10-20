@@ -6426,13 +6426,19 @@ impl PyDocument {
             for (owner, address) in self.owners.iter_mut().zip(locations) {
                 owner.location = address.location;
             }
-            self.inner = candidate;
+            // The location cache and the route index follow the registry.
+            *self
+                .locations
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = LocationCache::default();
+            self.owner_routes = std::sync::OnceLock::new();
+            self.inner = candidate.into();
             return Ok(());
         }
         let prepared =
             self.prepare_word_revision(py, &candidate, operation, WordPublication::Conservative)?;
         self.commit_word_revision(prepared)?;
-        self.inner = candidate;
+        self.inner = candidate.into();
         Ok(())
     }
 
@@ -11076,7 +11082,7 @@ impl PyDocument {
             crate::document::WordPublication::Conservative,
         )?;
         self.commit_word_revision(prepared)?;
-        self.inner = candidate;
+        self.inner = candidate.into();
         Ok(removed)
     }
 
