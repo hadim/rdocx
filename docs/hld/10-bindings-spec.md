@@ -1090,9 +1090,12 @@ place and do not advance the revision. `rpptx` and `rpptx.enum.text` export
   `bullet_char` is a checked alias with the same str, bool or None contract,
   including clear/no-op behavior and atomic invalid-value refusal.
 - `Paragraph.add_run(text="")` stages an append and allocates the new returned
-  run against prepared successor scopes before publication. The owning
-  paragraph and text frame remain live, while prior affected run descendants
-  retire with the exact public operation label.
+  run against prepared successor scopes before publication. An append moves
+  no earlier sibling, so the owning paragraph, its text frame and its earlier
+  runs remain live. Only the paragraph's text views, such as a held
+  `paragraph.runs` collection, retire with the exact public operation label.
+  `Paragraph.add_field` and `TextFrame.add_paragraph` follow the same rule,
+  where `TextFrame.add_paragraph` keeps every earlier paragraph and run live.
 - `Font` reads and writes the same properties for a run and for a
   paragraph's default run properties: `name` (`a:latin` typeface, keeping its
   other attributes), `size` (1 to 4000 points, as python-pptx validates),

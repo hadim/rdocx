@@ -593,7 +593,7 @@ impl PyTable {
         let result = TableLocation::new(index, &current_related.clone())
             .edit(&mut candidate, edit)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        document.inner = candidate;
+        document.adopt_property_edit(py, candidate, "Table property")?;
         Ok(result)
     }
 
@@ -1115,9 +1115,10 @@ impl PyTable {
                 crate::document::WordPublication::Conservative,
             )?;
             document.commit_word_revision(prepared)?;
+            document.inner = candidate;
+            return Ok(());
         }
-        document.inner = candidate;
-        Ok(())
+        document.adopt_property_edit(py, candidate, "Table.set_cell_grid_span")
     }
 
     #[pyo3(signature = (row, col, merge))]
@@ -1614,8 +1615,7 @@ impl PyRow {
                 edit(&mut row)
             })
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        document.inner = candidate;
-        Ok(())
+        document.adopt_property_edit(py, candidate, "Row property")
     }
 }
 
@@ -2003,8 +2003,7 @@ impl PyCell {
                 edit(&mut cell)
             })
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        document.inner = candidate;
-        Ok(())
+        document.adopt_property_edit(py, candidate, "Cell property")
     }
 }
 
