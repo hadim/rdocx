@@ -4182,7 +4182,12 @@ Document.validate and module validate_file share the native physical-owner
 validation used by the Word CLI. Identified paragraphs inside block content
 controls retain inherited producer namespace bindings, including qualified
 paraId and textId, through open, save and reopen. This does not relax genuine
-owner mismatch or malformed-source refusal.
+owner mismatch or malformed-source refusal. Imported content-control type markers keep
+their namespace identity across actual modeled mutation, serialization and
+reopen, including producer aliases and locally shadowed canonical prefixes.
+Move and clone refuse an incompatible repeating type before publication with
+unchanged package bytes. Compatible block edits retain the qualified markers,
+opaque metadata and the existing move or clone id policy.
 
 Template input accepts a string-keyed dict of bounded JSON values. Bool precedes integer conversion. Nonfinite values, cyclic containers, out-of-range integers and arbitrary objects refuse before publication. FragmentConflictPolicy exposes independent style, numbering and related-part reuse choices. ContentLocation and DocumentFragment retain physical source boundaries. Checked insertion uses the native fragment path and excludes final section properties by default.
 

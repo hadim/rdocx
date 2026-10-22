@@ -26638,6 +26638,50 @@ fn content_control_repeating_types_preserve_physical_and_owner_context() {
     let controls = document.content_controls();
     assert_eq!(controls.len(), 3);
     assert!(controls.iter().any(|control| control.id() == Some(4)));
+
+    for prefix in ["rep", "w15"] {
+        let item = nested_shell("item", 3, "<w:customXml><w:customXmlPr/></w:customXml>").replacen(
+            "</w:sdtPr>",
+            &format!("<{prefix}:repeatingSectionItem/></w:sdtPr>"),
+            1,
+        );
+        let section = nested_shell("section", 2, &item).replacen(
+            "</w:sdtPr>",
+            &format!("<{prefix}:repeatingSection/></w:sdtPr>"),
+            1,
+        );
+        let outer = nested_shell("outer", 1, &section).replacen(
+            "<w:sdt>",
+            &format!(
+                "<w:sdt xmlns:{prefix}=\"http://schemas.microsoft.com/office/word/2012/wordml\">"
+            ),
+            1,
+        );
+        let raw = format!(
+            "<w:p><w:r><w:t>host</w:t></w:r></w:p>{}",
+            nested_shell("container", 4, &outer),
+        );
+        for clone in [false, true] {
+            let mut document = document_with_body_inner(&raw);
+            let source = control_by_tag(&document, "outer");
+            let destination = nested_paragraph(&document, "host");
+            let before = document.to_bytes().unwrap();
+            let result = if clone {
+                document.clone_content_control(&source, &destination)
+            } else {
+                document.move_content_control(&source, &destination)
+            };
+            assert!(
+                matches!(result, Err(rdocx::Error::Other(_))),
+                "{prefix} clone={clone}: {result:?}"
+            );
+            assert_eq!(
+                document.to_bytes().unwrap(),
+                before,
+                "{prefix} clone={clone}"
+            );
+        }
+    }
 }
 
 fn reference_shell_document(inner: &str) -> Document {

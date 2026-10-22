@@ -339,3 +339,77 @@ CURRENT_SPRINT's current integrated amendment acceptance and the retained
 repeating-context-amendment full-union receipt. Earlier checkpoint paragraphs
 remain historical. No duplicate delivery credit. Final sprint pass5 and close
 remain due, with publication separately approved at exact clean main.
+
+## Q26 namespace-serialization amendment, 2026-10-22
+
+Q26 is approved: extend the independent final bound from5to7, retaining all
+previous passes. Run pass6 after the targeted B2 repair and actual affected
+qualification. Pass7 is available only if needed. Publication remains separate.
+Original eight completed delivery records remain historical. This is the same
+B2 invariant, not new feature, effort or velocity credit.
+
+Pass5 proves qualified type admission can be defeated by earlier modeled
+serialization. At the reviewed pass5 source, TypeElement canonicalized every type name
+except checkbox. Its writer does not establish the newly chosen canonical
+prefix. Preserve imported type QName and its existing namespace meaning,
+including local canonical-prefix shadowing. New or changed kind markers keep
+the existing canonical authoring fallback. Retain raw children, attributes,
+schema order and namespace scope. Do not recognize an unbound marker by local
+name or introduce a general imported-document namespace validator.
+
+The affected consumer chain is valid package, lazy import, actual modeled
+staging, typed marker write, qualified placement admission, mutation and
+complete saved XML. A raw-byte passthrough load/save is a control, not evidence
+that modeled serialization ran. Existing date value-metadata prefix repair
+and checkbox source names must remain correct. Audit all imported modeled
+type names that share the two Start/Empty constructors.
+
+- B2-N1: Native existing OXML unit entrypoint forces serialization of imported
+  Word, checkbox and repeating types in empty and nonempty form. Alias and
+  canonical bindings, local shadowing and opaque children retain expanded
+  identities. Reopen retains the type. Actual old-source RED precedes the fix.
+- B2-N2: Valid nested section/item packages with aliases declared at the root,
+  outer control, properties or markers refuse move/clone into a paragraph,
+  preserving complete package bytes. Canonical controls refuse as well. The
+  alias case with canonicalw15boundforeign must not silently lose both types.
+- B2-N3: Supported compatible direct-body relocation and a metadata edit force
+  modeled staging, retain qualified types, ids or fresh clone ids, and opaque
+  metadata after reopen. Do not invent a placement keyword or use the
+  unsupported nested-source end-story route as the positive discriminator.
+- B2-N4: Native facade and actual installed Python calls cover the same
+  namespace/placement contract. Current whole affected native and Word suites,
+  both Python priorities/typing configurations, scoped lint, bothWASM,
+ 49hashes/sevenpixels, README and genuine affected archive verification then
+  current hosted Word artifacts precede finalpass6. Reuse unaffected PowerPoint
+  and other observations only with exact source/input correspondence.
+
+Risk routing adds the existing parser/serializer and multiple-context rows.
+HLD03 and10 state namespace identity through actual modeled staging. Their
+existing listed impact applies. Other listed sections retain current intent.
+No public signature, payload kind, dependency, module or baseline changes.
+Initial root-only diagnostics and the absent placement-keyword TypeError stay
+separate from semantic RED and valid positive controls. Full current artifact
+observations accepted in pass5 remain real, while this source change invalidates
+affected successors.
+
+### Namespace amendment local checkpoint and source availability
+
+The actual independent namespace-identity microscope pass1 is clean. Both
+imported marker constructors retain source QNames. Actual current local native
+867b26f5passes all1066Word tests, both42priorities, typing/stubs and the three
+selected matrices on3.9/3.12. Native OXML739plus1doctest, rdocx710library,
+412integration,2457regression and twodoctests pass. The480dependent native
+cases, scoped lint, bothWASM,49hashes and seven deterministic pixels pass.
+The first OXML aggregate's stale lexical assertion remains a failed attempt,
+followed by the corrected739pass suite. The README sandbox network attempt
+is not acceptance. Use the existing inventory normalizer for VCS metadata.
+Current22README inventories and changed-archive measurement must pass before
+the clean source checkpoint. Genuine clean verification of the two affected
+archives and current build-only hosted wheels remain pending at that checkpoint.
+
+The orchestrator may push only the clean reviewed sprint/s95.3 source, without
+force, for the named wheels.yml workflow_dispatch build gate. No worker push,
+main merge, tag or publication. Bind the actual new source SHA, run id, job
+outcomes and downloaded wheel identities before final full acceptance. Existing
+35238e5bhosted evidence does not qualify this changed serializer. Finalpass6
+follows actual affected qualification. All8delivery records remain historical.

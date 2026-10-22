@@ -6638,6 +6638,100 @@ def test_f285_content_control_shell_metadata_and_refusal():
         assert b"hello" not in package.read("word/document.xml")
 
 
+def test_f286_type_namespace_identity_survives_staging_and_refusal():
+    from xml.etree import ElementTree as ET
+    import rdocx
+
+    word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    extension = "http://schemas.microsoft.com/office/word/2012/wordml"
+    opaque = '<w:customXmlPr><w:attr w:name="x" w:val="kept"/></w:customXmlPr>'
+    metadata = '<w:customXml w:uri="u" w:element="kept">' + opaque + '</w:customXml>'
+    base = rdocx.Document().to_bytes()
+
+    def package(prefix, scope, shadow, direct):
+        declaration = f' xmlns:{prefix}="{extension}"'
+
+        def shell(tag, identifier, kind, inner):
+            properties = declaration if scope == "properties" and kind else ""
+            marker = (
+                f'<{prefix}:{kind}' + (declaration if scope == "marker" else "") + '/>'
+                if kind else '<w:richText/>'
+            )
+            return (
+                f'<w:sdt><w:sdtPr{properties}><w:id w:val="{identifier}"/>'
+                f'<w:tag w:val="{tag}"/>{marker}</w:sdtPr>'
+                f'<w:sdtContent>{inner}</w:sdtContent></w:sdt>'
+            )
+
+        item = shell("item", 3, "repeatingSectionItem", metadata)
+        section = shell("section", 2, "repeatingSection", item)
+        outer = shell("outer", 1, None, section)
+        if scope == "outer":
+            outer = outer.replace('<w:sdt>', '<w:sdt' + declaration + '>', 1)
+        if shadow:
+            outer = outer.replace('<w:sdt', '<w:sdt xmlns:w15="urn:opaque"', 1)
+        body = '<w:p><w:r><w:t>host</w:t></w:r></w:p>'
+        body += outer if direct else shell("container", 4, None, outer)
+        result = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(base)) as source, zipfile.ZipFile(result, "w") as target:
+            for entry in source.infolist():
+                data = source.read(entry.filename)
+                if entry.filename == "word/document.xml":
+                    start = data.index(b"<w:body>") + len(b"<w:body>")
+                    end = data.index(b"</w:body>")
+                    data = data[:start] + body.encode() + data[end:]
+                    if scope == "root":
+                        data = data.replace(b"<w:document", ('<w:document' + declaration).encode(), 1)
+                    assert len(list(ET.fromstring(data).iter("{" + extension + "}repeatingSection"))) == 1
+                target.writestr(entry, data)
+        return rdocx.Document.from_bytes(result.getvalue())
+
+    def by_tag(document, tag):
+        needle = f'w:val="{tag}"'.encode()
+        return _content_location(
+            document,
+            lambda item: item.kind == "content_control" and needle in item.xml.split(b"<w:sdtContent", 1)[0],
+        )
+
+    def assert_types(document, count):
+        xml = _document_xml(document)
+        root = ET.fromstring(xml)
+        for kind in ("repeatingSection", "repeatingSectionItem"):
+            assert len(list(root.iter("{" + extension + "}" + kind))) == count
+        assert xml.count(opaque.encode()) == count
+        identifiers = [int(node.attrib["{" + word + "}val"]) for node in root.iter("{" + word + "}id")]
+        assert len(identifiers) == len(set(identifiers))
+        return set(identifiers)
+
+    variants = [(prefix, scope, False) for prefix in ("rep", "w15") for scope in ("outer", "root", "properties", "marker")]
+    variants.append(("rep", "outer", True))
+    for prefix, scope, shadow in variants:
+        for operation in ("move_content_control", "clone_content_control"):
+            document = package(prefix, scope, shadow, direct=False)
+            before = document.to_bytes()
+            assert_types(document, 1)  # Raw passthrough is only a control.
+            source = by_tag(document, "outer")
+            host = _content_location(document, lambda item: item.kind == "paragraph" and item.text == "host")
+            with pytest.raises(rdocx.RdocxError, match="placement"):
+                getattr(document, operation)(source, host)
+            assert document.to_bytes() == before
+            assert_types(document, 1)
+
+            # A direct source inserts at a body boundary, not inside a paragraph.
+            document = package(prefix, scope, shadow, direct=True)
+            source = by_tag(document, "outer")
+            body = next(story for story in document.stories if story.kind == "body")
+            getattr(document, operation)(source, rdocx.ContentLocation.end(body))
+            count = 2 if operation == "clone_content_control" else 1
+            identifiers = assert_types(document, count)
+            expected = set(range(1, 7)) if count == 2 else {1, 2, 3}
+            assert identifiers == expected
+            document = rdocx.Document.from_bytes(document.to_bytes())
+            document.set_content_control_alias(by_tag(document, "outer"), "retained")
+            assert_types(document, count)
+            assert any(control.alias == "retained" for control in document.content_controls())
+
+
 def test_f286_repeating_types_keep_physical_and_owner_context():
     import rdocx
     from xml.etree import ElementTree as ET

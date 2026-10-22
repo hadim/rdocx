@@ -1869,7 +1869,13 @@ only when the parent can hold it, and refuses a cell that would lose its last
 paragraph. Story-item classification seeds each owner with the ancestor prefix
 bindings already collected for that part, including a document-level `w14`
 binding, so a control whose paragraph carries `w14:paraId` stays typed. That
-scan does not start a second per-offset namespace walk.
+scan does not start a second per-offset namespace walk. Imported recognized type markers retain their
+original qualified name and existing namespace bindings during modeled
+serialization. This includes empty and nonempty markers and inherited or local
+bindings. A foreign binding on a canonical prefix cannot change the marker's
+expanded name or the meaning of retained opaque children. Newly authored or
+replaced kinds use their canonical names and declared bindings. Placement
+checks therefore see the same qualified type before and after staging.
 
 `Document::set_content_control_type` replaces the type element on a shell from
 `insert_content_control`. The payload is rich text, plain text, date,

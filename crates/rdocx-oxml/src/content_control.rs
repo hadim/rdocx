@@ -705,11 +705,7 @@ impl CT_SdtPr {
                                 })?;
                             properties.type_element = Some(TypeElement {
                                 control_type,
-                                name: if control_type == SdtType::CheckBox {
-                                    std::str::from_utf8(child.name().as_ref())?.to_owned()
-                                } else {
-                                    control_type.element_name().to_owned()
-                                },
+                                name: std::str::from_utf8(child.name().as_ref())?.to_owned(),
                                 attributes: capture_attributes(&child, &child_prefixes, &[])?,
                                 children: children.to_vec(),
                                 namespace_bindings: namespace_bindings(&child_prefixes),
@@ -731,11 +727,7 @@ impl CT_SdtPr {
                         {
                             properties.type_element = Some(TypeElement {
                                 control_type,
-                                name: if control_type == SdtType::CheckBox {
-                                    std::str::from_utf8(child.name().as_ref())?.to_owned()
-                                } else {
-                                    control_type.element_name().to_owned()
-                                },
+                                name: std::str::from_utf8(child.name().as_ref())?.to_owned(),
                                 attributes: capture_attributes(&child, &child_prefixes, &[])?,
                                 children: Vec::new(),
                                 namespace_bindings: namespace_bindings(&child_prefixes),
@@ -2421,6 +2413,84 @@ mod tests {
     }
 
     #[test]
+    fn imported_type_names_keep_namespace_identity_during_serialization() {
+        let cases = [
+            (W_NS, "date", "w", SdtType::Date),
+            (
+                "http://schemas.microsoft.com/office/word/2010/wordml",
+                "checkbox",
+                "w14",
+                SdtType::CheckBox,
+            ),
+            (
+                "http://schemas.microsoft.com/office/word/2012/wordml",
+                "repeatingSection",
+                "w15",
+                SdtType::RepeatingSection,
+            ),
+            (
+                "http://schemas.microsoft.com/office/word/2012/wordml",
+                "repeatingSectionItem",
+                "w15",
+                SdtType::RepeatingSectionItem,
+            ),
+        ];
+        let opaque = r#"<foreign:kept xmlns:foreign="urn:opaque" foreign:val="raw"/>"#;
+        for (namespace, local, canonical, kind) in cases {
+            for expanded in [false, true] {
+                let attributes = format!(r#" xmlns:{canonical}="urn:opaque" q:custom="kept""#);
+                let marker = if expanded {
+                    format!("<q:{local}{attributes}>{opaque}</q:{local}>")
+                } else {
+                    format!("<q:{local}{attributes}/>")
+                };
+                let xml = format!(
+                    r#"<w:sdt xmlns:w="{W_NS}" xmlns:q="{namespace}"><w:sdtPr>{marker}</w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt>"#
+                );
+                let control = parse_standalone_control(&xml);
+                assert_eq!(
+                    control.properties.as_ref().unwrap().control_type,
+                    Some(kind)
+                );
+                let mut saved = Vec::new();
+                control.to_xml(&mut Writer::new(&mut saved)).unwrap();
+                let mut reader = NsReader::from_reader(saved.as_slice());
+                let mut found = 0;
+                loop {
+                    let (resolved, event) = reader.read_resolved_event().unwrap();
+                    match event {
+                        Event::Start(start) | Event::Empty(start)
+                            if start.local_name().as_ref() == local.as_bytes() =>
+                        {
+                            assert!(
+                                matches!(resolved, quick_xml::name::ResolveResult::Bound(value) if value.as_ref() == namespace.as_bytes()),
+                                "type lost its namespace: {}",
+                                String::from_utf8_lossy(&saved)
+                            );
+                            found += 1;
+                        }
+                        Event::Eof => break,
+                        _ => {}
+                    }
+                }
+                assert_eq!(found, 1);
+                let saved = String::from_utf8(saved).unwrap();
+                assert!(saved.contains(r#"q:custom="kept""#));
+                if expanded {
+                    assert!(saved.contains(opaque));
+                }
+                assert_eq!(
+                    parse_standalone_control(&saved)
+                        .properties
+                        .unwrap()
+                        .control_type,
+                    Some(kind)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn fx249_review_d2_supported_extension_type_conflicts_refuse() {
         for kind in ["date", "dropDownList"] {
             let children = if kind == "date" {
@@ -2775,7 +2845,7 @@ mod tests {
         assert_eq!(binding.prefix_mappings.as_deref(), Some("xmlns:n='urn:x'"));
 
         let xml = String::from_utf8(document.to_xml().expect("serializes")).expect("UTF-8");
-        let typed = xml.find("<w:text").expect("typed marker");
+        let typed = xml.find("<x:text").expect("retained typed marker");
         let unknown = xml.find("<x:temporary").expect("unknown property");
         assert!(typed < unknown, "unmodelled property moved");
     }
