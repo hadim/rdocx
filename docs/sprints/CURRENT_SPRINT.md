@@ -312,3 +312,35 @@ with zero defects, smells and nitpicks, plus five additional installed probes.
 Actual49hashes, seven deterministic pixels and README inventories pass. The
 clean verified archive, updated hosted qualification and final sprint pass5
 remain due. No publication approval or sprint closure is implied.
+
+## Current integrated amendment acceptance, 2026-10-22
+
+The B2 customXml and typed-context amendments are accepted after both clean
+independent focused microscopes and actual current artifact qualification.
+Clean35238e5b verifies the affected rdocx archive. The other21genuine verified
+archives retain unchanged inputs and their082aafa9producer. Exact7Word0.16.3
+and15shared-PowerPoint0.14.3archives remain below10MiB. Actual build-only
+[39820083897](https://github.com/tensorbee/rdocx/actions/runs/39820083897)
+executes35238e5b with27successful deciding jobs and four publication skips.
+All26unique payloads are authenticated. Fresh installed downloaded wheels pass
+172priority calls, both strict3.12typing/stub checks and four additional
+placement-matrix calls over3.9/3.12. Prior hosted runs retain their identities.
+
+Current local Word1065passes and applicable unchanged PowerPoint1028passes
+qualify installed products. Native acceptance composes6733passes/73ignored,
+including710library,412integration and twodoctests for affected rdocx. The
+411-case successful subset and separately corrected new fixture case remain
+distinct from the failed aggregate attempt. Current lint, bothWASM, README,
+49hashes and seven deterministic pixels pass. Actual policy is190passes and
+two existing skips, plus four applicable final-state checks. No prior failure
+is relabeled. Source correspondence authenticates322unchanged inputs and
+three requalified inputs in the325-file manifest. Native Word, independent
+fonts, strict cost ratios and bounded corpus observations retain their actual
+producers. The advisory SSIM target remains missed and private Issue390 stays
+unqualified/open. Original delivery records and eight-story totals remain
+historical, with no second completion, effort or velocity credit.
+
+Only independent final sprint pass5 and closure remain before the separate
+exact-clean-main publication preflight and approval. No release is authorized
+by this qualification. Earlier checkpoint sections preserve what was pending
+at those times.

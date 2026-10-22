@@ -341,3 +341,16 @@ ignored `.claude/scratch/S95.3-takeover-evidence/release-preparation/`.
 HLD10and15 reflect this contract. Affected completion metadata checks run after
 status changes. The independent final eight-story sprint review and close
 remain separate, followed by fresh release preflights and final approval.
+
+## Current integrated amendment acceptance, 2026-10-22
+
+The existing B2 customXml and typed-context amendments now have clean focused
+microscopes, clean35238e5b verified rdocx archive and actual updated hosted
+39820083897qualifications. The21other verified archives retain unchanged
+inputs and their082aafa9producer. Current native6733composed, installedWord1065
+and applicable unchangedPPT1028retain actual artifact/source attribution.
+The exact observations, counts, limits and failures are reconciled in
+CURRENT_SPRINT's current integrated amendment acceptance and the retained
+repeating-context-amendment full-union receipt. Earlier checkpoint paragraphs
+remain historical. No duplicate delivery credit. Final sprint pass5 and close
+remain due, with publication separately approved at exact clean main.

@@ -116,7 +116,7 @@ defended.
 
 | S95.2 | M24, X | 3 | 2 | 1 | 12 to 15 | 2 | F-283 numbering-aware navigation and F-284 versioned template grammar completed. F-X192 stays unfinished and is carried to S96, which has not started. Retained two-story estimate is 8 to 10 developer-days. Original three-story estimate was 12 to 15. Actual days are the worked dates 2026-10-17 and 2026-10-18, not person-effort. Full verification at b240cb3509a9641fe265ebfc605c987a3f35e143 passed with 49 unchanged hashes, seven pixel cases, 22 package inventories under 10 MiB, both WASM targets, installed Python typing and stubs, and pinned Word 16.114 plus LibreOffice 26.2.5.2 oracles. Actual developer effort not recorded. Issues 264 and 281 stay open. No release prepared. M24 continues through S99. |
 
-| S95.3 | M24, X | 8 | 8 | 0 | 34 to 49 | 3 | Eight contracts complete with no carries. Actual days are worked dates2026-10-18,19and22, not person-effort. Source-qualified native6732/73ignored, installed1063Word/1028PPT,49hashes/sevenpixels,22verified archives and hosted27success/fourpublicationSKIP/26payloads/172priority calls pass. Independent final review and closure remain due. M24 continues to S99. No publication |
+| S95.3 | M24, X | 8 | 8 | 0 | 34 to 49 | 3 | Eight contracts complete, no carries. Actual days are worked dates2026-10-18,19and22, not person-effort. Current source-qualified native6733composed/73ignored, installed1065Word/1028PPT,49hashes/sevenpixels,22verified archives and current hosted39820083897with27success/fourpublicationSKIP/26payloads/172priorities plus4matrix calls pass. Historical failed attempts remain. Independent final review and closure remain due. M24 continues to S99. No publication |
 
 ## Completed features
 

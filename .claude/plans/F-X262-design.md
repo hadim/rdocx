@@ -251,7 +251,21 @@ in this completion. Historical failed attempts stay failed. Private unreduced
 Issue390 remains unqualified under its approved bounded disposition. This
 completion does not close a whole external issue or claim a new full-suite run.
 
-The current eight-story global gate is not passed: F-X263 new-version packages,
-local/hosted artifacts and final independent sprint review remain due. Q25
+At this historical provider completion checkpoint, the eight-story global
+gate was not passed. F-X263 new-version packages, local/hosted artifacts and
+final independent sprint review were still due. Q25
 permits at most two further final review passes,4and5. Publication still follows
 sprint acceptance, closure and separate exact-main-SHA final approval.
+
+## Current integrated amendment acceptance, 2026-10-22
+
+The existing B2 customXml and typed-context amendments now have clean focused
+microscopes, clean35238e5b verified rdocx archive and actual updated hosted
+39820083897qualifications. The21other verified archives retain unchanged
+inputs and their082aafa9producer. Current native6733composed, installedWord1065
+and applicable unchangedPPT1028retain actual artifact/source attribution.
+The exact observations, counts, limits and failures are reconciled in
+CURRENT_SPRINT's current integrated amendment acceptance and the retained
+repeating-context-amendment full-union receipt. Earlier checkpoint paragraphs
+remain historical. No duplicate delivery credit. Final sprint pass5 and close
+remain due, with publication separately approved at exact clean main.
