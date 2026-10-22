@@ -108,7 +108,14 @@ its context and contract match rather than adding another partial validator.
 Keep the reported reproduction and add a structurally different discriminator
 where the defect admits one. For grammar checks, test direct payloads and
 payloads hidden inside transparent wrappers, with valid nested controls beside
-them. For XML validation, successful attribute iteration is not proof that names,
+them. Enumerate admitted wrappers whose content model depends on their parent.
+For example, Word customXml can carry rows, cells, blocks or runs under the
+same element name. Carry the destination context through its payload and keep
+optional properties separate. Pair incompatible relocation and conversion
+refusals with compatible metadata-preserving controls. A tag allowlist alone
+is not proof of destination validity. This does not authorize a general
+validator or a blanket rejection of supported opaque wrappers.
+For XML validation, successful attribute iteration is not proof that names,
 values or references are legal. Cover those independent dimensions according to
 the approved contract. Preserve explicitly valid opaque inputs and raw bytes.
 

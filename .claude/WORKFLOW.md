@@ -170,6 +170,13 @@ and observable default signatures. Whole installed typing/stub checks remain
 final riders. Record this trigger in F-X263 delivery notes. Instruction changes
 do not repair a package or turn a failed typing run into a pass.
 
+S95.3 pass4 found a remaining context-dependent customXml wrapper bypass after
+nested-sdt checks passed. Implementation and microscope now require admitted
+wrapper inventories, inherited destination grammar and compatible metadata
+controls. This refines the existing placement invariant, not general imported
+XML validation. Record this trigger with the B2 amendment, without rewriting
+prior reports or treating instructions as product remediation.
+
 ### External CI source availability
 
 When an approved feature requires actual external CI execution of its new

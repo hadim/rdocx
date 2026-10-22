@@ -65,7 +65,11 @@ Without it, review the F-ID's commits on the sprint branch.
    semantic-outcome checks. A successful wrapper or diagnostic size is not proof.
    For remediation, inspect the cause and shared-helper consumers, not only
    the newly passing reported examples. Challenge context-preserving wrappers
-   and independent name/value validation where relevant. Preserve valid
+   whose payload changes grammar with the destination, not only nested instances
+   of the initially reported element. Inspect each admitted context-dependent
+   wrapper, its metadata and its repeating/conversion publishers. Require
+   compatible positive controls alongside atomic refusal cases. Challenge
+   independent name/value validation where relevant. Preserve valid
    controls and distinguish actual historical RED from source counterfactuals.
    Retain finding IDs when the same invariant fails on a new input.
    Check publisher coverage, including behaviorally equivalent predicates that
