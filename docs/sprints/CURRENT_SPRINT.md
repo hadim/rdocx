@@ -313,7 +313,7 @@ Actual49hashes, seven deterministic pixels and README inventories pass. The
 clean verified archive, updated hosted qualification and final sprint pass5
 remain due. No publication approval or sprint closure is implied.
 
-## Current integrated amendment acceptance, 2026-10-22
+## Typed-context qualification checkpoint before sprint review pass 5
 
 The B2 customXml and typed-context amendments are accepted after both clean
 independent focused microscopes and actual current artifact qualification.
@@ -344,3 +344,53 @@ Only independent final sprint pass5 and closure remain before the separate
 exact-clean-main publication preflight and approval. No release is authorized
 by this qualification. Earlier checkpoint sections preserve what was pending
 at those times.
+
+## Namespace amendment qualification, 2026-10-22
+
+The same B2 invariant is repaired through both imported TypeElement parser
+paths. Modeled staging preserves the original qualified type and its namespace
+scope. Newly authored or changed kinds retain canonical authoring. The clean
+independent namespace-identity microscope has zero defects, smells or nitpicks,
+including 120 additional alias/shadow controls. The process refinement requires
+checking transformations before guards, expanded namespace identity and actual
+modeled serialization, with compatible edits and atomic refusals.
+
+Actual source-qualified native acceptance composes 6,734 passes with 73 ignored.
+Of these, 4,801 passes are freshly executed for the changed OXML serializer and
+its Word dependents. They include 739 OXML units and one doctest, 710 Word
+library, 412 integration, 2,457 regression and two Word doctests, plus 480
+other Word-dependent cases. Unchanged producers qualify the other 1,933 cases.
+The actual fresh installed local Word wheel passes all 1,066 tests, both
+42-case priorities, strict typing/stubs and three matrices on Python 3.9/3.12.
+The unchanged PowerPoint whole-suite observation remains 1,028 passes. Current
+lint, both WASM graphs, all 49 hashes and seven deterministic pixel buffers,
+22 README inventories and 190 policy passes with two existing skips pass.
+Final metadata-dependent policies are checked after these record edits.
+
+Clean source 01d800f9 genuinely verifies both changed rdocx-oxml and rdocx
+archives. The other 20 archives retain their unchanged inputs and actual
+082aafa9 verification producer. The exact seven Word 0.16.3 and fifteen shared
+OOXML/PowerPoint 0.14.3 archives remain below 10 MiB. Actual build-only
+[CI run 39830343186](https://github.com/tensorbee/rdocx/actions/runs/39830343186)
+executes 01d800f9 with 27 deciding successes and four publication skips.
+Its 26 unique raw payloads are authenticated. Fresh downloaded-wheel installs
+pass 172 priority calls, both strict typing/stub suites and six additional
+matrix calls over Python 3.9/3.12. Source correspondence authenticates 320
+unchanged and five requalified inputs in the original 325-file manifest.
+
+The old-native semantic REDs, first OXML aggregate's stale lexical assertion,
+sandbox network failure and all earlier failed attempts remain historical.
+The corrected OXML suite has 739 passes. Current native and installed results
+are real executions, without relabeling previous artifacts at a later SHA.
+Native Word, genuine independent font producers, seven strict edit ratios,
+three strict read ratios and bounded corpus evidence retain their actual
+producers and applicable inputs. The SSIM advisory target remains missed.
+The private unreduced Issue 390 input remains unqualified and open.
+
+All eight original delivery records remain complete with no carries or new
+story, effort or velocity credit for this amendment. Earlier checkpoint
+paragraphs describe their actual producers and the pending state at that time.
+At this qualification checkpoint, final sprint pass 6 and closure are pending.
+Their actual outcomes follow in the numbered review and sprint tag. Q26 preserves
+passes 1 through 5 and permits pass 7 only if needed. Publication requires
+separate approval at the exact clean main merge SHA after closure.

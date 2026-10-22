@@ -505,7 +505,7 @@ final independent sprint review were still due. Q25
 permits at most two further final review passes,4and5. Publication still follows
 sprint acceptance, closure and separate exact-main-SHA final approval.
 
-## Current integrated amendment acceptance, 2026-10-22
+## Typed-context qualification checkpoint before sprint review pass 5
 
 The existing B2 customXml and typed-context amendments now have clean focused
 microscopes, clean35238e5b verified rdocx archive and actual updated hosted
@@ -517,3 +517,20 @@ CURRENT_SPRINT's current integrated amendment acceptance and the retained
 repeating-context-amendment full-union receipt. Earlier checkpoint paragraphs
 remain historical. No duplicate delivery credit. Final sprint pass5 and close
 remain due, with publication separately approved at exact clean main.
+
+## Namespace amendment qualification, 2026-10-22
+
+The existing B2 namespace amendment has a clean independent microscope and
+actual current artifact qualification at source 01d800f9. Both affected crates
+have genuine clean archive verification, with 20 unchanged verified archives
+retaining their producer. Actual build-only run 39830343186 passes 27 deciding
+jobs with four publication skips. Fresh downloaded wheels pass 172 priorities,
+both typing/stub suites and six additional matrix calls. Current local Word
+has 1,066 passes. Native acceptance composes 6,734 passes with 73 ignored,
+including 4,801 freshly executed affected cases. Exact observations, source
+correspondence, failures and limits are reconciled in CURRENT_SPRINT's namespace
+amendment qualification and namespace-identity-amendment full-union receipt.
+Earlier checkpoints retain their historical meaning. All eight original
+deliveries remain unchanged. Final sprint pass 6 and closure are pending at
+this checkpoint. Their actual outcomes follow in the numbered review and sprint
+tag. Publication is separately approved at exact clean main.
