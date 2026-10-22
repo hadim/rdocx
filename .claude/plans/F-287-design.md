@@ -141,6 +141,8 @@ Unchanged.
 
 ## Deviations
 
+This section records the original implementation checkpoint. Accepted provider completion below supersedes earlier pending evidence and readiness statements. Historical failures and missing-input limits are retained.
+
 The F-285 prefix checkpoint is integrated at `e7f3e98f` and the F-286 file lease ended at integration `9237b484`. The dependency-readiness sentence stays as written.
 
 A missing `add_custom_xml_store` is not a semantic RED at compile time. `custom_xml_binding_updates_the_addressed_store` keeps the missing-store fill refusal beside the additive create checks. There is no separate RED commit.

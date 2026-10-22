@@ -224,6 +224,24 @@ not publication. Deferring preparation completion until registry publication
 creates a circular prerequisite. Pending gates are not accepted by instruction
 refinement or by adding this story.
 
+## Installed typing correction
+
+The fresh release typing gate found three Word metadata defects: the payload
+class was missing from the stub export list, remove_content_range lacked its
+stub, and the custom XML default advertised Ellipsis despite its approved empty
+sequence behavior. Align the existing stub/export and the PyO3 text signature
+with those actual approved APIs. Preserve the Vec default implementation and
+all refusal behavior. Add typed smoke examples for payload creation, omitted
+and explicit schema URIs and range removal. Add a runtime inspect.signature
+assertion to the existing store test, with actual old-artifact RED.
+
+PowerPoint's existing typed smoke expected only float or None for bullet size.
+Update it to the already approved float, Length or None contract and exercise
+points and clearing. This is validation of existing behavior, not a new API.
+Fresh mypy/stubtest RED remains evidence. Rebuild and reinstall the affected
+Word wheel, rerun affected installed and typing controls, and independently
+review this small declaration/signature correction before acceptance.
+
 ## Contract closure
 
 The family allowlists match release.md and the existing validators. Fresh
@@ -234,16 +252,17 @@ remain unchanged. Every promised preparation outcome maps to A1 through A8 and
 a real consumer, producer and check. Historical contracts and new current
 assertions are separate. The exact five note headings remain Highlights,
 Added, Fixed, Compatibility and Contributors. Provider contracts are approved,
-but actual implementation readiness remains pending. No product decision
-remains in this plan. Approval authorizes no carrier edit before readiness.
+and actual provider completion is recorded at Base2ddbb13e. No product decision
+remains in this plan. The release-preparation gates remain pending until their
+actual local and hosted observations are accepted.
 
 ## Implementation checklist
 
 - [x] Pin fresh registry inventories and current manifest carrier map.
 - [x] Close the design contract against exact family/carrier inventories and existing release commands.
-- [ ] Confirm all actual provider checkpoints before start.
-- [ ] Establish actual target-specific RED and preserve historical controls.
-- [ ] Align carriers, current assertions, family notes and HLD impact.
+- [x] Confirm all actual provider checkpoints before start.
+- [x] Establish actual target-specific RED and preserve historical controls.
+- [x] Align carriers, current assertions, family notes and HLD impact.
 - [ ] Qualify local archives, wheels/CLIs, installed consumers and scoped checks.
 - [ ] Obtain clean independent microscope and reviewed source-availability checkpoint.
 - [ ] Qualify actual hosted build-only jobs and downloaded artifacts.
@@ -258,3 +277,19 @@ same time: at most two further independent sprint-review passes, numbered4and5,
 after required checks, preserving all prior passes and findings. These
 decisions do not satisfy a missing check or approve publication. Registry roles
 and trusted-publisher configuration remain fresh final release preflights.
+
+## Reviewed local implementation checkpoint
+
+Independent feature microscope pass1 reports zero defects, smells and nitpicks
+on the complete Base2ddbb13e-to-prepared-source change. The fresh workspace run
+passes6732tests with73ignored. Workspace clippy, minimal layout, both WASM
+configurations, warning-denied docs, README compilation and22archive inventories,
+49hashes, seven deterministic pixel buffers,192policy tests with2skips and
+dependency policy pass. Installed local wheel qualifications remain recorded
+separately. The initial missing-viewer failure is retained, not relabeled.
+
+Commit this reviewed local implementation to obtain the clean source required
+by the genuine22-package locked verified publication dryrun. This is not
+feature completion or permission to push. Actual verified archives, external
+source-availability reconciliation, hosted build-only execution and downloaded
+artifact qualifications remain pending. No delivery ledger is written here.

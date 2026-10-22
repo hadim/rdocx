@@ -3556,14 +3556,14 @@ flag, system codec, subprocess, or binary asset.
 ## Packaging
 
 Current source prepares the exact seven-package Word Rust family, `rdocx`
-Python distribution, `rdocx-wasm` and inherited support carriers at0.16.2.
+Python distribution, `rdocx-wasm` and inherited support carriers at0.16.3.
 The exact fifteen-package shared OOXML and PowerPoint family plus `rpptx-py`
-and its Python distribution are prepared at0.14.2. The separate unpublished
+and its Python distribution are prepared at0.14.3. The separate unpublished
 `rpptx-wasm` npm carrier remains0.12.1. Word's current dependency pins require
-shared0.14.2, so the shared family precedes Word publication. Preparation is
+shared0.14.3, so the shared family precedes Word publication. Preparation is
 local metadata and artifact verification, without registry publication or tag
-authority. The previous unified v0.16.1 and rpptx-v0.14.1 releases remain
-immutable at reviewed main80117123c1073b826392b06a6e6601311a929b44.
+authority. The previous unified v0.16.2 and rpptx-v0.14.2 releases remain
+immutable at reviewed main57f4d7438483e109cb8e45097f3498fe1c223b23.
 
 **maturin, mixed Rust and Python layout**, so type stubs and enum shims have a
 home. `python-source = "python"`, `module-name = "rdocx._rdocx"`,

@@ -125,7 +125,7 @@ Local tests construct those replacement and repetition observations in source an
 |---|---|---|---|
 | local scoped | regression | A1 through A8 | Child order, refusal, repetition counts and the repeating-item parent. These rows do not claim a Word match |
 | local scoped | regression | Existing `prepare_text_value` and checkbox tests | Date and list rules did not move |
-| final sprint | oracle | Authentic Word structure and behaviour under replacement and repetition | Provenance, version and input identity recorded. Pending until that evidence exists |
+| final sprint | oracle | Authentic Word structure and behaviour under replacement and equivalent repetition | Actual native producer/version/input identities and Q24 differences accepted. New-version integration and the final eight-story sprint gate remain separate |
 
 Tests join the F-285 module in the existing `rdocx` integration entrypoint.
 
@@ -165,13 +165,13 @@ Unchanged.
 
 ## Deviations
 
-The F-285 prefix checkpoint is met. Its integration commit is `e7f3e98f`, the ledger commit is `0c020da0`, and this claim is `e615dd73`. The dependency-readiness sentence above still says `BACKLOG.md` records F-285 as pending. That sentence is historical.
+The F-285 prefix checkpoint is met. Its integration commit is `e7f3e98f`, the ledger commit is `0c020da0`, and this claim is `e615dd73`. The original dependency-readiness guard described F-285 as pending. The actual prefix met it before implementation, and accepted provider completion now supersedes that state.
 
 Combo and drop-down fill share `prepare_text_value`. The previous combo assertion accepted any free string. A4 rejects an unknown combo value, so that assertion now expects a refusal. There is no second value engine.
 
 Citation, equation, bibliography, and document-part kinds have no payload variant. Creation still refuses them through the F-285 insert path.
 
-A missing API is not a semantic RED. The bad-list RED is the combo assertion above, which failed on the previous source. Additive payload tests arrived with the implementation. No separate RED commit was recorded. The Word differential stays pending.
+A missing API is not a semantic RED. The bad-list RED is the combo assertion above, which failed on the previous source. Additive payload tests arrived with the implementation. No separate RED commit was recorded. The Word differential was pending at that implementation checkpoint and is now accepted within Q24.
 
 ## Contract closure
 
@@ -183,9 +183,11 @@ Reviewed against `.claude/reviews/S95.3-design-quality-pass-1.md` R1 on 2026-10-
 | R1 repeat and last-item removal had no callable entry | Approach `repeat_content_control` and F-285 `remove_content_control` | A7 and C2 |
 | R1 Python payload disagreed with the native setter | Approach Python `set_content_control_type`. F-285 insert stays payload-free | A1 |
 
-No new product choice. Q17, Q19 and Q21 stay answered. The Word differential stays pending.
+At that design-quality checkpoint no new product choice arose. Q17, Q19 and Q21 stayed answered and the Word differential remained pending. Accepted provider completion records the later authentic qualification and Q24 disposition.
 
 ## Native qualification checkpoint, 2026-10-22
+
+This records the pre-approval checkpoint. Q24 and accepted provider completion below supersede its pending disposition without relabeling an earlier observation.
 
 Authentic Word for Mac16.114(26101123) produced the original inputs through
 its native object model. About Word supplied the version and build. Native

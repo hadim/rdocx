@@ -35,7 +35,7 @@ provisionally, making the expanded estimate 31 to 44 developer-days.
 | F-285 | Content control creation and lifecycle | L | done | - |
 | F-286 | Rich, repeating, and typed content controls | L | done | - |
 | F-287 | Custom XML stores and data binding authoring | L | done | - |
-| F-X263 | Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases | L | pending | - |
+| F-X263 | Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases | L | in-progress | codex |
 
 ## Sequencing note
 
@@ -127,10 +127,21 @@ addressed. Original-source PowerPoint regressions and the authenticated PR394
 functional-parent read close that story's evidence gaps. Capability rows and
 live-owner policy match the bounded completed contracts.
 
-F-X263 is the sole remaining story. Its new-version packages and local/hosted
-artifact checks have not run. No global eight-story full gate or final sprint
+F-X263 is the sole remaining story. Its new-version local wheels and CLIs are
+built. Installed Word1063tests and PowerPoint1028tests pass. Exact42Word and
+44PowerPoint priority cases pass on fresh Python3.9and3.12 environments, and
+both installed typing/stub checks pass. Remaining local and hosted artifact
+gates are pending. No global eight-story full gate or final sprint
 review is called passed. Q25 allows final passes4and5 only after the required
 checks. No push, merge, tag, issue closure or publication has occurred.
+
+The prepared-source local checkpoint now passes6732native tests with73ignored,
+workspace lint, minimal layout, both WASM graphs, warning-denied docs, README
+compilation and22package inventories,192policy tests with2skips and dependency
+policy. All49hashes and seven deterministic pixel buffers match. Independent
+F-X263 microscope pass1 has zero findings. Genuine clean-tree verified archives
+and actual hosted build-only/downloaded-artifact gates remain pending. This is
+an implementation checkpoint, not the final eight-story full gate or review.
 
 ## Requested release follow-up, 2026-10-22
 

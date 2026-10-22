@@ -21398,10 +21398,10 @@ fn rpptx_is_an_explicit_publication_candidate() {
     let manifest = include_str!("../Cargo.toml");
     assert!(workspace.contains("\"crates/rpptx\""));
     assert!(workspace.contains(
-        "rpptx = { path = \"crates/rpptx\", version = \"0.14.2\", default-features = false }"
+        "rpptx = { path = \"crates/rpptx\", version = \"0.14.3\", default-features = false }"
     ));
     assert!(manifest.contains("name = \"rpptx\""));
-    assert!(manifest.contains("version = \"0.14.2\""));
+    assert!(manifest.contains("version = \"0.14.3\""));
     assert!(manifest.contains("publish = true"));
     assert!(manifest.contains("default = [\"default-template\", \"render\", \"system-fonts\"]"));
     assert!(manifest.contains("default-template = [\"dep:scraper\"]"));

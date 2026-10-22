@@ -10081,6 +10081,9 @@ def test_issue391_textbox_paragraph_handles_preserve_physical_custody():
 
 def test_f287_custom_xml_store_binding_and_refusal():
     import rdocx
+    import inspect
+
+    assert inspect.signature(rdocx.Document.add_custom_xml_store).parameters["schema_uris"].default == ()
     document = rdocx.Document()
     before = document.to_bytes()
     with pytest.raises(rdocx.RdocxError, match="empty"):

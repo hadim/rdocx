@@ -147,6 +147,8 @@ Unchanged. Creation must not alter the bytes of a document that does not call th
 
 ## Deviations
 
+This section records the original implementation checkpoint. Accepted provider completion below supersedes earlier pending evidence and readiness statements. Historical failures and missing-input limits are retained.
+
 The file lease named in Dependency readiness is met. F-X259 is integrated at `4879e58a`, F-X260 at `883080bb`, F-X261 at `6adb7258`, and F-X262 at `8c14bd3c`. That last commit is the parent of claim `2a6078ce`. The readiness sentence stays as written. No product contract changed.
 
 There is no RED commit. The new methods did not exist, so compile-time absence is not a semantic failure. The six integration tests and the Python shell test are fixed-source checks.

@@ -115,6 +115,8 @@ Local commands are the existing Python files `crates/rdocx-py/tests/test_formatt
 
 ## Deviations
 
+This section records the original implementation checkpoint. Accepted provider completion below supersedes earlier pending evidence and readiness statements. Historical failures and missing-input limits are retained.
+
 The visit counter is `cfg(test)` state inside `rdocx`, `rpptx`, `rdocx-py` and `rpptx-py`. An integration binary and pytest do not compile that state, so the visit assertion lives in each library's existing unit tests under the A5 name. The same name in the two Python files checks that the edited owner changes and an unrelated owner does not.
 
 The affected-owner paths also edit `crates/rdocx/src/document.rs`, `crates/rdocx-py/src/paragraph.rs`, `crates/rpptx/src/lib.rs`, `crates/rpptx-py/src/shape.rs` and `crates/rpptx-py/src/dml.rs`. Those files already own the operations. No new crate, module or file was added.

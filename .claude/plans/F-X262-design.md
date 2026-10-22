@@ -166,6 +166,8 @@ R4's stale source sentence is corrected in Problem. F-X259 is integrated at `487
 
 ## Deviations
 
+This section records the original implementation checkpoint. Accepted provider completion below supersedes earlier pending evidence and readiness statements. Historical failures and missing-input limits are retained.
+
 The file lease named above is met. F-X260 is integrated at `883080bbe0277689ac48785f4a44ca24eb8db38c` and F-X261 at `6adb7258e7565969a58c55d3971d724519a59cd8`. That second commit is the parent of claim `2fdb6bf38aea54053096236bd837d5940fc45c64`. No product contract changed.
 
 PR394 head `e9f9fbe7b86388b8702af5757bdfa7e4e4fc6596` and functional parent `f9d165e77392b57a58223046d8cd551220c61a3a` are not in this repository. `gh pr view 394` returned HTTP 401. The functional parent was not re-read. The approved plan stayed the source. The re-read checklist item stays open.

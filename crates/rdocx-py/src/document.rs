@@ -8627,7 +8627,7 @@ impl PyDocument {
         )
     }
 
-    #[pyo3(signature = (item_xml, schema_uris=Vec::new()))]
+    #[pyo3(signature = (item_xml, schema_uris=Vec::new()), text_signature = "($self, item_xml, schema_uris=())")]
     fn add_custom_xml_store(
         &mut self,
         py: Python<'_>,
