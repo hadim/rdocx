@@ -1,6 +1,6 @@
 # F-287, Custom XML stores and data binding authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.3
 **Size**: L
 **Depends on**: F-285
@@ -60,7 +60,10 @@ Python uses the signatures above and keeps the frozen content-control snapshot f
 
 ## Dependency readiness
 
-The formal edge is F-285. Its provider contract is approved. `BACKLOG.md` still records F-285 as `pending`, so this story is not implementation-ready until the F-285 prefix checkpoint is integrated. The file lease also waits until F-286 leaves `content_control.rs`. Q18's helper fact is resolved and is not an open choice.
+All formal provider dependencies and shared-file leases were integrated before
+this implementation. The applicable local gates and final provider riders now
+pass with actual producer/source correspondence. S95.3 final release preparation
+and its final sprint review remain separate, unfinished obligations.
 
 ## Acceptance criteria
 
@@ -134,7 +137,7 @@ Unchanged.
 - [x] Add a RED test that a missing public create still cannot bind a new store.
 - [x] Implement the store and binding methods on the existing resolver.
 - [x] Update the HLD list and obtain a zero-finding microscope.
-- [ ] Leave the hash harness for the final union.
+- [x] Accept the actual final source-qualified unchanged hash observation.
 
 ## Deviations
 
@@ -197,3 +200,31 @@ Attribute and declaration fields require XML whitespace between quoted fields.
 Q23: answered by the user in this session, "Refuse DTD declarations explicitly
 (recommended)". No namespace-well-formedness requirement is added. B1 and final
 integrated qualification stay pending. Historical reviews are retained.
+
+
+## Accepted provider completion, 2026-10-22
+
+The applicable unique local checks, independent clean microscopes and actual
+provider final riders are accepted with their original producer attribution.
+Native Word evidence and Q24 resolve the earlier missing-Word condition for
+F-286. Source-qualified full suites pass6732native tests with73ignored,
+1061installed Word and1028installed PowerPoint tests. Two added external Word
+controls pass separately. Both WASM configurations, minimal layout, lint/docs,
+README inventories and22verified publication dryruns pass. All49hashes and
+seven deterministic pixels stay unchanged. All seven edit and three read release
+ratios are below3. Qualified independent font inputs are real producer outputs.
+The50-deck/421-slide corpus has zero dropped shapes. Its below-target SSIM is
+an explicitly advisory trend, not a passed target or an automatic failure.
+
+The authoritative retained logs and source/artifact correspondence are in
+`.claude/scratch/S95.3-takeover-evidence/`. Only test_core.py adds the exact150
+independently reviewed external-test lines to its earlier qualified bytes.
+Other324manifest inputs match. No product/native source or baseline changes
+in this completion. Historical failed attempts stay failed. Private unreduced
+Issue390 remains unqualified under its approved bounded disposition. This
+completion does not close a whole external issue or claim a new full-suite run.
+
+The current eight-story global gate is not passed: F-X263 new-version packages,
+local/hosted artifacts and final independent sprint review remain due. Q25
+permits at most two further final review passes,4and5. Publication still follows
+sprint acceptance, closure and separate exact-main-SHA final approval.

@@ -1890,8 +1890,11 @@ item of several and refuses the last item in its section. Combo and drop-down
 fill share the existing list table, so an unknown or ambiguous value refuses.
 A refusal returns `Error::Other` and publishes nothing. Python exposes
 `ContentControlTypePayload` and the same two methods. WASM and CLI gain no
-method. Layout and render keep the existing content walk. The authentic Word
-differential stays pending.
+method. Layout and render keep the existing content walk. Native Word
+qualification compares documented equivalent operations. The API intentionally
+clones the first item rather than Word's addressed-item default, and refuses
+last-item removal rather than Word's whole-section deletion. Authentic producer
+version and input identities remain mandatory for the comparison.
 
 `Document::add_custom_xml_store` stages one custom XML item, its properties
 part, both relationships, and both content-type overrides through the

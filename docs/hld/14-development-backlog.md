@@ -3112,10 +3112,12 @@ repeating-section, and repeating-item controls with type-specific validation.
 item stays through `remove_content_control`. Citation, equation, bibliography,
 and document-part kinds stay refused.
 **Depends on**: F-285.
-**Test gate**: differential. Every supported control matches the pinned Word
-structure and behavior under replacement and repetition. Authentic Word
-provenance, version, and input identity are not in the repo, so that
-observation stays pending. Local tests do not certify Word.
+**Test gate**: differential. Every supported control passes the pinned native
+Word comparison under replacement and documented equivalent repetition.
+Q24 retains clone-first append and last-item refusal as explicit intentional
+differences from Word's addressed-item default and whole-section deletion.
+Authentic Word provenance, version and input identity are mandatory. Locally
+constructed expectations do not certify Word.
 
 ### F-287, Custom XML stores and data binding authoring (L)
 `add_custom_xml_store` creates one custom XML item and its properties part

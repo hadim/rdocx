@@ -597,6 +597,14 @@ defended.
 | F-283 | S95.2 | L | 4 to 5 | not recorded | 2026-10-18 | Numbered REF and STYLEREF follow the captured Word 16.114 context rules, including literal full context, unnumbered STYLEREF level results, and cross-instance sharing only for one definition without a start override. Clean microscope pass 2. 49 hashes unchanged |
 | F-284 | S95.2 | L | 4 to 5 | not recorded | 2026-10-18 | Opt-in grammar 1 renders one payload across body, table, header, footer, note, and text box, with legacy calls unchanged. Clean microscope pass 1. Word 16.114 and LibreOffice 26.2.5.2 preserved the declared text. 49 hashes unchanged |
 
+| F-X259 | S95.3 | M | 2 to 3 | not recorded | 2026-10-22 | Accepted bounded provider implementation and actual qualification. Clean feature microscopes.49hash/sevenpixel unchanged. F-X263 and final sprint gate remain due |
+| F-X260 | S95.3 | L | 4 to 5 | not recorded | 2026-10-22 | Accepted bounded provider implementation and actual qualification. Clean feature microscopes.49hash/sevenpixel unchanged. F-X263 and final sprint gate remain due |
+| F-X261 | S95.3 | L | 4 to 5 | not recorded | 2026-10-22 | Accepted bounded provider implementation and actual qualification. Clean feature microscopes.49hash/sevenpixel unchanged. F-X263 and final sprint gate remain due |
+| F-X262 | S95.3 | L | 4 to 5 | not recorded | 2026-10-22 | Accepted bounded provider implementation and actual qualification. Clean feature microscopes.49hash/sevenpixel unchanged. F-X263 and final sprint gate remain due |
+| F-285 | S95.3 | L | 4 to 5 | not recorded | 2026-10-22 | Accepted bounded provider implementation and actual qualification. Clean feature microscopes.49hash/sevenpixel unchanged. F-X263 and final sprint gate remain due |
+| F-286 | S95.3 | L | 4 to 5 | not recorded | 2026-10-22 | Accepted bounded provider implementation and actual qualification. Clean feature microscopes.49hash/sevenpixel unchanged. F-X263 and final sprint gate remain due |
+| F-287 | S95.3 | L | 4 to 5 | not recorded | 2026-10-22 | Accepted bounded provider implementation and actual qualification. Clean feature microscopes.49hash/sevenpixel unchanged. F-X263 and final sprint gate remain due |
+
 ## Velocity
 
 Recalculated at each sprint close. The backlog assumes about 2 stories per week

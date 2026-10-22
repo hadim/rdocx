@@ -8877,6 +8877,11 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-285 completes DOCX-052 rich and plain content-control
                 # shells. Typed payloads stay with F-286 and DOCX-053.
                 285,
+                # F-286 delivers the ten bounded typed controls with accepted
+                # native differences. F-287 delivers package stores and the
+                # absolute-child-path binding subset, not store deletion.
+                286,
+                287,
                 # F-282 delivers the bounded native foundation in S90.
                 # F-X192 owns the remaining DOCX-049 catalogue in S91.
                 282,

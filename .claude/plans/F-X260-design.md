@@ -1,6 +1,6 @@
 # F-X260, Restore live handles and bound structural edit cost
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.3
 **Size**: L
 **Estimate**: 6 to 10 developer-days, provisional after Issue398. Original scope was 4 to 6.
@@ -59,7 +59,10 @@ No new crate, module or file. Python changes stay in `crates/rdocx-py/src/docume
 
 ## Dependency readiness
 
-`BACKLOG.md` records F-X211c and F-X237 as `done`. Those are the formal edges. F-X259 is not a formal dependency. Its integrated head `4879e58a` is an ancestor of claim base `c776041c`. This story is implementation-ready on those edges. The file lease still places it before F-X261 and F-X262. Approval of this plan does not complete the story. The running worker `work/f-x260-grok` predates the behavior-contract revision. Its owner recorded that revision in the worker progress file before further implementation. The local visit gate, the HLD update and microscope pass 2 are recorded. The release ratio of 3 stays final evidence.
+All formal provider dependencies and shared-file leases were integrated before
+this implementation. The applicable local gates and final provider riders now
+pass with actual producer/source correspondence. S95.3 final release preparation
+and its final sprint review remain separate, unfinished obligations.
 
 ## Acceptance criteria
 
@@ -150,7 +153,7 @@ Unchanged. A Word or PowerPoint byte change that is not required by the owner re
 - [x] Record old-source RED for A1 through A5. The release ratio is a final observation, and debug timings do not pass A5.
 - [x] Implement through the existing inventories and publication path.
 - [x] Update the HLD impact list and obtain a zero-finding microscope.
-- [ ] Leave the release ratio and installed suites for the final sprint union.
+- [x] Accept the actual source-qualified release ratios and complete installed suites, with original producer attribution.
 
 ## Contract closure
 
@@ -470,3 +473,31 @@ of optional semantic/raw fields. Box the concrete parsed model if needed for
 its large size. Prove text edit and exact preservation for self-contained
 foreign attributes in canonical and qualified-alias sections, plus refusal of
 attribute changes and removal. Keep all introduction and namespace controls.
+
+
+## Accepted provider completion, 2026-10-22
+
+The applicable unique local checks, independent clean microscopes and actual
+provider final riders are accepted with their original producer attribution.
+Native Word evidence and Q24 resolve the earlier missing-Word condition for
+F-286. Source-qualified full suites pass6732native tests with73ignored,
+1061installed Word and1028installed PowerPoint tests. Two added external Word
+controls pass separately. Both WASM configurations, minimal layout, lint/docs,
+README inventories and22verified publication dryruns pass. All49hashes and
+seven deterministic pixels stay unchanged. All seven edit and three read release
+ratios are below3. Qualified independent font inputs are real producer outputs.
+The50-deck/421-slide corpus has zero dropped shapes. Its below-target SSIM is
+an explicitly advisory trend, not a passed target or an automatic failure.
+
+The authoritative retained logs and source/artifact correspondence are in
+`.claude/scratch/S95.3-takeover-evidence/`. Only test_core.py adds the exact150
+independently reviewed external-test lines to its earlier qualified bytes.
+Other324manifest inputs match. No product/native source or baseline changes
+in this completion. Historical failed attempts stay failed. Private unreduced
+Issue390 remains unqualified under its approved bounded disposition. This
+completion does not close a whole external issue or claim a new full-suite run.
+
+The current eight-story global gate is not passed: F-X263 new-version packages,
+local/hosted artifacts and final independent sprint review remain due. Q25
+permits at most two further final review passes,4and5. Publication still follows
+sprint acceptance, closure and separate exact-main-SHA final approval.

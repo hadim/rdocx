@@ -1,6 +1,6 @@
 # F-X261, Resolve Word package preservation and inspection contributions
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.3
 **Size**: L
 **Estimate**: 6 to 9 developer-days, provisional
@@ -79,7 +79,10 @@ No new crate, module or file. Issue 387 extends the existing `CustomProperties` 
 
 ## Dependency readiness
 
-`BACKLOG.md` records F-X238, F-X220 and F-X241 as `done`. The formal edges are met. Q20 and Q22 are answered, so this contract is approved. It still starts only after F-X260 leaves the shared Python document and bindings files. Approval is not implementation completion.
+All formal provider dependencies and shared-file leases were integrated before
+this implementation. The applicable local gates and final provider riders now
+pass with actual producer/source correspondence. S95.3 final release preparation
+and its final sprint review remain separate, unfinished obligations.
 
 ## Acceptance criteria
 
@@ -165,7 +168,7 @@ Unchanged Word 49 hash and seven pixel baseline. A paint change is a stop, not a
 - [x] Record old-source RED for every reduced row.
 - [x] Implement in the existing files and keep one pruning policy with F-X260.
 - [x] Update the HLD list and obtain a zero-finding microscope.
-- [ ] Leave installed, font, wasm and hash evidence for the final union.
+- [x] Accept actual installed, independently produced font, WASM and unchanged hash evidence. Keep the private unreduced input unqualified.
 
 ## Contract closure
 
@@ -192,3 +195,31 @@ No new product choice. Q12 still limits the setter to `Length`. Q22 still writes
 | Q22 | F-X261 A10 and A13 | Imported `w:pPrDefault` with `w:lineRule="auto"`. Q12 keeps the setter on `Length`. The getter returns `Length` for an exact rule and the stored multiple as `float` for an auto rule. Omitting the keyword preserves the auto element. Assigning a `Length` writes `w:lineRule="exact"` and replaces the auto rule. The 2026-10-19 closure also projects `atLeast`, a missing rule, a missing line and an unknown rule through the existing paragraph getters. That does not change this answer. | Answered 2026-10-18 by the user. `Paragraph::line_spacing` and `line_spacing_multiple` supply the other stored states. |
 
 No issue or pull request closes from this plan.
+
+
+## Accepted provider completion, 2026-10-22
+
+The applicable unique local checks, independent clean microscopes and actual
+provider final riders are accepted with their original producer attribution.
+Native Word evidence and Q24 resolve the earlier missing-Word condition for
+F-286. Source-qualified full suites pass6732native tests with73ignored,
+1061installed Word and1028installed PowerPoint tests. Two added external Word
+controls pass separately. Both WASM configurations, minimal layout, lint/docs,
+README inventories and22verified publication dryruns pass. All49hashes and
+seven deterministic pixels stay unchanged. All seven edit and three read release
+ratios are below3. Qualified independent font inputs are real producer outputs.
+The50-deck/421-slide corpus has zero dropped shapes. Its below-target SSIM is
+an explicitly advisory trend, not a passed target or an automatic failure.
+
+The authoritative retained logs and source/artifact correspondence are in
+`.claude/scratch/S95.3-takeover-evidence/`. Only test_core.py adds the exact150
+independently reviewed external-test lines to its earlier qualified bytes.
+Other324manifest inputs match. No product/native source or baseline changes
+in this completion. Historical failed attempts stay failed. Private unreduced
+Issue390 remains unqualified under its approved bounded disposition. This
+completion does not close a whole external issue or claim a new full-suite run.
+
+The current eight-story global gate is not passed: F-X263 new-version packages,
+local/hosted artifacts and final independent sprint review remain due. Q25
+permits at most two further final review passes,4and5. Publication still follows
+sprint acceptance, closure and separate exact-main-SHA final approval.

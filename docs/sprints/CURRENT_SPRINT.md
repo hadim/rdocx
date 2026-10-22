@@ -28,13 +28,13 @@ provisionally, making the expanded estimate 31 to 44 developer-days.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X259 | Repair reviewed consistency defects and strengthen acceptance gates | M | in-progress | codex |
-| F-X260 | Restore live handles and bound structural edit cost | L | in-progress | codex |
-| F-X261 | Resolve Word package preservation and inspection contributions | L | in-progress | grok |
-| F-X262 | Resolve PowerPoint authoring and table-render contributions | L | in-progress | grok |
+| F-X259 | Repair reviewed consistency defects and strengthen acceptance gates | M | done | - |
+| F-X260 | Restore live handles and bound structural edit cost | L | done | - |
+| F-X261 | Resolve Word package preservation and inspection contributions | L | done | - |
+| F-X262 | Resolve PowerPoint authoring and table-render contributions | L | done | - |
 | F-285 | Content control creation and lifecycle | L | done | - |
-| F-286 | Rich, repeating, and typed content controls | L | in-progress | grok |
-| F-287 | Custom XML stores and data binding authoring | L | in-progress | grok |
+| F-286 | Rich, repeating, and typed content controls | L | done | - |
+| F-287 | Custom XML stores and data binding authoring | L | done | - |
 | F-X263 | Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases | L | pending | - |
 
 ## Sequencing note
@@ -55,10 +55,11 @@ The user subsequently asked Codex to take over implementation and resumed that
 takeover on 2026-10-22. Codex is the sole product writer. Grok may propose
 mechanical documentation in isolation, subject to Codex validation. Original
 worker identities and completed independent reviews remain historical facts.
-The exhausted three-pass sprint-review bound is unchanged. Focused feature
-microscopes do not reset it. Native Word is now connected and qualification
-is underway, with contract decision Q24 pending. The sprint stays blocked for
-acceptance. The documented independent CI
+The original three sprint-review passes remain historical. On 2026-10-22 the
+user approved Q25, allowing at most two further independent Codex passes,
+numbered4and5, after required checks. No pass is reset or counted as clean.
+Native Word is now connected and Q24 accepts the documented native differences.
+The sprint remains in integration until its remaining acceptance checks pass. The documented independent CI
 producer now supplies authenticated F-X195 inputs locally. Their installed
 suite outcomes are recorded separately from native Word qualification.
 
@@ -102,18 +103,34 @@ library-authored control cases without a repair prompt. Those consumer inputs
 are separate from original Word oracle files. Source and output hashes,
 producer version, VBA sources and exact observations are retained locally.
 
-Q24 remains pending because native default repeat copies the addressed item
-and native last-item deletion removes the section, unlike the approved API.
-The code and acceptance contract remain unchanged pending that decision.
-This is progress toward B1, not a claim that B1 or the sprint is accepted.
-The exhausted sprint-review bound also remains unchanged. Q25 asks for up to
-two further independent passes after required checks. No extension is assumed.
+The user approved Q24: retain clone-first append and last-item refusal,
+document native addressed-item cloning and whole-section deletion as intentional
+differences, and use equivalent native operations for comparison. The user also
+approved Q25: permit at most two further independent sprint-review passes after
+required checks, retaining passes1through3 and every finding. No review is
+called clean by that approval. B1 disposition still requires final evidence
+reconciliation, and the sprint is not accepted by recording the decisions.
 
 Obsolete sprint build products and completed render output have been removed
 from `/private/tmp`, reclaiming818.6MiB. Historical failures, measured outcomes
 and artifact hashes are retained in ignored evidence. Active build caches,
 qualified font producers, pinned viewers and current release artifacts remain
 available for the outstanding gates. Unrelated temporary files are untouched.
+
+## Accepted providers, 2026-10-22
+
+Seven provider stories are complete after actual local and provider-final
+evidence reconciliation. F-285's earlier prefix now has its final delivery
+entry exactly once. Independent native qualification pass2 accepts the bounded
+Word evidence under Q24 with zero findings. The missing-Word condition is
+addressed. Original-source PowerPoint regressions and the authenticated PR394
+functional-parent read close that story's evidence gaps. Capability rows and
+live-owner policy match the bounded completed contracts.
+
+F-X263 is the sole remaining story. Its new-version packages and local/hosted
+artifact checks have not run. No global eight-story full gate or final sprint
+review is called passed. Q25 allows final passes4and5 only after the required
+checks. No push, merge, tag, issue closure or publication has occurred.
 
 ## Requested release follow-up, 2026-10-22
 
@@ -131,7 +148,7 @@ developer-days and34to49total, beyond the normal seven-story cadence.
 Implementation waits for actual provider checkpoints. Release preparation
 needs its approved plan, exact family version alignment, changelog and
 contributor inventory, packaging and build-only CI evidence. This request does not mark any current story done or bypass pending
-native Word qualification, integrated acceptance or the exhausted review bound.
+native Word qualification, integrated acceptance or the approved bounded review.
 Only `/release` may publish after `/close-sprint`, with separate final approval
 at the reviewed clean main SHA. No version carrier or release tag is changed
 by recording this intent.
@@ -140,7 +157,7 @@ by recording this intent.
 
 - Integrate F-285 through its scoped dependency-prefix checkpoint before starting F-286 or F-287.
 - F-285 public creation and mutation of block, row, cell, paragraph and inline controls survives round-trip with no raw-XML fallback.
-- F-286 typed controls match the pinned Word structure and behaviour under replacement and repetition. Authentic Word provenance, version and input identity are required. Generated output is not that oracle. Missing evidence stays pending.
+- F-286 typed controls pass the pinned native Word comparison under replacement and documented equivalent repetition. Q24 retains clone-first append and last-item refusal as intentional native-default differences. Authentic Word provenance, version and input identity are required. Generated output is not that oracle. Missing evidence stays pending.
 - F-287 bound controls resolve, update and reopen against the correct store, and unknown store content stays byte-identical.
 - One integrated verification and a clean sprint review. Do not start S96. M24's complete stability gate remains F-310 in S99.
 - Issues 264 and 281 stay open. No release tag is prepared by opening this sprint.

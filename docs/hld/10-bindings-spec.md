@@ -2619,7 +2619,10 @@ payload argument. Citation, equation, bibliography, and document-part kinds
 stay refused. Combo and drop-down values still go through the existing tag,
 alias, and bind setters. Picture and group still refuse a text value. The last
 repeating item refuses `remove_content_control` and publishes nothing. WASM
-and CLI gain no method. The authentic Word differential stays pending.
+and CLI gain no method. Repetition intentionally clones the first item, unlike
+Word's addressed-item default. Last-item refusal intentionally preserves the
+section instead of Word's whole-section deletion. Native qualification uses
+the documented equivalent operations and records both default differences.
 
 `Document::add_custom_xml_store(item_xml, schema_uris)` returns the braced item
 id. Python `Document.add_custom_xml_store(item_xml, schema_uris=())` takes

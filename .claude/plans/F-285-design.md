@@ -1,6 +1,6 @@
 # F-285, Content control creation and lifecycle
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.3
 **Size**: L
 **Depends on**: F-253, F-254
@@ -66,7 +66,10 @@ Layout reads controls it can already see. This story does not change paint for a
 
 ## Dependency readiness
 
-`BACKLOG.md` records F-253 and F-254 as `done`. The formal edges are met. Q21 is answered, so this provider contract is approved. The file lease still waits for F-X259 through F-X262 to leave `document.rs` and the bindings spec. Approval is not the prefix checkpoint. F-286 and F-287 may consume this contract and stay unready until that checkpoint is integrated.
+All formal provider dependencies and shared-file leases were integrated before
+this implementation. The applicable local gates and final provider riders now
+pass with actual producer/source correspondence. S95.3 final release preparation
+and its final sprint review remain separate, unfinished obligations.
 
 ## Acceptance criteria
 
@@ -140,7 +143,7 @@ Unchanged. Creation must not alter the bytes of a document that does not call th
 - [x] Add the failing round-trip stubs to the existing integration entrypoint.
 - [x] Implement insert, edit, move, clone and remove on the existing types.
 - [x] Update the HLD list and obtain a zero-finding microscope.
-- [ ] Complete this story through the dependency-prefix checkpoint before F-286 or F-287 starts. Leave the full hash harness for final sprint closure, and record it as rider debt at the prefix.
+- [x] Complete and integrate the actual provider prefix before F-286/F-287, then accept the unchanged final source-qualified hash observation.
 
 ## Deviations
 
@@ -152,7 +155,7 @@ Block and paragraph placement insert at a direct-child boundary of a block story
 
 Story-item classification inherits ancestor prefix bindings, including a document-level `w14` binding, so a reopened control with `w14:paraId` stays typed. The scan does not call `story_namespace_scope_at`.
 
-Python does not expose move or clone. Those methods stay on the Rust facade. `Document::content_controls` remains the body inventory. Header and text-box controls are read through story items.
+The accepted B2 remediation also exposes Python move_content_control(source, destination) and clone_content_control(source, destination), each returning None through checked native publication. Rust returns Result<()>. Move retains ids, clone refreshes ids, and incompatible placement refuses atomically. `Document::content_controls` remains the body inventory. Header and text-box controls are read through story items.
 
 DOCX-052 is complete for rich and plain shells. Typed payloads stay on DOCX-053. The owner exclusion in `scripts/test_sprint_workflow.py` records that split.
 
@@ -165,3 +168,31 @@ DOCX-052 is complete for rich and plain shells. Typed payloads stay on DOCX-053.
 | Q21 | F-285 A2 and A4. F-286 and F-287 consume the names. | Python `insert_content_control(destination, placement, kind, tag=None, alias=None, lock=None, appearance=None, placeholder=None)`. Rust takes the same fields in `ContentControlSpec`. The setters are `set_content_control_tag`, `set_content_control_alias`, `set_content_control_lock`, `set_content_control_appearance` and `set_content_control_placeholder`. Each takes a location and `Option`, and `None` clears that field. `remove_content_control(location)` and `unwrap_content_control(location)` use the same names in Python. Rust returns `Result<()>`. A refusal returns `Error::Other` and does not publish. | Answered 2026-10-18 by the user. |
 
 No external issue closes from this plan.
+
+
+## Accepted provider completion, 2026-10-22
+
+The applicable unique local checks, independent clean microscopes and actual
+provider final riders are accepted with their original producer attribution.
+Native Word evidence and Q24 resolve the earlier missing-Word condition for
+F-286. Source-qualified full suites pass6732native tests with73ignored,
+1061installed Word and1028installed PowerPoint tests. Two added external Word
+controls pass separately. Both WASM configurations, minimal layout, lint/docs,
+README inventories and22verified publication dryruns pass. All49hashes and
+seven deterministic pixels stay unchanged. All seven edit and three read release
+ratios are below3. Qualified independent font inputs are real producer outputs.
+The50-deck/421-slide corpus has zero dropped shapes. Its below-target SSIM is
+an explicitly advisory trend, not a passed target or an automatic failure.
+
+The authoritative retained logs and source/artifact correspondence are in
+`.claude/scratch/S95.3-takeover-evidence/`. Only test_core.py adds the exact150
+independently reviewed external-test lines to its earlier qualified bytes.
+Other324manifest inputs match. No product/native source or baseline changes
+in this completion. Historical failed attempts stay failed. Private unreduced
+Issue390 remains unqualified under its approved bounded disposition. This
+completion does not close a whole external issue or claim a new full-suite run.
+
+The current eight-story global gate is not passed: F-X263 new-version packages,
+local/hosted artifacts and final independent sprint review remain due. Q25
+permits at most two further final review passes,4and5. Publication still follows
+sprint acceptance, closure and separate exact-main-SHA final approval.

@@ -1,6 +1,6 @@
 # F-X262, Resolve PowerPoint authoring and table-render contributions
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.3
 **Size**: L
 **Estimate**: 4 to 6 developer-days, provisional
@@ -72,7 +72,10 @@ No new crate or module. The preset generator is the existing tool. New public na
 
 ## Dependency readiness
 
-`BACKLOG.md` records F-X205, F-X206 and F-X258 as `done`. The formal edges are met. This story still waits for the F-X260 and F-X261 file lease on `crates/rpptx/src/lib.rs` and `docs/hld/10-bindings-spec.md`. Its own questions are answered, so the plan stays approved. Approval is not implementation readiness while those files are leased.
+All formal provider dependencies and shared-file leases were integrated before
+this implementation. The applicable local gates and final provider riders now
+pass with actual producer/source correspondence. S95.3 final release preparation
+and its final sprint review remain separate, unfinished obligations.
 
 ## Acceptance criteria
 
@@ -150,12 +153,12 @@ Word 49 hash and the Word seven-pixel baseline stay unchanged. PowerPoint paint 
 
 ## Implementation checklist
 
-- [ ] Re-read the functional parent after F-X259, F-X260 and F-X261 have left the shared files.
+- [x] Re-read the authenticated PR394 functional parent after the shared-file leases ended.
 - [x] Measure the genuine percentage ties against python-pptx 1.0.2 before writing expected integers.
-- [ ] Record old-source RED for transparency, placeholders, empty text and bullet size.
+- [x] Record actual claim-Base RED for transparency, placeholders and point bullet size. Record additive clear absence and the already-passing empty-text control separately.
 - [x] Regenerate presets and implement the nine rows in the existing crates.
 - [x] Update the HLD list and obtain a zero-finding microscope.
-- [ ] Leave the pixel baseline, viewer and wasm check for the final union.
+- [x] Accept actual unchanged pixel, pinned viewer, WASM and complete corpus observations, retaining advisory SSIM limits.
 
 ## Contract closure
 
@@ -189,3 +192,64 @@ Notes text assignment keeps the notes body's first regular run when a line is em
 | Q7 | F-X262 A4 | Stored row height stays. Painted height grows so the next row does not overlap. This story owns the PowerPoint baseline. The Word 49 hash and seven-pixel baseline stay unchanged. | Answered 2026-10-18 by the user. |
 
 No issue or pull request closes from this plan.
+
+
+## Completion evidence reconciliation, 2026-10-22
+
+The earlier unavailable functional-parent read is historical. Authenticated
+GitHub commit f9d165e77392b57a58223046d8cd551220c61a3a was retrieved and its
+render/HLD patches read after all shared-file integrations. It grows horizontal
+cell rows, allocates a spanning deficit to the last covered row and keeps
+stored row heights. Its vertical-text exemption does not replace this plan's
+approved vertical-growth contract. The candidate remains unmerged. Raw API
+receipt SHA256 is b01a56a9eaae659aedcd655e9bbfa115bb7906290e6a32cdb6e8e251ad8235f5.
+
+An isolated source export of actual claim Base
+2fdb6bf38aea54053096236bd837d5940fc45c64 was built successfully with maturin.
+The native artifact is separately hashed and imported from an isolated install,
+not the active repaired module. Actual old-source controls fail on stored
+alpha19999 instead of20000, unsorted slide placeholders and refusal of valid
+Pt(17.85) bullet size. TextFrame.clear is absent, an additive API absence rather
+than semantic RED. The empty-text-then-append case already passes at this Base
+and is retained as an unchanged positive, not invented failure evidence.
+The same four current installed cases and percentage probe pass against the
+source-qualified shipping extension. Original build profile is unoptimized
+with debuginfo, used only for functional comparison, not timing acceptance.
+An initial uv cache-permission failure stopped before tests. Its retry uses
+the existing task cache and succeeds. All child outcomes remain separate.
+
+Receipts, actual assertion outputs and source/wheel/native identities are
+retained in the existing sprint evidence directory. Earlier GREEN-only and
+unavailable-source observations remain historical. Final installed1028 tests,
+viewer controls, unchanged49hash/sevenpixel buffers, both WASM configurations
+and reproducible preset generation are actual separately attributed evidence.
+The421-slide SSIM result remains a below-target advisory trend, with every
+slide rendered and zero dropped bounded shapes. No baseline changed.
+
+
+## Accepted provider completion, 2026-10-22
+
+The applicable unique local checks, independent clean microscopes and actual
+provider final riders are accepted with their original producer attribution.
+Native Word evidence and Q24 resolve the earlier missing-Word condition for
+F-286. Source-qualified full suites pass6732native tests with73ignored,
+1061installed Word and1028installed PowerPoint tests. Two added external Word
+controls pass separately. Both WASM configurations, minimal layout, lint/docs,
+README inventories and22verified publication dryruns pass. All49hashes and
+seven deterministic pixels stay unchanged. All seven edit and three read release
+ratios are below3. Qualified independent font inputs are real producer outputs.
+The50-deck/421-slide corpus has zero dropped shapes. Its below-target SSIM is
+an explicitly advisory trend, not a passed target or an automatic failure.
+
+The authoritative retained logs and source/artifact correspondence are in
+`.claude/scratch/S95.3-takeover-evidence/`. Only test_core.py adds the exact150
+independently reviewed external-test lines to its earlier qualified bytes.
+Other324manifest inputs match. No product/native source or baseline changes
+in this completion. Historical failed attempts stay failed. Private unreduced
+Issue390 remains unqualified under its approved bounded disposition. This
+completion does not close a whole external issue or claim a new full-suite run.
+
+The current eight-story global gate is not passed: F-X263 new-version packages,
+local/hosted artifacts and final independent sprint review remain due. Q25
+permits at most two further final review passes,4and5. Publication still follows
+sprint acceptance, closure and separate exact-main-SHA final approval.

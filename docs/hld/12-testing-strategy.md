@@ -4763,8 +4763,9 @@ first-item template selection using different item text and formatting, checks
 append order and old/new identities, and compares non-last deletion. Its native
 equivalent appends an item and copies the first item's FormattedText. Native
 default addressed-item cloning and whole-section last-item deletion are
-separate observed differences, not parity successes. Acceptance requires
-explicit disposition under the design contract.
+separate intentional differences approved in Q24, not default-parity
+successes. The equivalent-operation comparison and unchanged-byte last-item
+refusal remain required. Other native acceptance rows are unchanged.
 
 Native opening and saving of library-authored outputs is consumer acceptance,
 not original-oracle authorship. Record types, payloads, ids, text, image bytes

@@ -74,6 +74,17 @@ Issues 264/281 and later form programme boundaries. Disclose actual API/source
 compatibility changes rather than implying patch numbering guarantees every
 source contract. Never claim unresolved native parity or fidelity acceptance.
 
+Disclose the actual source compatibility boundaries introduced since the
+published baseline. Word BodyContent now boxes Paragraph, Table, ContentControl
+and RawXml payloads, so downstream constructors need Box::new and owned matches
+must account for boxes. CommentRef resolved becomes Option<bool>. Navigation's
+ResolvedNumbering includes doc-hidden instance metadata. PowerPoint's
+ValidationIssue gains InvalidXmlChild for exhaustive Rust matches. Slide
+placeholder iteration order and percentage rounding change as explicitly
+approved. Include concrete migration guidance and accepted native Word repeat
+and last-item differences. Do not imply full source compatibility from patch
+numbering or recount prior0.16.2/0.14.2 changes as new work.
+
 Run genuine locally patched 22-package cargo publish dryrun with verification
 enabled and locked resolution. Retain exact target versions, source and archive
 identities, 22 Verifying records, unique members and the 10 MiB ceiling. Only
@@ -106,8 +117,9 @@ upload, tag, main merge or GitHub release is part of preparation.
 
 After actual preparation acceptance, complete ordinary feature records. Final
 integrated verification and an authorized clean independent sprint review
-still gate closure. The existing exhausted review bound is not reset by adding
-this feature. Only close-sprint may merge/tag the sprint. Only release may
+still gate closure. The user-approved Q25 extension permits at most two further independent
+passes, numbered4and5. Prior reviews and findings are not reset by adding this
+feature. Only close-sprint may merge/tag the sprint. Only release may
 publish from the exact reviewed clean main SHA, after separate final approval
 for each family, shared/PowerPoint first.
 
@@ -138,12 +150,14 @@ alter them to make a release check pass.
 
 ## Dependency readiness
 
-F-285 is done through its actual provider prefix. The other six provider
-stories remain in-progress in delivery records, reviewed in run state. Their
-plans are approved. Native Q24, final qualification and the exhausted sprint
-review bound remain explicit. Research and this design may proceed, but carrier
-implementation waits for actual dependency completion or an approved genuine
-local prefix checkpoint retaining final rider debt. Reviewed alone is not done.
+All seven providers are done in BACKLOG and CURRENT_SPRINT with completed
+plans and their actual source-qualified evidence. F-285's original prefix and
+final delivery record are reconciled. Q24 is accepted. Independent native
+qualification pass2 accepts the bounded Word evidence with zero findings.
+Q25 permits at most two further independent final review passes,4and5.
+Record the clean provider-completion commit as the actual F-X263 Base at start.
+Implementation must not copy an old worker tree over the integrated providers.
+The new-version/full-sprint and hosted release-preparation gates remain due.
 
 ## Acceptance criteria
 
@@ -239,9 +253,8 @@ remains in this plan. Approval authorizes no carrier edit before readiness.
 
 No new product choice is needed for version lines or families. The user already
 specified both. Candidate patches come from actual registry inventories and
-must be rechecked before publication. Q24 belongs to F-286 and remains pending.
-The exhausted sprint-review bound needs explicit replanning before another
-sprint review. Neither is answered or bypassed by this design. Q25 asks whether to permit
-at most two further independent sprint-review passes after all required
-checks, preserving the exhausted three and all findings. It remains pending. Registry roles
+must be rechecked before publication. Q24 belongs to F-286 and was approved on 2026-10-22. Q25 was approved at the
+same time: at most two further independent sprint-review passes, numbered4and5,
+after required checks, preserving all prior passes and findings. These
+decisions do not satisfy a missing check or approve publication. Registry roles
 and trusted-publisher configuration remain fresh final release preflights.

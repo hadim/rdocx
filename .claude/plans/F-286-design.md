@@ -1,6 +1,6 @@
 # F-286, Rich, repeating, and typed content controls
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.3
 **Size**: L
 **Depends on**: F-285
@@ -11,7 +11,7 @@
 
 F-285 creates only a rich or plain shell and refuses every other kind. This story adds the missing payloads. It cannot start until F-285 has passed its dependency-prefix checkpoint. F-287 starts only after this story leaves the shared files.
 
-DOCX-053 is still partial. The differential gate is a final observation against pinned Word structure and behaviour under replacement and repetition. It is not a worker oracle. A package this workspace generates is not that observation. Missing authentic Word provenance, version and input identity stays pending.
+DOCX-053 is complete within the explicit ten-kind and Q24 boundaries. The differential gate is a final observation against pinned Word structure and behaviour under replacement and repetition. It is not a worker oracle. A package this workspace generates is not that observation. Missing authentic Word provenance, version and input identity stays pending.
 
 ## Spec reference
 
@@ -69,24 +69,27 @@ Local tests construct the replacement and repetition observations in source. The
 | Checkbox vocabulary | `true`, `1` and `yes` check. `false`, `0` and `no` uncheck. `maybe` refuses and does not publish. | `prepare_control_value` at `crates/rdocx/src/content_control.rs` lines 81 to 88. | A3. |
 | Date, lists, picture and group | Date uses the existing Gregorian `yyyy-MM-dd` and `dd/MM/yyyy` forms. Lists reject duplicate, unknown and ambiguous values. Picture requires an already-owned relationship and refuses text. Group refuses text. | Q17. Existing `prepare_text_value` and the picture and group refusal at lines 102 to 106. | A2, A4, A5 and A6. |
 | Repeating section and item | `repeat_content_control(location)` clones the first item inside a repeating section. Zero items refuses. One item becomes two. `remove_content_control(location)` deletes one item of several. The same method refuses when the item is the last one in its section. `RepeatingSectionItem` is its own payload and is legal only on a shell whose parent is already a repeating section. | Q17. Element names are `w15:repeatingSection` and `w15:repeatingSectionItem` at `content_control.rs` lines 76 and 77. Removal is the F-285 method. | A7 and A8. |
-| Word differential | Every supported control must match pinned Word structure and behaviour under replacement and repetition. A package this workspace generates is not that evidence. | Backlog test gate. `.claude/skills/differential-testing.md`, native provenance rules. | Native Word for Mac16.114(26101123) originals and input hashes are retained outside tracked fixtures. The installed external controls pass. Q24 and complete acceptance remain pending. |
+| Word differential | Every supported control must pass the pinned native Word comparison under replacement and the documented equivalent repetition operations, retaining the explicit Q24 differences. A package this workspace generates is not that evidence. | Backlog test gate. `.claude/skills/differential-testing.md`, native provenance rules. | Native Word for Mac16.114(26101123) originals and input hashes are retained outside tracked fixtures. The installed external controls pass. Q24 is approved. Final feature acceptance still requires the complete evidence reconciliation. |
 
 ## Dependency readiness
 
-The formal edge is F-285. Its provider contract is approved. `BACKLOG.md` still records F-285 as `pending`, so this story is not implementation-ready until the F-285 prefix checkpoint is integrated. Reviewed status on F-285 does not unblock this story. The Word differential stays pending after implementation and is not a local gate.
+All formal provider dependencies and shared-file leases were integrated before
+this implementation. The applicable local gates and final provider riders now
+pass with actual producer/source correspondence. S95.3 final release preparation
+and its final sprint review remain separate, unfinished obligations.
 
 ## Acceptance criteria
 
 | ID | Input or setup | Expected observation or refusal | Consumers | Local test | Final gate or pending evidence |
 |---|---|---|---|---|---|
-| A1 | Set each payload except `RepeatingSectionItem` on an F-285 shell, then reopen | The type element and its children follow the order named above. Tag and raw slots remain. The Word structure comparison stays pending until authentic provenance exists | Native `set_content_control_type` and Python `Document.set_content_control_type` | `typed_content_control_payload_round_trips` | Authentic Word structure diff. Pending while provenance, version and input identity are missing |
-| A2 | Date `2026-10-18` with both formats, plus `31/02/2026` and a non-Gregorian calendar marker | The valid date stores the existing display and full date. The two invalid inputs do not publish | Existing date preparer | `typed_date_control_rejects_bad_calendar_values` | Authentic Word date comparison. Pending while provenance is missing |
-| A3 | Checkbox `true`, `false`, `yes`, `no`, `1`, `0`, and `maybe` | The first six follow today's glyph mapping. `maybe` refuses | Existing checkbox path | `typed_checkbox_control_uses_existing_vocabulary` | Authentic Word checkbox comparison. Pending while provenance is missing |
-| A4 | Drop-down and combo with two items, a repeated value, and a fill that names the display | Unique items round-trip. The repeated value refuses. Fill selects the matching item and writes its value | List payload and `prepare_text_value` | `typed_list_control_rejects_unknown_and_ambiguous_values` | Authentic Word list comparison. Pending while provenance is missing |
+| A1 | Set each payload except `RepeatingSectionItem` on an F-285 shell, then reopen | The type element and its children follow the order named above. Tag and raw slots remain. The authenticated Word consumer and native structure observations qualify the documented bounded surface | Native `set_content_control_type` and Python `Document.set_content_control_type` | `typed_content_control_payload_round_trips` | Authenticated Word producer, structure/consumer observations and pinned input identities retained |
+| A2 | Date `2026-10-18` with both formats, plus `31/02/2026` and a non-Gregorian calendar marker | The valid date stores the existing display and full date. The two invalid inputs do not publish | Existing date preparer | `typed_date_control_rejects_bad_calendar_values` | Native ISO/dmy replacement comparisons pass |
+| A3 | Checkbox `true`, `false`, `yes`, `no`, `1`, `0`, and `maybe` | The first six follow today's glyph mapping. `maybe` refuses | Existing checkbox path | `typed_checkbox_control_uses_existing_vocabulary` | Native checkbox replacement comparison passes, local vocabulary/refusal controls pass |
+| A4 | Drop-down and combo with two items, a repeated value, and a fill that names the display | Unique items round-trip. The repeated value refuses. Fill selects the matching item and writes its value | List payload and `prepare_text_value` | `typed_list_control_rejects_unknown_and_ambiguous_values` | Native combo/drop-down replacement comparisons pass, local list refusals pass |
 | A5 | Picture with an embedded image relationship, a missing id, and a text fill | The owned id round-trips. The other two refuse | Picture payload and value facade | `typed_picture_control_requires_an_owned_image` | No render change claimed |
-| A6 | Group, then a text fill | The group shell round-trips and the text fill refuses | Value facade | `typed_group_control_refuses_text` | Authentic Word group comparison. Pending while provenance is missing |
-| A7 | Repeating section with zero, one and three items. Call `repeat_content_control` once. Call `remove_content_control` down to one item and then on the last | Zero refuses and publishes nothing. One becomes two. Three becomes four. The last item refuses and publishes nothing. A non-last item is deleted by the F-285 method | `repeat_content_control` and F-285 `remove_content_control`, Rust and Python | `repeating_section_clones_the_template_item` | Authentic Word repeating comparison. Pending while provenance is missing |
-| A8 | `RepeatingSectionItem` on a shell inside a repeating section, and the same payload on a body shell | The nested shell round-trips as `w15:repeatingSectionItem`. The body shell returns `Error::Other` and the package bytes stay | Native and Python `set_content_control_type` | `repeating_item_requires_a_repeating_section_parent` | Authentic Word repeating comparison. Pending while provenance is missing |
+| A6 | Group, then a text fill | The group shell round-trips and the text fill refuses | Value facade | `typed_group_control_refuses_text` | Native group consumption and text refusal qualify the documented boundary |
+| A7 | Repeating section with zero, one and three items. Call `repeat_content_control` once. Call `remove_content_control` down to one item and then on the last | Zero refuses and publishes nothing. One becomes two. Three becomes four. The last item refuses and publishes nothing. A non-last item is deleted by the F-285 method | `repeat_content_control` and F-285 `remove_content_control`, Rust and Python | `repeating_section_clones_the_template_item` | Native equivalent repeat and middle deletion pass, Q24 intentional differences retained |
+| A8 | `RepeatingSectionItem` on a shell inside a repeating section, and the same payload on a body shell | The nested shell round-trips as `w15:repeatingSectionItem`. The body shell returns `Error::Other` and the package bytes stay | Native and Python `set_content_control_type` | `repeating_item_requires_a_repeating_section_parent` | Native equivalent repeat and middle deletion pass, Q24 intentional differences retained |
 
 Citation, equation, bibliography, document-part list and document-part object stay readable and are not authored here. A setter call for those kinds refuses. That keeps the backlog list exact.
 
@@ -114,7 +117,7 @@ HTML export and layout already walk `sdtContent`. They are not given a second ty
 
 ## Test plan
 
-**Test gate**: differential. Every supported control matches the pinned Word structure and behaviour under replacement and repetition.
+**Test gate**: differential. Every supported control passes the pinned native Word comparison under replacement and documented equivalent repetition, with the explicit Q24 differences.
 
 Local tests construct those replacement and repetition observations in source and do not add a binary fixture. They are not the Word differential. Differential evidence must name authentic Word provenance, the Word version and the input identity. Generated output is not a Word oracle. Missing evidence stays pending.
 
@@ -154,11 +157,11 @@ Unchanged.
 ## Implementation checklist
 
 - [x] Wait for the F-285 dependency-prefix checkpoint.
-- [ ] Keep the Word differential pending until provenance, version and input identity exist.
+- [x] Obtain authentic Word provenance, version and input identities, compare native observations and reconcile Q24.
 - [x] Add RED coverage for one missing payload and one bad list value.
 - [x] Implement `set_content_control_type` and `repeat_content_control` on the existing property model. Last-item removal stays on F-285 `remove_content_control`.
 - [x] Update the HLD list and obtain a zero-finding microscope.
-- [ ] Leave the live Word compare, if the pin must change, to the final union.
+- [x] Complete the final native comparison and independent accepted-contract review with Q24 differences explicit.
 
 ## Deviations
 
@@ -207,8 +210,10 @@ fresh clone identity and non-last deletion. This is not a claim that Word's
 default selected-item repeat command clones the first item. Native default
 repeat copies the addressed item. Native last-item deletion removes the whole
 section. The approved API instead clones the first and refuses last-item
-removal. Q24 must resolve this conflict with the blanket parity gate before
-acceptance. The tests retain both observations without changing the API.
+removal. The user approved Q24 on 2026-10-22: retain the approved API and
+document both differences. The differential gate uses the documented native
+equivalent operation, preserves both default observations and does not claim
+identical native defaults. No product API changes follow from this decision.
 
 Separately, Word opened and saved twelve library-authored consumer inputs with
 OpenAndRepair disabled and no repair prompt. These files qualify native
@@ -224,6 +229,16 @@ release extension9b9234fa. Their optional bundle absence is a skip, never a
 passed native gate. F-286 remains in-progress. This checkpoint does not weaken
 the differential contract, supply a clean final sprint review or close B1.
 
+## Q24 approved acceptance boundary
+
+The user approved the recommendation on 2026-10-22. Repetition remains a
+clone-first append API and removing the last item remains an atomic refusal.
+Native Word's addressed-item default and whole-section last-item deletion are
+retained observations of an intentional difference. The authentic comparison
+uses native append plus first FormattedText copy for the equivalent operation.
+This resolves the contradictory blanket native-default parity claim without
+changing other acceptance rows, provenance or malformed-input requirements.
+
 ## Open questions
 
 | ID | Affected F-IDs and A-IDs | Decision and recommendation | Status and answer/source |
@@ -231,6 +246,34 @@ the differential contract, supply a clean final sprint review or close B1.
 | Q17 | F-286 A1 to A8 | `set_content_control_type(location, payload)` on an F-285 shell. The supported kinds are rich text, plain text, date, checkbox, picture, combo, drop-down, group, repeating section and repeating item. Citation, equation, bibliography and document-part kinds stay refused. Replacement and repetition observations stay required. Generated output is not a Word oracle. | Answered 2026-10-18 by the user. Checkbox mapping is the code at `content_control.rs` lines 81 to 88. |
 | Q19 | F-285, F-286 and F-287 | This story starts after the F-285 prefix checkpoint and finishes before F-287. | Answered 2026-10-18 by the user. |
 | Q21 | F-285, and this story's approval | The F-285 method names. This plan has no separate product choice. | Answered 2026-10-18 on F-285. This plan adopts those names. |
-| Q24 | F-286 A1, A7 and final gate | Authentic Word default repeat copies the addressed item and last-item deletion removes the section. Retain the approved clone-first and last-item refusal contract with explicit differences, or revise the API to Word defaults. Recommendation: retain the approved API and document the native differences and equivalent operations. | Pending user decision. No API or acceptance-contract change is approved by this checkpoint. |
+| Q24 | F-286 A1, A7 and final gate | Authentic Word default repeat copies the addressed item and last-item deletion removes the section. Retain the approved clone-first and last-item refusal contract with explicit differences, or revise the API to Word defaults. Recommendation: retain the approved API and document the native differences and equivalent operations. | Answered 2026-10-22 by the user: approved. Retain clone-first append and atomic last-item refusal. Document the native differences and compare the native equivalent sequence. Other native acceptance obligations remain. |
 
 No external issue closes from this plan.
+
+
+## Accepted provider completion, 2026-10-22
+
+The applicable unique local checks, independent clean microscopes and actual
+provider final riders are accepted with their original producer attribution.
+Native Word evidence and Q24 resolve the earlier missing-Word condition for
+F-286. Source-qualified full suites pass6732native tests with73ignored,
+1061installed Word and1028installed PowerPoint tests. Two added external Word
+controls pass separately. Both WASM configurations, minimal layout, lint/docs,
+README inventories and22verified publication dryruns pass. All49hashes and
+seven deterministic pixels stay unchanged. All seven edit and three read release
+ratios are below3. Qualified independent font inputs are real producer outputs.
+The50-deck/421-slide corpus has zero dropped shapes. Its below-target SSIM is
+an explicitly advisory trend, not a passed target or an automatic failure.
+
+The authoritative retained logs and source/artifact correspondence are in
+`.claude/scratch/S95.3-takeover-evidence/`. Only test_core.py adds the exact150
+independently reviewed external-test lines to its earlier qualified bytes.
+Other324manifest inputs match. No product/native source or baseline changes
+in this completion. Historical failed attempts stay failed. Private unreduced
+Issue390 remains unqualified under its approved bounded disposition. This
+completion does not close a whole external issue or claim a new full-suite run.
+
+The current eight-story global gate is not passed: F-X263 new-version packages,
+local/hosted artifacts and final independent sprint review remain due. Q25
+permits at most two further final review passes,4and5. Publication still follows
+sprint acceptance, closure and separate exact-main-SHA final approval.

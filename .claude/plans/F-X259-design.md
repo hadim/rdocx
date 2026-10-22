@@ -1,6 +1,6 @@
 # F-X259, Repair reviewed consistency defects and strengthen acceptance gates
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.3
 **Size**: M
 **Depends on**: F-283, F-284, F-X254
@@ -114,7 +114,7 @@ Expected unchanged for all49documents and sevenpixel cases. These inputs do not 
 - [x] Simplify XML traversal without behavior changes.
 - [x] Update shared instructions, current intake and draft contribution plans.
 - [x] Execute the HLD impact list and scoped checks.
-- [ ] Obtain independent feature review and final integrated acceptance.
+- [x] Obtain clean independent feature reviews and accept provider-specific integrated evidence. The eight-story final sprint gate remains due.
 
 ## Open questions
 
@@ -164,3 +164,31 @@ pending where already required. A8 is not qualified by the contributor's tests.
 No material product choice is open for this bounded correction. The added
 shared files are leased serially after F-X260 source freeze. Final full/hash
 and affected metadata evidence must bind the actual integrated changes.
+
+
+## Accepted provider completion, 2026-10-22
+
+The applicable unique local checks, independent clean microscopes and actual
+provider final riders are accepted with their original producer attribution.
+Native Word evidence and Q24 resolve the earlier missing-Word condition for
+F-286. Source-qualified full suites pass6732native tests with73ignored,
+1061installed Word and1028installed PowerPoint tests. Two added external Word
+controls pass separately. Both WASM configurations, minimal layout, lint/docs,
+README inventories and22verified publication dryruns pass. All49hashes and
+seven deterministic pixels stay unchanged. All seven edit and three read release
+ratios are below3. Qualified independent font inputs are real producer outputs.
+The50-deck/421-slide corpus has zero dropped shapes. Its below-target SSIM is
+an explicitly advisory trend, not a passed target or an automatic failure.
+
+The authoritative retained logs and source/artifact correspondence are in
+`.claude/scratch/S95.3-takeover-evidence/`. Only test_core.py adds the exact150
+independently reviewed external-test lines to its earlier qualified bytes.
+Other324manifest inputs match. No product/native source or baseline changes
+in this completion. Historical failed attempts stay failed. Private unreduced
+Issue390 remains unqualified under its approved bounded disposition. This
+completion does not close a whole external issue or claim a new full-suite run.
+
+The current eight-story global gate is not passed: F-X263 new-version packages,
+local/hosted artifacts and final independent sprint review remain due. Q25
+permits at most two further final review passes,4and5. Publication still follows
+sprint acceptance, closure and separate exact-main-SHA final approval.
