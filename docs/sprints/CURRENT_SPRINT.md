@@ -168,6 +168,18 @@ The complete M24 stability gate remains F-310/S99. Issue390's private unreduced
 input stays unqualified and the issue remains open. Later roadmap work has
 not started. Fresh final release approval is still required at clean main.
 
+## Independent pass4 amendment, 2026-10-22
+
+Pass4 reviewed178d0b06 and reports one blocking B2 finding, zero should-fix and
+zero nice-to-have. B1/B3/B4 are accepted within their bounded contracts.
+A valid customXml row wrapper could relocate into a paragraph, and the same
+name-only admission reached repeating conversion. The eight completed delivery
+entries remain historical implementation records, without new story credit.
+Sprint acceptance, close and publication are blocked pending the separate B2
+amendment, affected source/artifact qualification and independent pass5.
+Old Word wheels and the rdocx archive do not qualify that changed source.
+Unaffected observations retain their original source applicability.
+
 ## Requested release follow-up, 2026-10-22
 
 The user explicitly retains Word0.16.x and PowerPoint0.14.x for both Rust
@@ -265,3 +277,18 @@ invitation retains its existing disposition without new implementation credit.
 - Checklist reconciliation on 2026-10-18 keeps Q1 through Q19 answered. Q20, Q21 and Q22 are answered the same day. `part_names` is lexicographic. Content controls use `insert_content_control`, the five setters, `remove_content_control` and `unwrap_content_control`. An imported auto line rule reads back as a float, and assigning a `Length` writes an exact rule. F-X261 and F-285 are approved on completed dependencies. F-286 and F-287 are approved against that provider contract and stay unready until the F-285 prefix checkpoint. F-X260 stays running and F-X262 stays approved. F-286 Word differential evidence remains pending.
 - Design-quality pass 1 on 2026-10-19 closes R1 through R3 in the plans. F-286 names `set_content_control_type`, `repeat_content_control` and F-285 removal, and `RepeatingSectionItem` is a payload with a parent constraint. F-287 uses item bytes plus schema URIs, and binding takes the three `CT_DataBinding` strings. F-X261 projects every stored line rule through the existing paragraph getters. F-X262 no longer cites the pre-integration F-X259 tree. Q1 through Q22 stay answered. The Word differential stays pending. F-X260 A5, HLD and microscope stay open.
 - Final integrated verification includes the new regression and policy union. After final completion edits, rerun affected metadata-dependent checks before adopting evidence. Codex performs the independent final sprint review, with the actual implementing and reviewing identities recorded.
+
+
+## Reviewed B2 repair checkpoint, 2026-10-22
+
+Independent F-285 custom-XML placement microscope pass1 accepts the repair with
+zero findings. It covers row/cell/block/inline wrappers, alternating depth,
+metadata retention, identity, atomic refusal and repeating conversion. The
+actual final native3958f3a4 passes the complete1064Word suite, exact42priorities
+on3.9/3.12, strict typing/stubs and the expanded wrapper matrix. Native union
+710library/411integration/twodoctests is composed from actual successful cases,
+without relabeling failed aggregate attempts. BothWASM, scoped clippy,
+49hashes/sevenpixels and README inventories pass. Policy union is190passes
+and two existing skips, not192passes. The earlier192total field is clarified
+in the amendment receipt. A new verified rdocx archive, actual updated hosted
+artifacts and final independent sprint pass5 remain due. No close/publication.

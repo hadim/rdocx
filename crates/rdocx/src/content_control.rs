@@ -2974,8 +2974,21 @@ fn transparent_children_match(
     elems: &[XmlElem],
     parent_id: usize,
 ) -> Result<bool> {
+    let custom_parent = elems
+        .iter()
+        .any(|elem| elem.id == parent_id && elem.word && elem.local == b"customXml");
     for child in elems.iter().filter(|elem| elem.parent == Some(parent_id)) {
-        if child.word && child.local == b"sdt" {
+        if custom_parent && child.word && child.local == b"customXmlPr" {
+            continue;
+        }
+        if child.word && child.local == b"customXml" {
+            if let Some(end) = child.inner_end
+                && (payload_has_nonspace_text(&xml[child.open_end..end])?
+                    || !transparent_children_match(slot, xml, elems, child.id)?)
+            {
+                return Ok(false);
+            }
+        } else if child.word && child.local == b"sdt" {
             if !sdt_payload_matches(slot, xml, elems, child)? {
                 return Ok(false);
             }
@@ -3437,12 +3450,6 @@ fn repeating_content(xml: &[u8], sdt_range: &Range<usize>) -> Result<RepeatingCo
     if children.is_empty() {
         return Ok(RepeatingContent::Empty);
     }
-    if children
-        .iter()
-        .any(|child| !child_allowed(ParentSlot::Block, child.word, &child.local))
-    {
-        return Ok(RepeatingContent::NotBlock);
-    }
     if children.len() == 1
         && children[0].word
         && children[0].local == b"sdt"
@@ -3450,15 +3457,10 @@ fn repeating_content(xml: &[u8], sdt_range: &Range<usize>) -> Result<RepeatingCo
     {
         return Ok(RepeatingContent::AlreadyItem);
     }
-    for child in children {
-        if child.word
-            && child.local == b"sdt"
-            && !sdt_payload_matches(ParentSlot::Block, xml, &elems, child).map_err(|error| {
-                Error::Other(format!("repeating section content is invalid: {error}"))
-            })?
-        {
-            return Ok(RepeatingContent::NotBlock);
-        }
+    if !transparent_children_match(ParentSlot::Block, xml, &elems, content.id)
+        .map_err(|error| Error::Other(format!("repeating section content is invalid: {error}")))?
+    {
+        return Ok(RepeatingContent::NotBlock);
     }
     Ok(RepeatingContent::Wrap)
 }

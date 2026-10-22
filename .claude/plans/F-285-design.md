@@ -198,3 +198,37 @@ The current eight-story global gate is not passed: F-X263 new-version packages,
 local/hosted artifacts and final independent sprint review remain due. Q25
 permits at most two further final review passes,4and5. Publication still follows
 sprint acceptance, closure and separate exact-main-SHA final approval.
+
+
+## Pass4 B2 amendment
+
+The existing destination-content contract also applies to admitted context-dependent
+customXml wrappers. A valid table-row wrapper must not become inline content
+by relocation. Row, cell, block and inline payloads, metadata-bearing wrappers
+and alternating customXml/sdt nesting discriminate name-only admission. Move,
+clone and unwrap retain compatible content and identities. Incompatible move
+and clone refuse with identical package bytes. F-286 repeating conversion
+applies the same inherited block grammar. This is the existing invariant,
+not general imported-document validation or a new authoring API.
+
+Actual old hosted native5c2997d2 supplies the new public regression RED.
+Local amendment checks now pass: native710library,407ordinary integration and
+four separately executed pinned-viewer integration cases, plus two doctests.
+Earlier whole commands remain failed, not relabeled. The final rebuilt native
+3958f3a4 passes the full1064Word suite, priorities and typing/stubs. Both Python
+interpreters pass the final matrix, including exact customXmlPr retention
+after save/reopen. Direct-body insertion and inline insertion are distinct
+fixture contexts. BothWASM and scoped clippy pass. The focused independent
+microscope, updated genuine verified archive and actual hosted artifacts
+remain pending. Original completed delivery entries remain historical. Final
+sprint acceptance remains blocked until the amendment and qualifications.
+
+
+Independent custom-XML placement microscope pass1 reports zero defects, smells
+and nitpicks. It also passes18bounded decoded-boundary probes on the final
+native. Fresh49hashes, seven deterministic pixels and README/package inventory
+checks pass. Policy qualification joins186sandbox passes with four blocked
+methods passing externally, plus the two existing skips. The original failed
+commands remain failed. Commit this reviewed amendment for a genuine clean
+verified rdocx archive and build-only hosted source qualification. Those final
+artifact gates and independent sprint pass5 remain pending.

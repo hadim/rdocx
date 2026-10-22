@@ -6638,6 +6638,112 @@ def test_f285_content_control_shell_metadata_and_refusal():
         assert b"hello" not in package.read("word/document.xml")
 
 
+def test_f285_custom_xml_wrappers_use_destination_grammar():
+    import rdocx
+    from xml.etree import ElementTree as ET
+
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    paragraph = '<w:p><w:r><w:t>kept</w:t></w:r></w:p>'
+    cell = '<w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/></w:tcPr>' + paragraph + '</w:tc>'
+    row = '<w:tr>' + cell + '</w:tr>'
+    grid = '<w:tblPr/><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid>'
+
+    def shell(tag, ident, inner):
+        return f'<w:sdt><w:sdtPr><w:id w:val="{ident}"/><w:tag w:val="{tag}"/><w:richText/></w:sdtPr><w:sdtContent>{inner}</w:sdtContent></w:sdt>'
+
+    def custom(inner):
+        return '<w:customXml w:uri="urn:valid" w:element="retained"><w:customXmlPr><w:attr w:name="marker" w:val="kept"/></w:customXmlPr>' + inner + '</w:customXml>'
+
+    def document(slot, nested, direct_block=False):
+        payload = {"block": paragraph, "row": row, "cell": cell, "inline": '<w:r><w:t>kept</w:t></w:r>'}[slot]
+        payload = custom(payload)
+        if nested:
+            payload = custom(shell("inner", 2, payload))
+        control = shell("context", 1, payload)
+        owner = {
+            "block": control if direct_block else shell("container", 3, control),
+            "row": '<w:tbl>' + grid + control + row + '</w:tbl>',
+            "cell": '<w:tbl>' + grid + '<w:tr>' + control + cell + '</w:tr></w:tbl>',
+            "inline": '<w:p>' + control + '</w:p>',
+        }[slot]
+        return _replace_document_body(rdocx.Document(), '<w:p><w:r><w:t>host</w:t></w:r></w:p>' + owner + '<w:tbl>' + grid + row + '</w:tbl>')
+
+    def source(doc):
+        def is_source(item):
+            if item.kind != "content_control":
+                return False
+            raw = item.xml
+            at = raw.find(b'w:val="context"')
+            return 0 <= at < raw.find(b"<w:sdtContent")
+        return _content_location(doc, is_source)
+
+    def destination(doc, slot, compatible):
+        host = _content_location(doc, lambda item: item.kind == "paragraph" and item.text == "host")
+        table = [item for item in doc.story_items if item.kind == "table"][-1]
+        table_location = rdocx.ContentLocation(table.story, table.kind, table.index_path)
+        if not compatible:
+            return host if slot in ("block", "row") else table_location
+        if slot == "block":
+            return rdocx.ContentLocation.end(next(story for story in doc.stories if story.kind == "body"))
+        if slot == "inline":
+            return host
+        if slot == "cell":
+            return rdocx.ContentLocation(table.story, "table", list(table.index_path) + [0])
+        return table_location
+
+    def raw_xml(doc):
+        with zipfile.ZipFile(io.BytesIO(doc.to_bytes())) as package:
+            return package.read("word/document.xml")
+
+    def xml(doc):
+        return ET.fromstring(raw_xml(doc))
+
+    metadata = b'<w:customXmlPr><w:attr w:name="marker" w:val="kept"/></w:customXmlPr>'
+
+    for slot in ("row", "cell", "block", "inline"):
+        for nested in (False, True):
+            for operation in ("clone_content_control", "move_content_control"):
+                doc = document(slot, nested)
+                before = doc.to_bytes()
+                try:
+                    getattr(doc, operation)(source(doc), destination(doc, slot, False))
+                except rdocx.RdocxError as error:
+                    assert "does not match" in str(error), (slot, nested, operation, error)
+                else:
+                    pytest.fail(f"{slot}/{nested}/{operation} accepted incompatible content")
+                assert doc.to_bytes() == before, (slot, nested, operation)
+
+                doc = document(slot, nested, direct_block=True)
+                getattr(doc, operation)(source(doc), destination(doc, slot, True))
+                controls = [control for control in doc.content_controls() if control.tag == "context"]
+                ids = [control.id for control in controls]
+                assert len(ids) == (2 if operation.startswith("clone") else 1)
+                assert 1 in ids and len(set(ids)) == len(ids)
+                tree = xml(doc)
+                wrappers = list(tree.iter(w + "customXml"))
+                assert wrappers and all(wrapper.find(w + "customXmlPr/" + w + "attr").get(w + "val") == "kept" for wrapper in wrappers)
+                assert all(wrapper.get(w + "uri") == "urn:valid" for wrapper in wrappers)
+                assert raw_xml(doc).count(metadata) == len(wrappers)
+                reopened = rdocx.Document.from_bytes(doc.to_bytes())
+                assert raw_xml(reopened).count(metadata) == len(wrappers)
+
+            doc = document(slot, nested)
+            doc.unwrap_content_control(source(doc))
+            assert not any(control.tag == "context" for control in doc.content_controls())
+            assert list(xml(doc).iter(w + "customXml"))
+
+            doc = document(slot, nested)
+            before = doc.to_bytes()
+            if slot == "block":
+                doc.set_content_control_type(source(doc), rdocx.ContentControlTypePayload.repeating_section())
+                assert any(element.tag == "{http://schemas.microsoft.com/office/word/2012/wordml}repeatingSectionItem" for element in xml(doc).iter())
+                assert list(xml(doc).iter(w + "customXml"))
+            else:
+                with pytest.raises(rdocx.RdocxError, match="block sequence"):
+                    doc.set_content_control_type(source(doc), rdocx.ContentControlTypePayload.repeating_section())
+                assert doc.to_bytes() == before, (slot, nested, "repeating")
+
+
 def test_f285_move_and_clone_content_control_identity_and_refusal():
     import rdocx
 

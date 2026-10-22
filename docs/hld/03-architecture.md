@@ -1858,7 +1858,11 @@ staged transaction through location-aware wrappers. Clone drops `w14:paraId`
 and `w14:textId` and allocates a new sdt id. Move keeps the id and stays inside
 one story. Both refuse before publication when the destination parent cannot
 hold the control content. A nested content control is transparent, so move,
-clone and unwrap apply that same parent grammar to its content. Character
+clone and unwrap apply that same parent grammar to its content. Admitted
+`w:customXml` wrappers also inherit that grammar. Their optional
+`w:customXmlPr` stays metadata, while their actual row, cell, block or inline
+payload must fit the destination. Alternating custom-XML and control wrappers
+do not reset the context. Repeating conversion uses this same policy. Character
 references, predefined entities and CDATA at that boundary count as their
 decoded text. Remove deletes the shell and its content. Unwrap leaves the content
 only when the parent can hold it, and refuses a cell that would lose its last

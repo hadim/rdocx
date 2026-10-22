@@ -20892,3 +20892,25 @@ F-X192 is carried and is not part of this grammar.
 **Hash harness.**49semantic/render hashes and seven deterministic pixel buffers unchanged. No baseline recorded.
 
 **Notes for future sessions.** Process-only94816e4e sharpens existing implementation, microscope and binding reference instructions after the release typing/default gap. Concrete typed factory/property calls, public export/stub agreement and observable omission defaults are now explicit. This trigger is separate from product repairs. Earlier provider evidence and native limits remain bounded. All eight implementation stories complete, while independent final sprint review, closure and separately approved publication remain due.
+
+
+## S95.3 B2 post-completion amendment checkpoint
+
+Pass4 found a valid context-dependent customXml wrapper could bypass the existing
+destination grammar through relocation or repeating conversion. Codex repaired
+that shared invariant without adding an API or a second feature completion.
+The original delivery entries and eight-story totals remain historical.
+The new matrix covers48incompatible/compatible relocation, unwrap and repeating
+scenarios over four slots and alternating wrappers, including exact metadata
+bytes after reopen. Actual old-hosted semantic RED and final native3958f3a4
+GREEN are distinct from failed installation, fixture and environment attempts.
+InstalledWord1064, native1123composed passes, bothWASM, scoped clippy, typing,
+190policy passes/two skips, hash49/pixels7 and README inventories qualify the
+local amendment. Independent focused microscope has zero findings and18extra
+boundary probes. Updated verified archive/hosted qualification and sprint pass5
+remain due. No new effort/velocity or publication credit is recorded here.
+
+Process-only4ebd83bd refines implementation and microscope commands after this
+pass4 trigger. Admitted wrappers with context-dependent payloads require inherited
+destination grammar, separate metadata and compatible positive controls. Both
+generated adapters match. Instructions and product remediation remain separate.
