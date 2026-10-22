@@ -143,6 +143,12 @@ F-X263 microscope pass1 has zero findings. Genuine clean-tree verified archives
 and actual hosted build-only/downloaded-artifact gates remain pending. This is
 an implementation checkpoint, not the final eight-story full gate or review.
 
+Clean-source082aafa9also passes the genuine locked22-package verified archive
+dryrun. All archives authenticate that source, match the recorded inventories
+and remain below10MiB. F-X263 still waits for actual hosted build-only execution
+and downloaded artifact qualification. Its canonical source-availability
+checkpoint does not complete the story or authorize tags or publication.
+
 ## Requested release follow-up, 2026-10-22
 
 The user explicitly retains Word0.16.x and PowerPoint0.14.x for both Rust

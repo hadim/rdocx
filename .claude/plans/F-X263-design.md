@@ -263,7 +263,7 @@ actual local and hosted observations are accepted.
 - [x] Confirm all actual provider checkpoints before start.
 - [x] Establish actual target-specific RED and preserve historical controls.
 - [x] Align carriers, current assertions, family notes and HLD impact.
-- [ ] Qualify local archives, wheels/CLIs, installed consumers and scoped checks.
+- [x] Qualify local archives, wheels/CLIs, installed consumers and scoped checks.
 - [ ] Obtain clean independent microscope and reviewed source-availability checkpoint.
 - [ ] Qualify actual hosted build-only jobs and downloaded artifacts.
 - [ ] Complete preparation records and applicable final metadata checks.
@@ -293,3 +293,19 @@ by the genuine22-package locked verified publication dryrun. This is not
 feature completion or permission to push. Actual verified archives, external
 source-availability reconciliation, hosted build-only execution and downloaded
 artifact qualifications remain pending. No delivery ledger is written here.
+
+The actual locked22-package verified dryrun passed at clean source
+082aafa95a1efd141acb6b23d9e32c07fac0de01. All22archives have that exact VCS
+identity, match their original manifests and recorded archive inventories, and
+are below10MiB, largest4900980bytes. The temporary validation probe initially
+looked one directory above Cargo's actual tmp-crate output. That failed probe
+is retained separately. Corrected validation passed without rebuilding or
+substituting the earlier measurement archives.
+
+Prepare the structured source-availability receipt from the canonical worktree,
+where this sole-writer feature was implemented directly. Preserve the actual
+Base and reviewed implementation Head, with no fictitious worker squash. The
+integrator consumes the validated receipt and records this canonical checkpoint
+as reviewed, keeping delivery in-progress. Only the reviewed canonical sprint
+ref may be pushed without force for wheels.yml workflow_dispatch. Publication
+jobs must remain skipped. Hosted gates and final sprint acceptance stay pending.
