@@ -1,3 +1,4 @@
+use oxml_py_support::PathSeg;
 use std::path::PathBuf;
 
 use oxml_py_support::RevisionCounter;
@@ -9,7 +10,7 @@ thread_local! {
     static FX260_PPT_VISITS: Cell<usize> = const { Cell::new(0) };
 }
 
-fn note_fx260_ppt(count: usize) {
+pub(crate) fn note_fx260_ppt(count: usize) {
     #[cfg(test)]
     FX260_PPT_VISITS.with(|cell| cell.set(cell.get().saturating_add(count)));
     #[cfg(not(test))]
@@ -878,6 +879,7 @@ pub struct PyPresentation {
     pub(crate) inner: rpptx::Presentation,
     pub(crate) revisions: RevisionCounter,
     owners: Vec<LiveOwner>,
+    indexes: OwnerIndexes,
     pub(crate) gradient_stops: Vec<crate::dml::GradientStopTokens>,
     pub(crate) next_gradient_stop: u64,
     slides: oxml_py_support::RevisionState,
@@ -2192,9 +2194,10 @@ impl PyPptElement {
             )
         })?;
         let actual = owner
-            .owners
-            .iter()
-            .find(|item| item.owner.generation() == generation)
+            .indexes
+            .by_generation
+            .get(&generation)
+            .and_then(|index| owner.owners.get(*index))
             .ok_or_else(|| PyValueError::new_err("Element owner is absent"))?;
         let valid = matches!(
             (self.kind, &actual.address.physical),
@@ -2306,23 +2309,14 @@ impl PyPptElement {
         };
         result.map_err(|error| rpptx_to_pyerr(py, error))
     }
-}
-
-#[pymethods]
-impl PyPptElement {
-    #[getter]
-    fn xml(&self, py: Python<'_>) -> PyResult<String> {
-        let owner = self.presentation.borrow(py);
-        let path = self.checked_path(py, &owner)?;
-        String::from_utf8(self.read_xml(py, &owner.inner, &path)?)
-            .map_err(|_| PyValueError::new_err("physical XML snapshot is not UTF-8"))
-    }
-
-    fn replace_xml(&self, py: Python<'_>, xml: &str) -> PyResult<()> {
-        use oxml_py_support::PathSeg;
-        let mut owner = self.presentation.borrow_mut(py);
-        let path = self.checked_path(py, &owner)?;
-        let part = crate::shape::shape_owner(&path)?;
+    fn write_xml(
+        &self,
+        py: Python<'_>,
+        inner: &mut rpptx::Presentation,
+        path: &oxml_py_support::ContentPath,
+        xml: &str,
+    ) -> PyResult<()> {
+        let part = crate::shape::shape_owner(path)?;
         let shapes = path
             .segs
             .iter()
@@ -2371,101 +2365,100 @@ impl PyPptElement {
                 }
             })
             .unwrap_or(0);
-        let before_xml = self.read_xml(py, &owner.inner, &path)?;
-        let before_structure = if self.kind == PptElementKind::Shape {
-            Some(shape_structure(&owner.inner, &path)?)
-        } else {
-            None
-        };
-        // Refuse unsupported payload transitions before native publication.
-        // Parse only the submitted frame, never clone unrelated slide models.
-        if let Some(structure) = before_structure.as_ref()
-            && structure.1 == rpptx::ShapeKind::GraphicFrame
-        {
-            let incoming = rpptx_oxml::graphic_frame::CT_GraphicFrame::from_xml(xml.as_bytes())
-                .map_err(|error| PyValueError::new_err(error.to_string()))?;
-            let incoming_table = matches!(
-                incoming.graphic_data.payload(),
-                rpptx_oxml::graphic_frame::GraphicDataPayload::Table(_)
-            );
-            if structure.2 != incoming_table {
-                return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-                    "Shape.element.replace_xml does not support changing table payload presence",
-                ));
-            }
-        }
         let result = match self.kind {
-            PptElementKind::Shape => owner.inner.replace_shape_xml_at(part, &shapes, xml),
-            PptElementKind::Table => owner.inner.replace_table_xml_at(part, &shapes, xml),
+            PptElementKind::Shape => inner.replace_shape_xml_at(part, &shapes, xml),
+            PptElementKind::Table => inner.replace_table_xml_at(part, &shapes, xml),
             PptElementKind::Cell => {
                 let (r, c) = cell.ok_or_else(|| PyValueError::new_err("cell address is absent"))?;
-                owner.inner.replace_cell_xml_at(part, &shapes, r, c, xml)
+                inner.replace_cell_xml_at(part, &shapes, r, c, xml)
             }
-            PptElementKind::TextBody => owner
-                .inner
-                .replace_text_body_xml_at(part, &shapes, cell, xml),
-            PptElementKind::Paragraph => owner
-                .inner
-                .replace_paragraph_xml_at(part, &shapes, cell, paragraph, xml),
-            PptElementKind::Run => owner
-                .inner
-                .replace_run_xml_at(part, &shapes, cell, paragraph, run, xml),
+            PptElementKind::TextBody => inner.replace_text_body_xml_at(part, &shapes, cell, xml),
+            PptElementKind::Paragraph => {
+                inner.replace_paragraph_xml_at(part, &shapes, cell, paragraph, xml)
+            }
+            PptElementKind::Run => {
+                inner.replace_run_xml_at(part, &shapes, cell, paragraph, run, xml)
+            }
             PptElementKind::Slide => {
                 let rpptx::ShapeOwner::Slide(i) = part else {
                     return Err(PyValueError::new_err("slide address is absent"));
                 };
-                owner.inner.replace_slide_xml(i, xml)
+                inner.replace_slide_xml(i, xml)
             }
             PptElementKind::Layout => {
                 let rpptx::ShapeOwner::Layout(i) = part else {
                     return Err(PyValueError::new_err("layout address is absent"));
                 };
-                owner.inner.replace_layout_xml(i, xml)
+                inner.replace_layout_xml(i, xml)
             }
             PptElementKind::Master => {
                 let rpptx::ShapeOwner::Master(i) = part else {
                     return Err(PyValueError::new_err("master address is absent"));
                 };
-                owner.inner.replace_master_xml(i, xml)
+                inner.replace_master_xml(i, xml)
             }
         };
-        result.map_err(|error| rpptx_to_pyerr(py, error))?;
-        let after_xml = self.read_xml(py, &owner.inner, &path)?;
+        result.map_err(|error| rpptx_to_pyerr(py, error))
+    }
+}
+
+#[pymethods]
+impl PyPptElement {
+    #[getter]
+    fn xml(&self, py: Python<'_>) -> PyResult<String> {
+        let owner = self.presentation.borrow(py);
+        let path = self.checked_path(py, &owner)?;
+        String::from_utf8(self.read_xml(py, &owner.inner, &path)?)
+            .map_err(|_| PyValueError::new_err("physical XML snapshot is not UTF-8"))
+    }
+
+    fn replace_xml(&self, py: Python<'_>, xml: &str) -> PyResult<()> {
+        let mut owner = self.presentation.borrow_mut(py);
+        let path = self.checked_path(py, &owner)?;
+        let before_xml = self.read_xml(py, &owner.inner, &path)?;
+        // Native checked replacement has the same exact-snapshot no-op rule.
+        if before_xml == xml.as_bytes() {
+            return Ok(());
+        }
+        if self.kind == PptElementKind::Shape
+            && prove_local_shape_xml(&owner.inner, &path, &before_xml, xml.as_bytes())?
+        {
+            let prepared = owner.prepare_shape_xml(&path)?;
+            self.write_xml(py, &mut owner.inner, &path, xml)?;
+            // The pre-native scalar witness establishes an actual change.
+            // No fallible read, inventory discovery or fallback follows it.
+            return owner.commit_shape_xml(prepared);
+        }
+        let before_structure = (self.kind == PptElementKind::Shape)
+            .then(|| shape_structure(&owner.inner, &path))
+            .transpose()?;
+        let mut candidate = owner.inner.clone();
+        self.write_xml(py, &mut candidate, &path, xml)?;
+        let after_xml = self.read_xml(py, &candidate, &path)?;
         if before_xml == after_xml {
             return Ok(());
         }
-        if let Some(before_structure) = before_structure {
-            let after_structure = shape_structure(&owner.inner, &path)?;
-            if before_structure.2 != after_structure.2 {
-                let original = std::str::from_utf8(&before_xml)
-                    .map_err(|_| PyValueError::new_err("physical XML snapshot is not UTF-8"))?;
-                owner
-                    .inner
-                    .replace_shape_xml_at(part, &shapes, original)
-                    .map_err(|error| rpptx_to_pyerr(py, error))?;
-                return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-                    "Shape.element.replace_xml does not support changing table payload presence",
-                ));
-            }
-            if before_structure == after_structure {
-                return owner.publish_stable_element_xml(&path, self.kind);
-            }
+        if let Some(before) = before_structure
+            && before.has_table != shape_structure(&candidate, &path)?.has_table
+        {
+            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                "Shape.element.replace_xml does not support changing table payload presence",
+            ));
         }
         let generation = self
             .path
             .owner_generation()
             .ok_or_else(|| PyValueError::new_err("Element owner is absent"))?;
         let survivors = owner.element_xml_survivors(&path, self.kind, generation)?;
-        let next = owner_addresses(&owner.inner)?;
-        let prepared = owner.finish_prepare_owners(
-            next,
+        let prepared = owner.prepare_owners(
+            &candidate,
             "Element.replace_xml",
             &survivors,
             false,
             false,
             false,
         )?;
-        owner.commit_prepared(prepared)
+        owner.publish_owners(candidate, prepared)
     }
 }
 
@@ -2478,7 +2471,7 @@ pub(crate) enum SlideOwnerEdit {
     Move { from: usize, to: usize },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum PartIdentity {
     Slide(u32),
     Layout(String),
@@ -2549,169 +2542,238 @@ pub(crate) struct OwnerSurvival {
     pub(crate) grid_changed: bool,
 }
 
+type OwnerPathKey = (
+    smallvec::SmallVec<[oxml_py_support::PathSeg; 5]>,
+    Option<usize>,
+    bool,
+);
+
+struct PreparedShapeXml {
+    revision: oxml_py_support::PreparedRevision,
+    updates: Vec<(usize, LiveOwner)>,
+}
+
+struct OwnerIndexes {
+    by_generation: std::collections::HashMap<u64, usize>,
+    by_path: std::collections::HashMap<OwnerPathKey, usize>,
+    shape_id_counts: std::collections::HashMap<(PartIdentity, u32), usize>,
+}
+
+impl OwnerIndexes {
+    fn prepare(owners: &[LiveOwner]) -> PyResult<Self> {
+        let mut indexes = Self {
+            by_generation: std::collections::HashMap::new(),
+            by_path: std::collections::HashMap::new(),
+            shape_id_counts: std::collections::HashMap::new(),
+        };
+        indexes.reserve(owners.len())?;
+        for (index, owner) in owners.iter().enumerate() {
+            indexes.insert(index, owner);
+        }
+        Ok(indexes)
+    }
+
+    fn reserve(&mut self, additional: usize) -> PyResult<()> {
+        let fail = |_| {
+            pyo3::exceptions::PyMemoryError::new_err("PowerPoint owner index allocation failed")
+        };
+        self.by_generation.try_reserve(additional).map_err(fail)?;
+        self.by_path.try_reserve(additional).map_err(fail)?;
+        self.shape_id_counts.try_reserve(additional).map_err(fail)?;
+        Ok(())
+    }
+
+    fn insert(&mut self, index: usize, owner: &LiveOwner) {
+        note_fx260_ppt(1);
+        self.by_generation.insert(owner.owner.generation(), index);
+        let body = matches!(owner.address.physical, PhysicalOwner::TextBody { .. });
+        self.by_path
+            .entry((owner.address.path.clone(), owner.address.layout_index, body))
+            .or_insert(index);
+        if let PhysicalOwner::Shape {
+            slide,
+            id: Some(id),
+            ..
+        } = &owner.address.physical
+        {
+            *self
+                .shape_id_counts
+                .entry((slide.clone(), *id))
+                .or_default() += 1;
+        }
+    }
+}
+
+enum OwnerChanges {
+    Replace {
+        owners: Vec<LiveOwner>,
+        indexes: OwnerIndexes,
+    },
+    Append(Vec<LiveOwner>),
+}
+
 pub(crate) struct PreparedOwners {
     revision: oxml_py_support::PreparedRevision,
-    owners: Vec<LiveOwner>,
+    owners: OwnerChanges,
     slides: oxml_py_support::RevisionState,
     layouts: oxml_py_support::RevisionState,
     masters: oxml_py_support::RevisionState,
 }
 
-fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
-    note_fx260_ppt(inner.slides().len().max(1));
-    use oxml_py_support::PathSeg;
-    fn text_nodes(
-        frame: rpptx::TextFrameRef<'_>,
-        slide: PartIdentity,
-        shape: Option<u32>,
-        cell: Option<(usize, usize)>,
-        path: smallvec::SmallVec<[PathSeg; 5]>,
-        out: &mut Vec<OwnerAddress>,
-    ) -> PyResult<()> {
+fn text_owner_addresses(
+    frame: rpptx::TextFrameRef<'_>,
+    slide: PartIdentity,
+    shape: Option<u32>,
+    cell: Option<(usize, usize)>,
+    path: smallvec::SmallVec<[PathSeg; 5]>,
+    out: &mut Vec<OwnerAddress>,
+) -> PyResult<()> {
+    out.try_reserve(1).map_err(|_| {
+        pyo3::exceptions::PyMemoryError::new_err("text body owner allocation failed")
+    })?;
+    out.push(OwnerAddress {
+        physical: PhysicalOwner::TextBody {
+            slide: slide.clone(),
+            shape,
+            cell,
+        },
+        path: path.clone(),
+        layout_index: None,
+        table: false,
+    });
+    for index in 0..frame.paragraph_count() {
+        let paragraph = frame
+            .paragraph(index)
+            .ok_or_else(|| PyValueError::new_err("physical paragraph is absent"))?;
+        let mut paragraph_path = path.clone();
+        paragraph_path.try_reserve(1).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("paragraph owner path allocation failed")
+        })?;
+        paragraph_path.push(PathSeg::Para(index));
         out.try_reserve(1).map_err(|_| {
-            pyo3::exceptions::PyMemoryError::new_err("text body owner allocation failed")
+            pyo3::exceptions::PyMemoryError::new_err("paragraph owner allocation failed")
         })?;
         out.push(OwnerAddress {
-            physical: PhysicalOwner::TextBody {
+            physical: PhysicalOwner::Paragraph {
                 slide: slide.clone(),
                 shape,
                 cell,
+                index,
             },
-            path: path.clone(),
+            path: paragraph_path.clone(),
             layout_index: None,
             table: false,
         });
-        for index in 0..frame.paragraph_count() {
-            let paragraph = frame
-                .paragraph(index)
-                .ok_or_else(|| PyValueError::new_err("physical paragraph is absent"))?;
-            let mut paragraph_path = path.clone();
-            paragraph_path.try_reserve(1).map_err(|_| {
-                pyo3::exceptions::PyMemoryError::new_err("paragraph owner path allocation failed")
+        for run in 0..paragraph.run_count() {
+            let mut run_path = paragraph_path.clone();
+            run_path.try_reserve(1).map_err(|_| {
+                pyo3::exceptions::PyMemoryError::new_err("run owner path allocation failed")
             })?;
-            paragraph_path.push(PathSeg::Para(index));
+            run_path.push(PathSeg::Run(run));
             out.try_reserve(1).map_err(|_| {
-                pyo3::exceptions::PyMemoryError::new_err("paragraph owner allocation failed")
+                pyo3::exceptions::PyMemoryError::new_err("run owner allocation failed")
             })?;
             out.push(OwnerAddress {
-                physical: PhysicalOwner::Paragraph {
+                physical: PhysicalOwner::Run {
                     slide: slide.clone(),
                     shape,
                     cell,
-                    index,
+                    paragraph: index,
+                    index: run,
                 },
-                path: paragraph_path.clone(),
+                path: run_path,
                 layout_index: None,
                 table: false,
             });
-            for run in 0..paragraph.run_count() {
-                let mut run_path = paragraph_path.clone();
-                run_path.try_reserve(1).map_err(|_| {
-                    pyo3::exceptions::PyMemoryError::new_err("run owner path allocation failed")
+        }
+    }
+    Ok(())
+}
+fn shape_owner_addresses(
+    shape: rpptx::ShapeRef<'_>,
+    slide: PartIdentity,
+    path: smallvec::SmallVec<[PathSeg; 5]>,
+    out: &mut Vec<OwnerAddress>,
+) -> PyResult<()> {
+    // AlternateContent remains an opaque physical owner. Its fallback
+    // children cannot become mutable addresses by traversing this inventory.
+    out.try_reserve(1).map_err(|_| {
+        pyo3::exceptions::PyMemoryError::new_err("owner inventory allocation failed")
+    })?;
+    out.push(OwnerAddress {
+        physical: PhysicalOwner::Shape {
+            slide: slide.clone(),
+            id: shape.non_visual_id(),
+            kind: shape.kind(),
+        },
+        path: path.clone(),
+        layout_index: None,
+        table: shape.table().is_some(),
+    });
+    if let Some(frame) = shape.text_frame() {
+        text_owner_addresses(
+            frame,
+            slide.clone(),
+            shape.non_visual_id(),
+            None,
+            path.clone(),
+            out,
+        )?;
+    }
+    if let Some(table) = shape.table() {
+        for row in 0..table.row_count() {
+            for column in 0..table.column_count() {
+                let Some(cell) = table.cell(row, column) else {
+                    continue;
+                };
+                let mut cell_path = path.clone();
+                cell_path.try_reserve(2).map_err(|_| {
+                    pyo3::exceptions::PyMemoryError::new_err("cell owner path allocation failed")
                 })?;
-                run_path.push(PathSeg::Run(run));
+                cell_path.extend([PathSeg::Row(row), PathSeg::Cell(column)]);
                 out.try_reserve(1).map_err(|_| {
-                    pyo3::exceptions::PyMemoryError::new_err("run owner allocation failed")
+                    pyo3::exceptions::PyMemoryError::new_err("cell inventory allocation failed")
                 })?;
                 out.push(OwnerAddress {
-                    physical: PhysicalOwner::Run {
+                    physical: PhysicalOwner::Cell {
                         slide: slide.clone(),
-                        shape,
-                        cell,
-                        paragraph: index,
-                        index: run,
+                        table: shape.non_visual_id(),
+                        row,
+                        column,
                     },
-                    path: run_path,
+                    path: cell_path.clone(),
                     layout_index: None,
                     table: false,
                 });
-            }
-        }
-        Ok(())
-    }
-    fn children(
-        shape: rpptx::ShapeRef<'_>,
-        slide: PartIdentity,
-        path: smallvec::SmallVec<[PathSeg; 5]>,
-        out: &mut Vec<OwnerAddress>,
-    ) -> PyResult<()> {
-        // AlternateContent remains an opaque physical owner. Its fallback
-        // children cannot become mutable addresses by traversing this inventory.
-        out.try_reserve(1).map_err(|_| {
-            pyo3::exceptions::PyMemoryError::new_err("owner inventory allocation failed")
-        })?;
-        out.push(OwnerAddress {
-            physical: PhysicalOwner::Shape {
-                slide: slide.clone(),
-                id: shape.non_visual_id(),
-                kind: shape.kind(),
-            },
-            path: path.clone(),
-            layout_index: None,
-            table: shape.table().is_some(),
-        });
-        if let Some(frame) = shape.text_frame() {
-            text_nodes(
-                frame,
-                slide.clone(),
-                shape.non_visual_id(),
-                None,
-                path.clone(),
-                out,
-            )?;
-        }
-        if let Some(table) = shape.table() {
-            for row in 0..table.row_count() {
-                for column in 0..table.column_count() {
-                    let Some(cell) = table.cell(row, column) else {
-                        continue;
-                    };
-                    let mut cell_path = path.clone();
-                    cell_path.try_reserve(2).map_err(|_| {
-                        pyo3::exceptions::PyMemoryError::new_err(
-                            "cell owner path allocation failed",
-                        )
-                    })?;
-                    cell_path.extend([PathSeg::Row(row), PathSeg::Cell(column)]);
-                    out.try_reserve(1).map_err(|_| {
-                        pyo3::exceptions::PyMemoryError::new_err("cell inventory allocation failed")
-                    })?;
-                    out.push(OwnerAddress {
-                        physical: PhysicalOwner::Cell {
-                            slide: slide.clone(),
-                            table: shape.non_visual_id(),
-                            row,
-                            column,
-                        },
-                        path: cell_path.clone(),
-                        layout_index: None,
-                        table: false,
-                    });
-                    if let Some(frame) = cell.text_frame() {
-                        text_nodes(
-                            frame,
-                            slide.clone(),
-                            shape.non_visual_id(),
-                            Some((row, column)),
-                            cell_path,
-                            out,
-                        )?;
-                    }
+                if let Some(frame) = cell.text_frame() {
+                    text_owner_addresses(
+                        frame,
+                        slide.clone(),
+                        shape.non_visual_id(),
+                        Some((row, column)),
+                        cell_path,
+                        out,
+                    )?;
                 }
             }
         }
-        if shape.kind() == rpptx::ShapeKind::Group {
-            for (index, child) in shape.children().enumerate() {
-                let mut nested = path.clone();
-                nested.try_reserve(1).map_err(|_| {
-                    pyo3::exceptions::PyMemoryError::new_err("owner path allocation failed")
-                })?;
-                nested.push(PathSeg::Shape(index));
-                children(child, slide.clone(), nested, out)?;
-            }
-        }
-        Ok(())
     }
+    if shape.kind() == rpptx::ShapeKind::Group {
+        for (index, child) in shape.children().enumerate() {
+            let mut nested = path.clone();
+            nested.try_reserve(1).map_err(|_| {
+                pyo3::exceptions::PyMemoryError::new_err("owner path allocation failed")
+            })?;
+            nested.push(PathSeg::Shape(index));
+            shape_owner_addresses(child, slide.clone(), nested, out)?;
+        }
+    }
+    Ok(())
+}
+
+fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
+    note_fx260_ppt(inner.slides().len().max(1));
+    use oxml_py_support::PathSeg;
     let mut out = Vec::new();
     for (index, slide) in inner.slides().enumerate() {
         out.try_reserve(1).map_err(|_| {
@@ -2724,7 +2786,7 @@ fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
             table: false,
         });
         for (shape_index, shape) in slide.shapes().enumerate() {
-            children(
+            shape_owner_addresses(
                 shape,
                 PartIdentity::Slide(slide.id()),
                 smallvec![PathSeg::Slide(index), PathSeg::Shape(shape_index)],
@@ -2761,7 +2823,7 @@ fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
             .iter()
             .enumerate()
         {
-            children(
+            shape_owner_addresses(
                 inner
                     .part_shape_at(rpptx::ShapeOwner::Layout(index), &[shape_index])
                     .map_err(|e| PyValueError::new_err(e.to_string()))?,
@@ -2787,7 +2849,7 @@ fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
         });
         if let Some(master) = inner.master(index) {
             for shape_index in 0..master.common_slide_data.shape_tree.children.len() {
-                children(
+                shape_owner_addresses(
                     inner
                         .part_shape_at(rpptx::ShapeOwner::Master(index), &[shape_index])
                         .map_err(|e| PyValueError::new_err(e.to_string()))?,
@@ -2849,10 +2911,12 @@ impl PyPresentation {
                 grid,
             });
         }
+        let indexes = OwnerIndexes::prepare(&owners)?;
         Ok(Self {
             inner,
             revisions,
             owners,
+            indexes,
             gradient_stops: Vec::new(),
             next_gradient_stop: 0,
             slides,
@@ -2861,23 +2925,28 @@ impl PyPresentation {
         })
     }
 
+    fn indexed_owner_at(
+        &self,
+        path: &[oxml_py_support::PathSeg],
+        layout_index: Option<usize>,
+        body: bool,
+    ) -> Option<&LiveOwner> {
+        note_fx260_ppt(1);
+        let key = (smallvec::SmallVec::from_slice(path), layout_index, body);
+        let index = *self.indexes.by_path.get(&key)?;
+        self.owners.get(index)
+    }
+
     fn owner_at(
         &self,
         path: &[oxml_py_support::PathSeg],
         layout_index: Option<usize>,
     ) -> Option<&LiveOwner> {
-        self.owners.iter().find(|owner| {
-            owner.address.path.as_slice() == path
-                && owner.address.layout_index == layout_index
-                && !matches!(owner.address.physical, PhysicalOwner::TextBody { .. })
-        })
+        self.indexed_owner_at(path, layout_index, false)
     }
 
     fn body_owner_at(&self, path: &[oxml_py_support::PathSeg]) -> Option<&LiveOwner> {
-        self.owners.iter().find(|owner| {
-            owner.address.path.as_slice() == path
-                && matches!(owner.address.physical, PhysicalOwner::TextBody { .. })
-        })
+        self.indexed_owner_at(path, None, true)
     }
 
     pub(crate) fn current_path(
@@ -2891,10 +2960,10 @@ impl PyPresentation {
         let Some(generation) = captured.owner_generation() else {
             return Some(captured.clone());
         };
+        note_fx260_ppt(1);
         let owner = self
             .owners
-            .iter()
-            .find(|owner| owner.owner.generation() == generation)?;
+            .get(*self.indexes.by_generation.get(&generation)?)?;
         let mut path = captured.clone();
         let end = match &owner.address.physical {
             PhysicalOwner::TextBody { cell, .. } => {
@@ -2977,10 +3046,12 @@ impl PyPresentation {
                 "shape has no qualified id",
             ));
         };
-        if *kind == rpptx::ShapeKind::AlternateContent || self.owners.iter().filter(|candidate| {
-            matches!(&candidate.address.physical, PhysicalOwner::Shape { slide: other_slide, id: Some(other_id), .. } if other_slide == slide && other_id == id)
-        }).count() != 1 {
-            return Err(pyo3::exceptions::PyValueError::new_err("shape id is ambiguous or read-only"));
+        if *kind == rpptx::ShapeKind::AlternateContent
+            || self.indexes.shape_id_counts.get(&(slide.clone(), *id)) != Some(&1)
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "shape id is ambiguous or read-only",
+            ));
         }
         Ok(*id)
     }
@@ -3005,13 +3076,43 @@ impl PyPresentation {
         segs: smallvec::SmallVec<[oxml_py_support::PathSeg; 5]>,
         descendants: Option<oxml_py_support::RevisionScope>,
     ) -> PyResult<oxml_py_support::ContentPath> {
-        self.capture_owner_path(
-            &prepared.owners,
-            &prepared.slides,
-            prepared.revision.committed_serial(),
-            segs,
-            (descendants, false, false),
-        )
+        match &prepared.owners {
+            OwnerChanges::Replace { owners, .. } => self.capture_owner_path(
+                owners,
+                &prepared.slides,
+                prepared.revision.committed_serial(),
+                segs,
+                (descendants, false, false),
+            ),
+            OwnerChanges::Append(owners) => {
+                use oxml_py_support::PathSeg;
+                let [PathSeg::Slide(slide), PathSeg::Shape(_)] = segs.as_slice() else {
+                    return Err(PyValueError::new_err("append requires a root shape owner"));
+                };
+                if descendants.is_some() {
+                    return Err(PyValueError::new_err(
+                        "append does not capture descendant views",
+                    ));
+                }
+                let part = self
+                    .owner_at(&[PathSeg::Slide(*slide)], None)
+                    .ok_or_else(|| PyValueError::new_err("append slide owner is absent"))?;
+                let shape = owners
+                    .iter()
+                    .find(|owner| {
+                        note_fx260_ppt(1);
+                        owner.address.path == segs
+                            && matches!(owner.address.physical, PhysicalOwner::Shape { .. })
+                    })
+                    .ok_or_else(|| PyValueError::new_err("append shape owner is absent"))?;
+                let mut path = self
+                    .revisions
+                    .capture_scopes(segs, &[part.owner.clone(), shape.owner.clone()])
+                    .map_err(oxml_py_support::revision_to_pyerr)?;
+                path.revision = prepared.revision.committed_serial();
+                Ok(path)
+            }
+        }
     }
 
     pub(crate) fn capture_text_body_path(
@@ -3052,11 +3153,16 @@ impl PyPresentation {
         use oxml_py_support::PathSeg;
         let (descendants, select_body, xml_children) = selection;
         let owner_at = |path: &[PathSeg], layout_index: Option<usize>, body: bool| {
-            owners.iter().find(|owner| {
-                owner.address.path.as_slice() == path
-                    && owner.address.layout_index == layout_index
-                    && matches!(owner.address.physical, PhysicalOwner::TextBody { .. }) == body
-            })
+            if std::ptr::eq(owners, self.owners.as_slice()) {
+                self.indexed_owner_at(path, layout_index, body)
+            } else {
+                owners.iter().find(|owner| {
+                    note_fx260_ppt(1);
+                    owner.address.path.as_slice() == path
+                        && owner.address.layout_index == layout_index
+                        && matches!(owner.address.physical, PhysicalOwner::TextBody { .. }) == body
+                })
+            }
         };
         if segs.is_empty() {
             let mut path = self
@@ -3473,9 +3579,10 @@ impl PyPresentation {
             || self.masters.clone(),
             |at| revision.successor(at).expect("inventory successor exists"),
         );
+        let indexes = OwnerIndexes::prepare(&owners)?;
         Ok(PreparedOwners {
             revision,
-            owners,
+            owners: OwnerChanges::Replace { owners, indexes },
             slides,
             layouts,
             masters,
@@ -3497,7 +3604,19 @@ impl PyPresentation {
         self.revisions
             .commit_scopes(prepared.revision)
             .map_err(oxml_py_support::revision_to_pyerr)?;
-        self.owners = prepared.owners;
+        match prepared.owners {
+            OwnerChanges::Replace { owners, indexes } => {
+                self.owners = owners;
+                self.indexes = indexes;
+            }
+            OwnerChanges::Append(owners) => {
+                let start = self.owners.len();
+                self.owners.extend(owners);
+                for index in start..self.owners.len() {
+                    self.indexes.insert(index, &self.owners[index]);
+                }
+            }
+        }
         self.slides = prepared.slides;
         self.layouts = prepared.layouts;
         self.masters = prepared.masters;
@@ -3506,12 +3625,20 @@ impl PyPresentation {
 
     /// A property edit that keeps every physical owner identity.
     /// The document serial advances and no slide inventory is rebuilt.
-    pub(crate) fn publish_local_property(&mut self, operation: &'static str) -> PyResult<()> {
+    pub(crate) fn prepare_local_property(
+        &self,
+        operation: &'static str,
+    ) -> PyResult<oxml_py_support::PreparedRevision> {
         note_fx260_ppt(1);
-        let revision = self
-            .revisions
+        self.revisions
             .prepare_scopes(operation, &[], &[])
-            .map_err(oxml_py_support::revision_to_pyerr)?;
+            .map_err(oxml_py_support::revision_to_pyerr)
+    }
+
+    pub(crate) fn commit_local_property(
+        &mut self,
+        revision: oxml_py_support::PreparedRevision,
+    ) -> PyResult<()> {
         self.revisions
             .commit_scopes(revision)
             .map_err(oxml_py_support::revision_to_pyerr)?;
@@ -3520,7 +3647,7 @@ impl PyPresentation {
 
     /// Birth the shape, text body and empty paragraph of one appended text box.
     /// Any other new child rebuilds the owner inventory.
-    pub(crate) fn publish_appended_textbox(
+    pub(crate) fn prepare_appended_textbox(
         &mut self,
         operation: &'static str,
         slide_index: usize,
@@ -3528,28 +3655,19 @@ impl PyPresentation {
     ) -> PyResult<PreparedOwners> {
         use oxml_py_support::PathSeg;
         use oxml_py_support::RevisionScope as S;
-        let (slide_id, shape_id, kind, simple) = {
-            let slide = self
-                .inner
-                .slide(slide_index)
-                .ok_or_else(|| PyValueError::new_err("slide owner is absent"))?;
-            let shape = slide
-                .shapes()
-                .nth(shape_index)
-                .ok_or_else(|| PyValueError::new_err("new text box is absent"))?;
-            let simple = shape.text_frame().is_some_and(|frame| {
-                frame.paragraph_count() == 1
-                    && frame
-                        .paragraph(0)
-                        .is_some_and(|paragraph| paragraph.run_count() == 0)
-            });
-            (slide.id(), shape.non_visual_id(), shape.kind(), simple)
-        };
-        if !simple {
-            let survivors = self.unchanged_owners()?;
-            let next = owner_addresses(&self.inner)?;
-            return self.finish_prepare_owners(next, operation, &survivors, false, false, false);
-        }
+        self.owners.try_reserve(3).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("textbox owner allocation failed")
+        })?;
+        self.indexes.reserve(3)?;
+        let slide_id = self
+            .inner
+            .slide(slide_index)
+            .ok_or_else(|| PyValueError::new_err("slide owner is absent"))?
+            .id();
+        // The constructor has fixed shape/body/paragraph arity. Its native ID
+        // is bound after successful append, before installing these owners.
+        let shape_id = None;
+        let kind = rpptx::ShapeKind::Shape;
         note_fx260_ppt(1);
         let slide_identity = PartIdentity::Slide(slide_id);
         let shape_path = smallvec![PathSeg::Slide(slide_index), PathSeg::Shape(shape_index)];
@@ -3617,25 +3735,48 @@ impl PyPresentation {
                 }
             })
             .collect::<Vec<_>>();
-        let insert_at = self
-            .owners
-            .iter()
-            .position(|owner| match owner.address.path.first() {
-                Some(PathSeg::Slide(index)) => *index > slide_index,
-                Some(PathSeg::Layout(_) | PathSeg::Master(_)) => true,
-                None => owner.address.layout_index.is_some(),
-                _ => false,
-            })
-            .unwrap_or(self.owners.len());
-        let mut owners = self.owners.clone();
-        owners.splice(insert_at..insert_at, born);
         Ok(PreparedOwners {
             revision,
-            owners,
+            owners: OwnerChanges::Append(born),
             slides: self.slides.clone(),
             layouts: self.layouts.clone(),
             masters: self.masters.clone(),
         })
+    }
+
+    pub(crate) fn bind_appended_textbox(
+        &self,
+        prepared: &mut PreparedOwners,
+        slide_index: usize,
+        shape_index: usize,
+    ) {
+        let shape = self
+            .inner
+            .slide(slide_index)
+            .expect("validated append slide")
+            .shape(shape_index)
+            .expect("successful textbox append");
+        let id = shape.non_visual_id();
+        let kind = shape.kind();
+        let OwnerChanges::Append(owners) = &mut prepared.owners else {
+            unreachable!("textbox append has prepared births");
+        };
+        for owner in owners {
+            match &mut owner.address.physical {
+                PhysicalOwner::Shape {
+                    id: stored,
+                    kind: stored_kind,
+                    ..
+                } => {
+                    *stored = id;
+                    *stored_kind = kind;
+                }
+                PhysicalOwner::TextBody { shape, .. } | PhysicalOwner::Paragraph { shape, .. } => {
+                    *shape = id
+                }
+                _ => unreachable!("textbox births have fixed owner kinds"),
+            }
+        }
     }
 
     fn element_xml_survivors(
@@ -3681,56 +3822,271 @@ impl PyPresentation {
         Ok(survivors)
     }
 
-    fn publish_stable_element_xml(
+    fn prepare_shape_xml(
         &mut self,
         path: &oxml_py_support::ContentPath,
-        kind: PptElementKind,
-    ) -> PyResult<()> {
-        note_fx260_ppt(1);
-        let generation = path
-            .owner_generation()
+    ) -> PyResult<PreparedShapeXml> {
+        let selected = *self
+            .indexes
+            .by_generation
+            .get(
+                &path
+                    .owner_generation()
+                    .ok_or_else(|| PyValueError::new_err("Element owner is absent"))?,
+            )
             .ok_or_else(|| PyValueError::new_err("Element owner is absent"))?;
-        let survivors = self.element_xml_survivors(path, kind, generation)?;
-        let next = self
-            .owners
-            .iter()
-            .map(|owner| owner.address.clone())
+        let PhysicalOwner::Shape { slide, .. } = &self.owners[selected].address.physical else {
+            return Err(PyValueError::new_err("Element is not a shape owner"));
+        };
+        let shape = crate::shape::native_shape_ref_at(&self.inner, path)
+            .ok_or_else(|| PyValueError::new_err("shape owner is absent"))?;
+        let mut addresses = Vec::new();
+        shape_owner_addresses(shape, slide.clone(), path.segs.clone(), &mut addresses)?;
+        let mut indices = Vec::with_capacity(addresses.len());
+        for address in addresses {
+            note_fx260_ppt(1);
+            let body = matches!(address.physical, PhysicalOwner::TextBody { .. });
+            let key = (address.path, address.layout_index, body);
+            let index =
+                *self.indexes.by_path.get(&key).ok_or_else(|| {
+                    PyValueError::new_err("local shape descendant owner is absent")
+                })?;
+            if self.owners[index].address.physical != address.physical {
+                return Err(PyValueError::new_err(
+                    "local shape descendant identity changed",
+                ));
+            }
+            indices.push(index);
+        }
+        self.indexes
+            .by_generation
+            .try_reserve(indices.len())
+            .map_err(|_| {
+                pyo3::exceptions::PyMemoryError::new_err("shape successor index allocation failed")
+            })?;
+        let mut retired = Vec::new();
+        for &index in &indices {
+            note_fx260_ppt(1);
+            let owner = &self.owners[index];
+            if index != selected {
+                retired.push(owner.owner.clone());
+            }
+            retired.push(owner.text.clone());
+            retired.push(owner.xml_children.clone());
+            if let Some(grid) = &owner.grid {
+                retired.push(grid.clone());
+            }
+        }
+        let revision = self
+            .revisions
+            .prepare_scopes("Element.replace_xml", &retired, &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let mut next = 0;
+        let updates = indices
+            .into_iter()
+            .map(|index| {
+                note_fx260_ppt(1);
+                let mut owner = self.owners[index].clone();
+                if index != selected {
+                    owner.owner = revision
+                        .successor(next)
+                        .expect("shape child owner successor");
+                    next += 1;
+                }
+                owner.text = revision.successor(next).expect("shape text successor");
+                owner.xml_children = revision.successor(next + 1).expect("shape XML successor");
+                next += 2;
+                if owner.grid.is_some() {
+                    owner.grid = Some(revision.successor(next).expect("shape grid successor"));
+                    next += 1;
+                }
+                (index, owner)
+            })
             .collect();
-        let prepared = self.finish_prepare_owners(
-            next,
-            "Element.replace_xml",
-            &survivors,
-            false,
-            false,
-            false,
-        )?;
-        self.commit_prepared(prepared)
+        Ok(PreparedShapeXml { revision, updates })
     }
+
+    fn commit_shape_xml(&mut self, prepared: PreparedShapeXml) -> PyResult<()> {
+        self.revisions
+            .commit_scopes(prepared.revision)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        for (index, owner) in prepared.updates {
+            note_fx260_ppt(1);
+            self.indexes
+                .by_generation
+                .remove(&self.owners[index].owner.generation());
+            self.indexes
+                .by_generation
+                .insert(owner.owner.generation(), index);
+            self.owners[index] = owner;
+        }
+        Ok(())
+    }
+}
+
+#[derive(PartialEq, Eq)]
+struct ShapeStructure {
+    id: Option<u32>,
+    kind: rpptx::ShapeKind,
+    has_table: bool,
+    paragraph_runs: Option<Vec<usize>>,
 }
 
 fn shape_structure(
     inner: &rpptx::Presentation,
     path: &oxml_py_support::ContentPath,
-) -> PyResult<(Option<u32>, rpptx::ShapeKind, bool, Vec<usize>)> {
+) -> PyResult<ShapeStructure> {
     let shape = crate::shape::native_shape_ref_at(inner, path)
         .ok_or_else(|| PyValueError::new_err("shape owner is absent"))?;
-    let runs = match shape.text_frame() {
-        Some(frame) => (0..frame.paragraph_count())
+    let paragraph_runs = shape.text_frame().map(|frame| {
+        (0..frame.paragraph_count())
             .map(|index| {
                 frame
                     .paragraph(index)
-                    .map(|paragraph| paragraph.run_count())
-                    .unwrap_or(0)
+                    .expect("current paragraph index")
+                    .run_count()
             })
-            .collect(),
-        None => Vec::new(),
+            .collect()
+    });
+    Ok(ShapeStructure {
+        id: shape.non_visual_id(),
+        kind: shape.kind(),
+        has_table: shape.table().is_some(),
+        paragraph_runs,
+    })
+}
+
+fn projected_runs(body: Option<&oxml_drawing::text::CT_TextBody>) -> Option<Vec<usize>> {
+    body.map(|body| {
+        body.paragraphs()
+            .iter()
+            .map(|paragraph| {
+                paragraph
+                    .runs
+                    .iter()
+                    .filter(|run| matches!(run, oxml_drawing::text::TextRun::Run(_)))
+                    .count()
+            })
+            .collect()
+    })
+}
+
+fn geometry_witness(
+    shape: &rpptx::ShapeRef<'_>,
+    before: Option<&oxml_drawing::xfrm::CT_Transform2D>,
+    after: Option<&oxml_drawing::xfrm::CT_Transform2D>,
+) -> bool {
+    let Some(before) = before else {
+        return false;
     };
-    Ok((
-        shape.non_visual_id(),
-        shape.kind(),
-        shape.table().is_some(),
-        runs,
-    ))
+    let position = |transform: &oxml_drawing::xfrm::CT_Transform2D| {
+        transform.offset.as_ref().map(|offset| (offset.x, offset.y))
+    };
+    let size = |transform: &oxml_drawing::xfrm::CT_Transform2D| {
+        transform
+            .extent
+            .as_ref()
+            .map(|extent| (extent.cx, extent.cy))
+    };
+    if shape.position() != position(before)
+        || shape.size() != size(before)
+        || shape.rotation() != Some(before.rotation)
+        || shape.flips() != Some((before.flip_horizontal, before.flip_vertical))
+    {
+        return false;
+    }
+    let Some(after) = after else {
+        return position(before).is_some()
+            || size(before).is_some()
+            || before.rotation != rpptx::Angle(0)
+            || before.flip_horizontal
+            || before.flip_vertical;
+    };
+    position(before) != position(after)
+        || size(before) != size(after)
+        || before.rotation != after.rotation
+        || before.flip_horizontal != after.flip_horizontal
+        || before.flip_vertical != after.flip_vertical
+}
+
+fn prove_local_shape_xml(
+    inner: &rpptx::Presentation,
+    path: &oxml_py_support::ContentPath,
+    before: &[u8],
+    after: &[u8],
+) -> PyResult<bool> {
+    use rpptx_oxml::shape_tree::{CT_Shape, ShapeTreeChild};
+    // Template writers also carry dirty-part bookkeeping. Keep those uncertain
+    // native contexts on a candidate, including native rejection paths.
+    if !matches!(
+        crate::shape::shape_owner(path)?,
+        rpptx::ShapeOwner::Slide(_)
+    ) {
+        return Ok(false);
+    }
+    let shape = crate::shape::native_shape_ref_at(inner, path)
+        .ok_or_else(|| PyValueError::new_err("shape owner is absent"))?;
+    let actual = shape_structure(inner, path)?;
+    match actual.kind {
+        rpptx::ShapeKind::Shape => {
+            let (Ok(old), Ok(new)) = (CT_Shape::from_xml(before), CT_Shape::from_xml(after)) else {
+                return Ok(false);
+            };
+            let old_runs = projected_runs(old.text_body.as_ref());
+            let new_runs = projected_runs(new.text_body.as_ref());
+            let old_alt = old.alt_text();
+            let new_alt = new.alt_text();
+            let geometry = geometry_witness(
+                &shape,
+                old.shape_properties.transform.as_ref(),
+                new.shape_properties.transform.as_ref(),
+            );
+            let old = ShapeTreeChild::Shape(old);
+            let new = ShapeTreeChild::Shape(new);
+            if actual.id != old.non_visual_id()
+                || actual.id != new.non_visual_id()
+                || actual.has_table
+                || actual.paragraph_runs != old_runs
+                || actual.paragraph_runs != new_runs
+            {
+                return Ok(false);
+            }
+            let name = shape.non_visual_name() == old.non_visual_name()
+                && old.non_visual_name() != new.non_visual_name();
+            let alt = shape.alt_text() == old_alt && old_alt != new_alt;
+            Ok(name || alt || geometry)
+        }
+        rpptx::ShapeKind::GraphicFrame => {
+            use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
+            let (Ok(old), Ok(new)) = (
+                CT_GraphicFrame::from_xml(before),
+                CT_GraphicFrame::from_xml(after),
+            ) else {
+                return Ok(false);
+            };
+            let old_table = matches!(old.graphic_data.payload(), GraphicDataPayload::Table(_));
+            let new_table = matches!(new.graphic_data.payload(), GraphicDataPayload::Table(_));
+            let payload_same = old.graphic_data == new.graphic_data;
+            let geometry = geometry_witness(&shape, Some(&old.transform), Some(&new.transform));
+            let old = ShapeTreeChild::GraphicFrame(Box::new(old));
+            let new = ShapeTreeChild::GraphicFrame(Box::new(new));
+            if actual.id != old.non_visual_id() || actual.has_table != old_table {
+                return Ok(false);
+            }
+            if old_table != new_table {
+                return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                    "Shape.element.replace_xml does not support changing table payload presence",
+                ));
+            }
+            if actual.id != new.non_visual_id() || !payload_same {
+                return Ok(false);
+            }
+            Ok((shape.non_visual_name() == old.non_visual_name()
+                && old.non_visual_name() != new.non_visual_name())
+                || geometry)
+        }
+        _ => Ok(false),
+    }
 }
 
 // Existing presentation.rs helpers. No current-owner history is retained.
@@ -4683,12 +5039,15 @@ mod fx260_visit_tests {
     fn issue389_local_edits_do_not_scale_with_unrelated_package() {
         Python::initialize();
         Python::attach(|py| -> PyResult<()> {
-            for (slides, boxes) in [(1usize, 0usize), (40usize, 40usize)] {
+            let mut expected_work = None;
+            for (slides, boxes) in [(0usize, 40usize), (40usize, 40usize)] {
+                let mut work = Vec::new();
                 let mut native = rpptx::Presentation::new().unwrap();
+                native.add_slide(6).unwrap();
                 for _ in 0..slides {
                     native.add_slide(6).unwrap();
                 }
-                for slide in 0..slides {
+                for slide in 1..=slides {
                     for _ in 0..boxes {
                         native
                             .shapes_mut(slide, &[])
@@ -4710,28 +5069,68 @@ mod fx260_visit_tests {
                     crate::shape::PyShapeCollection::new(presentation.clone_ref(py), path);
                 reset_fx260_ppt_visits();
                 let shape = shapes.add_textbox(py, 0, 0, 100, 100)?;
-                assert_eq!(
-                    fx260_ppt_visits(),
-                    1,
-                    "add_textbox slides={slides} boxes={boxes}"
-                );
+                work.push(fx260_ppt_visits());
+                // Regular runs, breaks and fields must not collapse to one count.
+                // This setup stages before the measured scalar edit below.
+                let body = r#"<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>regular</a:t></a:r><a:br/><a:fld id="{00000000-0000-0000-0000-000000000001}" type="slidenum"><a:t>2</a:t></a:fld></a:p></p:txBody>"#;
+                let element = shape.borrow(py).element(py)?;
+                let xml = element.borrow(py).xml(py)?;
+                let start = xml.find("<p:txBody").expect("physical text body");
+                let end = xml.find("</p:txBody>").expect("text body end") + "</p:txBody>".len();
+                let rich = format!("{}{}{}", &xml[..start], body, &xml[end..]);
+                element.borrow(py).replace_xml(py, &rich)?;
                 reset_fx260_ppt_visits();
                 shape.borrow(py).set_alt_text(py, Some("alt"))?;
-                assert_eq!(fx260_ppt_visits(), 1, "alt_text slides={slides}");
+                work.push(fx260_ppt_visits());
                 reset_fx260_ppt_visits();
                 shape.borrow(py).set_left(py, 200_000)?;
-                assert_eq!(fx260_ppt_visits(), 1, "left slides={slides}");
+                work.push(fx260_ppt_visits());
                 reset_fx260_ppt_visits();
                 let fill = shape.borrow(py).fill(py)?;
                 fill.borrow(py).solid(py)?;
-                assert_eq!(fx260_ppt_visits(), 1, "fill slides={slides}");
+                work.push(fx260_ppt_visits());
                 reset_fx260_ppt_visits();
                 let element = shape.borrow(py).element(py)?;
                 let xml = element.borrow(py).xml(py)?;
                 assert!(xml.contains("TextBox "), "{xml}");
                 let changed = xml.replacen("TextBox ", "TextBax ", 1);
                 element.borrow(py).replace_xml(py, &changed)?;
-                assert_eq!(fx260_ppt_visits(), 1, "replace_xml slides={slides}");
+                work.push(fx260_ppt_visits());
+                let root_shapes = presentation.bind(py).getattr("slides")?
+                    .get_item(0)?.getattr("shapes")?;
+                let frame = root_shapes.call_method1("add_table", (2, 2, 0, 0, 1000, 1000))?
+                    .extract::<Py<crate::shape::PyShape>>()?;
+                frame.bind(py).getattr("table")?.call_method1("cell", (0, 0))?
+                    .setattr("text", "payload")?;
+                // Appending on the earlier slide makes its owners noncontiguous.
+                root_shapes.call_method1("add_textbox", (0, 0, 100, 100))?;
+                let held_cell = frame.bind(py).getattr("table")?.call_method1("cell", (0, 0))?;
+                reset_fx260_ppt_visits();
+                let element = frame.borrow(py).element(py)?;
+                let xml = element.borrow(py).xml(py)?;
+                let changed = xml.replacen("Table ", "ChangedTable ", 1);
+                assert_ne!(xml, changed);
+                element.borrow(py).replace_xml(py, &changed)?;
+                work.push(fx260_ppt_visits());
+                assert!(held_cell.getattr("text").unwrap_err().to_string().contains("stale"));
+                assert_eq!(frame.bind(py).getattr("table")?.call_method1("cell", (0, 0))?
+                    .getattr("text")?.extract::<String>()?, "payload");
+                reset_fx260_ppt_visits();
+                let element = frame.borrow(py).element(py)?;
+                let xml = element.borrow(py).xml(py)?;
+                let changed = xml.replacen(" x=\"0\"", " x=\"123\"", 1);
+                assert_ne!(xml, changed);
+                element.borrow(py).replace_xml(py, &changed)?;
+                work.push(fx260_ppt_visits());
+                assert!(
+                    work.iter().all(|&visits| visits > 0 && visits <= 128),
+                    "{work:?}"
+                );
+                if let Some(expected) = &expected_work {
+                    assert_eq!(&work, expected, "unrelated slides changed traversal work");
+                } else {
+                    expected_work = Some(work);
+                }
             }
             Ok(())
         })

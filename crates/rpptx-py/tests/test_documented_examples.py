@@ -12163,3 +12163,146 @@ def test_issue389_local_edits_do_not_scale_with_unrelated_package():
             assert other.alt_text in (None, "")
             assert "TextBox " in other.element.xml
             assert int(other.left) == 0
+
+
+@pytest.mark.parametrize("kind", ["shape", "table", "cell", "body", "paragraph", "run", "slide", "layout", "master"])
+def test_issue389_element_publication_and_refusal_for_every_kind(kind):
+    import rpptx
+
+    original = rpptx.Presentation()
+    first = original.slides.add_slide(original.slide_layouts[6])
+    for _ in range(2):
+        first.shapes.add_textbox(0, 0, 1000, 1000)
+    target_slide = original.slides.add_slide(original.slide_layouts[6])
+    target_slide.shapes.add_textbox(0, 0, 1000, 1000).text = "target"
+    target_slide.shapes.add_table(1, 1, 0, 0, 1000, 1000).table.cell(0, 0).text = "payload"
+    unique = original.to_bytes()
+    damaged = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(unique)) as source, zipfile.ZipFile(damaged, "w") as out:
+        for member in source.infolist():
+            data = source.read(member.filename)
+            if member.filename == "ppt/slides/slide1.xml":
+                ids = re.findall(rb'<p:cNvPr\b[^>]*\bid="(\d+)"', data)
+                assert len(ids) == 3
+                data, count = re.subn(rb'(<p:cNvPr\b[^>]*\bid=")' + ids[-1] + rb'(")',
+                                      lambda match: match[1] + ids[-2] + match[2], data, count=1)
+                assert count == 1
+            out.writestr(member, data)
+
+    def select(deck):
+        slide = deck.slides[1]
+        shape = slide.shapes[0]
+        table = slide.shapes[1].table
+        return {
+            "shape": lambda: shape.element,
+            "table": lambda: table.element,
+            "cell": lambda: table.cell(0, 0).element,
+            "body": lambda: shape.text_frame.element,
+            "paragraph": lambda: shape.text_frame.paragraphs[0].element,
+            "run": lambda: shape.text_frame.paragraphs[0].runs[0].element,
+            "slide": lambda: slide.element,
+            "layout": lambda: deck.slide_layouts[6].element,
+            "master": lambda: deck.slide_masters[0].element,
+        }[kind]()
+
+    def changed(xml):
+        if kind in ("shape", "body"):
+            closing = "</p:txBody>" if kind == "shape" else "</a:txBody>"
+            # The physical shape body uses p:txBody on both owning surfaces.
+            if closing not in xml:
+                closing = "</p:txBody>"
+            assert closing in xml
+            return xml.replace(closing, "<a:p><a:r><a:t>new</a:t></a:r></a:p>" + closing, 1)
+        if kind == "paragraph":
+            assert "</a:p>" in xml
+            return xml.replace("</a:p>", "<a:r><a:t>new</a:t></a:r></a:p>", 1)
+        if kind in ("table", "cell"):
+            # Grow the physical owner inventory. A same-topology text edit is
+            # legal even when an unrelated imported slide has duplicate IDs.
+            assert "</a:txBody>" in xml
+            return xml.replace("</a:txBody>",
+                               "<a:p><a:r><a:t>new</a:t></a:r></a:p></a:txBody>", 1)
+        if kind == "run":
+            assert "target" in xml
+            return xml.replace("target", "edited", 1)
+        match = re.search(r"<p:cSld\b[^>]*>", xml)
+        assert match
+        tag = match[0]
+        if re.search(r'\sname="[^"]*"', tag):
+            tag = re.sub(r'\sname="[^"]*"', ' name="edited"', tag, count=1)
+        else:
+            tag = tag.replace("<p:cSld", '<p:cSld name="edited"', 1)
+        return xml[:match.start()] + tag + xml[match.end():]
+
+    if kind in ("table", "cell"):
+        stable = rpptx.Presentation.from_bytes(damaged.getvalue())
+        stable_element = select(stable)
+        stable_element.replace_xml(stable_element.xml.replace("payload", "edited", 1))
+        reopened = rpptx.Presentation.from_bytes(stable.to_bytes())
+        assert reopened.slides[1].shapes[1].table.cell(0, 0).text == "edited"
+
+    broken = rpptx.Presentation.from_bytes(damaged.getvalue())
+    element = select(broken)
+    before_xml = element.xml
+    before = broken.to_bytes()
+    held_run = broken.slides[1].shapes[0].text_frame.paragraphs[0].runs[0]
+    if kind in ("shape", "table", "cell", "body", "paragraph"):
+        with pytest.raises(ValueError, match="structural owner proof has an ambiguous shape id"):
+            element.replace_xml(changed(before_xml))
+        assert broken.to_bytes() == before
+        assert element.xml == before_xml
+        assert held_run.text == "target"
+        assert broken.slides[1].shapes[0].text_frame.paragraphs[0].runs[0].text == "target"
+        assert broken.slides[1].shapes[1].table.cell(0, 0).text == "payload"
+    else:
+        # These edits preserve the relevant physical topology. Existing policy
+        # permits them despite unrelated imported duplicate IDs.
+        element.replace_xml(changed(before_xml))
+        assert element.xml != before_xml
+        reopened = rpptx.Presentation.from_bytes(broken.to_bytes())
+        assert select(reopened).xml == element.xml
+
+    control = rpptx.Presentation.from_bytes(unique)
+    control_element = select(control)
+    control_before = control_element.xml
+    control_element.replace_xml(changed(control_before))
+    assert control_element.xml != control_before
+    reopened = rpptx.Presentation.from_bytes(control.to_bytes())
+    assert select(reopened).xml == control_element.xml
+
+
+def test_issue389_empty_body_removal_has_no_ghost_owner_or_resurrection():
+    import rpptx
+
+    deck = rpptx.Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    slide.shapes.add_textbox(0, 0, 1000, 1000)
+    source_bytes = deck.to_bytes()
+    result = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(source_bytes)) as source, zipfile.ZipFile(result, "w") as out:
+        for member in source.infolist():
+            data = source.read(member.filename)
+            if member.filename == "ppt/slides/slide1.xml":
+                data, count = re.subn(rb'<p:txBody\b[^>]*>.*?</p:txBody>',
+                                      b'<p:txBody><a:bodyPr/><a:lstStyle/></p:txBody>', data, count=1, flags=re.S)
+                assert count == 1
+            out.writestr(member, data)
+    deck = rpptx.Presentation.from_bytes(result.getvalue())
+    shape = deck.slides[0].shapes[0]
+    held_body = shape.text_frame
+    assert len(held_body.paragraphs) == 0
+    xml = shape.element.xml
+    without_body, count = re.subn(r'<p:txBody\b[^>]*>.*?</p:txBody>', '', xml, count=1, flags=re.S)
+    assert count == 1
+    shape.element.replace_xml(without_body)
+    with pytest.raises(rpptx.StaleElementError):
+        _ = held_body.text
+    # A stale inventory body must not poison a later full publication.
+    deck.slides.add_slide(deck.slide_layouts[6])
+    fresh = deck.slides[0].shapes[0]
+    xml = fresh.element.xml
+    xml = xml.replace('</p:sp>', '<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>', 1)
+    fresh.element.replace_xml(xml)
+    assert len(fresh.text_frame.paragraphs) == 1
+    with pytest.raises(rpptx.StaleElementError):
+        _ = held_body.text

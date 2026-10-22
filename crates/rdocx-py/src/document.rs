@@ -4187,21 +4187,61 @@ pub(crate) enum WordView {
     Grid,
 }
 
+struct WordOwnerIndexes {
+    by_generation: HashMap<u64, usize>,
+    direct_body_paragraphs: HashMap<usize, usize>,
+}
+
+impl WordOwnerIndexes {
+    fn prepare(owners: &[WordOwner]) -> PyResult<Self> {
+        let mut indexes = Self {
+            by_generation: HashMap::new(),
+            direct_body_paragraphs: HashMap::new(),
+        };
+        let fail =
+            |_| pyo3::exceptions::PyMemoryError::new_err("Word owner index allocation failed");
+        indexes
+            .by_generation
+            .try_reserve(owners.len())
+            .map_err(fail)?;
+        indexes
+            .direct_body_paragraphs
+            .try_reserve(owners.len())
+            .map_err(fail)?;
+        for (index, owner) in owners.iter().enumerate() {
+            note_fx260_word(1);
+            indexes
+                .by_generation
+                .insert(owner.owner.generation(), index);
+            if let WordOwnerLocation::Paragraph(location) = &owner.location
+                && location.story().kind() == rdocx::StoryKind::Body
+                && location.index_path().len() == 1
+                && let Some(slot) = owner.body_slot
+            {
+                indexes.direct_body_paragraphs.entry(slot).or_insert(index);
+            }
+        }
+        Ok(indexes)
+    }
+}
+
 pub(crate) struct PreparedWordRevision {
     pub(crate) revision: PreparedRevision,
     owners: Vec<WordOwner>,
+    indexes: WordOwnerIndexes,
     snapshot_scope: RevisionState,
 }
 
 fn word_owner_capture(
     counter: &RevisionCounter,
     owners: &[WordOwner],
-    document_scope: RevisionState,
+    document_scopes: (RevisionState, &RevisionState),
     location: &WordOwnerLocation,
     segments: smallvec::SmallVec<[PathSeg; 5]>,
     view: WordView,
     furniture_scope: Option<&RevisionState>,
 ) -> PyResult<(ContentPath, RevisionState)> {
+    let (document_scope, removal_scope) = document_scopes;
     let index = owners
         .iter()
         .position(|owner| owner.location.same_route(location))
@@ -4209,7 +4249,7 @@ fn word_owner_capture(
     let target = &owners[index];
     // Every structural publisher retires unproved current-owner states. Actual
     // Run handles retain the conservative document epoch and its first cause.
-    let mut states = vec![target.owner.clone()];
+    let mut states = vec![removal_scope.clone(), target.owner.clone()];
     if matches!(location, WordOwnerLocation::Run(..)) {
         states.push(document_scope);
     }
@@ -4245,48 +4285,6 @@ fn word_owner_capture(
 
 fn same_story_owner(a: &rdocx::StoryId, b: &rdocx::StoryId) -> bool {
     a.kind() == b.kind() && a.part_name() == b.part_name() && a.owner_index() == b.owner_index()
-}
-
-fn shift_content_location(
-    location: rdocx::ContentLocation,
-    removed: usize,
-) -> rdocx::ContentLocation {
-    let mut path = location.index_path().to_vec();
-    if location.story().kind() == rdocx::StoryKind::Body
-        && path.first().is_some_and(|root| *root > removed)
-    {
-        path[0] -= 1;
-    }
-    rdocx::ContentLocation::new(location.story().clone(), location.item_kind(), path)
-}
-
-fn shift_word_owner_location(location: WordOwnerLocation, removed: usize) -> WordOwnerLocation {
-    match location {
-        WordOwnerLocation::Paragraph(location) => {
-            WordOwnerLocation::Paragraph(shift_content_location(location, removed))
-        }
-        WordOwnerLocation::Run(location, path) => {
-            WordOwnerLocation::Run(shift_content_location(location, removed), path)
-        }
-        WordOwnerLocation::Table(location) => {
-            WordOwnerLocation::Table(shift_content_location(location, removed))
-        }
-        WordOwnerLocation::Cell {
-            table,
-            row,
-            cell,
-            story,
-        } => WordOwnerLocation::Cell {
-            table: shift_content_location(table, removed),
-            row,
-            cell,
-            story,
-        },
-        WordOwnerLocation::Hyperlink(location, index) => {
-            WordOwnerLocation::Hyperlink(shift_content_location(location, removed), index)
-        }
-        WordOwnerLocation::Section(index) => WordOwnerLocation::Section(index),
-    }
 }
 
 fn same_content_owner(a: &rdocx::ContentLocation, b: &rdocx::ContentLocation) -> bool {
@@ -5357,6 +5355,8 @@ pub struct PyDocument {
     pub(crate) inner: rdocx::Document,
     pub(crate) revisions: RevisionCounter,
     owners: Vec<WordOwner>,
+    indexes: WordOwnerIndexes,
+    removal_scope: RevisionState,
     snapshot_scope: RevisionState,
 }
 
@@ -5919,7 +5919,7 @@ impl PyDocument {
         word_owner_capture(
             &self.revisions,
             &self.owners,
-            self.revisions.current_document_scope(),
+            (self.revisions.current_document_scope(), &self.removal_scope),
             location,
             segments,
             view,
@@ -5942,7 +5942,7 @@ impl PyDocument {
         let (mut path, owner) = word_owner_capture(
             &self.revisions,
             &prepared.owners,
-            prepared.revision.document_scope(),
+            (prepared.revision.document_scope(), &self.removal_scope),
             location,
             segments,
             view,
@@ -5987,6 +5987,81 @@ impl PyDocument {
             .map_err(revision_to_pyerr)?;
         path.revision = prepared.revision.committed_serial();
         Ok(path)
+    }
+
+    pub(crate) fn plain_paragraph_owner(&self, state: &RevisionState) -> Option<(usize, usize)> {
+        let selected = *self.indexes.by_generation.get(&state.generation())?;
+        let owner = self.owners.get(selected)?;
+        if !owner.owner.same_state(state) {
+            return None;
+        }
+        let slot = owner.body_slot?;
+        (self.indexes.direct_body_paragraphs.get(&slot) == Some(&selected))
+            .then_some((selected, slot))
+    }
+
+    fn prepare_tail_body_removal(
+        &self,
+        slot: usize,
+    ) -> PyResult<Option<(std::ops::Range<usize>, PreparedRevision)>> {
+        if slot.checked_add(1) != Some(self.inner.content_count()) {
+            return Ok(None);
+        }
+        let Some(&selected) = self.indexes.direct_body_paragraphs.get(&slot) else {
+            return Ok(None);
+        };
+        let mut end = selected + 1;
+        while end < self.owners.len() && self.owners[end].parent == Some(selected) {
+            note_fx260_word(1);
+            end += 1;
+        }
+        for owner in &self.owners[end..] {
+            note_fx260_word(1);
+            if !matches!(owner.location, WordOwnerLocation::Section(_)) {
+                return Ok(None);
+            }
+        }
+        let revision = self
+            .revisions
+            .prepare_scopes(
+                "Document.remove_content",
+                &[self.removal_scope.clone(), self.snapshot_scope.clone()],
+                &[RevisionScope::Document, RevisionScope::Text],
+            )
+            .map_err(revision_to_pyerr)?;
+        Ok(Some((selected..end, revision)))
+    }
+
+    fn commit_tail_body_removal(
+        &mut self,
+        slot: usize,
+        range: std::ops::Range<usize>,
+        revision: PreparedRevision,
+    ) -> PyResult<()> {
+        let removal_scope = revision.born(0).expect("removal epoch birth");
+        let snapshot_scope = revision.born(1).expect("removal snapshot birth");
+        self.revisions
+            .commit_scopes(revision)
+            .map_err(revision_to_pyerr)?;
+        let start = range.start;
+        for owner in self.owners.drain(range) {
+            note_fx260_word(1);
+            self.indexes.by_generation.remove(&owner.owner.generation());
+        }
+        // The checked suffix contains only sections, with no owner parents or
+        // direct-body locations to shift. Earlier physical owners stay put.
+        for (offset, owner) in self.owners[start..].iter().enumerate() {
+            note_fx260_word(1);
+            *self
+                .indexes
+                .by_generation
+                .get_mut(&owner.owner.generation())
+                .expect("surviving section is indexed") = start + offset;
+        }
+        self.indexes.direct_body_paragraphs.remove(&slot);
+        self.removal_scope = removal_scope;
+        self.snapshot_scope = snapshot_scope;
+        Ok(())
     }
 
     pub(crate) fn current_paragraph_owner(
@@ -6087,138 +6162,25 @@ impl PyDocument {
             })
     }
 
-    fn publish_plain_body_removal(&mut self, removed: usize) -> PyResult<()> {
-        note_fx260_word(1);
-        let mut dropped = vec![false; self.owners.len()];
-        for (index, owner) in self.owners.iter().enumerate() {
-            if owner.body_slot == Some(removed) {
-                dropped[index] = true;
-            }
-        }
-        loop {
-            let mut changed = false;
-            for (index, owner) in self.owners.iter().enumerate() {
-                if !dropped[index] && owner.parent.is_some_and(|parent| dropped[parent]) {
-                    dropped[index] = true;
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        let mut map = vec![None; self.owners.len()];
-        let mut cursor = 0;
-        for (index, drop_owner) in dropped.iter().enumerate() {
-            if !*drop_owner {
-                map[index] = Some(cursor);
-                cursor += 1;
-            }
-        }
-        let previous = std::mem::take(&mut self.owners);
-        let mut retired = previous
-            .iter()
-            .flat_map(WordOwner::states)
-            .collect::<Vec<_>>();
-        retired.push(self.snapshot_scope.clone());
-        let mut addresses = Vec::with_capacity(cursor);
-        for (index, mut owner) in previous.into_iter().enumerate() {
-            if dropped[index] {
-                continue;
-            }
-            let original_slot = owner.body_slot;
-            if let Some(slot) = owner.body_slot.as_mut()
-                && *slot > removed
-            {
-                *slot -= 1;
-            }
-            if let WordOwnerLocation::Paragraph(location) = &owner.location
-                && location.story().kind() == rdocx::StoryKind::Body
-                && original_slot.is_some_and(|slot| slot > removed)
-                && let Some(ordinal) = owner.projection_ordinal.as_mut()
-            {
-                *ordinal = ordinal.saturating_sub(1);
-            }
-            owner.location = shift_word_owner_location(owner.location, removed);
-            owner.parent = owner
-                .parent
-                .map(|parent| map[parent].expect("a surviving owner keeps its parent"));
-            addresses.push(WordOwnerAddress {
-                location: owner.location,
-                parent: owner.parent,
-                body_slot: owner.body_slot,
-                projection_ordinal: owner.projection_ordinal,
-            });
-        }
-        let mut births = addresses
-            .iter()
-            .flat_map(|address| address.location.scopes().iter().copied())
-            .collect::<Vec<_>>();
-        births.push(RevisionScope::Text);
-        let revision = self
-            .revisions
-            .prepare_scopes("Document.remove_content", &retired, &births)
-            .map_err(revision_to_pyerr)?;
-        let owner_states = births.len() - 1;
-        let mut states = Vec::with_capacity(owner_states);
-        for index in 0..owner_states {
-            states.push(revision.born(index).expect("plain removal birth"));
-        }
-        let snapshot_scope = revision
-            .born(owner_states)
-            .expect("plain removal snapshot birth");
-        let owners = word_owners_with_states(addresses, &states);
-        self.revisions
-            .commit_scopes(revision)
-            .map_err(revision_to_pyerr)?;
-        self.owners = owners;
-        self.snapshot_scope = snapshot_scope;
-        Ok(())
-    }
-
-    pub(crate) fn plain_paragraph_slot(&self, location: &rdocx::ContentLocation) -> Option<usize> {
-        self.owners.iter().find_map(|owner| match &owner.location {
-            WordOwnerLocation::Paragraph(owned) if same_content_owner(owned, location) => {
-                owner.body_slot
-            }
-            _ => None,
-        })
-    }
-
-    pub(crate) fn publish_plain_paragraph_xml(
+    pub(crate) fn prepare_plain_paragraph_xml(
         &mut self,
-        location: &rdocx::ContentLocation,
-    ) -> PyResult<()> {
+        selected: usize,
+    ) -> PyResult<(std::ops::Range<usize>, PreparedRevision, Vec<RevisionState>)> {
         note_fx260_word(1);
-        let selected = self
-            .owners
-            .iter()
-            .position(|owner| {
-                matches!(
-                    &owner.location,
-                    WordOwnerLocation::Paragraph(owned) if same_content_owner(owned, location)
-                )
-            })
-            .ok_or_else(|| {
-                PyValueError::new_err("checked XML owner has no current physical authority")
-            })?;
-        let mut descendant = vec![false; self.owners.len()];
-        loop {
-            let mut changed = false;
-            for (index, owner) in self.owners.iter().enumerate() {
-                if !descendant[index]
-                    && owner
-                        .parent
-                        .is_some_and(|parent| parent == selected || descendant[parent])
-                {
-                    descendant[index] = true;
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
+        // Plain paragraphs have only direct run owners, contiguous in the
+        // inventory. Stop at the next owner instead of scanning other stories.
+        let mut end = selected + 1;
+        while end < self.owners.len() && self.owners[end].parent == Some(selected) {
+            note_fx260_word(1);
+            end += 1;
         }
+        let range = selected + 1..end;
+        self.indexes
+            .by_generation
+            .try_reserve(range.len())
+            .map_err(|_| {
+                pyo3::exceptions::PyMemoryError::new_err("Word local owner index allocation failed")
+            })?;
         let mut retired = Vec::new();
         if let Some(content) = &self.owners[selected].content {
             retired.push(content.clone());
@@ -6226,52 +6188,63 @@ impl PyDocument {
         if let Some(properties) = &self.owners[selected].properties {
             retired.push(properties.clone());
         }
-        for (index, owner) in self.owners.iter().enumerate() {
-            if descendant[index] {
-                retired.extend(owner.states());
-            }
+        for owner in &self.owners[range.clone()] {
+            note_fx260_word(1);
+            retired.extend(owner.states());
         }
         retired.push(self.snapshot_scope.clone());
-        let births = retired.iter().map(RevisionState::scope).collect::<Vec<_>>();
+        let scopes = retired.iter().map(RevisionState::scope).collect::<Vec<_>>();
         let revision = self
             .revisions
-            .prepare_local_scopes("Paragraph.replace_xml", &retired, &births)
+            .prepare_local_scopes("Paragraph.replace_xml", &retired, &scopes)
             .map_err(revision_to_pyerr)?;
-        let mut born = 0;
-        if self.owners[selected].content.is_some() {
-            self.owners[selected].content =
-                Some(revision.born(born).expect("paragraph content birth"));
-            born += 1;
-        }
-        if self.owners[selected].properties.is_some() {
-            self.owners[selected].properties =
-                Some(revision.born(born).expect("paragraph property birth"));
-            born += 1;
-        }
-        for (index, is_descendant) in descendant.iter().enumerate() {
-            if !is_descendant {
-                continue;
-            }
-            self.owners[index].owner = revision.born(born).expect("run owner birth");
-            born += 1;
-            if self.owners[index].content.is_some() {
-                self.owners[index].content = Some(revision.born(born).expect("run content birth"));
-                born += 1;
-            }
-            if self.owners[index].properties.is_some() {
-                self.owners[index].properties =
-                    Some(revision.born(born).expect("run property birth"));
-                born += 1;
-            }
-            if self.owners[index].grid.is_some() {
-                self.owners[index].grid = Some(revision.born(born).expect("run grid birth"));
-                born += 1;
-            }
-        }
-        self.snapshot_scope = revision.born(born).expect("paragraph snapshot birth");
+        let born = (0..scopes.len())
+            .map(|index| revision.born(index).expect("prepared paragraph scope"))
+            .collect();
+        Ok((range, revision, born))
+    }
+
+    pub(crate) fn commit_plain_paragraph_xml(
+        &mut self,
+        selected: usize,
+        prepared: (std::ops::Range<usize>, PreparedRevision, Vec<RevisionState>),
+    ) -> PyResult<()> {
+        let (range, revision, states) = prepared;
         self.revisions
             .commit_scopes(revision)
             .map_err(revision_to_pyerr)?;
+        let mut born = 0;
+        if self.owners[selected].content.is_some() {
+            self.owners[selected].content = Some(states[born].clone());
+            born += 1;
+        }
+        if self.owners[selected].properties.is_some() {
+            self.owners[selected].properties = Some(states[born].clone());
+            born += 1;
+        }
+        for index in range {
+            note_fx260_word(1);
+            let owner = &mut self.owners[index];
+            self.indexes.by_generation.remove(&owner.owner.generation());
+            owner.owner = states[born].clone();
+            born += 1;
+            if owner.content.is_some() {
+                owner.content = Some(states[born].clone());
+                born += 1;
+            }
+            if owner.properties.is_some() {
+                owner.properties = Some(states[born].clone());
+                born += 1;
+            }
+            if owner.grid.is_some() {
+                owner.grid = Some(states[born].clone());
+                born += 1;
+            }
+            self.indexes
+                .by_generation
+                .insert(owner.owner.generation(), index);
+        }
+        self.snapshot_scope = states[born].clone();
         Ok(())
     }
 
@@ -6511,9 +6484,11 @@ impl PyDocument {
             revision.born(born).expect("prepared snapshot birth")
         };
         let owners = word_owners_with_states(locations, &states);
+        let indexes = WordOwnerIndexes::prepare(&owners)?;
         Ok(PreparedWordRevision {
             revision,
             owners,
+            indexes,
             snapshot_scope,
         })
     }
@@ -6523,6 +6498,7 @@ impl PyDocument {
             .commit_scopes(prepared.revision)
             .map_err(revision_to_pyerr)?;
         self.owners = prepared.owners;
+        self.indexes = prepared.indexes;
         self.snapshot_scope = prepared.snapshot_scope;
         Ok(())
     }
@@ -6562,7 +6538,9 @@ impl PyDocument {
         let locations =
             word_owner_locations(&candidate, None).map_err(|error| rdocx_to_pyerr(py, error))?;
         if let Some(owners) = relocated_property_owners(&self.owners, &locations) {
+            let indexes = WordOwnerIndexes::prepare(&owners)?;
             self.owners = owners;
+            self.indexes = indexes;
             self.inner = candidate;
             return Ok(());
         }
@@ -6762,17 +6740,22 @@ impl PyDocument {
             .flat_map(|address| address.location.scopes().iter().copied())
             .collect::<Vec<_>>();
         scopes.push(RevisionScope::Text);
+        scopes.push(RevisionScope::Document);
         let mut revisions = RevisionCounter::new();
         let states = revisions
             .initialize_scopes(&scopes)
             .map_err(revision_to_pyerr)?;
-        let snapshot_scope = states.last().expect("snapshot scope allocated").clone();
-        let owners = word_owners_with_states(locations, &states[..states.len() - 1]);
+        let removal_scope = states.last().expect("removal epoch allocated").clone();
+        let snapshot_scope = states[states.len() - 2].clone();
+        let owners = word_owners_with_states(locations, &states[..states.len() - 2]);
+        let indexes = WordOwnerIndexes::prepare(&owners)?;
         Ok(Self {
             inner,
             revisions,
             owners,
             snapshot_scope,
+            removal_scope,
+            indexes,
         })
     }
 
@@ -11436,12 +11419,14 @@ impl PyDocument {
     }
 
     fn remove_content(&mut self, py: Python<'_>, index: usize) -> PyResult<bool> {
-        if self.inner.plain_direct_paragraph(index) {
+        if self.inner.plain_direct_paragraph(index)
+            && let Some((range, revision)) = self.prepare_tail_body_removal(index)?
+        {
             let removed = py
                 .detach(|| self.inner.try_remove_content(index))
                 .map_err(|error| rdocx_to_pyerr(py, error))?;
             if removed {
-                self.publish_plain_body_removal(index)?;
+                self.commit_tail_body_removal(index, range, revision)?;
             }
             return Ok(removed);
         }
@@ -13294,7 +13279,7 @@ fn issue389_local_edits_do_not_scale_with_unrelated_package() {
                 let borrowed = document.borrow(py);
                 borrowed
                     .revisions
-                    .capture(smallvec![PathSeg::Body(0), PathSeg::Para(0)])
+                    .capture(smallvec![PathSeg::Body(0), PathSeg::Para(count / 2)])
             };
             let paragraph = Py::new(
                 py,
@@ -13302,16 +13287,57 @@ fn issue389_local_edits_do_not_scale_with_unrelated_package() {
                     .bind_current(py, None)?,
             )?;
             let xml = paragraph.borrow(py).xml(py)?;
-            let changed = xml.replace(">p0<", ">q0<");
+            let changed = xml.replace(&format!(">p{}<", count / 2), ">changed<");
             assert_ne!(xml, changed);
             reset_fx260_word_visits();
             paragraph.borrow(py).replace_xml(py, &changed)?;
-            assert_eq!(fx260_word_visits(), 1, "replace count={count}");
+            assert!(
+                fx260_word_visits() <= 8,
+                "replace count={count}, visits={}",
+                fx260_word_visits()
+            );
             reset_fx260_word_visits();
-            let removed = document.borrow_mut(py).remove_content(py, 1)?;
+            let removed = document.borrow_mut(py).remove_content(py, count - 1)?;
             assert!(removed);
-            assert_eq!(fx260_word_visits(), 1, "remove count={count}");
+            assert!(
+                fx260_word_visits() <= 8,
+                "remove count={count}, visits={}",
+                fx260_word_visits()
+            );
         }
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn issue389_non_tail_preparation_refusal_preserves_native_and_inventory() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let mut native = rdocx::Document::new();
+        native.add_paragraph("first");
+        native.add_paragraph("second");
+        let mut document = PyDocument::from_document(native, py)?;
+        // Inject a retired inventory token to force the same preparation-error
+        // boundary as a checked allocation or revision-budget refusal. This is
+        // internal fault injection, not a normal authored document state.
+        let scope = document.owners[0].owner.clone();
+        let fault = document
+            .revisions
+            .prepare_local_scopes("test fault", &[scope], &[])
+            .map_err(revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(fault)
+            .map_err(revision_to_pyerr)?;
+        let bytes = document.inner.to_bytes().unwrap();
+        let owners = document.owners.len();
+        let revision = document.revisions.current();
+        assert!(document.remove_content(py, 0).is_err());
+        assert_eq!(document.inner.to_bytes().unwrap(), bytes);
+        assert_eq!(document.owners.len(), owners);
+        assert_eq!(document.revisions.current(), revision);
+        assert_eq!(document.indexes.by_generation.len(), owners);
         Ok(())
     })
     .unwrap();

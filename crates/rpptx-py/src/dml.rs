@@ -218,11 +218,12 @@ fn write_fill(
             Some(rpptx::Fill::Blip(_))
         )
     {
+        let revision = presentation.prepare_local_property("FillFormat.fill")?;
         presentation
             .inner
             .set_fill_at(&owner, fill)
             .map_err(|error| rpptx_to_pyerr(py, error))?;
-        return presentation.publish_local_property("FillFormat.fill");
+        return presentation.commit_local_property(revision);
     }
     let mut candidate = presentation.inner.clone();
     candidate

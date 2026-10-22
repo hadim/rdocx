@@ -735,6 +735,37 @@ impl PyParagraph {
     }
 
     pub(crate) fn replace_xml(&self, py: Python<'_>, xml: &str) -> PyResult<()> {
+        {
+            let mut document = self.document.borrow_mut(py);
+            self.path
+                .validate_scopes(
+                    &document.revisions,
+                    "paragraph",
+                    "Re-fetch the current paragraph.",
+                )
+                .map_err(|error| stale_to_pyerr(py, error))?;
+            let owner = self
+                .owner
+                .as_ref()
+                .ok_or_else(|| PyValueError::new_err("paragraph XML owner route is unsupported"))?;
+            if let Some((selected, slot)) = document.plain_paragraph_owner(owner)
+                && document.inner.plain_direct_paragraph(slot)
+            {
+                let prepared = document.prepare_plain_paragraph_xml(selected)?;
+                match document
+                    .inner
+                    .try_replace_plain_body_paragraph(slot, xml)
+                    .map_err(|error| crate::rdocx_to_pyerr(py, error))?
+                {
+                    Some(false) => return Ok(()),
+                    Some(true) => {
+                        document.commit_plain_paragraph_xml(selected, prepared)?;
+                        return Ok(());
+                    }
+                    None => {}
+                }
+            }
+        }
         self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
         let owner = self
@@ -742,21 +773,6 @@ impl PyParagraph {
             .as_ref()
             .ok_or_else(|| PyValueError::new_err("paragraph XML owner route is unsupported"))?;
         let location = document.current_paragraph_owner(owner)?;
-        let slot = document.plain_paragraph_slot(&location);
-        if let Some(slot) = slot {
-            match document
-                .inner
-                .try_replace_plain_body_paragraph(slot, xml)
-                .map_err(|error| crate::rdocx_to_pyerr(py, error))?
-            {
-                Some(false) => return Ok(()),
-                Some(true) => {
-                    document.publish_plain_paragraph_xml(&location)?;
-                    return Ok(());
-                }
-                None => {}
-            }
-        }
         let mut candidate = document.inner.clone_for_staging();
         candidate
             .replace_paragraph_xml(&location, xml)

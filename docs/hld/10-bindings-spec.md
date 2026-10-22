@@ -761,9 +761,13 @@ children it removed. The range is half-open. An empty range returns 0. A
 reversed or out-of-bounds range raises `RdocxError` and publishes nothing.
 The call does not recurse into tables.
 
-A plain direct body `Paragraph.replace_xml` and a plain `Document.remove_content`
-publish the affected owner without rebuilding the inventory from every body
-child. A retained shadowed serializer prefix refuses that local publication
+A plain direct body `Paragraph.replace_xml` resolves its captured generation
+through a derived current-inventory index and prepares only that paragraph's
+content, properties and contiguous run scopes. A last direct plain paragraph
+can be removed locally when only section owners follow its inventory range.
+A shared removal epoch retires all held physical owner paths, while earlier
+current inventory entries remain available to fresh handles. Removing another
+body child keeps conservative address reconciliation. A retained shadowed serializer prefix refuses that local publication
 and leaves the package unchanged. PowerPoint `ShapeCollection.add_textbox`, `Shape.alt_text`, `Shape.left`,
 `FillFormat.solid` on a shape, and a stable `Shape.element.replace_xml` do the
 same for one slide child when the edit does not change relationships, connectors,
@@ -4320,6 +4324,15 @@ Removed and recreated bodies cannot resurrect old handles. No-op, refusal and
 allocation failure preserve document bytes and live tokens. Ordinary supported
 setters retain their established lifetime behavior, while notes edits preserve
 unrelated shape and text owners.
+
+Binding publication chooses the local or staged route before changing live
+native state. Exact owned XML is a no-op. Local slide shape replacement needs
+a concrete scalar change and unchanged physical topology. Graphic frames also
+retain identical graphicData. Descendant scopes and grid retirement are prepared
+from the shared selected-owner address projection. Template and unproved edits
+stage native mutation, post-edit inspection and all owner preparation before
+publishing together. Scalar setters use a proven stored-state comparison or
+stage. Non-blip shape fill prepares its revision before native mutation.
 
 ## Licensed embedded fonts in Python and CLI
 

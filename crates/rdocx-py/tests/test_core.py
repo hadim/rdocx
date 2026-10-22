@@ -9971,3 +9971,41 @@ def test_f287_custom_xml_store_binding_and_refusal():
     assert b"<ns:child>filled</ns:child>" in stored
     assert b"urn:schema?a=1&amp;b=2" in properties
     assert item_id.encode() in properties
+
+
+def test_issue389_tail_removal_retires_held_owners_without_resurrection():
+    import rdocx
+
+    doc = rdocx.Document()
+    for text in ("first", "middle", "last"):
+        doc.add_paragraph(text)
+    first, last = doc.paragraphs[0], doc.paragraphs[2]
+    held_run = first.runs[0]
+    held_format = first.paragraph_format
+    before = doc.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        first.replace_xml("<broken")
+    assert doc.to_bytes() == before
+    first.replace_xml(first.xml.replace(">first<", ">changed<"))
+    assert first.text == "changed"
+    assert last.text == "last"
+    held_run = first.runs[0]
+    held_format = first.paragraph_format
+    assert doc.remove_content(2)
+    for operation in (lambda: first.text, lambda: held_run.text,
+                      lambda: held_format.space_before, lambda: last.text,
+                      lambda: last.replace_xml("<broken")):
+        with pytest.raises(rdocx.StaleElementError, match="stale"):
+            operation()
+    fresh = doc.paragraphs[0]
+    assert fresh.text == "changed"
+    fresh.replace_xml(fresh.xml.replace(">changed<", ">again<"))
+    assert fresh.text == "again"
+    doc.add_paragraph("replacement")
+    assert doc.paragraphs[2].text == "replacement"
+    with pytest.raises(rdocx.StaleElementError, match="stale"):
+        _ = last.text
+    assert doc.remove_content(2)
+    assert doc.remove_content(1)
+    reopened = rdocx.Document.from_bytes(doc.to_bytes())
+    assert [p.text for p in reopened.paragraphs] == ["again"]

@@ -92,6 +92,14 @@ children and does not recurse into tables. Modelled body children and
 preserved raw children are stored in boxes, so a direct removal shifts
 pointers.
 
+Python Word owner lookup uses derived indexes over the current inventory.
+Plain paragraph XML prepares only the selected content/property scopes and
+its contiguous run owners before native mutation. A plain tail removal can
+keep earlier inventory entries when its following owners are sections only.
+Every captured physical Word owner includes a removal epoch, so that shortcut
+retires held handles without allocating successors for every paragraph. Fresh
+handles capture the new epoch. Other removals retain conservative reconciliation.
+
 PowerPoint edits one child for `add_textbox` on a connector-free slide, for
 alt text, for non-connector geometry, for a non-blip shape fill, and for a
 shape XML replacement whose relationship facts and owner signature stay the
@@ -101,6 +109,23 @@ package transaction. These local edits do not read unrelated slides.
 Shape-id allocation reads typed ids and preserved raw blobs. The whole tree
 is serialized only when a preserved prefix other than `p` is not declared in
 that blob.
+
+Python PowerPoint also indexes current owner generations, routes and shape-id
+multiplicity. Those indexes are derived, not a second ownership registry.
+Appending a simple root textbox prepares three newborn owners and extends
+the current inventory without cloning existing entries. Exact owned XML is a
+no-op. Slide shape XML can use local publication only when a typed scalar
+change witnesses actual mutation and its physical owner topology is unchanged.
+Graphic frames also require unchanged graphicData. The shared address projector
+enumerates the selected shape's descendants before native mutation, including
+table grids and regular runs. Fields and breaks are not regular run owners.
+Unproved XML, template owners and topology changes use a native candidate, with
+all post-edit reads and owner preparation completed before publication.
+Scalar property edits likewise require a pre-native change/no-op proof or use
+a candidate. Non-blip shape fill prepares its property revision before native
+mutation. Replacing the inventory rebuilds its indexes, while local publications
+update only affected entries. No fallible discovery or staged fallback follows
+a successful live native edit.
 
 Word binding admission refuses PDF save paths, duplicate stored tab positions,
 page breaks in actual physical headers and malformed authored language values
