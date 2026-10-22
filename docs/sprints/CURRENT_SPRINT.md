@@ -82,15 +82,19 @@ All49hashes and seven deterministic pixel buffers match. Allseven Issue389
 release edit ratios and allthree Issue398 read ratios are strictly below3.
 Independent font inputs were rebuilt by the pinned CI producer. The full
 installed Word suite passes1061tests and the full PowerPoint suite passes1028.
-Current corpus observations and clean-tree packaging remain pending at this
-checkpoint.
+Clean-tree publication dryrun passed for all22publishable archives, each below
+10MiB, largest4900978bytes. The pinned PowerPoint corpus rendered50decks and
+421slides with zero dropped shapes. Its visual fidelity trend is51/421slides
+at SSIM0.95,12.114percent against an80percent target, which is not met.
+Completeness and fidelity are distinct observations. No baseline changed.
 Native Word evidence, the private unreduced Issue390 input and final acceptance
 remain pending. No fourth sprint review, push, merge or publication occurred.
 
 ## Requested release follow-up, 2026-10-22
 
-After sprint acceptance and closure, the user requests minor releases of both
-Rust crate families and their matching PyPI distributions. Prepare Word0.17.0
+The user requests minor releases of both Rust crate families and their matching
+PyPI distributions. Release preparation belongs before the final sprint freeze
+and review. Publication follows acceptance and closure. Prepare Word0.17.0
 and PowerPoint0.15.0 as the next-minor candidates from the current0.16.2 and
 0.14.2 carriers. Confirm registry availability before fixing these versions.
 Release preparation needs its normal approved plan, exact family version
