@@ -37,6 +37,11 @@ against the design plan as the contract.
    rendering, before/after update and save/reopen. Add a missing discriminating
    control when a new interaction is found. Keep unchanged-input consumers and
    refusal/atomicity controls valid. Use scoped `cargo check` between edits.
+   For cached read facts, inspect direct native assignments and callback bodies,
+   including publishers that keep owner identity or revision unchanged. Prepare
+   updated facts or invalidate them before publishing changed source. Exercise a
+   real value-changing operation of that kind and compare held, fresh, native
+   and saved/reopened reads without weakening the promised handle lifetime.
    Batch related focused regressions sharing a test binary when practical,
    rather than compiling the same large binary separately for each added case.
    Retain individual outcomes and rerun the cases affected by each source fix.

@@ -81,6 +81,15 @@ context differ, known missing-root controls beside deferred empty items, and
 fresh/held handles before reopening. Do not multiply trivial fixtures or demand
 every Cartesian combination.
 
+For cached projections, exercise a source edit that changes the cached value
+while keeping its owner live or its revision unchanged, when such a publisher
+exists. Compare the native value with held and fresh reads, then save/reopen.
+Check every affected logical owner when one operation mirrors physical content.
+Owner identity and successful serialization alone do not establish freshness.
+Compare read and write coordinates on mixed controlled/direct content. An
+immutable accessor and a mutable accessor can interpret the same ordinal
+differently. Check the selected physical owner and its unchanged neighbors.
+
 Observe the promised layer. A cached number cannot prove the positioned field
 text. A reopened package cannot prove live in-memory alias validity. An
 unchanged hash proves stability on those samples, not correctness of a new
@@ -161,6 +170,13 @@ and coverage of the promised behavior can be established. Do not invent a
 producer version or call this library's own generated output a Word fixture.
 Self-generated inputs are useful local regressions, but cannot establish native
 output parity. Schema-valid child names alone do not prove application behavior.
+
+Before declaring an oracle bundle unavailable, check its documented independent
+producer. HLD15 and CI prepare F-X195 inputs with
+`crates/rdocx-py/tests/test_rendering_threads.py --prepare-fx195-inputs` and the
+selected `--family`. Use that pinned tool and provenance path when available.
+A preparation failure stays a failure. It does not authorize synthetic expected
+outputs or removal of the qualification gate.
 
 If the promised oracle or private unreduced input is unavailable, keep that
 acceptance row pending. Reduced examples qualify only their stated scope.

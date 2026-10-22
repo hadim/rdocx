@@ -151,6 +151,16 @@ recipient and role and preserves sole-writer ownership. Review and repair
 handoffs are distinct. These controls are defined in `/implement-feature` and
 do not replace a missing native acceptance observation.
 
+S95.3 Issue398 review found stale accepted text in a Codex-authored cache after
+`Run.add_tab` and `Run.add_break`. Those existing publishers preserve owner
+scopes. The design, implementation and differential-testing instructions now
+require fact-changing publication coverage even when identity or revision stays
+unchanged. Its follow-up also requires proving immutable and mutable accessors
+select the same physical owner, since controlled content can change ordinal
+meaning. This applies to every model. Record the trigger in F-X259 delivery
+notes. These instructions do not close the product finding or replace pending
+release measurements and native qualification.
+
 ### External CI source availability
 
 When an approved feature requires actual external CI execution of its new

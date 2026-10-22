@@ -47,7 +47,7 @@ The user's follow-up extends this instruction work to detailed design validation
 | A3 | Missing known root members, wrong intermediate kinds and malformed syntax still refuse atomically | companion negative controls with before/after bytes |
 | A4 | Final capability records agree with completed owners | existing matrix tests and new metadata adoption regression |
 | A5 | XML acceptance remains identical after naming traversal cases | existing seven fx254 frontier tests |
-| A6 | Canonical instructions require measurable design, applicable API/numeric/schema contracts, pinned compatibility facts, complete decisions, authentic oracle evidence and discriminating cross-consumer/final-state checks | reviewed command/skill diff, prose and generated-adapter checks, dependency/draft-mode consistency inspection |
+| A6 | Cached projections name fact-changing publishers even with unchanged owner scopes or revisions, prove read/write physical-owner equivalence and native/held/fresh/reopened agreement, and stop dependent tests after failed builds. Canonical instructions require measurable design, applicable API/numeric/schema contracts, pinned compatibility facts, complete decisions, authentic oracle evidence and discriminating cross-consumer/final-state checks | reviewed command/skill diff, prose and generated-adapter checks, dependency/draft-mode consistency inspection |
 | A7 | Current sprint records every new issue/PR criterion and Grok/Codex handoff | CURRENT_SPRINT, HLD14 and draft contribution plans |
 | A8 | With TOC heading range 1 through N, outline-derived headings and directly outlined paragraphs outside that range are excluded. Native, Python and CLI rebuild agree. Outline-only instructions retain all admitted levels, body-text suppression and explicit custom-style selectors keep their existing semantics | Issue400 and PR401 pinned below. Actual local RED/GREEN plus binding/CLI observations, update/reopen controls and final unchanged hash harness |
 
@@ -118,7 +118,7 @@ Expected unchanged for all49documents and sevenpixel cases. These inputs do not 
 
 ## Open questions
 
-None for the bounded reviewed fixes and instruction updates. Contribution API choices belong to the separate draft F-X260 through F-X262 plans. The user already requests Grok implementation and independent Codex sprint review. No remaining sprint authoring or contribution implementation starts in this preparation.
+None for the bounded reviewed fixes and instruction updates. Contribution API choices are recorded in the separate approved F-X260 through F-X262 plans. The user already requests Grok implementation and independent Codex sprint review. No remaining sprint authoring or contribution implementation starts in this preparation.
 
 ## Sprint-final acceptance
 

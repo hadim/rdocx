@@ -33,6 +33,12 @@ Record in-flight evidence and pending checks in the feature's existing
 
 ### Build, artifact and semantic outcome
 
+Dependent batches stop after a failed prerequisite. Use `set -e` in a shell
+build/test batch or check the actual child status before the next stage. A
+failed extension build must not fall through to tests or timings on an older
+installed module. Preserve the failed attempt and authenticate the replacement
+artifact after a successful build.
+
 Keep the wrapper/transport exit, checked child exit and semantic acceptance
 outcome separate. A wrapper that successfully records Cargo exit 101 has
 recorded a failed build. Exit zero with a reported target of false is successful
@@ -115,8 +121,9 @@ suites, native UI or corpora for metadata alone.
    cases. Reuse unaffected observations without another binary invocation.
 
 4. **Test the workspace.**
-   `cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py`.
-   `--full` only.
+   `RUST_MIN_STACK=8388608 cargo test --workspace --all-features --exclude rdocx-py --exclude rpptx-py`.
+   Use the native test-thread budget documented in HLD15 and CI. It does not
+   change product runtime or input-depth limits. `--full` only.
 
 5. **The hash harness.** `python3 scripts/hash_harness.py --check`. Run once under
    `--full`, not under `--fast` or `--scoped`.

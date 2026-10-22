@@ -162,6 +162,14 @@ semantic check, not a check that headings and answered Q-IDs exist.
    than placing a constant counter at entry to an unbounded loop.
 
 Record the closure result and any unresolved items in the existing plan.
+For a cached read projection, name its source facts, preparation boundary and
+every publisher that can change those facts. Include direct candidate assignments
+and callbacks that preserve owner scopes or leave the revision unchanged. Map a
+real fact-changing operation of that kind to held, fresh, native and save/reopen
+observations. State when no such operation exists. Trace mirrored or paired
+outputs so the update covers every affected logical owner.
+Prove that immutable and mutable accessors select the same physical owner.
+A shared numeric ordinal is not proof when controlled or nested content differs.
 Answered questions alone do not discharge these checks. Revisions preserve
 approved user decisions. Resolve source facts directly, use routine judgment
 for implementation detail, and ask only when a material product choice remains.
