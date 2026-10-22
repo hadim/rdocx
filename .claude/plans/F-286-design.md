@@ -69,7 +69,7 @@ Local tests construct the replacement and repetition observations in source. The
 | Checkbox vocabulary | `true`, `1` and `yes` check. `false`, `0` and `no` uncheck. `maybe` refuses and does not publish. | `prepare_control_value` at `crates/rdocx/src/content_control.rs` lines 81 to 88. | A3. |
 | Date, lists, picture and group | Date uses the existing Gregorian `yyyy-MM-dd` and `dd/MM/yyyy` forms. Lists reject duplicate, unknown and ambiguous values. Picture requires an already-owned relationship and refuses text. Group refuses text. | Q17. Existing `prepare_text_value` and the picture and group refusal at lines 102 to 106. | A2, A4, A5 and A6. |
 | Repeating section and item | `repeat_content_control(location)` clones the first item inside a repeating section. Zero items refuses. One item becomes two. `remove_content_control(location)` deletes one item of several. The same method refuses when the item is the last one in its section. `RepeatingSectionItem` is its own payload and is legal only on a shell whose parent is already a repeating section. | Q17. Element names are `w15:repeatingSection` and `w15:repeatingSectionItem` at `content_control.rs` lines 76 and 77. Removal is the F-285 method. | A7 and A8. |
-| Word differential | Every supported control must match pinned Word structure and behaviour under replacement and repetition. A package this workspace generates is not that evidence. | Backlog test gate. `.claude/skills/differential-testing.md`, native provenance rules. | Pending. No authentic Word producer, version or input identity is in the repo. |
+| Word differential | Every supported control must match pinned Word structure and behaviour under replacement and repetition. A package this workspace generates is not that evidence. | Backlog test gate. `.claude/skills/differential-testing.md`, native provenance rules. | Native Word for Mac16.114(26101123) originals and input hashes are retained outside tracked fixtures. The installed external controls pass. Q24 and complete acceptance remain pending. |
 
 ## Dependency readiness
 
@@ -182,6 +182,48 @@ Reviewed against `.claude/reviews/S95.3-design-quality-pass-1.md` R1 on 2026-10-
 
 No new product choice. Q17, Q19 and Q21 stay answered. The Word differential stays pending.
 
+## Native qualification checkpoint, 2026-10-22
+
+Authentic Word for Mac16.114(26101123) produced the original inputs through
+its native object model. About Word supplied the version and build. Native
+VBA sources, source/output hashes and the producer receipt are retained in
+`.claude/scratch/S95.3-takeover-evidence/native-word-originals/`. Original
+packages remain in Word's separate test directory outside git. No library
+writer authored the native expected documents. Earlier unavailable-connection
+observations are superseded by this actual connection, not relabeled as passes.
+
+`test_f286_native_word_replacement_preserves_typed_payloads` authenticates each
+external input hash before comparing rich/plain text, combo/drop-down,
+checkbox and genuinely distinct ISO/dmy date replacements. Picture and three
+native group fixtures refuse text atomically. The native initial date-iso
+filename alone was misleading because Word reset its format on assignment.
+The refined native cases set the format after the date and establish both.
+
+`test_f286_approved_repeat_matches_native_equivalent_operations` uses distinct
+First/Second/Third items with bold formatting on First. Its native equivalent
+appends after the last item and copies the first item's FormattedText. It
+checks template selection, formatting, append position, retained old ids,
+fresh clone identity and non-last deletion. This is not a claim that Word's
+default selected-item repeat command clones the first item. Native default
+repeat copies the addressed item. Native last-item deletion removes the whole
+section. The approved API instead clones the first and refuses last-item
+removal. Q24 must resolve this conflict with the blanket parity gate before
+acceptance. The tests retain both observations without changing the API.
+
+Separately, Word opened and saved twelve library-authored consumer inputs with
+OpenAndRepair disabled and no repair prompt. These files qualify native
+consumption, not native original authorship. All control types, payloads,
+ids, tags, text, drawings and image bytes survive. Native rich text omits the
+explicit empty richText marker, native dates add lid=en-GB, and native group
+adds contentLocked. These normalizations are recorded individually, not hidden
+in a general XML difference allowance. The type setter's approved metadata
+preservation contract remains unchanged.
+
+The two external installed tests passed against the previously source-qualified
+release extension9b9234fa. Their optional bundle absence is a skip, never a
+passed native gate. F-286 remains in-progress. This checkpoint does not weaken
+the differential contract, supply a clean final sprint review or close B1.
+
 ## Open questions
 
 | ID | Affected F-IDs and A-IDs | Decision and recommendation | Status and answer/source |
@@ -189,5 +231,6 @@ No new product choice. Q17, Q19 and Q21 stay answered. The Word differential sta
 | Q17 | F-286 A1 to A8 | `set_content_control_type(location, payload)` on an F-285 shell. The supported kinds are rich text, plain text, date, checkbox, picture, combo, drop-down, group, repeating section and repeating item. Citation, equation, bibliography and document-part kinds stay refused. Replacement and repetition observations stay required. Generated output is not a Word oracle. | Answered 2026-10-18 by the user. Checkbox mapping is the code at `content_control.rs` lines 81 to 88. |
 | Q19 | F-285, F-286 and F-287 | This story starts after the F-285 prefix checkpoint and finishes before F-287. | Answered 2026-10-18 by the user. |
 | Q21 | F-285, and this story's approval | The F-285 method names. This plan has no separate product choice. | Answered 2026-10-18 on F-285. This plan adopts those names. |
+| Q24 | F-286 A1, A7 and final gate | Authentic Word default repeat copies the addressed item and last-item deletion removes the section. Retain the approved clone-first and last-item refusal contract with explicit differences, or revise the API to Word defaults. Recommendation: retain the approved API and document the native differences and equivalent operations. | Pending user decision. No API or acceptance-contract change is approved by this checkpoint. |
 
 No external issue closes from this plan.

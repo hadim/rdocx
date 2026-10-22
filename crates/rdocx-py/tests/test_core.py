@@ -6361,6 +6361,156 @@ def test_f286_repeating_section_checks_decoded_boundary_text(payload, refusal):
         assert b">tail<" in xml
 
 
+@pytest.fixture(scope="module")
+def _f286_native_word_input():
+    import hashlib
+    import json
+    import os
+    from pathlib import Path
+
+    receipt = os.environ.get("RDOCX_F286_WORD_PROVENANCE")
+    if receipt is None:
+        pytest.skip("F-286 needs the separately retained native Word provenance bundle")
+    provenance = json.loads(Path(receipt).read_text())
+    assert (provenance["producer"], provenance["version"], provenance["build"]) == (
+        "Microsoft Word for Mac", "16.114", "26101123"
+    )
+    inputs = {Path(row["source"]).name: row for row in provenance["files"]}
+
+    def read(name):
+        row = inputs[name]
+        raw = Path(row["source"]).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == row["sha256"], name
+        return raw
+
+    return read
+
+
+def test_f286_native_word_replacement_preserves_typed_payloads(_f286_native_word_input):
+    import xml.etree.ElementTree as ET
+    import rdocx
+
+    read = _f286_native_word_input
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    types = {
+        "richText", "text", "date", "checkbox", "comboBox", "dropDownList",
+        "picture", "group", "repeatingSection", "repeatingSectionItem",
+    }
+
+    def facts(raw):
+        with zipfile.ZipFile(io.BytesIO(raw)) as package:
+            tree = ET.fromstring(package.read("word/document.xml"))
+
+        def node(element):
+            return (
+                element.tag, sorted(element.attrib.items()), element.text or "",
+                [node(child) for child in element],
+            )
+
+        result = []
+        for control in tree.iter(w + "sdt"):
+            properties = control.find(w + "sdtPr")
+            payload = next(
+                (child for child in properties if child.tag.rsplit("}", 1)[-1] in types),
+                None,
+            )
+            result.append((
+                properties.find(w + "id").get(w + "val"),
+                node(payload) if payload is not None else None,
+                "".join(child.text or "" for child in control.iter(w + "t")),
+                len(list(control.iter(w + "drawing"))),
+            ))
+        return result
+
+    for stem, value in [
+        ("scalar-0", "Replacement"), ("scalar-1", "Replacement"),
+        ("scalar-3", "two"), ("scalar-4", "Second"), ("scalar-8", "true"),
+        ("date-refined-1", "2026-10-19"), ("date-refined-2", "2026-10-19"),
+    ]:
+        document = rdocx.Document.from_bytes(read(stem + "-before.docx"))
+        assert document.set_content_control_value_by_tag(stem, value) == 1
+        assert facts(document.to_bytes()) == facts(read(stem + "-after.docx")), stem
+
+    for name, tag in [("picture-before.docx", "picture")] + [
+        (f"group-native-{index}-before.docx", "group-native") for index in (1, 2, 3)
+    ]:
+        document = rdocx.Document.from_bytes(read(name))
+        before = document.to_bytes()
+        with pytest.raises(rdocx.RdocxError):
+            document.set_content_control_value_by_tag(tag, "Replacement")
+        assert document.to_bytes() == before
+
+
+def test_f286_approved_repeat_matches_native_equivalent_operations(_f286_native_word_input):
+    import xml.etree.ElementTree as ET
+    import rdocx
+
+    read = _f286_native_word_input
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    w15 = "{http://schemas.microsoft.com/office/word/2012/wordml}"
+
+    def items(raw):
+        with zipfile.ZipFile(io.BytesIO(raw)) as package:
+            tree = ET.fromstring(package.read("word/document.xml"))
+        result = []
+        for control in tree.iter(w + "sdt"):
+            properties = control.find(w + "sdtPr")
+            if properties.find(w15 + "repeatingSectionItem") is None:
+                continue
+            runs = []
+            for run in control.iter(w + "r"):
+                bold = run.find(w + "rPr/" + w + "b")
+                runs.append((
+                    "".join(child.text or "" for child in run.iter(w + "t")),
+                    bold is not None and bold.get(w + "val", "1") not in ("0", "false", "off"),
+                ))
+            result.append((properties.find(w + "id").get(w + "val"), runs))
+        return result
+
+    # Native equivalent is append after the last item, then copy the first
+    # item's FormattedText. Word's default addressed-item clone differs.
+    before = read("repeat-native-first-v3-before.docx")
+    document = rdocx.Document.from_bytes(before)
+    section = _content_location(
+        document,
+        lambda item: item.kind == "content_control"
+        and b'w:val="repeat-clone-first"' in item.xml,
+    )
+    document.repeat_content_control(section)
+    original, actual = items(before), items(document.to_bytes())
+    native = items(read("repeat-native-first-v3-after.docx"))
+    assert len(original) == 3 and len(actual) == 4
+    assert [row[1] for row in actual] == [row[1] for row in native]
+    assert actual[:3] == original
+    assert len({row[0] for row in actual}) == 4
+    assert actual[-1][0] not in {row[0] for row in original}
+    assert actual[-1][1] == original[0][1] != original[-1][1]
+
+    def locations():
+        return [
+            rdocx.ContentLocation(item.story, item.kind, item.index_path)
+            for item in document.story_items
+            if item.kind == "content_control"
+            and b"repeatingSectionItem" in item.xml
+            and b'w:val="repeat-clone-first"' not in item.xml
+        ]
+
+    document.remove_content_control(locations()[1])
+    removed = items(document.to_bytes())
+    native_removed = items(read("repeat-native-first-v3-remove-middle.docx"))
+    assert [row[1] for row in removed] == [row[1] for row in native_removed]
+    assert removed == [actual[index] for index in (0, 2, 3)]
+    while len(locations()) > 1:
+        document.remove_content_control(locations()[-1])
+    before_refusal = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="last repeating"):
+        document.remove_content_control(locations()[0])
+    assert document.to_bytes() == before_refusal
+    # Observed native last-item deletion removes the entire section. This
+    # asserts the difference, not approval of a blanket Word-parity claim.
+    assert items(read("repeat-last-refusal.docx")) == []
+
+
 def test_f286_typed_content_control_payload_repeat_and_refusal():
     import rdocx
     document = rdocx.Document()

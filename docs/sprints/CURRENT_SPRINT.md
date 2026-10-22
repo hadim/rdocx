@@ -35,6 +35,7 @@ provisionally, making the expanded estimate 31 to 44 developer-days.
 | F-285 | Content control creation and lifecycle | L | done | - |
 | F-286 | Rich, repeating, and typed content controls | L | in-progress | grok |
 | F-287 | Custom XML stores and data binding authoring | L | in-progress | grok |
+| F-X263 | Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases | L | pending | - |
 
 ## Sequencing note
 
@@ -55,8 +56,9 @@ takeover on 2026-10-22. Codex is the sole product writer. Grok may propose
 mechanical documentation in isolation, subject to Codex validation. Original
 worker identities and completed independent reviews remain historical facts.
 The exhausted three-pass sprint-review bound is unchanged. Focused feature
-microscopes do not reset it. Native Word qualification remains unavailable,
-so the sprint stays blocked for acceptance. The documented independent CI
+microscopes do not reset it. Native Word is now connected and qualification
+is underway, with contract decision Q24 pending. The sprint stays blocked for
+acceptance. The documented independent CI
 producer now supplies authenticated F-X195 inputs locally. Their installed
 suite outcomes are recorded separately from native Word qualification.
 
@@ -87,19 +89,48 @@ Clean-tree publication dryrun passed for all22publishable archives, each below
 421slides with zero dropped shapes. Its visual fidelity trend is51/421slides
 at SSIM0.95,12.114percent against an80percent target, which is not met.
 Completeness and fidelity are distinct observations. No baseline changed.
-Native Word evidence, the private unreduced Issue390 input and final acceptance
-remain pending. No fourth sprint review, push, merge or publication occurred.
+Native Word final qualification, the private unreduced Issue390 input and
+final acceptance remain pending. No fourth sprint review, push, merge or publication occurred.
+
+## Native Word checkpoint, 2026-10-22
+
+Word for Mac16.114(26101123) now authors the external originals through its
+native UI and object model. Two installed external differential tests pass,
+including both date formats and distinct first-item repetition with formatting,
+identity and non-last removal controls. Word also opened and saved all twelve
+library-authored control cases without a repair prompt. Those consumer inputs
+are separate from original Word oracle files. Source and output hashes,
+producer version, VBA sources and exact observations are retained locally.
+
+Q24 remains pending because native default repeat copies the addressed item
+and native last-item deletion removes the section, unlike the approved API.
+The code and acceptance contract remain unchanged pending that decision.
+This is progress toward B1, not a claim that B1 or the sprint is accepted.
+The exhausted sprint-review bound also remains unchanged. Q25 asks for up to
+two further independent passes after required checks. No extension is assumed.
+
+Obsolete sprint build products and completed render output have been removed
+from `/private/tmp`, reclaiming818.6MiB. Historical failures, measured outcomes
+and artifact hashes are retained in ignored evidence. Active build caches,
+qualified font producers, pinned viewers and current release artifacts remain
+available for the outstanding gates. Unrelated temporary files are untouched.
 
 ## Requested release follow-up, 2026-10-22
 
-The user requests minor releases of both Rust crate families and their matching
-PyPI distributions. Release preparation belongs before the final sprint freeze
-and review. Publication follows acceptance and closure. Prepare Word0.17.0
-and PowerPoint0.15.0 as the next-minor candidates from the current0.16.2 and
-0.14.2 carriers. Confirm registry availability before fixing these versions.
-Release preparation needs its normal approved plan, exact family version
-alignment, changelog and contributor inventory, packaging and build-only CI
-evidence. This request does not mark any current story done or bypass pending
+The user explicitly retains Word0.16.x and PowerPoint0.14.x for both Rust
+crate families and matching PyPI distributions. Release preparation belongs
+before the final sprint freeze and review. Publication follows acceptance and
+closure. Determine the next available patch in each retained line from actual
+registry inventories before fixing the versions. Fresh22crate and two PyPI
+inventories select0.16.3 and0.14.3, absent across both complete families.
+Recheck absence at final publication. The earlier0.17.0 and0.15.0
+candidates were a Codex interpretation and are superseded by this correction.
+F-X263 records the approved release-preparation contract. This is an
+eighth story under the added release request, provisionally3to5additional
+developer-days and34to49total, beyond the normal seven-story cadence.
+Implementation waits for actual provider checkpoints. Release preparation
+needs its approved plan, exact family version alignment, changelog and
+contributor inventory, packaging and build-only CI evidence. This request does not mark any current story done or bypass pending
 native Word qualification, integrated acceptance or the exhausted review bound.
 Only `/release` may publish after `/close-sprint`, with separate final approval
 at the reviewed clean main SHA. No version carrier or release tag is changed

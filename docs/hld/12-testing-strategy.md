@@ -4745,6 +4745,32 @@ strict typing and current public behavior. Both CLI formats, resource modes,
 existing rendering paths and both WASM graphs are qualified. Verified affected
 archives, scoped checks and unchanged deterministic hashes complete the gate.
 
+## Typed content-control native Word qualification
+
+F-286 external installed controls use `RDOCX_F286_WORD_PROVENANCE` to locate
+the independently retained native producer receipt. Each input is read from
+its recorded source and checked against its recorded SHA-256. The pinned
+producer is Word for Mac16.114(26101123). Binary fixtures are not committed.
+An absent bundle skips these controls and leaves native qualification pending.
+A skip is not a passed differential gate.
+
+`test_f286_native_word_replacement_preserves_typed_payloads` compares native
+expected replacements for rich/plain text, lists, checkbox and both date
+formats, plus atomic picture/group text refusal. Date fixtures must establish
+the actual stored format, since native assignment can restore a locale default.
+`test_f286_approved_repeat_matches_native_equivalent_operations` distinguishes
+first-item template selection using different item text and formatting, checks
+append order and old/new identities, and compares non-last deletion. Its native
+equivalent appends an item and copies the first item's FormattedText. Native
+default addressed-item cloning and whole-section last-item deletion are
+separate observed differences, not parity successes. Acceptance requires
+explicit disposition under the design contract.
+
+Native opening and saving of library-authored outputs is consumer acceptance,
+not original-oracle authorship. Record types, payloads, ids, text, image bytes
+and individual native normalizations. Do not turn no repair prompt into a
+claim of complete structural or behavioral equality.
+
 ## Word checked XML qualification
 
 Word XML controls use a freshly source-qualified release wheel with complete

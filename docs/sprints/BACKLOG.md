@@ -831,4 +831,5 @@ HLD14 contract before adopting contributor changes.
 | F-X260 | Restore live handles and bound structural edit cost | S95.3 | L | in-progress |
 | F-X261 | Resolve Word package preservation and inspection contributions | S95.3 | L | in-progress |
 | F-X262 | Resolve PowerPoint authoring and table-render contributions | S95.3 | L | in-progress |
+| F-X263 | Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases | S95.3 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->

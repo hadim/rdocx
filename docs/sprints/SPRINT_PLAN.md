@@ -2829,6 +2829,13 @@ debt and the exhausted three-pass sprint-review bound remain unchanged.
 | F-285 | Content control creation and lifecycle | L |
 | F-286 | Rich, repeating, and typed content controls | L |
 | F-287 | Custom XML stores and data binding authoring | L |
+| F-X263 | Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases | L |
+
+The subsequent explicit release request adds F-X263 as an eighth story,
+provisionally another3to5 developer-days, for34to49total. This exceeds the
+normal seven-story planning cadence and is a visible release scope expansion.
+Prepare the release only after the seven provider checkpoints actually pass.
+Publication remains after acceptance, closure and separate final approval.
 
 Complete and integrate F-285 through its scoped dependency-prefix checkpoint
 before starting F-286 or F-287. Their shared source/resource leases may require

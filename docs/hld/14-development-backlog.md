@@ -8550,3 +8550,38 @@ The constructed remove, reinsert and `set_header_image` sequence keeps a reachab
 Slide placeholders iterate by ascending idx. Layout and master placeholders iterate in document order. Idx lookup stays on `placeholders[idx]`. Percentage transparency, gradient position, bullet percent, and baseline use ties-to-even rounding. EMU, twips, time, and adjustments still truncate. `MSO_SHAPE.UP_ARROW` is 35. The generator adds the published `upArrow` geometry because the ECMA source duplicates `upDownArrow` and omits `upArrow`. Painted table rows grow for wrapped text, spans, margins, and unwrapped vertical text. Stored `a:tr/@h` stays. `TextFrame.clear` leaves one paragraph, keeps its properties, and drops runs. Empty text leaves no runs. An empty notes line keeps the first regular run. A cell-run address uses the slide hyperlink relationship. `target_slide` on a cell stays refused. Bullet size accepts a percentage float or a `Length`. `remove_style` removes `p:style` from a shape or connector. An unsupported kind raises and does not publish.
 
 [Issue392](https://github.com/tensorbee/rdocx/issues/392) stays open until the final sprint evidence exists. Candidate [PR394](https://github.com/tensorbee/rdocx/pull/394) at e9f9fbe7b86388b8702af5757bdfa7e4e4fc6596 stays unmerged. Its functional parent f9d165e77392b57a58223046d8cd551220c61a3a could not be re-read from this repository. Installed suites, the pinned viewer, the PowerPoint pixel baseline, both WASM graphs, and the hash harness remain final-sprint evidence. This story owns any PowerPoint paint baseline. The Word 49 hash and seven-pixel baseline stay unchanged.
+
+
+### F-X263, Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases
+
+**Size**: L
+**Depends on**: F-X259, F-X260, F-X261, F-X262, F-285, F-286, F-287
+**Test gate**: release regression
+**Spec reference**: `10-bindings-spec.md`, Packaging and CI, `15-build-and-toolchain.md`, Packaging, Publishing, Release process and CI job matrix.
+
+The user requests both Rust and PyPI releases after S95.3 completion and all
+verification, explicitly retaining Word0.16.x and PowerPoint0.14.x. Fresh
+registry inventories select absent0.16.3 and0.14.3 across the exact seven and
+fifteen published Rust packages and matching Python projects. Recheck absence
+before publication. Align current manifests, workspace pins, lock records,
+Python projects, examples, current assertions and family contribution notes.
+Preserve immutable historical evidence, external dependency versions and the
+separate nonpublished WASM boundary. Preparation adds no product behavior.
+
+Require genuine verified22-package publication dryrun, ordinary source-bound
+wheels and CLIs, clean Python3.9/3.12 priority runs, strict3.12 typing/stub
+checks, both WASM graphs and unchanged output baselines. Actual build-only
+wheels.yml execution must bind reviewed source, all deciding jobs and exact
+unique artifacts. Inspect and test downloaded host wheels as actual producers.
+Keep unresolved native, fidelity and private-input qualifications explicit.
+The source-availability checkpoint may push only the reviewed clean sprint
+ref after all named local checks and independent microscope pass. It does
+not permit a merge, tag, upload or feature completion before hosted acceptance.
+
+All seven prerequisites must reach their applicable actual completion or
+approved genuine local prefix checkpoint before implementation. Drafting and
+registry/carrier research do not satisfy that boundary. This release-preparation
+story is the eighth S95.3 story under the user's added release request, an
+explicit scope expansion beyond the normal seven-story planning cadence.
+Only close-sprint closes the sprint. Subsequent release commands require the
+separate exact-main-SHA final approval, shared/PowerPoint family first.
