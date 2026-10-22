@@ -49,6 +49,23 @@ The user's follow-up extends this instruction work to detailed design validation
 | A5 | XML acceptance remains identical after naming traversal cases | existing seven fx254 frontier tests |
 | A6 | Canonical instructions require measurable design, applicable API/numeric/schema contracts, pinned compatibility facts, complete decisions, authentic oracle evidence and discriminating cross-consumer/final-state checks | reviewed command/skill diff, prose and generated-adapter checks, dependency/draft-mode consistency inspection |
 | A7 | Current sprint records every new issue/PR criterion and Grok/Codex handoff | CURRENT_SPRINT, HLD14 and draft contribution plans |
+| A8 | With TOC heading range 1 through N, outline-derived headings and directly outlined paragraphs outside that range are excluded. Native, Python and CLI rebuild agree. Outline-only instructions retain all admitted levels, body-text suppression and explicit custom-style selectors keep their existing semantics | Issue400 and PR401 pinned below. Actual local RED/GREEN plus binding/CLI observations, update/reopen controls and final unchanged hash harness |
+
+## Behavior contracts and evidence
+
+| Rule | Exact contract | Source and evidence |
+|---|---|---|
+| Existing consistency repairs | A1 through A7 retain their approved outputs, atomicity, consumer map and local regressions | Original evaluation and existing scoped records, with final integrated acceptance pending |
+| TOC outline range | Filter outline-derived levels by both endpoints only when heading_levels is Some. None retains levels1through9. Custom styles are selected independently. No new API, unit conversion or namespace policy | Current field.rs toc_paragraph_level, pinned Issue400/PR401. Contributor Word claims remain attributed |
+
+## Test matrix
+
+| Case | Input and expected observation | Wrong implementation rejected |
+|---|---|---|
+| Existing rules | A1 multilevel numbering, A2/A3 empty versus known invalid scope, A4 completed-owner metadata, A5 finite XML admission | Passing a convenient same-consumer or nonempty case only |
+| TOC range composition | Inherited/direct levels1and2 with ranges1through1,1through2,2through2 and outline-only, before/after reopen | Upper-bound-only filter, heading-style-only filter and unconditional range default |
+| Independent selectors | Explicit custom-style mapping and body outline9 suppression retain existing outputs | Blanket range filtering before custom-style selection or lost body-text suppression |
+| Actual consumers | Native, installed Python and CLI rebuild yield the same expected entry text/count at the integrated source | Correct helper with an untested binding or stale executable |
 
 ## Rejected alternatives
 
@@ -112,3 +129,38 @@ None for the bounded reviewed fixes and instruction updates. Contribution API ch
 **Hash harness**: deferred to the final sprint gate, expected unchanged
 
 The final checklist item stays open. This marker is not feature completion.
+
+## Approved intake extension, 2026-10-22
+
+The user requests new GitHub work in this sprint and Codex continuation. A8
+owns Issue400 body SHA-256
+`656762fcfaf40919000730cb39099c6d3c0da427cacba45360a9cfcd4fa0836f` and
+candidate PR401 head `62124737c428a77e0c4fec52b56665c67f221e7c`.
+Its base is `b072b9852d5b17c7bcd19889cef058556ce9b67d`. The candidate
+changes the existing `toc_paragraph_level` outline branch and the existing
+regression entrypoint. Its contributor-reported Word observation is attributed
+to the reporter, not a native oracle execution by this workspace.
+
+Consumer map: native `Document::rebuild_toc`, Python `Document.rebuild_toc`
+and CLI `toc rebuild` share the existing field selector. Filter only the
+outline fallback by an explicit parsed heading range. No new API or selector
+engine. An absent range leaves outline-only behavior intact. Custom style
+selection stays independent. Do not silently constrain its assigned TOC levels.
+
+Discriminating matrix: inherited Heading1/Heading2 and direct outline0/outline1
+under heading ranges 1 through1 and 1 through2, with and without outline switch,
+with h/z switches, and outline-only. Compare exact selected entry texts and
+counts before/after save and reopen. Add a lower-bound range to reject a
+maximum-only predicate. Retain the existing body-outline9 suppression and
+custom-style selector regression. Exercise the actual Python and CLI surfaces
+at final integrated qualification, not merely native tests. Expected source
+change is confined to `field.rs`, existing tests and listed HLD sections.
+
+HLD08 describes current range/outline composition. HLD12 records these local
+discriminators. HLD14 and CURRENT_SPRINT retain intake and pending evidence.
+Published behavior changes only for incorrectly admitted TOC entries. No new
+public signature, dependency, module or file. Native Word provenance remains
+pending where already required. A8 is not qualified by the contributor's tests.
+No material product choice is open for this bounded correction. The added
+shared files are leased serially after F-X260 source freeze. Final full/hash
+and affected metadata evidence must bind the actual integrated changes.

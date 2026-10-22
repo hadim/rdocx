@@ -10,6 +10,11 @@ review repairs and the live Issue387 through Issue392 and PR393 through PR396
 resolution union on 2026-10-18. The expanded seven-story estimate is 28 to 39
 developer-days, not an unchanged sprint-capacity promise.
 
+The 2026-10-22 user-authorized refresh adds Issue398/PR399 and Issue400/PR401,
+plus candidate PR397 for existing Issue389. These extend F-X260 and F-X259
+without adding parallel stories. Allow another 3 to 5 developer-days
+provisionally, making the expanded estimate 31 to 44 developer-days.
+
 ## Spec references
 
 - `docs/hld/14-development-backlog.md`, F-285, F-286 and F-287 define the creation, typed-control and custom-XML scope, their dependencies and the round-trip or differential gates. M24's complete stability boundary remains F-310 in S99.
@@ -24,7 +29,7 @@ developer-days, not an unchanged sprint-capacity promise.
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
 | F-X259 | Repair reviewed consistency defects and strengthen acceptance gates | M | in-progress | codex |
-| F-X260 | Restore live handles and bound structural edit cost | L | in-progress | grok |
+| F-X260 | Restore live handles and bound structural edit cost | L | in-progress | codex |
 | F-X261 | Resolve Word package preservation and inspection contributions | L | in-progress | grok |
 | F-X262 | Resolve PowerPoint authoring and table-render contributions | L | in-progress | grok |
 | F-285 | Content control creation and lifecycle | L | done | - |
@@ -44,6 +49,14 @@ The user requests Grok implementation through the shared commands followed by
 an independent Codex sprint review. Use `/run-sprint --reviewer codex` and stop
 at the review handoff if Codex cannot be invoked in that environment. The Grok
 implementer cannot record its own review as the requested Codex review.
+
+The user subsequently asked Codex to take over implementation and resumed that
+takeover on 2026-10-22. Codex is the sole product writer. Grok may propose
+mechanical documentation in isolation, subject to Codex validation. Original
+worker identities and completed independent reviews remain historical facts.
+The exhausted three-pass sprint-review bound is unchanged. Focused feature
+microscopes do not reset it. Native Word and F-X195 font qualification remain
+unavailable, so the sprint stays blocked for acceptance.
 
 Within the authoring group, F-285 comes first. Complete and integrate F-285
 through its scoped dependency-prefix checkpoint before F-286 starts. F-287
@@ -91,6 +104,26 @@ commented on.
 | [390](https://github.com/tensorbee/rdocx/issues/390), [396](https://github.com/tensorbee/rdocx/pull/396) | F-X261 | Six reduced observations plus explicit disposition of the unreduced control-owner diagnostic and disclosed asset reinsert regression |
 | [391](https://github.com/tensorbee/rdocx/issues/391), [395](https://github.com/tensorbee/rdocx/pull/395) | F-X261 | All five source/API rows, paired text-box authority and approved public compatibility |
 | [392](https://github.com/tensorbee/rdocx/issues/392), [394](https://github.com/tensorbee/rdocx/pull/394) | F-X262 | All nine authoring/render rows, native table growth and intentional paint deltas |
+| [398](https://github.com/tensorbee/rdocx/issues/398), [399](https://github.com/tensorbee/rdocx/pull/399) | F-X260 | Read-only paragraph, row-cell and cell-paragraph creation, cold and repeated calls, whole walks, table-position independence, nested/related owners and current-state correctness after edits. Candidate PR399 still fails the reporter's cold-call script |
+| [397](https://github.com/tensorbee/rdocx/pull/397) | F-X260 | Additional candidate for Issue389. Preserve all seven strict release ratios and the already approved range signature/error. Its unaddressed Word edit costs and first-fill cost stay acceptance work |
+| [400](https://github.com/tensorbee/rdocx/issues/400), [401](https://github.com/tensorbee/rdocx/pull/401) | F-X259 | Bound outline-derived TOC entries by an explicit heading range, through native, Python and CLI rebuild. Preserve outline-only, custom-style and suppressed-outline selectors |
+
+Live API refresh on 2026-10-22 found the existing issue bodies and PR393 through
+PR396 heads unchanged. New PR heads are PR397
+`d9721353314ba969c05bd9f886bdd24d15d51a8d`, PR399
+`34dfd42782de08bc331a5f6c819774720bb60067` and PR401
+`62124737c428a77e0c4fec52b56665c67f221e7c`. All target base
+`b072b9852d5b17c7bcd19889cef058556ce9b67d`, not the current sprint tree.
+Issue398 body SHA-256 is
+`4e940897286f91d30bf5c2b54497462e50077e89313262db6ea38eebccaf6124`.
+Issue400 body SHA-256 is
+`656762fcfaf40919000730cb39099c6d3c0da427cacba45360a9cfcd4fa0836f`.
+Both have zero comments at refresh. The existing local intake files now retain
+the refreshed issues and the three new PR bodies, file patches and commits.
+Their refreshed SHA-256 values are
+`a03525cd237b2081c105ffe55f36e189134164ef0f6052977fbaaa0d846c364e` and
+`26e3454b3c215f8cbda82e7f805f987cb2e105080c4215cc1bf3492734ad1036`.
+No candidate is merged or accepted. No external messages or closures occurred.
 
 No external issue/PR was closed, merged or commented on by this preparation.
 `/close-sprint` reconciles them only after acceptance and the integrated main

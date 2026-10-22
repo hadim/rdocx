@@ -8488,6 +8488,15 @@ Own B1, S1, S2 and N1 from `.claude/reviews/S95.11-S95.2-code-quality-evaluation
 
 Reconcile completed capability rows and enforce their live-owner invariant during metadata adoption. Strengthen the canonical design, implementation, review, verification, integration and completion commands and their existing reference skills with consumer maps, measurable acceptance, discriminating cases and final-state checks. Regenerate adapters. Process changes remain separate from behavioral commits. No new public API, crate, module or dependency is required. Final sprint full/hash/pixel/rider acceptance and independent review remain due, without rewriting historical acceptance records.
 
+The 2026-10-22 scope includes [Issue400](https://github.com/tensorbee/rdocx/issues/400)
+and candidate [PR401](https://github.com/tensorbee/rdocx/pull/401) at
+62124737c428a77e0c4fec52b56665c67f221e7c. TOC outline-derived entries must
+respect an explicit heading range while outline-only, body-text suppression and
+custom-style selectors keep their own semantics. Qualify native, Python and CLI
+rebuild with inherited/direct outline sources, lower and upper range bounds,
+and saved/reopened entries. Contributor-reported Word observations are not
+workspace-native acceptance evidence.
+
 ### F-X260, Restore live handles and bound structural edit cost
 
 **Size**: L
@@ -8502,6 +8511,21 @@ Word cell, row and table property setters keep held and fresh paragraph and run 
 The seven Issue389 operations edit one owner. They are PowerPoint `add_textbox`, alt text, `left`, `fill.solid` and `replace_xml`, plus Word `replace_xml` and `remove_content`. A visit counter fails when the edit reads an unrelated slide or body block. The release-build large-to-small ratio below 3 is recorded with the final sprint. Debug timings do not pass. `Document.remove_content_range(start, end)` removes a half-open direct body range in one transaction, returns the removed count, and refuses a reversed or out-of-bounds range without publishing. It does not recurse into tables. Shared media and a refused XML edit stay on the checked package transaction.
 
 The local tests are the Issue388 handle tests and `issue389_local_edits_do_not_scale_with_unrelated_package`. Installed product suites, the unchanged hash harness and the release ratio remain final-sprint evidence. Neither issue closes from this story.
+
+The 2026-10-22 scope also includes read-only handle creation from
+[Issue398](https://github.com/tensorbee/rdocx/issues/398) and candidate
+[PR399](https://github.com/tensorbee/rdocx/pull/399) at
+34dfd42782de08bc331a5f6c819774720bb60067. Preserve all three reporter
+large/small ratios below3, including cold calls, whole body/cell walks,
+first/last table position and nested/related owner correctness after edits and
+reopen. Per-state warm-up is not acceptance for a failing first-call script.
+Derived current-state indexes must not become a second ownership authority or
+survive a mutation with stale routes. Candidate
+[PR397](https://github.com/tensorbee/rdocx/pull/397) at
+d9721353314ba969c05bd9f886bdd24d15d51a8d contributes another Issue389
+approach but leaves Word edit costs unresolved. Its range signature/error and
+new public comparison APIs do not replace the approved contract. All candidates
+remain unmerged and all new acceptance remains pending.
 
 ### F-X261, Resolve Word package preservation and inspection contributions
 

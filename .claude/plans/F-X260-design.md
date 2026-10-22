@@ -72,6 +72,9 @@ No new crate, module or file. Python changes stay in `crates/rdocx-py/src/docume
 | A5 | The reporter's small and large packages for all seven named operations | Each large/small ratio is below 3 under the pinned release workload. A visit counter shows the unrelated slides or blocks were not scanned | Python Word and PowerPoint editors. Native publication | `issue389_local_edits_do_not_scale_with_unrelated_package` | Release-build samples recorded with the final sprint. Not a worker-only debug timing |
 | A6 | Empty, one-item, many-item and invalid direct body ranges | The approved half-open call stages once. Invalid input returns the old package bytes. Empty removes zero items | Native `Document` and Python `Document` | `issue389_range_removal_is_one_owned_transaction` | Installed product suite and hash harness unchanged |
 | A7 | A refused XML edit, a nested table, and a package with shared media | The faster path still refuses atomically and does not drop a shared image | Python checked mutation and native package graph | `issue389_edit_cost_preserves_checked_mutation_contract` | Final hash harness unchanged |
+| A8 | Issue398 exact small 50-paragraph/two-table and large 400-paragraph/sixteen-table documents, each table four by three | All three read-only handle rows have large/small release ratio below3, including first calls and a late table. Reference cell.text remains correct. Setup and any inventory construction are identified separately, never hidden by warming the timed API | Python body paragraphs, row.cells and cell.paragraphs | Deterministic selected-route work controls plus reporter workload | Actual installed release artifact, raw timings and source/build identity |
+| A9 | Walk body paragraphs and cells, including nested tables and related stories | Exact source text and physical routes, bounded total work rather than per-handle whole-document scans. First and last table selection agree | Python paragraph, table and cell collections | Constructed zero/one/many, body/nested/related and table-position controls | Installed compatibility suites and scoped performance evidence |
+| A10 | Read before and after text, property, row/grid, structural and no-op edits, then reopen | Current handles see documented current values or original stale cause. No stale cached route, resurrection, changed source on read or lost atomic refusal | Same handles and derived indexes, all publication paths | Read/edit/read lifecycle matrix, exact saved bytes on read and refusal | Installed suites and unchanged hash harness |
 
 Issue 388 rows map to A1 through A4. Issue 389's seven timing rows map to A5. Its range-removal request maps to A6. A7 is the control that forbids buying A5 by skipping checks. PR393 does not satisfy A5 or A6.
 
@@ -181,3 +184,112 @@ graphic-frame edit. Preflight incoming table presence with the existing
 `rpptx-oxml` concrete graphic-frame parser, before native publication. The Python
 binding adds that existing workspace dependency for this named consumer. Reject
 payload transitions before mutation and keep unchanged-payload edits local.
+
+## Codex takeover, public Python cost repair
+
+The actual release Python workload on source `6f206c83` failed four Q10 rows.
+The native-only observations do not qualify A5. Retain the failed release run
+and exact extension identities in `/tmp/s95.3-codex-issue389-release-qualified.log`
+and `/tmp/s95.3-codex-release-manifest.json`. No threshold changes or timing
+retries without an implementation change.
+
+Keep the existing owner inventories authoritative. Add derived generation and
+direct-body indexes where needed for checked owner lookup. Rebuild these indexes
+only with ordinary inventory replacement and update affected entries for local
+publication. A direct plain paragraph edit resolves its captured generation
+without serializing every story, and retires only its content/property and
+contiguous plain-run scopes. Unsupported paragraph structures keep the checked
+staged path.
+
+For Word tail removal, prepare a shared removal epoch before mutation. Capture
+that epoch in every physical Word owner path so conservative invalidation does
+not allocate successors for unrelated owners. Use the shortcut only for the
+last direct plain paragraph when its inventory descendants are contiguous and
+the remaining suffix contains only sections. Remove that local range and update
+its derived indexes. Other removals keep the existing conservative path. Held
+paragraphs/runs and retained wrappers must still refuse after removal, including
+after a later append reuses the removed numeric slot. No history is retained.
+
+PowerPoint append must prepare only the three newborn owners, reserving storage
+before publication, and preserve all existing owner identities without cloning
+the entire inventory. Checked generation lookup must avoid a full inventory
+search on each property/XML read. Existing staged paths remain the fallback
+for unproved structural changes. Instrument actual traversals at the acceptance
+boundary and retain selected-owner, stale-handle, refusal and reopen controls.
+Independent microscopes and a fresh seven-row release measurement are required.
+
+Binding cost microscope pass 1 adds three concrete repair obligations. Group
+the two document epochs in the capture signature without a lint exception.
+Stage complete replacement indexes and their owned keys with the prepared
+inventory, then install them by moving. Reserve local successor-key capacity
+before local native edits. Route non-tail Word removal through the existing
+candidate transaction rather than mutating live state before preparation.
+Prepare textbox scopes, index/inventory capacity, captures and the returned
+Python shape before native append. Bind its constructor-assigned id only after
+append succeeds, before publishing the three prepared current owners. No
+fallible scope preparation or Python result allocation follows that append.
+
+The required D2 designer investigation is recorded in
+`.claude/reviews/F-X260-publication-design-investigation.md`. Implement its
+pre-native local/staged decision. Exact owned XML equality is a no-op, matching
+native admission. Ordinary shape proof distinguishes absent/empty bodies and
+regular runs from fields/breaks. A real name/accessibility/geometry scalar
+change witnesses publication. Frame scalar proof requires unchanged complete
+graphicData. Enumerate affected frame/table descendants with the existing
+owner-address builder, not slide-contiguous assumptions or a second registry.
+Unproved XML, other Element kinds and topology changes use a candidate, all
+post-edit reads and preparation on that candidate, then one publication.
+
+Scalar shape editing uses explicit concrete alt-text and direct-geometry
+proofs for bounded paths. Unproved callbacks stage, including uncertain imported
+state. Non-blip shape fill prepares before native mutation. No post-live parser,
+serializer, new owner proof or fallback remains. Add the existing workspace
+`oxml-drawing` dependency for the concrete TextRun/transform proof consumers,
+with no new public API. The designer's publisher and discriminator tables are
+the work list. Native oracle debt and Q10 stay unchanged.
+
+## Approved intake extension, 2026-10-22
+
+The user's new intake request adds A8 through A10 for Issue398 body SHA-256
+`4e940897286f91d30bf5c2b54497462e50077e89313262db6ea38eebccaf6124`.
+Candidate PR399 head is `34dfd42782de08bc331a5f6c819774720bb60067`.
+It claims faster repeated walks but discloses that the exact reporter's script
+still fails from per-state first-call inventory construction. A warmed ratio or
+a four-times-size walk below6 does not replace the three exact below3 rows.
+Nested and non-body routes remain explicit acceptance, not silent exclusions.
+
+Prefer derived indexes over current checked owner inventory, with complete
+preparation and coherent invalidation at every publisher. Inspect the existing
+native location and story refresh paths before choosing the minimal mechanism.
+Read-only handle construction must not clone or serialize unrelated content.
+If extra cached source facts are necessary, derive them at the existing state
+preparation boundary and prove mutations that preserve revision serial cannot
+leave stale entries. Do not import PR399's TrackedDocument wrapper, LocationSource
+trait or hidden public batch methods without a demonstrated need and explicit
+contract. No public signature addition is currently approved for A8 through A10.
+Supported imported routes and native refusal semantics remain authoritative.
+
+Consumer map adds body/nested/related paragraph, table and cell collections,
+physical owner capture, fresh lookup, held reads and read/edit/reopen. Test
+zero/one/many, first/last table and repeated read without publication. Compare
+exact routes/text against the existing checked provider. Measure actual owner
+work as well as final release timing. Scope of any new native batch method must
+be designed before implementation, not inherited from candidate code.
+
+PR397 head `d9721353314ba969c05bd9f886bdd24d15d51a8d` is an additional
+candidate for A5 through A7, not a new accepted implementation. Its first-fill
+and add-textbox ratios do not qualify all Q10 rows. It leaves both Word cost
+rows unimplemented. Its Range-based Rust API and Python IndexError differ from
+the already approved A6 signature and RdocxError contract. Keep the approved
+contract. Do not add public equality or serialization-comparison APIs merely
+because the candidate contains them. Candidate archive values do not describe
+this sprint's artifacts and cannot replace fresh affected measurements.
+
+Both PRs target `b072b9852d5b17c7bcd19889cef058556ce9b67d`. All acceptance
+runs must identify this sprint's actual source and binaries. Finish the current
+publication repair and focused review before the read-only performance changes.
+The latter share Word binding files and require another focused review of their
+actual incremental diff. Final suites, hash, release ratios and all existing
+risk riders remain due once over the integrated union. No new material product
+choice is open. No issue closes at intake. Grok documentation proposals are
+untrusted input until checked by Codex against these pinned sources.

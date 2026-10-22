@@ -2813,6 +2813,13 @@ not measured effort or an unchanged capacity promise. Current intake and exact
 acceptance ownership live in CURRENT_SPRINT and HLD14. Grok implements through
 `/run-sprint --reviewer codex`, then Codex independently reviews the union.
 
+On 2026-10-22 the user adds Issue398/PR399 read-only handle costs to F-X260,
+Issue400/PR401 TOC range composition to F-X259, and PR397 as another Issue389
+candidate. Keep seven stories and provisionally add 3 to 5 developer-days,
+for 31 to 44 total. Codex has taken over product implementation. Mechanical
+Grok documentation proposals require validation. Existing Word/font qualification
+debt and the exhausted three-pass sprint-review bound remain unchanged.
+
 | F-ID | Title | Size |
 |------|-------|------|
 | F-X259 | Repair reviewed consistency defects and strengthen acceptance gates | M |
