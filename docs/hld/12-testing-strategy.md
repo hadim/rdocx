@@ -3333,6 +3333,14 @@ required, and no binary fixture enters the repository.
   background samples pin the remaining paint translations. These are
   deterministic unit tests with no golden files.
 
+TOC range-composition regressions compare inherited and direct outline levels
+against both endpoints, with h/z switches, no outline switch, outline-only and
+independent explicit custom-style selectors. They assert exact entry text/count
+after rebuild, save/reopen and a second rebuild. Native, installed Python and
+CLI observations remain distinct evidence, all bound to the integrated source.
+Reporter statements about Word are attributed rather than reclassified as a
+native oracle execution by this workspace.
+
 ## Binding tests
 
 `issue389_local_edits_do_not_scale_with_unrelated_package` runs in the

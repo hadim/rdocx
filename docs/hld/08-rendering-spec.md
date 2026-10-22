@@ -2168,6 +2168,10 @@ TOC selectors reuse the existing source-qualified navigation tuple. Explicit
 custom-style selection remains independent. Heading-style selection without
 u keeps its established rule, while u requires the qualified shared heading
 eligibility, including effective inherited or direct outline9 suppression.
+When a heading range is explicit, its lower and upper bounds also filter the
+outline-derived fallback. An outline-only instruction without that range keeps
+all admitted outline levels. Explicit custom-style assignments remain independent
+of this range, including their assigned TOC levels.
 An unavailable owner is an explicit refusal, not a fabricated suppression fact.
 No additional cascade, flag, counter or per-field source scan is introduced.
 

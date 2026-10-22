@@ -406328,3 +406328,87 @@ fn issue390_asset_reinsertion_and_unreduced_control_diagnostic() {
     assert!(media.iter().any(|data| data == &header));
     assert!(Document::from_bytes(&document.to_bytes().unwrap()).is_ok());
 }
+#[test]
+fn toc_outline_switch_stays_within_the_heading_range() {
+    // tensorbee/rdocx#400: Heading 2 takes outline level 2 from its style, and the
+    // plain paragraphs carry theirs directly; Word lists neither level-2 paragraph
+    // under `\o "1-1" \u`.
+    let headings = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Chapter</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Section</w:t></w:r></w:p><w:p><w:pPr><w:outlineLvl w:val="1"/></w:pPr><w:r><w:t>Outline two</w:t></w:r></w:p><w:p><w:pPr><w:outlineLvl w:val="0"/></w:pPr><w:r><w:t>Outline one</w:t></w:r></w:p>"#;
+    for (instruction, expected) in [
+        (r#"TOC \o "1-1""#, &["Chapter"][..]),
+        (r#"TOC \o "1-1" \h \z \u"#, &["Chapter", "Outline one"][..]),
+        (r#"TOC \o "1-1" \u"#, &["Chapter", "Outline one"][..]),
+        (
+            r#"TOC \o "1-2" \u"#,
+            &["Chapter", "Section", "Outline two", "Outline one"][..],
+        ),
+        (r#"TOC \o "2-2" \u"#, &["Section", "Outline two"][..]),
+        (
+            r#"TOC \o "1-1" \u \t "Heading 2,3""#,
+            &["Chapter", "Section", "Outline one"][..],
+        ),
+        (
+            r"TOC \u",
+            &["Chapter", "Section", "Outline two", "Outline one"][..],
+        ),
+    ] {
+        let body = format!(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>{instruction}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>OLD TOC</w:t></w:r></w:p><w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>{headings}"#
+        );
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+        for (id, name, level) in [("Heading1", "Heading 1", 0), ("Heading2", "Heading 2", 1)] {
+            document
+                .set_style(
+                    StyleBuilder::paragraph(id, name).paragraph_properties(CT_PPr {
+                        outline_lvl: Some(level),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        }
+        let report = document.rebuild_toc().unwrap();
+        assert_eq!(report.entry_count, expected.len(), "{instruction}");
+        let entries = document
+            .paragraphs()
+            .into_iter()
+            .filter(|paragraph| {
+                paragraph
+                    .style_id()
+                    .is_some_and(|style| style.starts_with("TOC"))
+            })
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.split('\t').next().unwrap())
+                .collect::<Vec<_>>(),
+            expected,
+            "{instruction}"
+        );
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.rebuild_toc().unwrap().entry_count,
+            expected.len(),
+            "reopened {instruction}"
+        );
+        let reopened_entries = reopened
+            .paragraphs()
+            .into_iter()
+            .filter(|paragraph| {
+                paragraph
+                    .style_id()
+                    .is_some_and(|style| style.starts_with("TOC"))
+            })
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reopened_entries
+                .iter()
+                .map(|entry| entry.split('\t').next().unwrap())
+                .collect::<Vec<_>>(),
+            expected,
+            "reopened {instruction}"
+        );
+    }
+}

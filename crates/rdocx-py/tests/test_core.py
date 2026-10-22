@@ -10082,6 +10082,43 @@ def test_issue398_read_indexes_follow_current_owners_after_edits(edit):
     assert observe(rdocx.Document.from_bytes(document.to_bytes())) == expected
 
 
+@pytest.mark.parametrize("instruction, expected", [
+    (r'TOC \o "1-1" \h', ("Chapter",)),
+    (r'TOC \o "1-1" \h \z \u', ("Chapter", "Outline one")),
+    (r'TOC \o "1-1" \u', ("Chapter", "Outline one")),
+    (r'TOC \o "2-2" \u', ("Section", "Outline two")),
+    (r'TOC \u', ("Chapter", "Section", "Outline two", "Outline one")),
+])
+def test_issue400_python_toc_rebuild_bounds_outline_entries_after_reopen(instruction, expected):
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_heading("Chapter", level=1)
+    document.add_heading("Section", level=2)
+    document.add_paragraph("Outline two").paragraph_format.outline_level = 1
+    document.add_paragraph("Outline one").paragraph_format.outline_level = 0
+    document.insert_toc(0, max_level=1)
+    result = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as source, zipfile.ZipFile(result, "w") as out:
+        for member in source.infolist():
+            data = source.read(member.filename)
+            if member.filename == "word/document.xml":
+                data, count = re.subn(rb'(<w:instrText\b[^>]*>).*?(</w:instrText>)',
+                                      lambda match: match[1] + instruction.encode() + match[2], data, flags=re.S)
+                assert count == 1
+            out.writestr(member, data)
+    document = rdocx.Document.from_bytes(result.getvalue())
+
+    def entries(doc):
+        return tuple(paragraph.text.split("\t")[0] for paragraph in doc.paragraphs
+                     if (paragraph.style or "").upper().startswith("TOC"))
+
+    assert document.rebuild_toc().entry_count == len(expected)
+    assert entries(document) == expected
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert entries(reopened) == expected
+    assert reopened.rebuild_toc().entry_count == len(expected)
+    assert entries(reopened) == expected
 
 
 @pytest.mark.parametrize("host", ["body", "cell", "nested", "header", "paired"])

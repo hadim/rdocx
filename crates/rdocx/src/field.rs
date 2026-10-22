@@ -9062,7 +9062,11 @@ fn toc_paragraph_level(
     {
         return Ok(Some(level));
     }
-    Ok(outline)
+    // Apply an explicit heading range to outline-derived entries as well.
+    Ok(outline.filter(|level| {
+        toc.heading_levels
+            .is_none_or(|(start, end)| (start..=end).contains(level))
+    }))
 }
 
 fn heading_style_level(document: &Document, style_id: &str) -> Option<u8> {
