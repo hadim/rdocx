@@ -89,6 +89,15 @@ with a short reason rather than inventing APIs or broadening a small story.
   that introduce a different child grammar. Neither accepting the wrapper name
   alone nor applying the outer grammar indiscriminately to all descendants is
   sufficient. Include incompatible nested payloads and legal nested controls.
+  Treat physical placement, payload grammar and enclosing-owner requirements
+  as separate proofs. Empty contents may fit several grammars without making
+  their control type legal in each slot. Type changes, marker retirement,
+  unwrap and relocation can invalidate retained descendants or the previous
+  owner. Include those inverse transitions and compatible positive controls.
+  Resolve qualified transparent ancestors without skipping real paragraph,
+  row, table or cell discriminators. A containing ancestor is not automatically
+  an immediate parent. Pin the primary rule before imposing either condition.
+
 - **Specify raw XML validation.** Distinguish well-formedness, namespace
   correctness, parent/schema validity and application behavior. Name which
   existing mechanism proves each promised level. Event parsing or root counts

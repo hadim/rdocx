@@ -115,6 +115,11 @@ optional properties separate. Pair incompatible relocation and conversion
 refusals with compatible metadata-preserving controls. A tag allowlist alone
 is not proof of destination validity. This does not authorize a general
 validator or a blanket rejection of supported opaque wrappers.
+Changing a type marker can invalidate its physical position, enclosing owner's
+child requirements or retained descendants even when bytes do not move. Check
+those separately from payload fit. Use an empty ambiguous payload to expose
+that difference. Include marker retirement and unwrap, with a compatible
+enclosing-owner case so the repair does not become a blanket refusal.
 For XML validation, successful attribute iteration is not proof that names,
 values or references are legal. Cover those independent dimensions according to
 the approved contract. Preserve explicitly valid opaque inputs and raw bytes.

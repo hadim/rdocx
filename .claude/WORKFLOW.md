@@ -177,6 +177,14 @@ controls. This refines the existing placement invariant, not general imported
 XML validation. Record this trigger with the B2 amendment, without rewriting
 prior reports or treating instructions as product remediation.
 
+The subsequent typed-context investigation found compatible empty payloads
+still published repeating types inline. Type changes could also retire an
+owner marker without preserving item context. Design, implementation and
+microscope now separate physical type placement, payload grammar and enclosing
+owner requirements, including inverse transitions. Preserve primary-source
+containment versus immediate-parent distinctions. Record this refinement with
+the B2 amendment. Instructions do not qualify a changed product artifact.
+
 ### External CI source availability
 
 When an approved feature requires actual external CI execution of its new

@@ -69,6 +69,10 @@ Without it, review the F-ID's commits on the sprint branch.
    of the initially reported element. Inspect each admitted context-dependent
    wrapper, its metadata and its repeating/conversion publishers. Require
    compatible positive controls alongside atomic refusal cases. Challenge
+   physical type placement and owner membership independently of payload
+   grammar. Empty wrappers are a discriminator. Inspect type/marker retirement
+   and retained descendants on unwrap or relocation, including compatible
+   enclosing ownership. Use namespace-qualified structural identity. Challenge
    independent name/value validation where relevant. Preserve valid
    controls and distinguish actual historical RED from source counterfactuals.
    Retain finding IDs when the same invariant fails on a new input.
