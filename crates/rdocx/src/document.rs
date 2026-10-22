@@ -3874,8 +3874,9 @@ fn unsafe_nested_namespace_prefix(owners: &[NestedNamespaceOwner]) -> Option<Str
     })
 }
 
-/// True when a later modified save must fail closed. A scan error blocks the
-/// local edit as well, because the save path cannot prove the prefix is safe.
+/// Retained nested namespace owners need staged identity reconciliation even
+/// for benign aliases. Local edits cannot refresh their source snapshots. A
+/// scan error also keeps the edit on the checked staged path.
 fn plain_local_edit_is_blocked(
     root_declarations: &[(String, String)],
     body_declarations: &[(String, String)],
@@ -3887,7 +3888,7 @@ fn plain_local_edit_is_blocked(
         return true;
     }
     match nested_modeled_namespace_owners(document_xml) {
-        Ok(owners) => unsafe_nested_namespace_prefix(&owners).is_some(),
+        Ok(owners) => !owners.is_empty(),
         Err(_) => true,
     }
 }
@@ -8116,9 +8117,16 @@ struct EditedParagraphMcAttribute {
     meaning: Vec<(String, Option<usize>, bool)>,
 }
 
+#[derive(PartialEq)]
+enum EditedParagraphSection {
+    Parsed(Box<CT_SectPr>),
+    Preserved(EditedParagraphIsland),
+}
+
 struct EditedParagraphAdmission {
     islands: Vec<EditedParagraphIsland>,
     mc_attributes: Vec<EditedParagraphMcAttribute>,
+    sections: Vec<EditedParagraphSection>,
 }
 
 fn edited_paragraph_admission(
@@ -8132,6 +8140,8 @@ fn edited_paragraph_admission(
     let mut islands = Vec::new();
     let mut mc_attributes = Vec::new();
     let mut ppr = false;
+    let mut ppr_route = None;
+    let mut sections = Vec::new();
     let mut content = false;
     loop {
         let start = reader.buffer_position() as usize;
@@ -8139,9 +8149,10 @@ fn edited_paragraph_admission(
         match event {
             Event::Start(ref element) | Event::Empty(ref element) => {
                 let (_, parent_route, next) = frames.last_mut().expect("initial frame");
+                let parent_route = *parent_route;
                 let changes = context.enter(element)?;
                 let (uri, local) = context.expanded_name(element.name().as_ref(), false)?;
-                let route = routes.child(*parent_route, uri, &local, *next);
+                let route = routes.child(parent_route, uri, &local, *next);
                 *next += 1;
                 let direct = frames.len() == 2;
                 let schema = edited_paragraph_schema_child(uri, &local);
@@ -8153,8 +8164,57 @@ fn edited_paragraph_admission(
                             )));
                         }
                         ppr = true;
+                        ppr_route = Some(route);
                     } else {
                         content = true;
+                    }
+                }
+                if Some(parent_route) == ppr_route && uri == W_NS && local == "sectPr" {
+                    let end = story_element_end(xml, start)?;
+                    let raw = &xml[start..end];
+                    // Empty sectPr is preserved raw by CT_PPr. Expand a temporary
+                    // copy for the same semantic model used by paired elements.
+                    let mut section = raw.to_vec();
+                    if matches!(event, Event::Empty(_)) {
+                        section.truncate(section.len() - 2);
+                        section.extend_from_slice(b"></");
+                        section.extend_from_slice(element.name().as_ref());
+                        section.push(b'>');
+                    }
+                    let section = close_content_fragment_namespaces(&section, &context.namespaces)?;
+                    let mut paragraph = format!("<w:p xmlns:w=\"{W_NS}\"><w:pPr>").into_bytes();
+                    paragraph.extend_from_slice(&section);
+                    paragraph.extend_from_slice(b"</w:pPr></w:p>");
+                    match CT_P::from_xml_fragment_checked(&paragraph) {
+                        Ok(parsed) => {
+                            let section = parsed
+                                .properties
+                                .and_then(|properties| properties.sect_pr)
+                                .ok_or_else(|| {
+                                    Error::Other(
+                                        "paragraph section properties could not be checked".into(),
+                                    )
+                                })?;
+                            sections.push(EditedParagraphSection::Parsed(Box::new(section)));
+                        }
+                        Err(_) if matches!(event, Event::Empty(_)) => {
+                            // The ordinary checked paragraph parser already admitted
+                            // this raw Empty section. Preserve its exact bytes and
+                            // namespace meaning when paired parsing cannot model it.
+                            let mut opaque_context = context.clone();
+                            let meaning =
+                                edited_paragraph_island_meaning(raw, &mut opaque_context, routes)?;
+                            sections.push(EditedParagraphSection::Preserved(
+                                EditedParagraphIsland {
+                                    route: 0,
+                                    name: (routes.namespace(W_NS), "sectPr".into()),
+                                    raw: raw.to_vec(),
+                                    meaning: meaning.names,
+                                    authored_ignorable: false,
+                                },
+                            ));
+                        }
+                        Err(error) => return Err(error.into()),
                     }
                 }
                 if (!direct
@@ -8248,6 +8308,7 @@ fn edited_paragraph_admission(
                 return Ok(EditedParagraphAdmission {
                     islands,
                     mc_attributes,
+                    sections,
                 });
             }
             _ => {}
@@ -8282,6 +8343,11 @@ fn admit_edited_paragraph(
     let mut routes = EditedParagraphRoutes::default();
     let original = edited_paragraph_admission(original, inherited, &mut routes)?;
     let incoming = edited_paragraph_admission(incoming, inherited, &mut routes)?;
+    if original.sections != incoming.sections {
+        return Err(Error::Other(
+            "element XML changed or introduced paragraph-owned section properties are unsupported, use the checked section owner".into(),
+        ));
+    }
     let mut original_counts = HashMap::new();
     let mut incoming_counts = HashMap::new();
     for island in &original.islands {
@@ -27015,6 +27081,181 @@ impl Document {
         )))
     }
 
+    /// Resolve every body paragraph at once, in [`Self::paragraphs`] order.
+    ///
+    /// Entry `i` is what [`Self::paragraph_story_location`] returns for `i`
+    /// when that is a location. `None` marks a paragraph that the single
+    /// lookup does not resolve, or resolves to an error; callers that cache
+    /// this inventory ask the single lookup for those. One call costs one
+    /// scan of the body, where a single lookup costs one scan per paragraph.
+    #[doc(hidden)]
+    pub fn paragraph_story_locations(&self) -> Result<Vec<Option<ContentLocation>>> {
+        let mut targets = HashMap::new();
+        for (slot, child) in self.document.body.content.iter().enumerate() {
+            match child {
+                BodyContent::Paragraph(paragraph) => {
+                    targets
+                        .entry(paragraph.as_ref() as *const CT_P)
+                        .or_insert((slot, None));
+                }
+                BodyContent::ContentControl(control) => {
+                    for (ordinal, paragraph) in control
+                        .content
+                        .iter()
+                        .filter_map(|child| match child {
+                            SdtContent::Paragraph(paragraph) => Some(paragraph),
+                            _ => None,
+                        })
+                        .enumerate()
+                    {
+                        targets
+                            .entry(paragraph as *const CT_P)
+                            .or_insert((slot, Some(ordinal)));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let story = self
+            .stories()?
+            .into_iter()
+            .find(|story| story.kind == StoryKind::Body)
+            .ok_or_else(|| Error::Other("document body story is missing".to_owned()))?;
+        let (source, owner) = self.story_source_and_owner(&story)?;
+        let items = scan_story_items(source.xml.as_ref(), &owner, None)?;
+        let direct = items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.direct_owner_child)
+            .collect::<Vec<_>>();
+        Ok(self
+            .document
+            .body
+            .paragraphs()
+            .map(|paragraph| {
+                let (slot, ordinal) = *targets.get(&(paragraph as *const CT_P))?;
+                let (item_index, item) = direct.get(slot)?;
+                let expected_kind = if ordinal.is_some() {
+                    StoryItemKind::ContentControl
+                } else {
+                    StoryItemKind::Paragraph
+                };
+                (item.kind == expected_kind).then(|| {
+                    ContentLocation::new(
+                        story.clone(),
+                        StoryItemKind::Paragraph,
+                        std::iter::once(*item_index).chain(ordinal).collect(),
+                    )
+                })
+            })
+            .collect())
+    }
+
+    /// Resolve the paragraphs of every body table cell at once, keyed by
+    /// (table, row, cell) as [`Self::cell_paragraph_story_location`] takes
+    /// them.
+    ///
+    /// A cell is present when the single lookup resolves its paragraphs; a
+    /// cell it refuses is absent, and callers that cache this inventory ask
+    /// the single lookup for it. The single lookup also reads each returned
+    /// paragraph back; this inventory leaves that check to the caller. One
+    /// call costs one serialization and one owner scan of the body, where a
+    /// single lookup costs them for each paragraph and rescans the body for
+    /// each cell owner before its target.
+    #[doc(hidden)]
+    pub fn cell_paragraph_story_locations(
+        &self,
+    ) -> Result<HashMap<(usize, usize, usize), Vec<ContentLocation>>> {
+        let mut candidate = self.clone_for_staging();
+        let mut addresses = HashMap::<*const CT_Tc, (usize, usize, usize)>::new();
+        for (table_index, table) in candidate.tables().into_iter().enumerate() {
+            for (row_index, row) in table.inner.rows.iter().enumerate() {
+                for (cell_index, cell) in row.cells.iter().enumerate() {
+                    addresses.entry(cell as *const CT_Tc).or_insert((
+                        table_index,
+                        row_index,
+                        cell_index,
+                    ));
+                }
+            }
+        }
+        let xml = candidate.document.to_xml()?;
+        let owners = scan_story_owners(&xml, StoryKind::Body)?;
+        let body = owners
+            .iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
+        let direct_items = direct_story_content_items(&xml, body)?;
+        let mut ordinals = HashMap::<usize, usize>::new();
+        let mut selected = Vec::new();
+        let mut seen = HashSet::new();
+        for owner in owners
+            .iter()
+            .filter(|owner| owner.kind == StoryKind::TableCell)
+        {
+            // The single lookup fails on the first owner it cannot route,
+            // whatever its target, so the inventory stops there too.
+            let Some((content, direct_item)) = direct_items.iter().enumerate().find(|(_, item)| {
+                item.full.start <= owner.full.start && owner.full.end <= item.full.end
+            }) else {
+                break;
+            };
+            if !matches!(
+                direct_item.kind,
+                StoryItemKind::Table | StoryItemKind::ContentControl
+            ) {
+                break;
+            }
+            let counter = ordinals.entry(content).or_insert(0);
+            let mut ordinal = *counter;
+            *counter += 1;
+            let modeled = match candidate.document.body.content.get_mut(content) {
+                Some(BodyContent::Table(table)) => nth_cell_in_table(table, &mut ordinal),
+                Some(BodyContent::ContentControl(control)) => {
+                    nth_cell_in_control(control, &mut ordinal)
+                }
+                _ => None,
+            };
+            let Some((pointer, count)) =
+                modeled.map(|cell| (&*cell as *const CT_Tc, cell.paragraphs().len()))
+            else {
+                continue;
+            };
+            let Some(address) = addresses.get(&pointer) else {
+                continue;
+            };
+            if !seen.insert(*address) {
+                continue;
+            }
+            let story = StoryId {
+                kind: owner.kind,
+                part_name: candidate.doc_part_name.clone(),
+                owner_index: owner.owner_index,
+                fingerprint: owner.fingerprint,
+            };
+            selected.push((*address, count, (story, owner.clone())));
+        }
+        let pairs = selected
+            .iter()
+            .map(|(_, _, pair)| pair.clone())
+            .collect::<Vec<_>>();
+        let spans = story_range_paragraph_spans(&xml, &pairs)?;
+        let mut result = HashMap::with_capacity(selected.len());
+        for ((address, count, _), mut paragraphs) in selected.into_iter().zip(spans) {
+            paragraphs.sort_by_key(|(_, span)| span.start);
+            if paragraphs.len() == count {
+                result.insert(
+                    address,
+                    paragraphs
+                        .into_iter()
+                        .map(|(location, _)| location)
+                        .collect(),
+                );
+            }
+        }
+        Ok(result)
+    }
+
     /// Return the direct body index of the table addressed by `table_index`.
     pub fn content_index_of_table(&self, table_index: usize) -> Option<usize> {
         let target = self.table(table_index)?.inner;
@@ -27073,7 +27314,8 @@ impl Document {
             return Ok(Some(false));
         }
         if !paragraph_is_plain(&incoming)
-            || stored.accepted_run_paths() != incoming.accepted_run_paths()
+            || (!stored.accepted_run_paths().is_empty()
+                && stored.accepted_run_paths() != incoming.accepted_run_paths())
         {
             return Ok(None);
         }

@@ -10009,3 +10009,288 @@ def test_issue389_tail_removal_retires_held_owners_without_resurrection():
     assert doc.remove_content(1)
     reopened = rdocx.Document.from_bytes(doc.to_bytes())
     assert [p.text for p in reopened.paragraphs] == ["again"]
+
+
+@pytest.mark.parametrize("edit", ["body", "cell", "nested", "header", "xml", "property", "row", "tail", "noop_refusal"])
+def test_issue398_read_indexes_follow_current_owners_after_edits(edit):
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("body before")
+    document.add_paragraph("second body")
+    document.add_table(1, 1).cell(0, 0).text = "outer before"
+    document.tables[0].cell(0, 0).add_table(1, 1).cell(0, 0).text = "nested before"
+    document.section(0).header.add_paragraph("header before")
+
+    def observe(doc):
+        outer = doc.tables[0].cell(0, 0)
+        return {
+            "body": tuple(paragraph.text for paragraph in doc.paragraphs),
+            "outer": tuple(paragraph.text for paragraph in outer.paragraphs),
+            "nested": tuple(paragraph.text for paragraph in outer.tables[0].cell(0, 0).paragraphs),
+            "header": tuple(paragraph.text for paragraph in doc.section(0).header.paragraphs),
+            "rows": tuple(len(row.cells) for row in doc.tables[0].rows),
+        }
+
+    before = document.to_bytes()
+    initial = observe(document)
+    assert observe(document) == initial
+    assert document.to_bytes() == before
+    expected = dict(initial)
+    if edit == "body":
+        document.paragraphs[0].text = "body after"
+        expected["body"] = ("body after", "second body")
+    elif edit == "cell":
+        document.tables[0].cell(0, 0).paragraphs[0].text = "outer after"
+        expected["outer"] = ("outer after",) + initial["outer"][1:]
+    elif edit == "nested":
+        document.tables[0].cell(0, 0).tables[0].cell(0, 0).paragraphs[0].text = "nested after"
+        expected["nested"] = ("nested after",)
+    elif edit == "header":
+        document.section(0).header.paragraphs[-1].text = "header after"
+        expected["header"] = initial["header"][:-1] + ("header after",)
+    elif edit == "xml":
+        paragraph = document.paragraphs[0]
+        paragraph.replace_xml(paragraph.xml.replace("body before", "xml after"))
+        expected["body"] = ("xml after", "second body")
+    elif edit == "property":
+        document.tables[0].cell(0, 0).width = 200_000
+    elif edit == "row":
+        document.tables[0].add_row()
+        expected["rows"] = (1, 1)
+    elif edit == "tail":
+        document.add_paragraph("removed")
+        held = document.paragraphs[0]
+        assert document.remove_content(document.find_content_index("removed"))
+        with pytest.raises(rdocx.StaleElementError):
+            _ = held.text
+        assert observe(document) == expected
+        document.add_paragraph("replacement")
+        expected["body"] = initial["body"] + ("replacement",)
+        with pytest.raises(rdocx.StaleElementError):
+            _ = held.text
+    else:
+        held = document.paragraphs[0]
+        held.replace_xml(held.xml)
+        assert held.text == "body before"
+        stable = document.to_bytes()
+        with pytest.raises(rdocx.RdocxError):
+            held.replace_xml(held.xml.replace("</w:p>", "<w:notAChild/></w:p>"))
+        assert document.to_bytes() == stable
+        assert held.text == "body before"
+    assert observe(document) == expected
+    assert observe(rdocx.Document.from_bytes(document.to_bytes())) == expected
+
+
+
+
+@pytest.mark.parametrize("host", ["body", "cell", "nested", "header", "paired"])
+@pytest.mark.parametrize("operation", ["tab", "line", "page", "column"])
+def test_issue398_run_tabs_and_breaks_refresh_live_paragraph_text(host, operation):
+    import rdocx
+
+    if host == "paired":
+        document = _fx261_text_box("pair")
+    else:
+        document = rdocx.Document()
+        document.add_paragraph("before")
+        document.add_table(1, 1).cell(0, 0).text = "before"
+        document.tables[0].cell(0, 0).add_table(1, 1).cell(0, 0).text = "before"
+        document.section(0).header.add_paragraph("before")
+
+    def select(doc):
+        if host == "body":
+            return doc.paragraphs[0]
+        if host == "cell":
+            return doc.tables[0].cell(0, 0).paragraphs[0]
+        if host == "nested":
+            return doc.tables[0].cell(0, 0).tables[0].cell(0, 0).paragraphs[0]
+        if host == "header":
+            return doc.section(0).header.paragraphs[-1]
+        return next(item.paragraph for item in doc.story_items
+                    if item.story.kind == "text_box" and item.kind == "paragraph")
+
+    paragraph = select(document)
+    initial = "box NEEDLE" if host == "paired" else "before"
+    assert paragraph.text == initial
+    run = paragraph.runs[0]
+    font = run.font
+    bold = font.bold
+    before = document.to_bytes()
+    if host == "header" and operation == "page":
+        with pytest.raises(ValueError, match="page break.*header"):
+            run.add_break("page")
+        assert document.to_bytes() == before
+        expected = initial
+    else:
+        if operation == "tab":
+            run.add_tab()
+        elif operation == "line":
+            run.add_break()
+        else:
+            run.add_break(operation)
+        expected = initial + ("\t" if operation == "tab" else "\n")
+    assert run.text == expected
+    assert paragraph.text == expected
+    assert select(document).text == expected
+    assert font.bold == bold
+    if host == "paired":
+        tag = b"tab" if operation == "tab" else b"br"
+        assert len(re.findall(rb"<w:" + tag + rb"(?:\s|/|>)", _document_xml(document))) == 2
+    saved = document.to_bytes()
+    assert paragraph.text == select(document).text == expected
+    assert select(rdocx.Document.from_bytes(saved)).text == expected
+
+
+@pytest.mark.parametrize("target", [0, 1])
+@pytest.mark.parametrize("operation", ["tab", "line", "run_text", "paragraph_text", "append"])
+@pytest.mark.parametrize("leading_direct", [False, True])
+def test_issue398_controlled_cell_edit_selects_read_owner(target, operation, leading_direct):
+    import rdocx
+    content = ('<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>'
+               '<w:tr><w:tc><w:sdt><w:sdtContent><w:p><w:r><w:t>controlled</w:t>'
+               '</w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>after</w:t>'
+               '</w:r></w:p></w:tc></w:tr></w:tbl>')
+    if leading_direct:
+        content = content.replace('<w:tc>', '<w:tc><w:p><w:r><w:t>before</w:t></w:r></w:p>')
+        target += 1
+    doc = _replace_document_body(rdocx.Document(), content)
+    held = list(doc.tables[0].cell(0, 0).paragraphs)
+    paragraph = held[target]
+    run = paragraph.runs[0]
+    font = run.font
+    expected = (["before"] if leading_direct else []) + ["controlled", "after"]
+    if operation == "tab":
+        run.add_tab()
+        expected[target] += "\t"
+    elif operation == "line":
+        run.add_break()
+        expected[target] += "\n"
+    elif operation == "run_text":
+        run.text = "changed"
+        expected[target] = "changed"
+    elif operation == "paragraph_text":
+        paragraph.text = "changed"
+        expected[target] = "changed"
+    else:
+        paragraph.add_run("Z")
+        expected[target] += "Z"
+    assert [p.text for p in held] == expected
+    assert [p.text for p in doc.tables[0].cell(0, 0).paragraphs] == expected
+    if operation in ("tab", "line"):
+        assert run.text == expected[target]
+        assert font.bold is None
+    out = io.BytesIO()
+    doc.save(out)
+    reopened = rdocx.Document.from_bytes(out.getvalue())
+    assert [p.text for p in reopened.tables[0].cell(0, 0).paragraphs] == expected
+
+
+@pytest.mark.parametrize("run_count", [1, 2])
+def test_issue389_first_run_local_publication_keeps_exact_owner_lifetimes(run_count):
+    import rdocx
+    doc = rdocx.Document()
+    doc.add_paragraph("before")
+    doc.add_paragraph("tail")
+    paragraph = doc.insert_paragraph(1, "")
+    old_runs = paragraph.runs
+    xml = ('<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+           + ''.join(f'<w:r><w:t>r{i}</w:t></w:r>' for i in range(run_count))
+           + '</w:p>')
+    paragraph.replace_xml(xml)
+    expected = ''.join(f'r{i}' for i in range(run_count))
+    assert paragraph.text == expected
+    with pytest.raises(rdocx.StaleElementError):
+        len(old_runs)
+    run = paragraph.runs[0]
+    font = run.font
+    run.add_tab()
+    font.bold = True
+    assert font.bold is True
+    expected = 'r0\t' + ''.join(f'r{i}' for i in range(1, run_count))
+    assert paragraph.text == expected
+    current_xml = paragraph.xml
+    paragraph.replace_xml(current_xml)
+    assert run.text == 'r0\t'
+    before = doc.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        paragraph.replace_xml('<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:invalid/></w:p>')
+    assert doc.to_bytes() == before
+    assert run.text == 'r0\t'
+    paragraph.replace_xml(current_xml.replace('>r0<', '>changed<'))
+    with pytest.raises(rdocx.StaleElementError):
+        _ = run.text
+    assert paragraph.runs[0].text == 'changed\t'
+    # A later tail removal must update the appended run indices, then a full
+    # publication must reconstruct the same physical owners without history.
+    assert doc.remove_content(2)
+    paragraph = doc.paragraphs[1]
+    assert paragraph.runs[0].text == 'changed\t'
+    paragraph.add_run('end')
+    expected = 'changed\t' + ''.join(f'r{i}' for i in range(1, run_count)) + 'end'
+    assert doc.paragraphs[1].text == expected
+    stream = io.BytesIO()
+    doc.save(stream)
+    assert rdocx.Document.from_bytes(stream.getvalue()).paragraphs[1].text == expected
+
+
+@pytest.mark.parametrize("path", ["first_run", "same_runs", "changed_runs"])
+@pytest.mark.parametrize("section", ["<w:sectPr/>", "<w:sectPr></w:sectPr>", '<w:sectPr><w:pgSz w:w="12345"/></w:sectPr>'])
+def test_issue389_paragraph_xml_refuses_section_introduction_on_every_path(path, section):
+    import rdocx
+    doc = rdocx.Document()
+    paragraph = doc.add_paragraph("" if path == "first_run" else "old")
+    runs = '<w:r><w:t>new</w:t></w:r>' * (2 if path == "changed_runs" else 1)
+    xml = '<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:pPr>' + section + '</w:pPr>' + runs + '</w:p>'
+    before = doc.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="section"):
+        paragraph.replace_xml(xml)
+    assert doc.to_bytes() == before
+    assert paragraph.text == ("" if path == "first_run" else "old")
+
+
+@pytest.mark.parametrize("prefix", ["w", "q"])
+@pytest.mark.parametrize("section", ["<{p}:sectPr/>", "<{p}:sectPr></{p}:sectPr>", '<{p}:sectPr><{p}:pgSz {p}:w="12345"/></{p}:sectPr>', '<{p}:sectPr xmlns:x="urn:x" x:flag="keep"/>'])
+def test_issue389_paragraph_xml_preserves_imported_section_and_refuses_removal(prefix, section):
+    import rdocx
+    section = section.format(p=prefix)
+    if prefix != "w":
+        section = section.replace(f'<{prefix}:sectPr', f'<{prefix}:sectPr xmlns:{prefix}="http://schemas.openxmlformats.org/wordprocessingml/2006/main"', 1)
+    body = ('<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            f'<w:pPr>{section}</w:pPr><w:r><w:t>old</w:t></w:r></w:p>')
+    doc = _replace_document_body(rdocx.Document(), body)
+    paragraph = doc.paragraphs[0]
+    original = paragraph.xml
+    paragraph.replace_xml(original.replace('>old<', '>new<'))
+    assert paragraph.xml == original.replace('>old<', '>new<')
+    assert paragraph.text == 'new'
+    assert rdocx.Document.from_bytes(doc.to_bytes()).paragraphs[0].text == 'new'
+    if 'x:flag="keep"' in paragraph.xml:
+        before_attribute = doc.to_bytes()
+        with pytest.raises(rdocx.RdocxError, match='section'):
+            paragraph.replace_xml(paragraph.xml.replace('x:flag="keep"', 'x:flag="changed"'))
+        assert doc.to_bytes() == before_attribute
+    # Removing the entire pPr avoids making assumptions about retained prefixes.
+    without_section = re.sub(r'<w:pPr\b[^>]*>.*?</w:pPr>', '', paragraph.xml, flags=re.S)
+    assert without_section != paragraph.xml
+    before = doc.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match='section'):
+        paragraph.replace_xml(without_section)
+    assert doc.to_bytes() == before
+    assert paragraph.text == 'new'
+
+
+def test_issue389_retained_paragraph_alias_never_publishes_unsavable_text():
+    import rdocx
+    doc = _replace_document_body(rdocx.Document(), '<q:p xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:pPr><q:sectPr></q:sectPr></q:pPr><q:r><q:t>old</q:t></q:r></q:p>')
+    paragraph = doc.paragraphs[0]
+    before = doc.to_bytes()
+    try:
+        paragraph.replace_xml(paragraph.xml.replace('>old<', '>new<'))
+    except rdocx.RdocxError as error:
+        assert 'namespace owner' in str(error)
+        assert doc.to_bytes() == before
+        assert paragraph.text == 'old'
+    else:
+        assert paragraph.text == 'new'
+        assert rdocx.Document.from_bytes(doc.to_bytes()).paragraphs[0].text == 'new'

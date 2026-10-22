@@ -3340,12 +3340,38 @@ required, and no binary fixture enters the repository.
 50 and 800 paragraphs. The PowerPoint property packages hold one edited text
 box, or 40 slides of 40 text boxes. `add_textbox` is also run on a deck with
 one blank slide and on a deck that already holds 40 slides of 40 text boxes.
-Each measured call records one visit of the edited slide or body block.
-Walking the in-memory owner vector is not a visit. A debug timing does not
-pass this gate. The release-build large-to-small ratio below 3 for the same
+Native counters record edited-slide or body-block traversal. Binding counters
+separately record owner/index traversal and calls into source-wide fallbacks.
+These are bounded-work controls, not a meter of every allocation or parser.
+A debug timing does not pass this gate. The release-build large-to-small ratio below 3 for the same
 seven operations is final-sprint evidence. The same test name in the existing
 Python files checks that the edited owner changes and an unrelated owner does
 not.
+
+Issue398 adds actual cold and repeated paragraph, row-cell and cell-paragraph
+creation on50paragraphs/twotables and400paragraphs/sixteentables, with four by
+three cells in each table. All three release ratios remain below3. Initial
+projection preparation is measured separately, rather than hidden in a warm-up.
+The batch/single native parity case includes nested tables and controlled
+content. Binding controls compare current text/counts after body, cell, nested,
+header, XML, property, row and removal/reinsertion edits, plus no-op/refusal and
+reopen. The deterministic read test records equal bounded selected-owner work
+on small and large inputs, and deliberately disables a projection to prove that
+the old source-wide fallback exceeds the bound. Facts and route indexes remain
+derived from current checked ownership, with no authority from matching text.
+Run-content controls cover held and fresh reads after tabs and breaks, including
+qualified paired text boxes and controlled/direct paragraphs in the same cell.
+The cell cases also check run and paragraph text setters and appended runs,
+unchanged neighbors and save/reopen. The first-run work control introduces a run
+into an empty paragraph, then edits it again. One-run and two-run lifecycle cases
+check newborn handles, no-op, refusal, stale content views, later tail removal
+and full publication. Section-refusal controls cross first-run, same-run and
+staged run-topology paths with self-closing, paired-empty and nonempty forms.
+Unchanged sections, qualified aliases and section removal get separate controls.
+Foreign root attributes on an admitted opaque Empty section must survive text
+edits exactly, while changed attributes and section removal refuse atomically.
+A retained paragraph alias with an opaque section dependency must either stage
+a savable edit or refuse atomically. Allocation and hashing are not universally metered.
 
 Issue 392 local tests cover placeholder idx gaps, ties-to-even percentage
 boundaries, generated `upArrow` geometry, painted table-row growth with

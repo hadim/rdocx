@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S95.3
 **Size**: L
-**Estimate**: 4 to 6 developer-days, provisional
+**Estimate**: 6 to 10 developer-days, provisional after Issue398. Original scope was 4 to 6.
 **Depends on**: F-X211c, F-X237
 
 ## Problem
@@ -106,7 +106,7 @@ CLI and WASM are unaffected. They do not hold these Python owner inventories. Na
 | local scoped | regression | A1 through A4 | Old missing-owner and stale-append failures, then live handles |
 | local scoped | regression | A5 visit counter | Unrelated slides and body blocks are not visited. The ratio is the release observation |
 | local scoped | regression | A6 and A7 | One transaction, atomic refusal, shared media kept |
-| final sprint | risk rider | installed `rdocx` and `rpptx` suites, release ratio samples, full hash harness | No Word hash delta. No new public surface beyond the approved range method |
+| final sprint | risk rider | installed `rdocx` and `rpptx` suites, release ratio samples, full hash harness | No Word hash delta. Only the range method and the two approved doc-hidden native read projections are added. Python adds only the range method |
 
 Local commands are the existing Python files `crates/rdocx-py/tests/test_formatting_tables.py` and `crates/rpptx-py/tests/test_documented_examples.py`, plus the visit assertion in the existing library unit tests named under Deviations. No new test binary.
 
@@ -266,7 +266,7 @@ If extra cached source facts are necessary, derive them at the existing state
 preparation boundary and prove mutations that preserve revision serial cannot
 leave stale entries. Do not import PR399's TrackedDocument wrapper, LocationSource
 trait or hidden public batch methods without a demonstrated need and explicit
-contract. No public signature addition is currently approved for A8 through A10.
+contract. Only the two doc-hidden native read-projection methods specified below are approved additions for A8 through A10. No new Python API.
 Supported imported routes and native refusal semantics remain authoritative.
 
 Consumer map adds body/nested/related paragraph, table and cell collections,
@@ -293,3 +293,180 @@ actual incremental diff. Final suites, hash, release ratios and all existing
 risk riders remain due once over the integrated union. No new material product
 choice is open. No issue closes at intake. Grok documentation proposals are
 untrusted input until checked by Codex against these pinned sources.
+
+## Read-index mechanism closure
+
+Source inspection shows that current physical owner snapshots already carry
+qualified table/cell ancestry and ordered paragraph source, but facade body and
+cell ordinals are different axes. A direct projection-ordinal shortcut would
+misbind paragraphs in nested controls. The existing single native lookups clone
+or scan unrelated source and cannot be used once per handle.
+
+Use two additive doc-hidden native batch projections with concrete Python
+consumers: `paragraph_story_locations() -> Result<Vec<Option<ContentLocation>>>`
+and `cell_paragraph_story_locations() -> Result<HashMap<(usize, usize, usize),
+Vec<ContentLocation>>>`. Match the corresponding existing single lookup exactly
+on supported entries. Missing/unsupported entries retain that original lookup,
+including its refusal. These are source facts, not new mutation authority or a
+Python API. PR399 supplies the candidate algorithms. Verify actual batch/single
+parity, including nested/control cases, before trusting their output.
+
+Prepare these projection maps with the existing immutable owner inventory at
+open or before candidate publication. Do not build them lazily inside the first
+timed handle call. Keep prepared captures on the existing checked path. Current
+captures use a derived route index with exact same_route confirmation, including
+hash collisions and first-match behavior. Current-generation lookup checks the
+actual token, not the numeric generation alone.
+
+Cache only read facts derived from that same admitted inventory: accepted
+paragraph text and table row/cell paragraph counts. These facts are not serialized
+and grant no ownership. Unsupported table-source parsing retains native reads.
+They are prepared with full replacement or property relocation. A local plain
+paragraph XML edit prepares its next accepted text before native mutation and
+installs it only on successful publication. A tail removal drops only removed
+facts and updates affected indices without rescanning survivors. No-op/refusal
+keeps the old facts. Do not introduce a forwarding document wrapper, lazy
+whole-document cache, trait or second owner registry.
+
+Bindings resolve body/table/cell paragraph aliases through prepared projections,
+parent-cell indexes and current scopes. Read text/counts through the current
+owner only after checking captured authority. Mutations still refresh native
+fingerprints through existing checked providers. Nested-table enumeration uses
+the same current source inventory and preserves source order. Repeated route
+reads must not call stories or serialize source merely to capture authority.
+
+Tests compare body, cell, nested and related read facts to actual native/saved
+content, then edit text, properties, rows and XML and repeat. Include unsupported
+routes, duplicate content, stale collections, removal/reinsertion, no-op and
+refusal. Meter capture/projection/text traversal at its actual boundary after
+open and after edits. Report initial projection preparation cost separately.
+The two hidden native additions are additive pre-1.0, with no new public types.
+Final packaging, WASM and hash riders cover them with the integrated union.
+
+## Issue398 D1 publisher closure
+
+Focused Issue398 pass1 found that Run.add_tab and Run.add_break install an
+owner-preserving native candidate without changing the revision. Their paragraph
+read facts must change even though captured scopes stay live. Both are the only
+callers of the existing PyRun.edit helper in run.rs. Keep that shared edit path.
+After candidate mutation, read accepted paragraph text through the existing
+native reader. Validate the current run and its paragraph parent before
+publishing, then move the prepared text and candidate together without changing
+scopes. Preserve legacy unbound fallback, held runs/fonts, native refusal and
+paired text-box behavior. No post-live preparation or broad cache invalidation.
+
+A10 now explicitly covers tab, default line, page and column breaks in body,
+cell, nested cell, header and qualified paired text-box contexts. Header page
+break is the atomic refusal control. Observe held/fresh paragraph text, actual
+run text, retained font views, both paired physical XML copies and save/reopen.
+The old dev extension is retained with the review's SHA-256, alongside the first
+release wheel. The actual initial matrix is15failures and1passing refusal, not
+a source counterfactual. A fresh focused pass2 is required after GREEN.
+
+## First-run and physical-cell follow-up
+
+F-X260 source-backed follow-up, Issue389 initial empty paragraph
+Actual release failure7.336295, child1, /tmp/s95.3-final-issue389-release.log.
+No threshold or workload changes. Current native plain shortcut refuses a
+change in accepted run paths. Reporter first introduces a run into a previously
+empty paragraph. Local existing test incorrectly exercises only an existing run.
+
+Proposed bounded extension: keep equal-path edit support and additionally
+allow a plain paragraph with zero accepted runs to acquire direct plain runs.
+Retain all native paragraph checks, section refusal, namespace/MC/identity and
+relationship admission before mutation. No other topology change is local.
+Prepare existing owner scope replacements and newborn run authority before
+native publication. Append newborn runs to the current finite owner vector to
+avoid shifting unrelated indices. Exact run route buckets grant authority only
+after native admission. No historical owners are retained. Later full admission
+rebuilds source order as before. Local follow-up edits find child run owners
+through the existing exact route index rather than relying on adjacency.
+Tail removal falls back for non-contiguous descendants of the removed owner.
+Independent appended runs whose parents precede the removed owner may remain
+in the suffix, with their route/generation indices shifted alongside sections.
+This visits the actual appended suffix, not every physical body owner. Do not
+claim a universal bound independent of all earlier local edits.
+No new API, registry, trait, generic, crate, file or feature flag.
+
+Use a private preparation struct in existing document.rs if necessary to make
+the staged state explicit and avoid another tuple of opaque positional values.
+Pre-reserve affected owner and hash-index storage and prepare collision buckets,
+revision scopes, accepted text and new owners before native writes. Native no-op
+or refusal must not publish prepared states or births. Commit only moves prepared
+values. Preserve first stale cause and existing paragraph owner identity.
+
+Prove actual old-code RED for first empty-to-run public call at50/800 native
+source sizes with metered work. Then assert constant bounded preparation and
+native work. Exercise0->1 and0->2, follow-up equal-path edit on appended owners,
+held paragraph live, previous content/run/font wrappers stale as contracted,
+fresh run edit and formatting, no-op unchanged identities, malformed/section/
+unsupported refusal exact bytes, save/reopen, later property/full edit and tail
+removal conservative behavior. Do not generalize growth/removal with existing
+runs. Rebuild release artifacts only after fix and rerun original strict scripts
+once on changed source. Preserve original failed wheel and measurement hashes.
+Fresh independent microscope must review this new publication path.
+
+D1 designer investigation, root Codex, before further mutation:
+ParagraphLocation::Cell.read uses immutable CellRef.paragraph, which includes
+controlled paragraph content. Its edit callback uses mutable Cell.paragraph_mut,
+which selects direct paragraphs only. A controlled paragraph before a direct
+paragraph makes the same ordinal address two owners. Run.edit reads accepted
+text through the former but mutates through the latter. Updating additional
+cache entries would conceal the incorrect physical edit. Resolve the checked
+cell_paragraph_story_location through the original native reader and invoke
+edit_story_paragraph on that exact physical location. Keep body and related
+providers unchanged. This shared provider covers all callback publishers, not
+only tabs/breaks. Test controls first/middle and direct/control targets, run
+text setter and paragraph content setters beside tabs/breaks, both held and
+fresh values and actual XML, unchanged neighbors, and save/reopen. Refusal must
+publish nothing. This is a source-based identity correction, not native parity.
+
+## D2 physical section admission
+
+Generic paragraph XML refuses introduced, removed or changed physical section
+properties on both local and staged paths. The shared paragraph admission
+scanner inventories direct qualified sectPr children of pPr for Start and Empty
+events. Normalize a temporary Empty representation to paired tags only for
+checked semantic comparison, with the actual namespace scope closed. Parse that
+temporary section through the existing CT_P/CT_SectPr model. Compare the ordered
+section values and multiplicity before publication. Keep original submitted
+bytes and parser/serializer behavior unchanged. Retain the local modeled-section
+guard so no new section-owner topology can slip through a local commit.
+
+Tests cross first-run, same-run and staged run-topology paths with self-closing,
+paired-empty and nonempty section forms. Prove actual three-failure RED beside
+six passing refusal controls. Preserve unchanged imported empty and nonempty
+sections during text edits, including qualified aliases. New/removal/change
+refuses with exact package bytes and live handles. Related-story placement uses
+the same shared guard. This does not claim authentic Word qualification.
+
+A constructed positive with an alternate prefix declared on the entire
+paragraph exposed an existing local namespace-owner replay failure at save.
+Preserving a section's qualified alias is a separate positive control, declared
+on the section itself. Do not mislabel the outer-paragraph failure as a section
+guard regression or erase it. Route packages with retained nested modeled
+namespace owners through staged identity proof. If the original provenance
+cannot be reconciled, refuse atomically rather than publishing an unsavable
+local mutation. No namespace declaration or unmodeled byte may be discarded.
+
+## D2 opaque imported section preservation
+
+The first D2 repair's temporary paired parse fails for a valid imported Empty
+sectPr with a foreign root attribute. The existing paired parser captures root
+attributes using its Word prefix scope, so a normal foreign binding is lost.
+Do not change that public parser in this repair or reject previously readable
+opaque bytes. Use two explicit private section cases in shared admission:
+a successfully parsed semantic section and an opaque Empty section whose
+temporary semantic parse fails. The opaque case uses the existing protected
+island representation with exact raw bytes and expanded-name/namespace meaning.
+It is never an authored-Ignorable escape. Only an unchanged opaque section may
+remain. New, removed or changed instances refuse by ordered comparison.
+The regular incoming checked paragraph parse still runs before admission.
+Paired input parser failures retain their existing refusal. This fallback does
+not create a second mutable document model or normalize serialized bytes.
+
+The enum represents two actual imported states and avoids invalid combinations
+of optional semantic/raw fields. Box the concrete parsed model if needed for
+its large size. Prove text edit and exact preservation for self-contained
+foreign attributes in canonical and qualified-alias sections, plus refusal of
+attribute changes and removal. Keep all introduction and namespace controls.

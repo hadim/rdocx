@@ -96,6 +96,8 @@ presentation identity is checked before stale lookup or mutation.
 Native staged edits finish validation, checked scope preparation and every
 returned Python object allocation before committing and publishing the
 candidate. `capture_prepared` binds returned handles to the successor state.
+Run tab and break edits prepare the changed paragraph read fact before
+publishing native content and keep existing handle scopes live.
 Failures and actual no-ops publish nothing. Manual unbound native snapshots
 cannot acquire authority from a matching numeric position. Private authority
 changes pre-1.0 struct-literal source compatibility, while existing constructors
@@ -763,11 +765,21 @@ The call does not recurse into tables.
 
 A plain direct body `Paragraph.replace_xml` resolves its captured generation
 through a derived current-inventory index and prepares only that paragraph's
-content, properties and contiguous run scopes. A last direct plain paragraph
-can be removed locally when only section owners follow its inventory range.
+content, properties and exact run scopes. An empty plain paragraph may acquire
+direct runs with prepared newborn authority and exact route buckets. Subsequent
+equal-path edits resolve those appended owners through the same route index.
+Other topology changes retain the staged path. A last direct plain paragraph
+can be removed locally when the suffix contains only sections or appended runs
+whose parents precede the removed owner. Their indices are shifted locally.
+Non-contiguous descendants of the removed owner retain the staged path.
 A shared removal epoch retires all held physical owner paths, while earlier
 current inventory entries remain available to fresh handles. Removing another
-body child keeps conservative address reconciliation. A retained shadowed serializer prefix refuses that local publication
+body child keeps conservative address reconciliation. Generic paragraph XML
+refuses adding, removing or changing physical section properties, including
+self-closing forms. Unchanged imported section XML, including opaque foreign
+attributes, is preserved. A temporary model failure on an admitted Empty
+section retains exact protected raw bytes and namespace meaning. Retained
+nested namespace owners require staged identity proof. A retained shadowed serializer prefix refuses that local publication
 and leaves the package unchanged. PowerPoint `ShapeCollection.add_textbox`, `Shape.alt_text`, `Shape.left`,
 `FillFormat.solid` on a shape, and a stable `Shape.element.replace_xml` do the
 same for one slide child when the edit does not change relationships, connectors,
@@ -4457,6 +4469,18 @@ routes. Nested typed owners keep their existing providers. An unchanged
 unsupported MC attribute retains its own raw value and resolved meaning,
 without freezing supported text and metadata edits on its owner. This does
 not establish a recursive schema validator or broaden ordinary import.
+
+Current paragraph, table and cell capture uses derived exact-route indexes.
+Body and cell-paragraph aliases are prepared from the native batch location
+projections when the owner inventory is prepared, including before candidate
+publication. The additive doc-hidden native methods paragraph_story_locations and
+cell_paragraph_story_locations return the existing ContentLocation vocabulary. Unsupported entries retain the single lookup and
+its refusal behavior. No Python signature changes. Read text, collection counts
+and nested-table enumeration use current admitted inventory facts after scope
+validation. Full or property publications replace those facts. Plain paragraph
+XML prepares its accepted text before live mutation and tail removal drops only
+the removed facts. No-op, refusal and numeric-slot reuse preserve their existing
+causal lifetime semantics. Source facts do not bypass native mutation admission.
 Ordinary parsing and physical picture snapshots keep their source authority,
 and invalid replacement or save candidates fail atomically.
 

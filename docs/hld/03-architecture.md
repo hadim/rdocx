@@ -94,11 +94,45 @@ pointers.
 
 Python Word owner lookup uses derived indexes over the current inventory.
 Plain paragraph XML prepares only the selected content/property scopes and
-its contiguous run owners before native mutation. A plain tail removal can
-keep earlier inventory entries when its following owners are sections only.
+its exact run owners before native mutation. An empty plain paragraph can
+acquire direct runs locally, with newborn scopes, storage and route buckets
+prepared before admission. New run owners append without shifting earlier
+physical owners. Other run-topology changes retain staged reconciliation.
+A plain tail removal can keep earlier entries when the suffix contains sections
+or appended runs whose parents precede the removed owner. It updates those
+suffix indices. Non-contiguous descendants of the removed owner retain the
+conservative path. This is not a bound independent of prior local edits.
 Every captured physical Word owner includes a removal epoch, so that shortcut
 retires held handles without allocating successors for every paragraph. Fresh
 handles capture the new epoch. Other removals retain conservative reconciliation.
+
+Word read projections are prepared with that same immutable current-owner
+inventory. The facade supplies batch body and cell-paragraph locations matching
+its existing single lookups. Missing or unsupported projections retain those
+lookups. Route hashes index candidate owners, with exact route comparison and
+first-match selection after hashing. Hash equality alone grants no authority.
+Accepted paragraph text and table row/cell paragraph counts are derived read
+facts, never serialization sources. Full replacement and property relocation
+prepare fresh facts. Local plain XML prepares its new accepted text before
+mutation, and installs it only on successful publication. Tail removal retires
+captured epochs and removes its projections without scanning unrelated owners.
+Shared paragraph XML admission compares physical section properties for both
+Start and Empty events, using a namespace-complete temporary semantic parse.
+It refuses changed or introduced section boundaries on local and staged paths.
+An admitted opaque Empty section that the paired parser cannot model remains
+protected by exact bytes and expanded namespace meaning. Only an unchanged
+instance may remain. Submitted and stored XML are not rewritten by comparison. Retained nested
+modeled namespace owners require staged identity reconciliation, even for
+benign aliases. A failed proof refuses before source publication.
+
+Run tab and break edits prepare accepted paragraph text from the native candidate,
+validate its current run-to-paragraph owner and publish source and fact together.
+They preserve existing run, font and paragraph scopes. Cell edits resolve the
+same physical paragraph location as immutable reads, including controlled
+paragraphs, rather than using the direct-only mutable cell ordinal accessor.
+Reads validate current scopes before using facts. Mutations retain native
+fingerprint refresh and admission. There is no lazy first-handle package scan
+or second owner registry.
 
 PowerPoint edits one child for `add_textbox` on a connector-free slide, for
 alt text, for non-connector geometry, for a non-blip shape fill, and for a
