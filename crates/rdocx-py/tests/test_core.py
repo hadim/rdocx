@@ -6638,6 +6638,143 @@ def test_f285_content_control_shell_metadata_and_refusal():
         assert b"hello" not in package.read("word/document.xml")
 
 
+def test_f286_repeating_types_keep_physical_and_owner_context():
+    import rdocx
+    from xml.etree import ElementTree as ET
+
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    w15_uri = "http://schemas.microsoft.com/office/word/2012/wordml"
+    metadata = '<w:customXml w:uri="urn:valid" w:element="kept"><w:customXmlPr><w:attr w:name="m" w:val="kept"/></w:customXmlPr></w:customXml>'
+    paragraph = '<w:p><w:r><w:t>kept</w:t></w:r></w:p>'
+    cell = '<w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/></w:tcPr>' + paragraph + '</w:tc>'
+    row = '<w:tr>' + cell + '</w:tr>'
+    grid = '<w:tblPr/><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid>'
+
+    def shell(tag, ident, kind, inner):
+        marker = '<w:richText/>' if kind == 'rich' else f'<w15:{kind} xmlns:w15="{w15_uri}"/>'
+        return f'<w:sdt><w:sdtPr><w:id w:val="{ident}"/><w:tag w:val="{tag}"/>{marker}</w:sdtPr><w:sdtContent>{inner}</w:sdtContent></w:sdt>'
+
+    def document(inner):
+        return _replace_document_body(rdocx.Document(), '<w:p><w:r><w:t>host</w:t></w:r></w:p>' + inner + '<w:tbl>' + grid + row + '</w:tbl>')
+
+    def location(doc, tag):
+        def match(item):
+            if item.kind != 'content_control':
+                return False
+            raw = item.xml
+            at = raw.find(f'w:val="{tag}"'.encode())
+            return 0 <= at < raw.find(b'<w:sdtContent')
+        return _content_location(doc, match)
+
+    def xml(doc):
+        with zipfile.ZipFile(io.BytesIO(doc.to_bytes())) as package:
+            return package.read('word/document.xml')
+
+    def refuse(doc, operation, label):
+        before = doc.to_bytes()
+        try:
+            operation()
+        except rdocx.RdocxError:
+            assert doc.to_bytes() == before, label
+        else:
+            pytest.fail(label + ' published an invalid repeating context')
+
+    # Begin valid: the inline rich shell is inside a real block item/section.
+    inline = shell('target', 3, 'rich', '<w:r><w:t>inline</w:t></w:r>')
+    source = shell('section', 1, 'repeatingSection', shell('item', 2, 'repeatingSectionItem', '<w:p>' + inline + '</w:p>'))
+    doc = document(source)
+    refuse(doc, lambda: doc.set_content_control_type(location(doc, 'target'), rdocx.ContentControlTypePayload.repeating_section_item()), 'inline item type')
+
+    # A nonempty wrapper with empty payload fits both grammars, not both slots.
+    for inner in (shell('empty', 4, 'rich', ''), metadata):
+        doc = document('<w:p>' + shell('target', 3, 'rich', inner) + '</w:p>')
+        refuse(doc, lambda: doc.set_content_control_type(location(doc, 'target'), rdocx.ContentControlTypePayload.repeating_section()), 'inline empty section')
+        doc = document(shell('target', 3, 'rich', inner))
+        doc.set_content_control_type(location(doc, 'target'), rdocx.ContentControlTypePayload.repeating_section())
+        assert b'repeatingSectionItem' in xml(doc)
+        if inner == metadata:
+            assert metadata.encode() in xml(rdocx.Document.from_bytes(doc.to_bytes()))
+
+    # Same type retirement would either orphan items or replace a required item.
+    simple = shell('section', 1, 'repeatingSection', shell('item', 2, 'repeatingSectionItem', paragraph))
+    for tag in ('section', 'item'):
+        doc = document(simple)
+        refuse(doc, lambda: doc.set_content_control_type(location(doc, tag), rdocx.ContentControlTypePayload.rich_text()), 'retire ' + tag)
+        doc = document(simple)
+        refuse(doc, lambda: doc.unwrap_content_control(location(doc, tag)), 'unwrap ' + tag)
+
+    # Removing a section deletes its owned items, so it does not orphan them.
+    doc = document(simple)
+    doc.remove_content_control(location(doc, 'section'))
+    assert b'repeatingSection' not in xml(doc)
+
+    # An enclosing section can retain ownership across an inner marker/shell loss.
+    nested = shell('section', 1, 'repeatingSection', shell('outer-item', 2, 'repeatingSectionItem', shell('inner-section', 3, 'repeatingSection', shell('inner-item', 4, 'repeatingSectionItem', paragraph))))
+    for unwrap in (False, True):
+        doc = document(nested)
+        if unwrap:
+            doc.unwrap_content_control(location(doc, 'inner-section'))
+        else:
+            doc.set_content_control_type(location(doc, 'inner-section'), rdocx.ContentControlTypePayload.rich_text())
+        tree = ET.fromstring(xml(doc))
+        assert len(list(tree.iter('{' + w15_uri + '}repeatingSection'))) == 1
+        assert len(list(tree.iter('{' + w15_uri + '}repeatingSectionItem'))) == 2
+        assert any(control.id == 4 for control in doc.content_controls())
+
+    # Flattening an item into an item-only sequence keeps a legal section.
+    flattened = shell('section', 1, 'repeatingSection', shell('item', 2, 'repeatingSectionItem', shell('a', 3, 'repeatingSectionItem', paragraph) + shell('b', 4, 'repeatingSectionItem', paragraph)))
+    doc = document(flattened)
+    doc.unwrap_content_control(location(doc, 'item'))
+    assert {control.id for control in doc.content_controls()} == {1, 3, 4}
+
+    # Existing legal block, row and cell items/sections retain their operations.
+    for slot, payload in [('block', paragraph), ('row', row), ('cell', cell)]:
+        section = shell('section', 1, 'repeatingSection', shell('item', 2, 'repeatingSectionItem', payload))
+        if slot == 'row':
+            section = '<w:tbl>' + grid + section + row + '</w:tbl>'
+        elif slot == 'cell':
+            section = '<w:tbl>' + grid + '<w:tr>' + section + cell + '</w:tr></w:tbl>'
+        doc = document(section)
+        doc.set_content_control_type(location(doc, 'section'), rdocx.ContentControlTypePayload.repeating_section())
+        doc.set_content_control_type(location(doc, 'item'), rdocx.ContentControlTypePayload.repeating_section_item())
+        doc.repeat_content_control(location(doc, 'section'))
+        reopened = rdocx.Document.from_bytes(doc.to_bytes())
+        assert len(list(ET.fromstring(xml(reopened)).iter('{' + w15_uri + '}repeatingSectionItem'))) == 2
+        assert len({control.id for control in reopened.content_controls()}) == 3
+
+    # Block item authoring requires containment, not an immediate section parent.
+    contained = shell('section', 1, 'repeatingSection', shell('item', 2, 'repeatingSectionItem', shell('target', 3, 'rich', paragraph)))
+    doc = document(contained)
+    doc.set_content_control_type(location(doc, 'target'), rdocx.ContentControlTypePayload.repeating_section_item())
+    assert len(list(ET.fromstring(xml(doc)).iter('{' + w15_uri + '}repeatingSectionItem'))) == 2
+
+    # Republish the complete type, not only an empty payload's generic grammar.
+    section = shell('section', 1, 'repeatingSection', shell('item', 2, 'repeatingSectionItem', metadata))
+    for operation in ('clone_content_control', 'move_content_control'):
+        doc = document(shell('container', 3, 'rich', section))
+        host = _content_location(doc, lambda item: item.kind == 'paragraph' and item.text == 'host')
+        refuse(doc, lambda: getattr(doc, operation)(location(doc, 'section'), host), operation + ' inline section')
+        # Row sections carry their own item owner into a compatible table.
+        row_section = '<w:tbl>' + grid + shell('section', 1, 'repeatingSection', shell('item', 2, 'repeatingSectionItem', row)) + row + '</w:tbl>'
+        doc = document(row_section)
+        target = [item for item in doc.story_items if item.kind == 'table'][-1]
+        getattr(doc, operation)(location(doc, 'section'), rdocx.ContentLocation(target.story, target.kind, target.index_path))
+        sections = [control for control in doc.content_controls() if control.tag == 'section']
+        assert len(sections) == (2 if operation.startswith('clone') else 1)
+        assert len({control.id for control in doc.content_controls()}) == (4 if operation.startswith('clone') else 2)
+        if operation.startswith('clone'):
+            assert 1 in {control.id for control in sections}
+        else:
+            assert sections[0].id == 1
+
+    # An item copied outside all sections loses ownership even at a legal level.
+    row_section = '<w:tbl>' + grid + shell('section', 1, 'repeatingSection', shell('item', 2, 'repeatingSectionItem', row) + shell('other-item', 3, 'repeatingSectionItem', row)) + row + '</w:tbl>'
+    for operation in ('clone_content_control', 'move_content_control'):
+        doc = document(row_section)
+        target = [item for item in doc.story_items if item.kind == 'table'][-1]
+        refuse(doc, lambda: getattr(doc, operation)(location(doc, 'item'), rdocx.ContentLocation(target.story, target.kind, target.index_path)), operation + ' orphan item')
+
+
 def test_f285_custom_xml_wrappers_use_destination_grammar():
     import rdocx
     from xml.etree import ElementTree as ET
@@ -6739,7 +6876,7 @@ def test_f285_custom_xml_wrappers_use_destination_grammar():
                 assert any(element.tag == "{http://schemas.microsoft.com/office/word/2012/wordml}repeatingSectionItem" for element in xml(doc).iter())
                 assert list(xml(doc).iter(w + "customXml"))
             else:
-                with pytest.raises(rdocx.RdocxError, match="block sequence"):
+                with pytest.raises(rdocx.RdocxError, match="block sequence|placement"):
                     doc.set_content_control_type(source(doc), rdocx.ContentControlTypePayload.repeating_section())
                 assert doc.to_bytes() == before, (slot, nested, "repeating")
 

@@ -1884,7 +1884,17 @@ already owns and a drawing in the shell that embeds it. Repeating section
 content must already be one repeating item, or one block sequence that the
 call wraps in one nested repeating item. Empty content refuses. Admission
 uses the same decoded-text rule at each transparent nested block boundary. A
-repeating item is legal only when its parent is already a repeating section. Citation,
+repeating item requires a containing repeating section and block, row or cell
+placement. Containment is distinct from immediate parenthood. Repeating
+section conversion also requires a physical level capable of holding such
+items, independently of whether empty payload fits a block grammar. Qualified
+custom-XML ancestors inherit that physical level. Relocation checks the outer
+and retained boundary types as well as payload grammar and preserves item
+containment. Moving the last direct item refuses. Type changes and unwrap
+refuse orphaned items or non-item children in a section. An inner section can
+retire when an outer section retains ownership. An item can unwrap into an
+item-only sequence that leaves at least one direct item. Removing a section
+deletes its content and does not orphan retained items. Citation,
 equation, bibliography, and document-part kinds stay refused at creation and
 have no payload. Tag, alias, id, lock, appearance, placeholder, and unmodelled
 property children stay. `Document::repeat_content_control` clones the first

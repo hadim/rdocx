@@ -26562,6 +26562,84 @@ fn content_control_nested_payload_uses_destination_grammar() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
+#[test]
+fn content_control_repeating_types_preserve_physical_and_owner_context() {
+    let typed = |tag: &str, id: i32, kind: &str, inner: &str| {
+        nested_shell(tag, id, inner).replacen(
+            "</w:sdtPr>",
+            &format!(
+                "<w15:{kind} xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"/></w:sdtPr>"
+            ),
+            1,
+        )
+    };
+    let inline = nested_shell("target", 3, "<w:r><w:t>inline</w:t></w:r>");
+    let inline_section = typed(
+        "section",
+        1,
+        "repeatingSection",
+        &typed(
+            "item",
+            2,
+            "repeatingSectionItem",
+            &format!("<w:p>{inline}</w:p>"),
+        ),
+    );
+    let section = typed(
+        "section",
+        1,
+        "repeatingSection",
+        &typed("item", 2, "repeatingSectionItem", "<w:p/>"),
+    );
+    for (action, raw, tag) in [
+        ("inline item", inline_section.as_str(), "target"),
+        ("retire section", section.as_str(), "section"),
+        ("retire item", section.as_str(), "item"),
+        ("unwrap section", section.as_str(), "section"),
+        ("unwrap item", section.as_str(), "item"),
+    ] {
+        let mut document = document_with_body_inner(raw);
+        let location = control_by_tag(&document, tag);
+        let before = document.to_bytes().unwrap();
+        let result = match action {
+            "inline item" => document.set_content_control_type(
+                &location,
+                rdocx::ContentControlTypePayload::RepeatingSectionItem,
+            ),
+            "retire section" | "retire item" => document
+                .set_content_control_type(&location, rdocx::ContentControlTypePayload::RichText),
+            _ => document.unwrap_content_control(&location),
+        };
+        assert!(
+            matches!(result, Err(rdocx::Error::Other(_))),
+            "{action}: {result:?}"
+        );
+        assert_eq!(document.to_bytes().unwrap(), before, "{action}");
+    }
+    let nested = typed(
+        "section",
+        1,
+        "repeatingSection",
+        &typed(
+            "item",
+            2,
+            "repeatingSectionItem",
+            &typed(
+                "inner-section",
+                3,
+                "repeatingSection",
+                &typed("inner-item", 4, "repeatingSectionItem", "<w:p/>"),
+            ),
+        ),
+    );
+    let mut document = document_with_body_inner(&nested);
+    let inner = control_by_tag(&document, "inner-section");
+    document.unwrap_content_control(&inner).unwrap();
+    let controls = document.content_controls();
+    assert_eq!(controls.len(), 3);
+    assert!(controls.iter().any(|control| control.id() == Some(4)));
+}
+
 fn reference_shell_document(inner: &str) -> Document {
     let shell = nested_shell("outer", 1, &nested_shell("inner", 2, inner));
     document_with_body_inner(&format!(

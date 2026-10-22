@@ -21,7 +21,7 @@ Word 0.16.3 completes the bounded navigation, template and content-control work 
 - Named read-only handle operations and structural edits avoid unrelated package inventory scans. Half-open direct-body range removal publishes one transaction and returns the removed count.
 - Style edits retain opaque root children in schema order. Image pruning keeps shared and reinserted resources, plain embedded font bytes stay intact, header validation names wrong targets, and qualified alternate text-box edits publish together or not at all.
 - Comment resolution preserves the three states of true, false and unknown. Checked XML retains admitted namespaces and unchanged opaque sections while refusing invalid newly authored placement and malformed custom XML. DTD declarations are explicitly refused.
-- Nested control relocation, unwrapping and repeating-section admission inspect decoded text and the actual destination content model before publication.
+- Nested control relocation, unwrapping and repeating-section admission inspect decoded text and the actual destination content model before publication. Repeating types also retain their permitted physical level and section/item ownership across type changes and unwrap.
 
 ### Compatibility
 

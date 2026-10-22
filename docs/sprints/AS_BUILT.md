@@ -20914,3 +20914,21 @@ Process-only4ebd83bd refines implementation and microscope commands after this
 pass4 trigger. Admitted wrappers with context-dependent payloads require inherited
 destination grammar, separate metadata and compatible positive controls. Both
 generated adapters match. Instructions and product remediation remain separate.
+
+The later independent typed-context investigation found compatible empty
+payloads could retain an invalid physical repeating type. The same amendment
+now protects physical placement and section/item ownership during relocation,
+type retirement and unwrap, while preserving compatible enclosing ownership.
+Actual nativee07f191d passes fullWord1065, installed priorities/typing, native
+integration412composed cases, scoped lint and bothWASM. The fixture failure
+remains historical. Current archive/hosted and final review remain pending.
+Process-only3277ed28 refines design, implementation and microscope instructions
+to separate physical type, payload grammar and owner constraints, including
+inverse transitions. Primary-source containment is not immediate parenthood.
+This adds no second delivery, effort or velocity credit.
+
+Independent F-286 repeating-context microscope pass1 accepts this amendment
+with zero defects, smells and nitpicks, plus five additional installed probes.
+Actual49hashes, seven deterministic pixels and README inventories pass. The
+clean verified archive, updated hosted qualification and final sprint pass5
+remain due. No publication approval or sprint closure is implied.

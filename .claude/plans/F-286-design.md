@@ -279,3 +279,49 @@ The current eight-story global gate is not passed: F-X263 new-version packages,
 local/hosted artifacts and final independent sprint review remain due. Q25
 permits at most two further final review passes,4and5. Publication still follows
 sprint acceptance, closure and separate exact-main-SHA final approval.
+
+
+## B2 typed-context amendment
+
+The completed delivery record remains historical while the sprint is blocked.
+Independent designer investigation pass1 confirms physical repeating-type
+placement is separate from payload grammar. MS-DOCX
+[2.5.1.11](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/6b50d4d0-3f5d-4d8d-b507-9879bd342f3e)
+requires section containment and block, row or cell item placement.
+[2.5.1.10](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-docx/b1768ff2-c9fe-4660-86e5-73cd8c94b0a0)
+requires section children to be items. Combining these rules excludes inline
+section authoring even when empty wrappers fit several payload grammars.
+Containment does not require the immediate parent control to be a section.
+
+The existing A7/A8 contract includes the proposed marker's physical slot,
+qualified transparent ancestors, retained types at relocation boundaries,
+item containment after relocation or section retirement, and item-only
+children after a direct item's type or shell is retired. Refusals publish
+nothing. Remove of a section deletes its owned content and remains allowed.
+Compatible nested section retirement can retain an outer section owner.
+An item's unwrap can replace it with an item-only sequence. Moving the last
+direct item refuses. Ordinary block wrapping, legal existing row/cell item
+branches and malformed imported-content preservation keep their existing scope.
+No general schema validator, new API, immediate-parent rule or native parity
+claim is introduced. These are concrete existing-invariant clarifications.
+
+The new matrix combines inline/block payload ambiguity, item conversion,
+section/item retirement, compatible nested ownership, unwrap replacement,
+row/cell existing operations and compatible/incompatible relocation. Actual
+old-native3958f3a4 RED and designer probes are retained. Current native integration acceptance composes411passed cases and the corrected
+new native atomicity case, with eight existing ignores. The first new Rust
+fixture omitted its type marker and failed, then only that corrected case was
+rerun successfully. The earlier failed aggregate remains failed. Final local
+nativee07f191d passes both two-case Python matrices, fullWord1065, priorities
+and typing/stubs. Scoped clippy and bothWASM pass. The policy command reports
+192tests,190passes/two existing skips, child0. Archive inventory measurements
+are actual no-verify observations, not compilation gates. Independent focused
+microscope, clean verified archive and current hosted qualifications remain
+pending. Historical f9e hosted39806338556 passed its actual qualifications but
+does not qualify this changed Word source.
+
+Independent F-286 repeating-context microscope pass1 accepts this amendment
+with zero defects, smells and nitpicks, plus five additional installed probes.
+Actual49hashes, seven deterministic pixels and README inventories pass. The
+clean verified archive, updated hosted qualification and final sprint pass5
+remain due. No publication approval or sprint closure is implied.

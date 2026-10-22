@@ -292,3 +292,23 @@ without relabeling failed aggregate attempts. BothWASM, scoped clippy,
 and two existing skips, not192passes. The earlier192total field is clarified
 in the amendment receipt. A new verified rdocx archive, actual updated hosted
 artifacts and final independent sprint pass5 remain due. No close/publication.
+
+## B2 typed-context amendment checkpoint, 2026-10-22
+
+Independent designer investigation found that physical repeating-type placement
+and enclosing ownership remain separate from payload grammar. The amendment
+refuses inline repeating types, orphaned item markers and non-item replacement
+children, including relocation and unwrap. Compatible nested ownership, legal
+block/row/cell operations and item-only unwrap remain supported. No new story,
+API or completion credit is added. Current nativee07f191d passes the full1065Word
+suite, priorities and installed typing/stubs. Native integration acceptance
+composes411passed cases and one corrected new case. The failed aggregate
+fixture attempt stays failed. Scoped clippy, bothWASM and actual policy190passes
+with two skips pass. Focused microscope, current verified archive, current
+hosted qualification and final independent sprint pass5 remain pending.
+
+Independent F-286 repeating-context microscope pass1 accepts this amendment
+with zero defects, smells and nitpicks, plus five additional installed probes.
+Actual49hashes, seven deterministic pixels and README inventories pass. The
+clean verified archive, updated hosted qualification and final sprint pass5
+remain due. No publication approval or sprint closure is implied.

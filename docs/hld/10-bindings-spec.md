@@ -3162,6 +3162,20 @@ two alignment payloads reuse the existing `DrawingHorizontalAlignment` and
 additive fields on pre-1.0 native Rust projections rather than new binding
 surface. Python, WASM, and CLI consumers gain no advanced table surface here.
 
+
+### Repeating control mutation context
+
+The existing native and Python type setter, move/clone and unwrap calls retain
+repeating-type placement and ownership. A repeated item requires section
+containment and block, row or cell level. A section's children remain items.
+Empty wrapper contents do not establish physical placement. Retiring a section
+marker or shell cannot orphan retained items, and retiring a direct item
+cannot leave non-item section content. Compatible enclosing ownership and
+item-only unwrap replacement remain supported. Errors publish nothing. The
+bindings invoke the native policy and add no parallel implementation. These
+checks do not claim full validation of malformed imported control contents.
+
+
 ## Native PowerPoint collaboration and navigation
 
 Native parsing and supported authoring admit recognized PresentationML nesting

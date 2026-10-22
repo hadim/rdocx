@@ -1549,16 +1549,8 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
         let (part, mut xml, mut range, _) = control_item(&candidate, location)?;
+        validate_repeating_type_change(&xml, &range, &payload)?;
         match &payload {
-            ContentControlTypePayload::RepeatingSectionItem => {
-                let elems = index_elements(&xml)?;
-                let sdt = element_at(&elems, &range)?;
-                if ancestor_repeating_section(&elems, sdt.id).is_none() {
-                    return Err(Error::Other(
-                        "repeating section item requires a repeating section parent".to_owned(),
-                    ));
-                }
-            }
             ContentControlTypePayload::Picture { relationship_id } => {
                 if !part_owns_image(&candidate, &part, relationship_id) {
                     return Err(Error::Other(
@@ -1664,8 +1656,18 @@ impl Document {
             ));
         }
         let (_part, xml, range, direct) = control_item(self, source)?;
+        if last_repeating_item(&xml, &range)? {
+            return Err(Error::Other(
+                "cannot move the last repeating section item".to_owned(),
+            ));
+        }
         if direct && control_parent_is_block(&xml, &range)? {
-            if !inner_matches_slot(ParentSlot::Block, &sdt_content_bytes(&xml, &range)?)? {
+            if !control_matches_context(
+                ParentSlot::Block,
+                story_inside_repeating_section(self, destination.story())?,
+                &xml,
+                &range,
+            )? {
                 return Err(Error::Other(
                     "content control placement does not match its parent".to_owned(),
                 ));
@@ -1692,7 +1694,7 @@ impl Document {
                 "content control move destination is inside the source".to_owned(),
             ));
         }
-        destination_accepts_control(&dest.xml, &dest.range, &bytes)?;
+        destination_accepts_control(&dest.xml, &dest.range, &updated, &source_range)?;
         let original_len = updated.len();
         updated.drain(source_range.clone());
         let dest_range = shift_after_removal(&dest.range, &source_range);
@@ -1711,7 +1713,12 @@ impl Document {
     ) -> Result<()> {
         let (_part, xml, range, direct) = control_item(self, source)?;
         if direct && control_parent_is_block(&xml, &range)? {
-            if !inner_matches_slot(ParentSlot::Block, &sdt_content_bytes(&xml, &range)?)? {
+            if !control_matches_context(
+                ParentSlot::Block,
+                story_inside_repeating_section(self, destination.story())?,
+                &xml,
+                &range,
+            )? {
                 return Err(Error::Other(
                     "content control placement does not match its parent".to_owned(),
                 ));
@@ -1726,9 +1733,10 @@ impl Document {
             .to_vec();
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
-        let fresh = freshen_control(&mut candidate, &bytes)?;
+        let (_, source_xml, source_range, _) = control_item(&candidate, source)?;
         let dest = nested_destination(&candidate, destination)?;
-        destination_accepts_control(&dest.xml, &dest.range, &fresh)?;
+        destination_accepts_control(&dest.xml, &dest.range, &source_xml, &source_range)?;
+        let fresh = freshen_control(&mut candidate, &bytes)?;
         let mut dest_xml = dest.xml;
         let replacement = insert_into_element(&dest_xml, &dest.range, &fresh)?;
         dest_xml.splice(dest.range, replacement);
@@ -1787,7 +1795,9 @@ impl Document {
             }
             ControlRewrite::Unwrap => {
                 let inner = sdt_content_bytes(&xml, &range)?;
-                if !parent_can_hold(&xml, &range, &inner)? {
+                if !unwrap_keeps_repeating_context(&xml, &range)?
+                    || !parent_can_hold(&xml, &range, &inner)?
+                {
                     return Err(Error::Other(
                         "content control unwrap leaves content the parent cannot hold".to_owned(),
                     ));
@@ -2918,29 +2928,13 @@ fn parent_slot(elems: &[XmlElem], id: usize) -> ParentSlot {
     let Some(parent) = elems.iter().find(|elem| elem.id == parent_id) else {
         return ParentSlot::Other;
     };
-    match parent.local.as_slice() {
-        b"sdt" | b"sdtContent" => parent_slot(elems, parent.id),
-        b"p" | b"hyperlink" | b"fldSimple" | b"ins" | b"del" | b"moveFrom" | b"moveTo" => {
-            ParentSlot::Inline
-        }
-        b"tbl" => ParentSlot::Table,
-        b"tr" => ParentSlot::Row,
-        b"body" | b"hdr" | b"ftr" | b"footnote" | b"endnote" | b"comment" | b"txbxContent"
-        | b"tc" => ParentSlot::Block,
-        _ => ParentSlot::Other,
-    }
+    element_slot(elems, parent)
 }
 
 fn control_parent_is_block(xml: &[u8], range: &Range<usize>) -> Result<bool> {
     let elems = index_elements(xml)?;
     let sdt = element_at(&elems, range)?;
     Ok(matches!(parent_slot(&elems, sdt.id), ParentSlot::Block))
-}
-
-fn detached_control_content(control: &[u8]) -> Result<Vec<u8>> {
-    let wrapped = wrap_word_root(control);
-    let prefix = b"<w:root xmlns:w=\"".len() + W_NS.len() + b"\">".len();
-    sdt_content_bytes(&wrapped, &(prefix..prefix + control.len()))
 }
 
 fn wrap_word_root(inner: &[u8]) -> Vec<u8> {
@@ -3005,6 +2999,11 @@ fn sdt_payload_matches(
     elems: &[XmlElem],
     sdt: &XmlElem,
 ) -> Result<bool> {
+    if (sdt_is_repeating_section(elems, sdt) || sdt_is_repeating_item(elems, sdt))
+        && !repeating_slot_allowed(slot)
+    {
+        return Ok(false);
+    }
     let mut contents = Vec::new();
     for child in elems.iter().filter(|elem| elem.parent == Some(sdt.id)) {
         match (child.word, child.local.as_slice()) {
@@ -3127,12 +3126,18 @@ fn xml_space(bytes: &[u8]) -> bool {
 fn destination_accepts_control(
     parent_xml: &[u8],
     parent_range: &Range<usize>,
-    control: &[u8],
+    source_xml: &[u8],
+    source_range: &Range<usize>,
 ) -> Result<()> {
     let elems = index_elements(parent_xml)?;
     let parent = element_at(&elems, parent_range)?;
-    let inner = detached_control_content(control)?;
-    if inner_matches_slot(element_slot(&elems, parent), &inner)? {
+    let in_section = ancestor_repeating_section(&elems, parent.id).is_some();
+    if control_matches_context(
+        element_slot(&elems, parent),
+        in_section,
+        source_xml,
+        source_range,
+    )? {
         Ok(())
     } else {
         Err(Error::Other(
@@ -3142,8 +3147,11 @@ fn destination_accepts_control(
 }
 
 fn element_slot(elems: &[XmlElem], elem: &XmlElem) -> ParentSlot {
+    if !elem.word {
+        return ParentSlot::Other;
+    }
     match elem.local.as_slice() {
-        b"sdt" | b"sdtContent" => parent_slot(elems, elem.id),
+        b"sdt" | b"sdtContent" | b"customXml" => parent_slot(elems, elem.id),
         b"p" | b"hyperlink" | b"fldSimple" | b"ins" | b"del" | b"moveFrom" | b"moveTo" => {
             ParentSlot::Inline
         }
@@ -3697,17 +3705,145 @@ fn first_repeating_item_range(elems: &[XmlElem], section: &XmlElem) -> Option<Ra
         .map(|elem| elem.range.clone())
 }
 
+fn repeating_slot_allowed(slot: ParentSlot) -> bool {
+    matches!(
+        slot,
+        ParentSlot::Block | ParentSlot::Table | ParentSlot::Row
+    )
+}
+
+fn direct_item_section<'a>(elems: &'a [XmlElem], item: &XmlElem) -> Option<&'a XmlElem> {
+    if !sdt_is_repeating_item(elems, item) {
+        return None;
+    }
+    let section = ancestor_repeating_section(elems, item.id)?;
+    direct_repeating_items(elems, section)
+        .iter()
+        .any(|child| child.id == item.id)
+        .then_some(section)
+}
+
+fn section_type_can_retire(elems: &[XmlElem], section: &XmlElem) -> bool {
+    if !sdt_is_repeating_section(elems, section)
+        || ancestor_repeating_section(elems, section.id).is_some()
+    {
+        return true;
+    }
+    !elems.iter().any(|item| {
+        item.word
+            && item.local == b"sdt"
+            && section.range.start < item.range.start
+            && item.range.end < section.range.end
+            && sdt_is_repeating_item(elems, item)
+            && ancestor_repeating_section(elems, item.id)
+                .is_some_and(|owner| owner.id == section.id)
+    })
+}
+
+fn validate_repeating_type_change(
+    xml: &[u8],
+    range: &Range<usize>,
+    payload: &ContentControlTypePayload,
+) -> Result<()> {
+    let elems = index_elements(xml)?;
+    let sdt = element_at(&elems, range)?;
+    let item = matches!(payload, ContentControlTypePayload::RepeatingSectionItem);
+    let section = matches!(payload, ContentControlTypePayload::RepeatingSection);
+    if item && ancestor_repeating_section(&elems, sdt.id).is_none() {
+        return Err(Error::Other(
+            "repeating section item requires a repeating section parent".to_owned(),
+        ));
+    }
+    if (item || section) && !repeating_slot_allowed(parent_slot(&elems, sdt.id)) {
+        return Err(Error::Other(
+            "repeating control requires block, row, or cell placement".to_owned(),
+        ));
+    }
+    if !item && direct_item_section(&elems, sdt).is_some() {
+        return Err(Error::Other(
+            "repeating section must retain repeating section items".to_owned(),
+        ));
+    }
+    if !section && !section_type_can_retire(&elems, sdt) {
+        return Err(Error::Other(
+            "cannot remove a repeating section type while its items require it".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn control_matches_context(
+    slot: ParentSlot,
+    in_section: bool,
+    xml: &[u8],
+    range: &Range<usize>,
+) -> Result<bool> {
+    if matches!(slot, ParentSlot::Other) {
+        return Ok(false);
+    }
+    let elems = index_elements(xml)?;
+    let sdt = element_at(&elems, range)?;
+    if !sdt_payload_matches(slot, xml, &elems, sdt)? {
+        return Ok(false);
+    }
+    if in_section {
+        return Ok(true);
+    }
+    Ok(!elems.iter().any(|item| {
+        item.word
+            && item.local == b"sdt"
+            && range.start <= item.range.start
+            && item.range.end <= range.end
+            && sdt_is_repeating_item(&elems, item)
+            && ancestor_repeating_section(&elems, item.id)
+                .is_none_or(|owner| owner.range.start < range.start || owner.range.end > range.end)
+    }))
+}
+
+fn story_inside_repeating_section(document: &Document, story: &crate::StoryId) -> Result<bool> {
+    let (xml, range) = document.story_owner_span(story)?;
+    let elems = index_elements(&xml)?;
+    Ok(elems.iter().any(|section| {
+        section.word
+            && section.local == b"sdt"
+            && section.range.start < range.start
+            && range.end < section.range.end
+            && sdt_is_repeating_section(&elems, section)
+    }))
+}
+
+fn unwrap_keeps_repeating_context(xml: &[u8], range: &Range<usize>) -> Result<bool> {
+    let elems = index_elements(xml)?;
+    let sdt = element_at(&elems, range)?;
+    if !section_type_can_retire(&elems, sdt) {
+        return Ok(false);
+    }
+    let Some(owner) = direct_item_section(&elems, sdt) else {
+        return Ok(true);
+    };
+    let Some(content) = sdt_content_elem(&elems, sdt) else {
+        return Ok(direct_repeating_items(&elems, owner).len() > 1);
+    };
+    let children: Vec<_> = elems
+        .iter()
+        .filter(|elem| elem.parent == Some(content.id))
+        .collect();
+    if children
+        .iter()
+        .any(|child| !child.word || child.local != b"sdt" || !sdt_is_repeating_item(&elems, child))
+    {
+        return Ok(false);
+    }
+    Ok(!children.is_empty() || direct_repeating_items(&elems, owner).len() > 1)
+}
+
 fn last_repeating_item(xml: &[u8], sdt_range: &Range<usize>) -> Result<bool> {
     let elems = index_elements(xml)?;
     let sdt = element_at(&elems, sdt_range)?;
-    if !sdt_is_repeating_item(&elems, sdt) {
-        return Ok(false);
-    }
-    let Some(section) = ancestor_repeating_section(&elems, sdt.id) else {
+    let Some(section) = direct_item_section(&elems, sdt) else {
         return Ok(false);
     };
-    let items = direct_repeating_items(&elems, section);
-    Ok(items.len() == 1 && items.iter().any(|item| item.range == sdt.range))
+    Ok(direct_repeating_items(&elems, section).len() == 1)
 }
 
 fn freshen_control(document: &mut Document, sdt_bytes: &[u8]) -> Result<Vec<u8>> {
