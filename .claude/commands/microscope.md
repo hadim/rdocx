@@ -56,6 +56,10 @@ Without it, review the F-ID's commits on the sprint branch.
    Trace structure invariants through every applicable lifecycle operation,
    especially move/clone destination checks. Inspect public binding and stub
    coverage per promised method, with actual binding invocation evidence.
+   Check the public export path and __all__, callable factory typing, changed
+   property unions and visible defaults. A source-only mypy pass does not prove
+   installed stub/runtime agreement, and matching stub names alone do not prove
+   a factory remains callable through the public import.
    For raw XML input, verify attribute and applicable namespace validation mechanisms.
    For measured results, follow `/verify`'s separate child-exit, artifact and
    semantic-outcome checks. A successful wrapper or diagnostic size is not proof.

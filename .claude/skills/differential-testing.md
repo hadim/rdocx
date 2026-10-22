@@ -125,7 +125,12 @@ test of one representation does not establish the others.
 For binding parity, call every promised operation through the actual public
 binding, with its documented argument types, and inspect the installed result.
 Native coverage and a correct stub cannot prove a Python method exists or that
-its argument conversion reaches the native operation. Exercise the promised
+its argument conversion reaches the native operation. Conversely, a runtime
+call does not prove public re-exports, __all__, stubs or factory typing agree.
+Add a small typed use for each changed API family and inspect visible defaults
+where the binding generator displays Ellipsis. Keep real installed stubtest
+and strict mypy outcomes distinct, without broad annotations or exclusions
+that conceal a mismatch. Exercise the promised
 nested owner contexts and at least one atomic refusal where applicable.
 
 For APIs accepting XML bytes, separate tokenization from well-formedness,

@@ -7,6 +7,6 @@ description: "How to compare this workspace against an external oracle. python-d
 
 Canonical source: `.claude/skills/differential-testing.md`.
 
-Source SHA-256: `870eb5eb77436641d54182e029561d67f62bce4691dd219878ecbbeb0923aadb`.
+Source SHA-256: `9a51a09cba8267370f0ca9f47b0f202009fee95ed76bd515d3790d5faeb228e7`.
 
 Read the canonical source in full before acting, and follow it with whatever tools this host provides. Treat any invocation arguments as arguments to that workflow. Where it names another slash command, follow the repository skill of the same name. Where it says to ask with `AskUserQuestion`, ask through this host's own question mechanism. `.claude/WORKFLOW.md` wins on any process question. Do not edit this generated adapter.

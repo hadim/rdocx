@@ -50,7 +50,18 @@ against the design plan as the contract.
 
    Follow the operation invariants in `/design`, including destination checks
    on move/clone and byte-identical refusal. For promised bindings, implement
-   and invoke each exact public method and update its stub. For raw XML, inspect
+   and invoke each exact public method and update its stub. Align native module
+   registration, Python re-exports and __all__, stub declarations and a small
+   typed use of each changed API family. Exercise factory class methods and
+   changed property unions through the public import. A private constructor
+   must not erase the factory class's type or static methods. Check observable
+   default signatures against the approved omission/clearing contract, including
+   PyO3 defaults displayed as Ellipsis. Use the existing text-signature mechanism
+   when the actual approved default is not represented correctly. Preserve the
+   implementation's default and refusal behavior. Do not hide drift with Any,
+   a broader return type or a stubtest exclusion. Whole installed mypy/stubtest
+   remains a final rider, separate from this small local typed discriminator.
+   For raw XML, inspect
    the validator's actual attribute and applicable namespace checks rather than assuming
    the event reader or save/reopen performs them. If optimizing representations,
    inspect all affected constructors/callers and earn the necessary scoped

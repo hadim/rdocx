@@ -161,6 +161,15 @@ meaning. This applies to every model. Record the trigger in F-X259 delivery
 notes. These instructions do not close the product finding or replace pending
 release measurements and native qualification.
 
+The S95.3 release qualification exposed a separate binding-contract gap after
+runtime suites passed: a missing export and range stub, an unusable typed
+factory constructor, a misleading visible empty-sequence default and a stale
+bullet return union in typed smoke. Implementation, microscope and the
+binding reference now require concrete public typed uses, aligned export paths
+and observable default signatures. Whole installed typing/stub checks remain
+final riders. Record this trigger in F-X263 delivery notes. Instruction changes
+do not repair a package or turn a failed typing run into a pass.
+
 ### External CI source availability
 
 When an approved feature requires actual external CI execution of its new
