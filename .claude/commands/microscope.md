@@ -73,6 +73,11 @@ Without it, review the F-ID's commits on the sprint branch.
    grammar. Empty wrappers are a discriminator. Inspect type/marker retirement
    and retained descendants on unwrap or relocation, including compatible
    enclosing ownership. Use namespace-qualified structural identity. Challenge
+   transformations before the guard as well as the guard itself. Distinguish
+   raw passthrough from actual modeled serialization. Compare expanded type
+   identity across staging, not only XML parseability, using imported aliases
+   and locally shadowed canonical prefixes with compatible metadata-preserving
+   edits and atomic refusal controls. Challenge
    independent name/value validation where relevant. Preserve valid
    controls and distinguish actual historical RED from source counterfactuals.
    Retain finding IDs when the same invariant fails on a new input.

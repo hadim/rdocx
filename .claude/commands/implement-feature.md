@@ -120,6 +120,13 @@ child requirements or retained descendants even when bytes do not move. Check
 those separately from payload fit. Use an empty ambiguous payload to expose
 that difference. Include marker retirement and unwrap, with a compatible
 enclosing-owner case so the repair does not become a blanket refusal.
+Trace transformations that run before the enforcement point. If a parser or
+serializer supplies structural identity to a guard, prove that actual modeled
+staging preserves the expanded name and required namespace scope. An unchanged
+raw passthrough does not exercise that writer. Pair imported prefix aliases and
+locally shadowed canonical prefixes with compatible mutation and atomic refusal
+controls. XML parseability alone does not prove the same qualified type survived.
+Retain opaque metadata without rebinding its names to repair modeled fields.
 For XML validation, successful attribute iteration is not proof that names,
 values or references are legal. Cover those independent dimensions according to
 the approved contract. Preserve explicitly valid opaque inputs and raw bytes.

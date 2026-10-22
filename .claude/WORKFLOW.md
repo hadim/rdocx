@@ -185,6 +185,14 @@ owner requirements, including inverse transitions. Preserve primary-source
 containment versus immediate-parent distinctions. Record this refinement with
 the B2 amendment. Instructions do not qualify a changed product artifact.
 
+S95.3 pass5 exposed a modeled serializer changing imported type-marker identity
+before a namespace-qualified placement guard. Implementation and microscope now
+trace transformations before validation, distinguish raw passthrough from
+modeled serialization, and compare expanded namespace identity after staging.
+Alias and local-shadow controls must preserve compatible edits and opaque
+metadata as well as prove refusal. Record this trigger with the B2 amendment.
+Instruction changes do not qualify repaired source or its installed artifacts.
+
 ### External CI source availability
 
 When an approved feature requires actual external CI execution of its new

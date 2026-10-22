@@ -7,6 +7,6 @@ description: "Implement a started feature against its design plan and test stubs
 
 Canonical source: `.claude/commands/implement-feature.md`.
 
-Source SHA-256: `471e7dc5eadb1b6a7caf5ea0f44460290682cebdba16e2f5f5af472eee969e60`.
+Source SHA-256: `389382a6e2b4b4e5548497aa2c21c69225184286a9ff7dd1fe056cc89c2ec8cf`.
 
 Read the canonical source in full before acting, and follow it with whatever tools this host provides. Treat any invocation arguments as arguments to that workflow. Where it names another slash command, follow the repository skill of the same name. Where it says to ask with `AskUserQuestion`, ask through this host's own question mechanism. `.claude/WORKFLOW.md` wins on any process question. Do not edit this generated adapter.
