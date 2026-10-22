@@ -87,6 +87,9 @@ impl ResolvedNumbering {
         if !matches!(instruction.name.as_str(), "REF" | "STYLEREF") {
             return Err("paragraph-number reference formatting requires REF or STYLEREF".into());
         }
+        // STYLEREF without a numbered caller compares the target with itself,
+        // so relative context is its current level. REF still keeps full context.
+        let source = source.or_else(|| (instruction.name == "STYLEREF").then_some(self));
         let has = |name| {
             instruction
                 .switches
@@ -2486,6 +2489,19 @@ mod tests {
             marker_rpr: CT_RPr::default(),
             suffix: ST_LvlSuffix::Tab,
         };
+        for (instruction, expected) in [
+            (r"REF target \r", "4.5.Clause 2"),
+            (r"REF target \r \t", "4.5.2"),
+            (r#"STYLEREF "Heading 3" \r"#, "Clause 2"),
+            (r#"STYLEREF "Heading 3" \r \t"#, "2"),
+        ] {
+            let instruction =
+                rdocx_oxml::text::Field::new(instruction, "old").effective_instruction();
+            assert_eq!(
+                target.numbered_reference_text(&instruction, None).unwrap(),
+                expected
+            );
+        }
         let mut source = target.clone();
         source.number_context = vec!["4".to_owned(), "3".to_owned(), "1".to_owned()];
         assert_eq!(target.relative_to(Some(&source), false), "4.5.Clause 2");

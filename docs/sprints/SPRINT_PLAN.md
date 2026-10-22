@@ -2804,14 +2804,38 @@ S96 work. Continue the authorized S95.3 and S95.4 boundaries before publication.
 
 #### Sprint S95.3, Content control foundations and typed values
 
-**Goal**: author the control lifecycle before typed values and XML bindings.
-Three stories total 12 to 15 developer-days.
+**Goal**: repair the reviewed consistency defects, resolve current contributions,
+then author the control lifecycle before typed values and XML bindings. The
+original three-story estimate remains 12 to 15 developer-days. User expansion
+on 2026-10-18 adds F-X259 through F-X262, provisionally 16 to 24 developer-days,
+for seven stories and 28 to 39 developer-days total. This is an expanded scope,
+not measured effort or an unchanged capacity promise. Current intake and exact
+acceptance ownership live in CURRENT_SPRINT and HLD14. Grok implements through
+`/run-sprint --reviewer codex`, then Codex independently reviews the union.
+
+On 2026-10-22 the user adds Issue398/PR399 read-only handle costs to F-X260,
+Issue400/PR401 TOC range composition to F-X259, and PR397 as another Issue389
+candidate. Keep seven stories and provisionally add 3 to 5 developer-days,
+for 31 to 44 total. Codex has taken over product implementation. Mechanical
+Grok documentation proposals require validation. Existing Word/font qualification
+debt and the exhausted three-pass sprint-review bound remain unchanged.
 
 | F-ID | Title | Size |
 |------|-------|------|
+| F-X259 | Repair reviewed consistency defects and strengthen acceptance gates | M |
+| F-X260 | Restore live handles and bound structural edit cost | L |
+| F-X261 | Resolve Word package preservation and inspection contributions | L |
+| F-X262 | Resolve PowerPoint authoring and table-render contributions | L |
 | F-285 | Content control creation and lifecycle | L |
 | F-286 | Rich, repeating, and typed content controls | L |
 | F-287 | Custom XML stores and data binding authoring | L |
+| F-X263 | Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases | L |
+
+The subsequent explicit release request adds F-X263 as an eighth story,
+provisionally another3to5 developer-days, for34to49total. This exceeds the
+normal seven-story planning cadence and is a visible release scope expansion.
+Prepare the release only after the seven provider checkpoints actually pass.
+Publication remains after acceptance, closure and separate final approval.
 
 Complete and integrate F-285 through its scoped dependency-prefix checkpoint
 before starting F-286 or F-287. Their shared source/resource leases may require

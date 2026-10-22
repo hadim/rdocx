@@ -60,7 +60,10 @@ pub use comments::{
 pub use comparison::{
     ComparisonDiagnostic, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind,
 };
-pub use content_control::ContentControlRef;
+pub use content_control::{
+    ContentControlAppearance, ContentControlLock, ContentControlPlacement, ContentControlRef,
+    ContentControlSpec, ContentControlTypePayload,
+};
 pub use document::{
     AccessibilityIssue, BodyContentRef, BodyItemRef, ContentFragment, ContentLocation,
     ContentMeasurement, Document, DocumentFragment, DrawingHorizontalAlignment,

@@ -7,6 +7,6 @@ description: "Begin work on a designed feature. Marks it in-progress and creates
 
 Canonical source: `.claude/commands/start-feature.md`.
 
-Source SHA-256: `de1bd230c3273e04083431b555ee04177a382ff6b06a68d204cbe53ae14db0f8`.
+Source SHA-256: `3b89481595396db88a4dc1bca3156bf471718d813d2328e7252530f15f1189b5`.
 
 Read the canonical source in full before acting, and follow it with whatever tools this host provides. Treat any invocation arguments as arguments to that workflow. Where it names another slash command, follow the repository skill of the same name. Where it says to ask with `AskUserQuestion`, ask through this host's own question mechanism. `.claude/WORKFLOW.md` wins on any process question. Do not edit this generated adapter.

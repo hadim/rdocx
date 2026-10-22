@@ -15836,7 +15836,7 @@ mod tests {
             panic!("expected paragraph");
         };
         input.footnotes.as_mut().expect("footnote stream").footnotes[0].paragraphs =
-            vec![paragraph.clone()];
+            vec![paragraph.as_ref().clone()];
 
         let output = Engine::new_deterministic()
             .expect("bundled fonts load")
@@ -16774,7 +16774,7 @@ mod tests {
         table.rows.push(row);
         let mut input = make_input_with_text("");
         input.automatic_hyphenation = true;
-        input.document.body.content = vec![BodyContent::Table(table)];
+        input.document.body.content = vec![BodyContent::Table(Box::new(table))];
 
         let text = output_text(&deterministic_layout(&input));
         assert!(text.iter().any(|item| item == "-"), "{text:?}");
@@ -16981,7 +16981,7 @@ mod tests {
             BodyContent::Paragraph({
                 let mut paragraph = CT_P::new();
                 paragraph.add_run("inserted body source");
-                paragraph
+                Box::new(paragraph)
             }),
         );
         let (warm, warm_sources) = engine
@@ -17038,7 +17038,7 @@ mod tests {
             .document
             .body
             .content
-            .insert(0, BodyContent::Paragraph(first_section_end));
+            .insert(0, BodyContent::Paragraph(Box::new(first_section_end)));
         let mut inherited_engine = Engine::new_deterministic().expect("bundled fonts load");
         inherited_engine
             .layout_with_provenance(&inherited_input)
@@ -18321,7 +18321,7 @@ mod tests {
                 .document
                 .body
                 .content
-                .insert(0, BodyContent::Paragraph(unsafe_paragraph));
+                .insert(0, BodyContent::Paragraph(Box::new(unsafe_paragraph)));
 
             let warm = engine.layout(&input).expect("warm unsafe-prefix layout");
             let cold = Engine::new_deterministic()
@@ -18681,7 +18681,7 @@ mod tests {
             .document
             .body
             .content
-            .insert(1, BodyContent::Paragraph(inserted));
+            .insert(1, BodyContent::Paragraph(Box::new(inserted)));
         let (layout, sources) = engine
             .layout_with_provenance(&input)
             .expect("warm provenance layout");
@@ -18750,7 +18750,7 @@ mod tests {
             .document
             .body
             .content
-            .insert(0, BodyContent::Paragraph(inserted));
+            .insert(0, BodyContent::Paragraph(Box::new(inserted)));
         let warm = engine
             .layout_with_provenance(&input)
             .expect("warm heading layout");
@@ -18915,7 +18915,7 @@ mod tests {
             ..CT_PPr::default()
         });
         let paragraph_entry = RestartBodyEntry::for_content(
-            &BodyContent::Paragraph(paragraph),
+            &BodyContent::Paragraph(Box::new(paragraph)),
             RevisionView::Accepted,
         )
         .expect("paragraph has restart identity");
@@ -18935,9 +18935,11 @@ mod tests {
             text_direction: Some("c".repeat(4_096)),
             ..rdocx_oxml::table::CT_TcPr::default()
         });
-        let table_entry =
-            RestartBodyEntry::for_content(&BodyContent::Table(table), RevisionView::Accepted)
-                .expect("table has restart identity");
+        let table_entry = RestartBodyEntry::for_content(
+            &BodyContent::Table(Box::new(table)),
+            RevisionView::Accepted,
+        )
+        .expect("table has restart identity");
         assert!(table_entry.bytes() >= 3 * 4_096);
     }
 
@@ -18954,7 +18956,7 @@ mod tests {
         });
         paragraph.runs.push(run);
         let retained = RestartBodyEntry::for_content(
-            &BodyContent::Paragraph(paragraph.clone()),
+            &BodyContent::Paragraph(Box::new(paragraph.clone())),
             RevisionView::Accepted,
         )
         .expect("paragraph has restart identity");
@@ -18981,7 +18983,7 @@ mod tests {
                 paragraph_fingerprint(&paragraph),
                 paragraph_fingerprint(&candidate)
             );
-            assert!(!retained.matches(&BodyContent::Paragraph(candidate)));
+            assert!(!retained.matches(&BodyContent::Paragraph(Box::new(candidate))));
         }
     }
 
@@ -19034,7 +19036,7 @@ mod tests {
         });
         paragraph.runs.push(run);
         let retained = RestartBodyEntry::for_content(
-            &BodyContent::Paragraph(paragraph.clone()),
+            &BodyContent::Paragraph(Box::new(paragraph.clone())),
             RevisionView::Accepted,
         )
         .expect("paragraph has restart identity");
@@ -19043,7 +19045,7 @@ mod tests {
             .as_mut()
             .expect("run properties exist")
             .language = Some("en-GB".to_owned());
-        let candidate = BodyContent::Paragraph(paragraph);
+        let candidate = BodyContent::Paragraph(Box::new(paragraph));
         let mut memo = RestartBodyIdentityMemo::new(1);
 
         let BodyContent::Paragraph(candidate_paragraph) = &candidate else {
@@ -19119,7 +19121,7 @@ mod tests {
             .document
             .body
             .content
-            .insert(0, BodyContent::Paragraph(inserted));
+            .insert(0, BodyContent::Paragraph(Box::new(inserted)));
         let warm = engine
             .layout_with_provenance(&input)
             .expect("warm shared layout");
@@ -19277,7 +19279,7 @@ mod tests {
             .document
             .body
             .content
-            .insert(0, BodyContent::Table(table));
+            .insert(0, BodyContent::Table(Box::new(table)));
         let mut table_engine = Engine::new_deterministic().expect("bundled fonts load");
         table_engine
             .layout_with_provenance(&table_input)
@@ -19501,7 +19503,7 @@ mod tests {
             .document
             .body
             .content
-            .insert(1, BodyContent::Paragraph(note_paragraph));
+            .insert(1, BodyContent::Paragraph(Box::new(note_paragraph)));
         let warm_insert = engine.layout(&input).expect("warm insertion layout");
         let cold_insert = Engine::new_deterministic()
             .expect("bundled fonts load")
@@ -19566,7 +19568,11 @@ mod tests {
                 };
                 let mut input = make_input_with_text("before table");
                 assert!(table_is_cache_safe(&table, &input.styles));
-                input.document.body.content.push(BodyContent::Table(table));
+                input
+                    .document
+                    .body
+                    .content
+                    .push(BodyContent::Table(Box::new(table)));
                 let mut engine = Engine::new_deterministic().expect("bundled fonts load");
                 if provenance {
                     engine.layout_with_provenance(&input).unwrap();
@@ -19581,7 +19587,7 @@ mod tests {
                     .document
                     .body
                     .content
-                    .insert(0, BodyContent::Paragraph(inserted));
+                    .insert(0, BodyContent::Paragraph(Box::new(inserted)));
                 for expected_hits in 1..=2 {
                     let mut fresh = Engine::new_deterministic().expect("bundled fonts load");
                     let (warm, cold) = if provenance {
@@ -19609,10 +19615,10 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Table(safe_nested_table(
+            .push(BodyContent::Table(Box::new(safe_nested_table(
                 "cached outer cell",
                 "cached nested cell",
-            )));
+            ))));
         let mut engine = Engine::new_deterministic().expect("bundled fonts load");
         let cold = engine.layout(&input).expect("cold table layout");
         let warm = engine.layout(&input).expect("warm table layout");
@@ -19630,7 +19636,7 @@ mod tests {
             .document
             .body
             .content
-            .insert(1, BodyContent::Paragraph(inserted));
+            .insert(1, BodyContent::Paragraph(Box::new(inserted)));
         let (provenance_layout, sources) = provenance_engine
             .layout_with_provenance(&provenance_input)
             .expect("warm sourced table layout");
@@ -19667,7 +19673,9 @@ mod tests {
                 .document
                 .body
                 .content
-                .push(BodyContent::Table(safe_table(&format!("table {index}"))));
+                .push(BodyContent::Table(Box::new(safe_table(&format!(
+                    "table {index}"
+                )))));
         }
         let mut bounded_engine = Engine::new_deterministic().expect("bundled fonts load");
         bounded_engine
@@ -19794,7 +19802,7 @@ mod tests {
     fn page_spanning_prose_restart_input(paragraph_count: usize) -> LayoutInput {
         let mut input = make_input_with_text("");
         input.document.body.content = (0..paragraph_count)
-            .map(|index| BodyContent::Paragraph(page_spanning_prose_paragraph(index)))
+            .map(|index| BodyContent::Paragraph(Box::new(page_spanning_prose_paragraph(index))))
             .collect();
         input.core_properties = Some(rdocx_oxml::core_properties::CoreProperties {
             title: Some("Issue 67 page-spanning prose".to_owned()),
@@ -19923,7 +19931,7 @@ mod tests {
 
         input.document.body.content.insert(
             160,
-            BodyContent::Paragraph(page_spanning_prose_paragraph(999)),
+            BodyContent::Paragraph(Box::new(page_spanning_prose_paragraph(999))),
         );
         let warm_insert = engine.layout(&input).expect("warm insertion");
         let fresh_insert = Engine::new_deterministic()
@@ -20238,7 +20246,7 @@ mod tests {
             .document
             .body
             .content
-            .insert(640, BodyContent::Paragraph(inserted));
+            .insert(640, BodyContent::Paragraph(Box::new(inserted)));
         let warm_insert = engine.layout(&input).expect("warm insertion");
         assert!(
             engine.page_layout_invocation_count() <= 3,
@@ -20294,7 +20302,7 @@ mod tests {
             .document
             .body
             .content
-            .insert(640, BodyContent::Paragraph(inserted));
+            .insert(640, BodyContent::Paragraph(Box::new(inserted)));
         let (warm_insert, warm_insert_sources) = engine
             .layout_with_provenance(&input)
             .expect("warm sourced insertion");
@@ -20337,7 +20345,7 @@ mod tests {
             .document
             .body
             .content
-            .insert(640, BodyContent::Paragraph(inserted));
+            .insert(640, BodyContent::Paragraph(Box::new(inserted)));
         let (warm, warm_sources) = engine
             .layout_with_provenance(&input)
             .expect("warm sourced insertion");
@@ -20386,7 +20394,7 @@ mod tests {
             .document
             .body
             .content
-            .insert(641, BodyContent::Paragraph(after_enter));
+            .insert(641, BodyContent::Paragraph(Box::new(after_enter)));
         let (warm_enter, warm_enter_sources) = engine
             .layout_with_provenance(&input)
             .expect("warm sourced Enter");
@@ -20696,7 +20704,7 @@ mod tests {
             let BodyContent::Paragraph(paragraph) = document.body.content.remove(0) else {
                 panic!("paragraph");
             };
-            paragraph
+            *paragraph
         };
         let mut input = related_story_restart_input(45);
         input.revision_view = RevisionView::Tracked;
@@ -21751,7 +21759,7 @@ mod tests {
             .document
             .body
             .content
-            .insert(60, BodyContent::Paragraph(inserted));
+            .insert(60, BodyContent::Paragraph(Box::new(inserted)));
         let warm_insert = engine.layout(&input).expect("warm insertion");
         let cold_insert = Engine::new_deterministic()
             .expect("bundled fonts load")
@@ -21776,7 +21784,7 @@ mod tests {
             BodyContent::Paragraph({
                 let mut paragraph = CT_P::new();
                 paragraph.add_run("inserted sourced line");
-                paragraph
+                Box::new(paragraph)
             }),
         );
         let (warm_insert, warm_insert_sources) = sourced_engine
@@ -21866,10 +21874,10 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Table(safe_nested_table(
+            .push(BodyContent::Table(Box::new(safe_nested_table(
                 "staged outer before failure",
                 "staged nested before failure",
-            )));
+            ))));
         let mut later = CT_P::new();
         later
             .add_run("late font failure")
@@ -22006,7 +22014,7 @@ mod tests {
         engine.publish_paragraph_cache_entry(ParagraphCacheEntry {
             fingerprint: paragraph_fingerprint(paragraph),
             key: ParagraphCacheKey {
-                paragraph: paragraph.clone(),
+                paragraph: paragraph.as_ref().clone(),
                 content_width_bits: PageGeometry::default().content_width().to_bits(),
                 revision_view: RevisionView::Accepted,
                 revision_style: crate::input::RevisionStyle::Plain,
@@ -22773,7 +22781,7 @@ mod tests {
                         let entries = engine
                             .paragraph_cache
                             .iter()
-                            .filter(|entry| entry.key.paragraph == *paragraph)
+                            .filter(|entry| entry.key.paragraph == **paragraph)
                             .collect::<Vec<_>>();
                         assert_eq!(
                             entries.len(),
@@ -23004,7 +23012,11 @@ mod tests {
         row.cells.push(cell);
         let mut table = CT_Tbl::new();
         table.rows.push(row);
-        input.document.body.content.push(BodyContent::Table(table));
+        input
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(Box::new(table)));
         let mut engine = Engine::new_deterministic().unwrap();
         let cold = engine.layout(&input).unwrap();
         let families = |events: &Vec<FontTraceEvent>| {
@@ -24811,7 +24823,7 @@ mod tests {
         paragraph
             .runs
             .push(cross_reference_run("SEQ Figure", "COUNTER-OLD"));
-        input.document.body.content = vec![BodyContent::Paragraph(paragraph)];
+        input.document.body.content = vec![BodyContent::Paragraph(Box::new(paragraph))];
         let bytes = input.document.to_xml().unwrap();
         input.document = rdocx_oxml::document::CT_Document::from_xml(&bytes).unwrap();
         assert_eq!(input.document.to_xml().unwrap(), bytes);
@@ -26129,7 +26141,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(fields));
+            .push(BodyContent::Paragraph(Box::new(fields)));
 
         let mut numbered = CT_P::new();
         numbered.properties = Some(CT_PPr {
@@ -26144,7 +26156,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(numbered));
+            .push(BodyContent::Paragraph(Box::new(numbered)));
 
         let mut plain = CT_P::new();
         plain.add_run("plain target");
@@ -26154,7 +26166,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(plain));
+            .push(BodyContent::Paragraph(Box::new(plain)));
 
         let text = output_text(&deterministic_layout(&input));
         assert!(text.iter().any(|value| value == "1"), "{text:?}");
@@ -26201,7 +26213,7 @@ mod tests {
                 .document
                 .body
                 .content
-                .push(BodyContent::Paragraph(target));
+                .push(BodyContent::Paragraph(Box::new(target)));
 
             let text = output_text(&deterministic_layout(&input));
             assert!(text.iter().any(|value| value == "1"), "{text:?}");
@@ -26251,7 +26263,7 @@ mod tests {
             .document
             .body
             .content
-            .push(BodyContent::Paragraph(target));
+            .push(BodyContent::Paragraph(Box::new(target)));
 
         let text = output_text(&deterministic_layout(&input));
         let joined = text.concat();
@@ -26286,7 +26298,7 @@ mod tests {
                 .document
                 .body
                 .content
-                .push(BodyContent::Paragraph(target));
+                .push(BodyContent::Paragraph(Box::new(target)));
 
             let mut note_reference = CT_P::new();
             let mut reference_run = CT_R::new("");
@@ -26305,7 +26317,7 @@ mod tests {
                 .document
                 .body
                 .content
-                .push(BodyContent::Paragraph(note_reference));
+                .push(BodyContent::Paragraph(Box::new(note_reference)));
 
             let mut note_paragraph = CT_P::new();
             note_paragraph.runs.push(cross_reference_run(
@@ -26489,7 +26501,11 @@ mod tests {
         row.cells.push(cell);
         let mut table = CT_Tbl::new();
         table.rows.push(row);
-        input.document.body.content.push(BodyContent::Table(table));
+        input
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(Box::new(table)));
         input.document.body.add_paragraph(target_paragraph(
             &[(4, "destination", 0, 1)],
             "target",
@@ -26673,9 +26689,9 @@ mod tests {
         })];
         image_paragraph.runs.push(image_run);
         input.document.body.content = vec![
-            BodyContent::Table(table),
-            BodyContent::Paragraph(image_paragraph),
-            BodyContent::RawXml(br#"<w:custom/>"#.to_vec()),
+            BodyContent::Table(Box::new(table)),
+            BodyContent::Paragraph(Box::new(image_paragraph)),
+            BodyContent::RawXml(Box::new(br#"<w:custom/>"#.to_vec())),
         ];
         input.images.insert(
             "rIdImage".to_owned(),

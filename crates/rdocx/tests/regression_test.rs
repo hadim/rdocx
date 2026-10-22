@@ -469,10 +469,10 @@ fn rich_content_reopens_in_every_header_and_footer_variant() {
             document.create_section_story(0, kind, variant).unwrap();
             for item in &content {
                 let fragment = match item.clone() {
-                    BodyContent::Paragraph(value) => ContentFragment::paragraph(value).unwrap(),
-                    BodyContent::Table(value) => ContentFragment::table(value).unwrap(),
+                    BodyContent::Paragraph(value) => ContentFragment::paragraph(*value).unwrap(),
+                    BodyContent::Table(value) => ContentFragment::table(*value).unwrap(),
                     BodyContent::ContentControl(value) => {
-                        ContentFragment::content_control(value).unwrap()
+                        ContentFragment::content_control(*value).unwrap()
                     }
                     BodyContent::RawXml(_) => panic!("fixture must be modeled"),
                 };
@@ -1159,10 +1159,10 @@ fn rich_section_stories_survive_reopen_replace_and_unlink() {
         .content
     {
         let fragment = match content {
-            BodyContent::Paragraph(paragraph) => ContentFragment::paragraph(paragraph).unwrap(),
-            BodyContent::Table(table) => ContentFragment::table(table).unwrap(),
+            BodyContent::Paragraph(paragraph) => ContentFragment::paragraph(*paragraph).unwrap(),
+            BodyContent::Table(table) => ContentFragment::table(*table).unwrap(),
             BodyContent::ContentControl(control) => {
-                ContentFragment::content_control(control).unwrap()
+                ContentFragment::content_control(*control).unwrap()
             }
             BodyContent::RawXml(_) => panic!("rich fixture remains typed"),
         };
@@ -1478,7 +1478,7 @@ fn f254_block_context_content_control(content: &str) -> CT_Sdt {
     else {
         panic!("block-context content-control fixture stays typed");
     };
-    control
+    *control
 }
 
 fn f255_story_document() -> Document {
@@ -10461,7 +10461,7 @@ fn update_page_fields_writes_body_and_nested_caches_preserving_footer_sources() 
     let document_xml = package.get_part("/word/document.xml").unwrap();
     let body = CT_Document::from_xml(document_xml).unwrap().body;
     let paragraphs = body.content.iter().filter_map(|content| match content {
-        BodyContent::Paragraph(paragraph) => Some(paragraph),
+        BodyContent::Paragraph(paragraph) => Some(paragraph.as_ref()),
         _ => None,
     });
     let caches = |values: &[(&str, &str, Option<bool>)]| {
@@ -10489,7 +10489,7 @@ fn update_page_fields_writes_body_and_nested_caches_preserving_footer_sources() 
         .content
         .iter()
         .filter_map(|content| match content {
-            BodyContent::Paragraph(paragraph) => Some(paragraph),
+            BodyContent::Paragraph(paragraph) => Some(paragraph.as_ref()),
             _ => None,
         })
         .flat_map(|paragraph| &paragraph.runs)
@@ -10531,7 +10531,7 @@ fn update_page_fields_formats_page_caches_in_the_owning_section() {
     assert_eq!(document.update_page_fields().unwrap(), 2);
     let body = body_from_document(&mut document);
     let paragraphs = body.content.iter().filter_map(|content| match content {
-        BodyContent::Paragraph(paragraph) => Some(paragraph),
+        BodyContent::Paragraph(paragraph) => Some(paragraph.as_ref()),
         _ => None,
     });
     assert_eq!(
@@ -21126,7 +21126,7 @@ fn a_ranged_comment_reply_and_resolution_keep_one_intact_thread() {
     assert_eq!(comments.len(), 2);
     assert_eq!(comments[0].id(), comment_id);
     assert_eq!(comments[0].text(), "Please review");
-    assert!(comments[0].resolved());
+    assert_eq!(comments[0].resolved(), Some(true));
     assert_eq!(comments[1].id(), reply_id);
     assert_eq!(comments[1].text(), "Looks good");
     assert_eq!(comments[1].parent_id(), Some(comment_id));
@@ -21178,7 +21178,7 @@ fn comments_keep_standard_content_type_ids_dates_and_threads() {
             (reply, Some(second), Some("2026-09-16T11:00:00+01:00")),
         ]
     );
-    assert!(comments[0].resolved());
+    assert_eq!(comments[0].resolved(), Some(true));
 
     let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
     assert_eq!(
@@ -39502,7 +39502,10 @@ fn fragment_import_preserves_unmodeled_xml_and_reopens() {
     let comments = reopened.comments();
     assert_eq!(comments.len(), 4);
     assert_eq!(
-        comments.iter().filter(|comment| comment.resolved()).count(),
+        comments
+            .iter()
+            .filter(|comment| comment.resolved() == Some(true))
+            .count(),
         2
     );
     assert_eq!(
@@ -50148,7 +50151,10 @@ fn public_created_building_blocks_insert_and_reopen() {
 fn glossary_lifecycle_preserves_untouched_docparts() {
     let mut document = Document::new();
     let mut block = f277_block("first", "docParts");
-    block.body.content.push(BodyContent::Paragraph(CT_P::new()));
+    block
+        .body
+        .content
+        .push(BodyContent::Paragraph(Box::default()));
     let first = document.create_building_block(block).unwrap();
     let mut package = f249_package(&document.to_bytes().unwrap());
     let raw = String::from(
@@ -50169,7 +50175,10 @@ fn glossary_lifecycle_preserves_untouched_docparts() {
     let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
     let producer = document.building_blocks().unwrap()[0].clone();
     let mut third = f277_block("third", "docParts");
-    third.body.content.push(BodyContent::Paragraph(CT_P::new()));
+    third
+        .body
+        .content
+        .push(BodyContent::Paragraph(Box::default()));
     let third = document.create_building_block(third).unwrap();
     let mut changed = third.block.clone();
     changed.category = Some("changed".to_owned());
@@ -50496,7 +50505,7 @@ fn glossary_block_grammar_rejects_inline_xml_and_preserves_opaque_blocks() {
         block
             .body
             .content
-            .push(BodyContent::RawXml(content.as_bytes().to_vec()));
+            .push(BodyContent::RawXml(Box::new(content.as_bytes().to_vec())));
         assert!(document.create_building_block(block).is_err(), "{content}");
         assert_eq!(document.to_bytes().unwrap(), before);
         let mut producer = f249_minimal_building_block_document();
@@ -50528,7 +50537,7 @@ fn glossary_block_grammar_rejects_inline_xml_and_preserves_opaque_blocks() {
     block
         .body
         .content
-        .push(BodyContent::RawXml(content.to_vec()));
+        .push(BodyContent::RawXml(Box::new(content.to_vec())));
     let entry = document.create_building_block(block).unwrap();
     let story = f254_story(&document, StoryKind::Body);
     document
@@ -62477,13 +62486,14 @@ fn comment_moves_cover_related_owners_and_refuse_invalid_graphs_atomically() {
                 .parent_id(),
             Some(id)
         );
-        assert!(
+        assert_eq!(
             document
                 .comments()
                 .iter()
                 .find(|comment| comment.id() == id)
                 .unwrap()
-                .resolved()
+                .resolved(),
+            Some(true)
         );
         document.validate_comment_ownership().unwrap();
         document.move_comment_to_text(id, "RETURN", 0).unwrap();
@@ -64158,7 +64168,7 @@ fn building_block_transfer_update_and_public_insertion_omit_review_state() {
     local.validate_comment_ownership().unwrap();
     let mut body = CT_Body::new();
     body.sect_pr = None;
-    body.content.push(BodyContent::Paragraph(CT_P::from_xml_fragment(format!(r#"<w:p xmlns:w="{W_NS}"><w:commentRangeStart w:id="0"/><w:r><w:t>new supplied</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p>"#).as_bytes()).unwrap()));
+    body.content.push(BodyContent::Paragraph(Box::new(CT_P::from_xml_fragment(format!(r#"<w:p xmlns:w="{W_NS}"><w:commentRangeStart w:id="0"/><w:r><w:t>new supplied</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p>"#).as_bytes()).unwrap())));
     let mut supplied = f277_block("supplied", "autoTxt");
     supplied.body = body;
     let bytes = local.to_bytes().unwrap();
@@ -297417,7 +297427,7 @@ fn bibliography_twelve_styles_single_document_lifecycle_match_actual_word() {
                             }
                         }
                     }
-                    Some(BodyContent::Paragraph(result))
+                    Some(BodyContent::Paragraph(Box::new(result)))
                 }
                 BodyContent::Table(table) => Some(BodyContent::Table(table)),
                 _ => None,
@@ -405633,4 +405643,772 @@ fn suppressed_styleref_number_keeps_position_and_related_story_refusal() {
         assert_eq!(document.to_bytes().unwrap(), before);
     }
     assert_eq!(observed, [true, true]);
+}
+
+fn fx261_package_bytes(package: &oxml_opc::OpcPackage) -> Vec<u8> {
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut cursor).unwrap();
+    cursor.into_inner()
+}
+
+fn fx261_package(bytes: &[u8]) -> oxml_opc::OpcPackage {
+    oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap()
+}
+
+fn fx261_media(bytes: &[u8]) -> Vec<Vec<u8>> {
+    let package = fx261_package(bytes);
+    let mut payloads = package
+        .parts
+        .iter()
+        .filter(|(name, _)| name.contains("/media/"))
+        .map(|(_, data)| data.clone())
+        .collect::<Vec<_>>();
+    payloads.sort();
+    payloads
+}
+
+fn fx261_drawing_indexes(document: &Document) -> Vec<usize> {
+    let body = f254_story(document, StoryKind::Body);
+    document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .filter_map(|item| {
+            if item.kind() != StoryItemKind::Paragraph {
+                return None;
+            }
+            let xml = item.xml().unwrap();
+            let xml = std::str::from_utf8(xml.as_ref()).unwrap_or("");
+            xml.contains("w:drawing")
+                .then(|| item.direct_body_index().unwrap().unwrap())
+        })
+        .collect()
+}
+
+fn fx261_custom_property(name: &str, pid: i32) -> CustomProperty {
+    CustomProperty {
+        fmtid: "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}".to_owned(),
+        pid,
+        name: Some(name.to_owned()),
+        value: CustomPropertyValue::Lpwstr(name.to_owned()),
+    }
+}
+
+#[test]
+fn issue387_custom_properties_are_enumerable() {
+    let mut document = Document::new();
+    assert!(document.custom_properties().is_empty());
+    document
+        .set_custom_property(fx261_custom_property("Zebra", 2))
+        .unwrap();
+    document
+        .set_custom_property(fx261_custom_property("Alpha", 3))
+        .unwrap();
+    let names = document
+        .custom_properties()
+        .iter()
+        .map(|property| property.name.clone().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["Zebra", "Alpha"]);
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let reopened_names = reopened
+        .custom_properties()
+        .iter()
+        .map(|property| property.name.clone().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(reopened_names, ["Zebra", "Alpha"]);
+}
+
+fn fx261_styles_with_unmodelled_root() -> Document {
+    let mut document = Document::new();
+    document.add_paragraph("host");
+    let mut package = fx261_package(&document.to_bytes().unwrap());
+    let mut styles =
+        String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+    styles = styles.replacen("<w:styles ", "<w:styles xmlns:x=\"urn:x\" ", 1);
+    let insertion = concat!(
+        r#"<w:latentStyles w:count="1"><w:lsdException w:name="Normal" x:a="1"/></w:latentStyles>"#,
+        r#"<x:empty/>"#,
+        r#"<w:style w:type="paragraph" w:styleId="Empty"/>"#,
+    );
+    let index = styles.find("<w:style ").unwrap();
+    styles.insert_str(index, insertion);
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    Document::from_bytes(&fx261_package_bytes(&package)).unwrap()
+}
+
+fn fx261_style_marker(styles: &str, markers: &[&str]) -> usize {
+    markers
+        .iter()
+        .find_map(|marker| styles.find(marker))
+        .unwrap_or_else(|| panic!("{styles}"))
+}
+
+fn fx261_assert_unmodelled_style_order(styles: &str) {
+    let latent = fx261_style_marker(
+        styles,
+        &[
+            concat!(
+                r#"<w:latentStyles w:count="1" xmlns:x="urn:x">"#,
+                r#"<w:lsdException w:name="Normal" x:a="1"/></w:latentStyles>"#,
+            ),
+            r#"<w:latentStyles w:count="1"><w:lsdException w:name="Normal" x:a="1"/></w:latentStyles>"#,
+        ],
+    );
+    let empty = fx261_style_marker(styles, &[r#"<x:empty xmlns:x="urn:x"/>"#, r#"<x:empty/>"#]);
+    let empty_style = styles
+        .find(r#"<w:style w:type="paragraph" w:styleId="Empty""#)
+        .unwrap_or_else(|| panic!("{styles}"));
+    assert!(styles.contains(r#"xmlns:x="urn:x""#));
+    assert!(styles.find("<w:docDefaults").unwrap() < latent);
+    assert!(latent < empty);
+    assert!(empty < empty_style);
+}
+
+#[test]
+fn issue390_style_edits_preserve_unmodelled_root_source() {
+    let mut document = fx261_styles_with_unmodelled_root();
+    fx261_assert_unmodelled_style_order(&document.part_xml("/word/styles.xml").unwrap());
+    document
+        .set_style(StyleBuilder::paragraph("Normal", "Normal"))
+        .unwrap();
+    fx261_assert_unmodelled_style_order(&document.part_xml("/word/styles.xml").unwrap());
+    document
+        .add_style(StyleBuilder::paragraph("Spare", "Updated spare"))
+        .unwrap();
+    fx261_assert_unmodelled_style_order(&document.part_xml("/word/styles.xml").unwrap());
+    let mut other = Document::new();
+    other.add_paragraph("inserted host");
+    document.insert_document(0, &other);
+    fx261_assert_unmodelled_style_order(&document.part_xml("/word/styles.xml").unwrap());
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    fx261_assert_unmodelled_style_order(&reopened.part_xml("/word/styles.xml").unwrap());
+}
+
+#[test]
+fn issue390_removed_picture_media_has_proved_reachability() {
+    let body_png = f_x204_picture_fixture(b"body");
+    let unused_png = f_x204_picture_fixture(b"unused");
+    let header_png = f_x204_picture_fixture(b"header");
+    let mut document = Document::new();
+    document.add_paragraph("before");
+    document.add_picture(&body_png, "body.png", Length::pt(1.0), Length::pt(1.0));
+    document.add_paragraph("after");
+    let unused_id = document.embed_image(&unused_png, "unused.png");
+    let body = f254_story(&document, StoryKind::Body);
+    let location = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            let xml = item.xml().unwrap();
+            std::str::from_utf8(xml.as_ref())
+                .unwrap_or("")
+                .contains("w:drawing")
+        })
+        .unwrap()
+        .location()
+        .clone();
+    let fragment = document.remove_content_at(&location).unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_content(&ContentLocation::end(body), fragment)
+        .unwrap();
+    let popped = document.to_bytes().unwrap();
+    let popped_media = fx261_media(&popped);
+    assert!(popped_media.iter().any(|data| data == &body_png));
+    assert!(popped_media.iter().any(|data| data == &unused_png));
+    document.set_header_image(&header_png, "header.png", Length::pt(1.0), Length::pt(1.0));
+    let index = fx261_drawing_indexes(&document)[0];
+    assert!(document.remove_content(index));
+    let saved = document.to_bytes().unwrap();
+    let saved_media = fx261_media(&saved);
+    assert!(saved_media.iter().all(|data| data != &body_png));
+    assert!(saved_media.iter().any(|data| data == &unused_png));
+    assert!(saved_media.iter().any(|data| data == &header_png));
+    let mut reopened = Document::from_bytes(&saved).unwrap();
+    assert!(reopened.part_xml("/word/styles.xml").is_ok());
+    assert!(reopened.has_header_footer_content());
+    let package = fx261_package(&reopened.to_bytes().unwrap());
+    assert!(
+        package
+            .get_part_rels("/word/document.xml")
+            .unwrap()
+            .items
+            .iter()
+            .any(|relationship| relationship.id == unused_id)
+    );
+
+    let mut shared = Document::new();
+    shared.add_picture(&body_png, "shared.png", Length::pt(1.0), Length::pt(1.0));
+    let mut shared = Document::from_bytes(&{
+        let mut package = fx261_package(&shared.to_bytes().unwrap());
+        let mut xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        let drawing = xml.find("<w:drawing").unwrap();
+        let start = xml[..drawing].rfind("<w:p").unwrap();
+        let end = xml[drawing..].find("</w:p>").unwrap() + drawing + "</w:p>".len();
+        let paragraph = xml[start..end].to_owned();
+        let body_end = xml.rfind("</w:body>").unwrap();
+        xml.insert_str(body_end, &paragraph);
+        package.set_part("/word/document.xml", xml.into_bytes());
+        fx261_package_bytes(&package)
+    })
+    .unwrap();
+    assert_eq!(fx261_drawing_indexes(&shared).len(), 2);
+    assert_eq!(fx261_media(&shared.to_bytes().unwrap()).len(), 1);
+    assert!(shared.remove_content(fx261_drawing_indexes(&shared)[0]));
+    assert_eq!(fx261_media(&shared.to_bytes().unwrap()).len(), 1);
+    assert!(shared.remove_content(fx261_drawing_indexes(&shared)[0]));
+    assert!(fx261_media(&shared.to_bytes().unwrap()).is_empty());
+
+    let mut referred = Document::new();
+    referred.add_picture(&body_png, "referred.png", Length::pt(1.0), Length::pt(1.0));
+    let document_xml = referred.part_xml("/word/document.xml").unwrap();
+    let marker = r#"r:embed=""#;
+    let start = document_xml.find(marker).unwrap() + marker.len();
+    let end = document_xml[start..].find('"').unwrap() + start;
+    let relationship_id = document_xml[start..end].to_owned();
+    let mut referred = Document::from_bytes(&{
+        let mut package = fx261_package(&referred.to_bytes().unwrap());
+        let mut xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        let paragraph = format!(
+            r#"<w:p xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><w:r><w:pict><v:shape id="kept"><v:imagedata r:id="{relationship_id}" o:relid="{relationship_id}"/></v:shape></w:pict></w:r></w:p>"#
+        );
+        let body_end = xml.rfind("</w:body>").unwrap();
+        xml.insert_str(body_end, &paragraph);
+        package.set_part("/word/document.xml", xml.into_bytes());
+        fx261_package_bytes(&package)
+    })
+    .unwrap();
+    assert!(
+        referred
+            .part_xml("/word/document.xml")
+            .unwrap()
+            .contains("o:relid")
+    );
+    assert!(referred.remove_content(fx261_drawing_indexes(&referred)[0]));
+    assert_eq!(fx261_media(&referred.to_bytes().unwrap()).len(), 1);
+    let body = f254_story(&referred, StoryKind::Body);
+    let vml_index = referred
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            std::str::from_utf8(item.xml().unwrap().as_ref())
+                .unwrap_or("")
+                .contains("o:relid")
+        })
+        .unwrap()
+        .direct_body_index()
+        .unwrap()
+        .unwrap();
+    assert!(referred.remove_content(vml_index));
+    assert!(fx261_media(&referred.to_bytes().unwrap()).is_empty());
+}
+
+fn fx261_without_comments_extended(bytes: &[u8]) -> Vec<u8> {
+    let mut package = fx261_package(bytes);
+    let parts = package
+        .parts
+        .keys()
+        .filter(|name| name.to_ascii_lowercase().contains("commentsextended"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(parts.len(), 1);
+    for part in &parts {
+        package.remove_part(part);
+        package.content_types.remove_override(part);
+    }
+    package
+        .get_part_rels_mut("/word/document.xml")
+        .unwrap()
+        .items
+        .retain(|relationship| {
+            !relationship
+                .target
+                .to_ascii_lowercase()
+                .contains("commentsextended")
+        });
+    fx261_package_bytes(&package)
+}
+
+#[test]
+fn issue390_comment_resolution_preserves_unknown_state() {
+    let mut document = Document::new();
+    document.add_paragraph("Comment target");
+    let id = document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Alice",
+            Some("AL"),
+            "Review this",
+        )
+        .unwrap();
+    assert_eq!(document.comments()[0].resolved(), Some(false));
+    assert!(document.resolve_comment(id, true).unwrap());
+    assert_eq!(document.comments()[0].resolved(), Some(true));
+    let unknown = Document::from_bytes(&fx261_without_comments_extended(
+        &document.to_bytes().unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(unknown.comments()[0].resolved(), None);
+    assert_eq!(unknown.comments()[0].text(), "Review this");
+}
+
+#[test]
+fn issue390_invalid_story_targets_are_diagnosed() {
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    document.set_header("kept header");
+    let mut package = fx261_package(&document.to_bytes().unwrap());
+    package.set_part("/word/header9.bin", b"not xml".to_vec());
+    package
+        .content_types
+        .add_override("/word/header9.bin", "application/octet-stream");
+    package
+        .get_part_rels_mut("/word/document.xml")
+        .unwrap()
+        .items
+        .push(oxml_opc::relationship::Relationship {
+            id: "rId99".to_owned(),
+            rel_type: oxml_opc::relationship::rel_types::HEADER.to_owned(),
+            target: "header9.bin".to_owned(),
+            target_mode: None,
+        });
+    let reopened = Document::from_bytes(&fx261_package_bytes(&package)).unwrap();
+    assert!(reopened.header_text().unwrap().contains("kept header"));
+    let report = reopened.validate().unwrap();
+    assert!(!report.is_valid());
+    assert!(report.findings.iter().any(|finding| {
+        finding.severity == rdocx::ValidationSeverity::Error
+            && finding.message.contains("header relationship rId99")
+            && finding.message.contains("/word/header9.bin")
+            && finding.message.contains("application/octet-stream")
+    }));
+}
+
+fn fx261_with_doc_defaults(defaults: &str) -> Document {
+    let mut document = Document::new();
+    document.add_paragraph("held");
+    let mut package = fx261_package(&document.to_bytes().unwrap());
+    let mut styles =
+        String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+    let block = format!("<w:docDefaults>{defaults}</w:docDefaults>");
+    if let Some(start) = styles.find("<w:docDefaults") {
+        let end = styles[start..]
+            .find("</w:docDefaults>")
+            .map(|offset| start + offset + "</w:docDefaults>".len())
+            .or_else(|| styles[start..].find("/>").map(|offset| start + offset + 2))
+            .unwrap();
+        styles.replace_range(start..end, &block);
+    } else {
+        let root = styles.find("<w:styles").unwrap();
+        let end = styles[root..].find('>').unwrap() + root + 1;
+        styles.insert_str(end, &block);
+    }
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    Document::from_bytes(&fx261_package_bytes(&package)).unwrap()
+}
+
+#[test]
+fn issue391_default_paragraph_format_is_owned_and_atomic() {
+    let mut document = fx261_with_doc_defaults(concat!(
+        r#"<w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri"/></w:rPr></w:rPrDefault>"#,
+        r#"<w:pPrDefault><w:pPr><w:spacing w:before="120" w:after="240" w:line="360" w:lineRule="auto"/></w:pPr></w:pPrDefault>"#,
+        "<!--opaque-default-->",
+    ));
+    let stored = document.default_paragraph_properties().unwrap().clone();
+    assert_eq!(stored.space_before, Some(Twips(120)));
+    assert_eq!(stored.line_spacing, Some(Twips(360)));
+    assert_eq!(stored.line_rule.as_deref(), Some("auto"));
+    let before = document.to_bytes().unwrap();
+    document
+        .set_default_paragraph_properties(Some(stored))
+        .unwrap();
+    assert_eq!(document.to_bytes().unwrap(), before);
+    document.set_default_paragraph_properties(None).unwrap();
+    assert!(document.default_paragraph_properties().is_none());
+    let styles = document.part_xml("/word/styles.xml").unwrap();
+    let defaults =
+        &styles[styles.find("<w:docDefaults").unwrap()..styles.find("</w:docDefaults>").unwrap()];
+    assert!(defaults.contains(r#"w:ascii="Calibri""#));
+    assert!(defaults.contains("<!--opaque-default-->"));
+    assert!(!defaults.contains("w:spacing"));
+    assert!(!defaults.contains("w:line"));
+}
+
+#[test]
+fn issue391_default_paragraph_line_rules_keep_imported_states() {
+    let cases = [
+        (
+            "w:line=\"360\" w:lineRule=\"auto\"",
+            Some(360),
+            Some("auto"),
+        ),
+        (
+            "w:line=\"259\" w:lineRule=\"auto\"",
+            Some(259),
+            Some("auto"),
+        ),
+        (
+            "w:line=\"240\" w:lineRule=\"exact\"",
+            Some(240),
+            Some("exact"),
+        ),
+        (
+            "w:line=\"240\" w:lineRule=\"atLeast\"",
+            Some(240),
+            Some("atLeast"),
+        ),
+        ("w:line=\"480\"", Some(480), None),
+        ("w:before=\"120\"", None, None),
+        (
+            "w:line=\"240\" w:lineRule=\"precise\"",
+            Some(240),
+            Some("precise"),
+        ),
+    ];
+    for (spacing, line, rule) in cases {
+        let document = fx261_with_doc_defaults(&format!(
+            "<w:pPrDefault><w:pPr><w:spacing {spacing}/></w:pPr></w:pPrDefault>"
+        ));
+        let stored = document.default_paragraph_properties();
+        assert_eq!(
+            stored.and_then(|value| value.line_spacing),
+            line.map(Twips),
+            "{spacing}"
+        );
+        assert_eq!(
+            stored.and_then(|value| value.line_rule.as_deref()),
+            rule,
+            "{spacing}"
+        );
+    }
+    let mut at_least = fx261_with_doc_defaults(
+        "<w:pPrDefault><w:pPr><w:spacing w:line=\"240\" w:lineRule=\"atLeast\"/></w:pPr></w:pPrDefault>",
+    );
+    let before = at_least.to_bytes().unwrap();
+    assert_eq!(
+        at_least
+            .default_paragraph_properties()
+            .unwrap()
+            .line_rule
+            .as_deref(),
+        Some("atLeast")
+    );
+    assert_eq!(at_least.to_bytes().unwrap(), before);
+    let exact = CT_PPr {
+        line_spacing: Some(Twips(240)),
+        line_rule: Some("exact".to_owned()),
+        ..CT_PPr::default()
+    };
+    at_least
+        .set_default_paragraph_properties(Some(exact))
+        .unwrap();
+    assert_eq!(
+        at_least
+            .default_paragraph_properties()
+            .unwrap()
+            .line_rule
+            .as_deref(),
+        Some("exact")
+    );
+    at_least.set_default_paragraph_properties(None).unwrap();
+    assert!(at_least.default_paragraph_properties().is_none());
+}
+
+fn fx261_add_part(bytes: &[u8], name: &str, payload: &[u8], content_type: &str) -> Vec<u8> {
+    let mut package = fx261_package(bytes);
+    package.set_part(name, payload.to_vec());
+    package.content_types.add_override(name, content_type);
+    fx261_package_bytes(&package)
+}
+
+#[test]
+fn issue391_part_inspection_reflects_current_package() {
+    let mut document = Document::new();
+    document.add_paragraph("inspect");
+    let orphan = fx261_add_part(
+        &document.to_bytes().unwrap(),
+        "/word/a-unreferenced.xml",
+        b"<?xml version=\"1.0\"?><orphan/>",
+        "application/xml",
+    );
+    let mut document = Document::from_bytes(&orphan).unwrap();
+    let names = document.part_names().unwrap();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted);
+    assert!(names.iter().all(|name| name.starts_with('/')));
+    assert!(names.iter().any(|name| name == "/word/a-unreferenced.xml"));
+    assert_eq!(
+        document.part_xml("WORD/A-UNREFERENCED.XML").unwrap(),
+        "<?xml version=\"1.0\"?><orphan/>"
+    );
+    document
+        .add_style(StyleBuilder::paragraph("Inspected", "Inspected"))
+        .unwrap();
+    assert!(
+        document
+            .part_xml("/word/styles.xml")
+            .unwrap()
+            .contains("Inspected")
+    );
+    let after_style = document.part_names().unwrap();
+    assert_eq!(
+        after_style
+            .iter()
+            .filter(|name| names.iter().any(|original| original == *name))
+            .cloned()
+            .collect::<Vec<_>>(),
+        names
+    );
+    document.add_paragraph("rewritten");
+    assert_eq!(document.part_names().unwrap(), after_style);
+    let missing = document
+        .part_xml("/word/missing.xml")
+        .unwrap_err()
+        .to_string();
+    assert!(missing.contains("/word/missing.xml"), "{missing}");
+    assert!(missing.contains("content type"), "{missing}");
+    let binary = fx261_add_part(
+        &document.to_bytes().unwrap(),
+        "/word/media/pixel.bin",
+        b"\x00\x01\x02",
+        "application/octet-stream",
+    );
+    let binary = Document::from_bytes(&binary).unwrap();
+    let binary_error = binary
+        .part_xml("/word/media/pixel.bin")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        binary_error.contains("/word/media/pixel.bin"),
+        "{binary_error}"
+    );
+    assert!(
+        binary_error.contains("application/octet-stream"),
+        "{binary_error}"
+    );
+    let utf16_payload = "<?xml version=\"1.0\"?><orphan/>"
+        .encode_utf16()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect::<Vec<_>>();
+    let utf16 = fx261_add_part(
+        &document.to_bytes().unwrap(),
+        "/word/utf16.xml",
+        &utf16_payload,
+        "application/xml",
+    );
+    let utf16 = Document::from_bytes(&utf16).unwrap();
+    let utf16_error = utf16.part_xml("/word/utf16.xml").unwrap_err().to_string();
+    assert!(utf16_error.contains("/word/utf16.xml"), "{utf16_error}");
+    assert!(utf16_error.contains("not UTF-8"), "{utf16_error}");
+    let bom = fx261_add_part(
+        &Document::new().to_bytes().unwrap(),
+        "/word/bom.xml",
+        b"\xEF\xBB\xBF<bom/>",
+        "application/xml",
+    );
+    let bom = Document::from_bytes(&bom).unwrap();
+    assert_eq!(bom.part_xml("/word/bom.xml").unwrap(), "<bom/>");
+}
+
+#[test]
+fn issue391_story_item_snapshots_are_namespace_complete() {
+    let mut document = Document::new();
+    document.add_paragraph("body paragraph");
+    document.add_table(1, 1);
+    document.set_header("header paragraph");
+    let mut package = fx261_package(&document.to_bytes().unwrap());
+    let mut xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let box_paragraph = concat!(
+        r#"<w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:shape id="only">"#,
+        r#"<v:textbox><w:txbxContent><w:p><w:r><w:t>box paragraph</w:t></w:r></w:p></w:txbxContent></v:textbox>"#,
+        "</v:shape></w:pict></w:r></w:p>",
+    );
+    let body_end = xml.rfind("</w:body>").unwrap();
+    xml.insert_str(body_end, box_paragraph);
+    package.set_part("/word/document.xml", xml.into_bytes());
+    let document = Document::from_bytes(&fx261_package_bytes(&package)).unwrap();
+    let exact = document.story_item_snapshots().unwrap();
+    let closed = document.standalone_story_item_snapshots().unwrap();
+    assert_eq!(exact.len(), closed.len());
+    let mut saw_paragraph = false;
+    let mut saw_table = false;
+    let mut saw_cell = false;
+    let mut saw_header = false;
+    let mut saw_box = false;
+    for (exact, closed) in exact.iter().zip(closed.iter()) {
+        let part = document
+            .part_xml(exact.location().story().part_name())
+            .unwrap();
+        assert!(
+            part.as_bytes()
+                .windows(exact.xml().len())
+                .any(|window| window == exact.xml())
+        );
+        let closed_xml = std::str::from_utf8(closed.xml()).unwrap();
+        let exact_xml = std::str::from_utf8(exact.xml()).unwrap_or("");
+        if exact_xml.contains("w:") {
+            assert!(closed_xml.contains("xmlns:w"), "{closed_xml}");
+        }
+        let mut reader = XmlReader::from_reader(closed.xml());
+        let mut buffer = Vec::new();
+        loop {
+            if reader.read_event_into(&mut buffer).unwrap() == XmlEvent::Eof {
+                break;
+            }
+            buffer.clear();
+        }
+        match exact.location().story().kind() {
+            StoryKind::Header => saw_header = true,
+            StoryKind::TableCell => saw_cell = true,
+            StoryKind::TextBox => saw_box = true,
+            StoryKind::Body if exact.location().item_kind() == StoryItemKind::Table => {
+                saw_table = true
+            }
+            StoryKind::Body if exact.location().item_kind() == StoryItemKind::Paragraph => {
+                saw_paragraph = true
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_paragraph && saw_table && saw_cell && saw_header && saw_box);
+}
+
+const ISSUE390_UNREDUCED_CONTROL_DIAGNOSTIC: &str = "proved owner route is direct body remove_content, pop and reinsert, and set_header_image. The private unreduced control-owner document stays unqualified";
+
+#[test]
+fn issue390_asset_reinsertion_and_unreduced_control_diagnostic() {
+    assert_eq!(
+        ISSUE390_UNREDUCED_CONTROL_DIAGNOSTIC,
+        "proved owner route is direct body remove_content, pop and reinsert, and set_header_image. The private unreduced control-owner document stays unqualified"
+    );
+    let image = f_x204_picture_fixture(b"reinserted");
+    let header = f_x204_picture_fixture(b"header-reinserted");
+    let mut document = Document::new();
+    document.add_paragraph("before");
+    document.add_picture(&image, "reinserted.png", Length::pt(1.0), Length::pt(1.0));
+    let body = f254_story(&document, StoryKind::Body);
+    let location = document
+        .story_items(&body)
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            let xml = item.xml().unwrap();
+            std::str::from_utf8(xml.as_ref())
+                .unwrap_or("")
+                .contains("w:drawing")
+        })
+        .unwrap()
+        .location()
+        .clone();
+    let fragment = document.remove_content_at(&location).unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_content(&ContentLocation::end(body), fragment)
+        .unwrap();
+    document.set_header_image(&header, "header.png", Length::pt(1.0), Length::pt(1.0));
+    assert!(document.remove_content(fx261_drawing_indexes(&document)[0]));
+    let media = fx261_media(&document.to_bytes().unwrap());
+    assert!(media.iter().all(|data| data != &image));
+    assert!(media.iter().any(|data| data == &header));
+    assert!(Document::from_bytes(&document.to_bytes().unwrap()).is_ok());
+}
+#[test]
+fn toc_outline_switch_stays_within_the_heading_range() {
+    // tensorbee/rdocx#400: Heading 2 takes outline level 2 from its style, and the
+    // plain paragraphs carry theirs directly; Word lists neither level-2 paragraph
+    // under `\o "1-1" \u`.
+    let headings = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Chapter</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Section</w:t></w:r></w:p><w:p><w:pPr><w:outlineLvl w:val="1"/></w:pPr><w:r><w:t>Outline two</w:t></w:r></w:p><w:p><w:pPr><w:outlineLvl w:val="0"/></w:pPr><w:r><w:t>Outline one</w:t></w:r></w:p>"#;
+    for (instruction, expected) in [
+        (r#"TOC \o "1-1""#, &["Chapter"][..]),
+        (r#"TOC \o "1-1" \h \z \u"#, &["Chapter", "Outline one"][..]),
+        (r#"TOC \o "1-1" \u"#, &["Chapter", "Outline one"][..]),
+        (
+            r#"TOC \o "1-2" \u"#,
+            &["Chapter", "Section", "Outline two", "Outline one"][..],
+        ),
+        (r#"TOC \o "2-2" \u"#, &["Section", "Outline two"][..]),
+        (
+            r#"TOC \o "1-1" \u \t "Heading 2,3""#,
+            &["Chapter", "Section", "Outline one"][..],
+        ),
+        (
+            r"TOC \u",
+            &["Chapter", "Section", "Outline two", "Outline one"][..],
+        ),
+    ] {
+        let body = format!(
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>{instruction}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>OLD TOC</w:t></w:r></w:p><w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>{headings}"#
+        );
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+        for (id, name, level) in [("Heading1", "Heading 1", 0), ("Heading2", "Heading 2", 1)] {
+            document
+                .set_style(
+                    StyleBuilder::paragraph(id, name).paragraph_properties(CT_PPr {
+                        outline_lvl: Some(level),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        }
+        let report = document.rebuild_toc().unwrap();
+        assert_eq!(report.entry_count, expected.len(), "{instruction}");
+        let entries = document
+            .paragraphs()
+            .into_iter()
+            .filter(|paragraph| {
+                paragraph
+                    .style_id()
+                    .is_some_and(|style| style.starts_with("TOC"))
+            })
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.split('\t').next().unwrap())
+                .collect::<Vec<_>>(),
+            expected,
+            "{instruction}"
+        );
+        let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.rebuild_toc().unwrap().entry_count,
+            expected.len(),
+            "reopened {instruction}"
+        );
+        let reopened_entries = reopened
+            .paragraphs()
+            .into_iter()
+            .filter(|paragraph| {
+                paragraph
+                    .style_id()
+                    .is_some_and(|style| style.starts_with("TOC"))
+            })
+            .map(|paragraph| paragraph.text())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reopened_entries
+                .iter()
+                .map(|entry| entry.split('\t').next().unwrap())
+                .collect::<Vec<_>>(),
+            expected,
+            "reopened {instruction}"
+        );
+    }
 }
