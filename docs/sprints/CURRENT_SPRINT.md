@@ -55,14 +55,51 @@ takeover on 2026-10-22. Codex is the sole product writer. Grok may propose
 mechanical documentation in isolation, subject to Codex validation. Original
 worker identities and completed independent reviews remain historical facts.
 The exhausted three-pass sprint-review bound is unchanged. Focused feature
-microscopes do not reset it. Native Word and F-X195 font qualification remain
-unavailable, so the sprint stays blocked for acceptance.
+microscopes do not reset it. Native Word qualification remains unavailable,
+so the sprint stays blocked for acceptance. The documented independent CI
+producer now supplies authenticated F-X195 inputs locally. Their installed
+suite outcomes are recorded separately from native Word qualification.
 
 Within the authoring group, F-285 comes first. Complete and integrate F-285
 through its scoped dependency-prefix checkpoint before F-286 starts. F-287
 starts only after F-286 leaves the shared content-control files. The three
 stories stay serial. F-X249's bounded existing-control fill repair does not
 replace these authoring contracts.
+
+## Codex implementation checkpoint, 2026-10-22
+
+The latest instruction changes are committed in61306b3b. F-X260's read-handle,
+physical-owner and atomic publication repairs are in8d53993f. F-X259's Issue400
+TOC range correction and measured archive refresh are ina4e4deff. Independent
+feature microscopes are clean. These are local reviewed checkpoints, not
+feature completion or final sprint approval. Run state now retains reviewed
+for both stories, while this delivery table stays in-progress until acceptance.
+Original consumed worker identities and integration receipts remain intact.
+
+Current source passed6732native tests, with73ignored, both WASM configurations,
+minimal layout, workspace lint/docs, README validation and dependency policy.
+All49hashes and seven deterministic pixel buffers match. Allseven Issue389
+release edit ratios and allthree Issue398 read ratios are strictly below3.
+Independent font inputs were rebuilt by the pinned CI producer. The full
+installed Word suite passes1061tests and the full PowerPoint suite passes1028.
+Current corpus observations and clean-tree packaging remain pending at this
+checkpoint.
+Native Word evidence, the private unreduced Issue390 input and final acceptance
+remain pending. No fourth sprint review, push, merge or publication occurred.
+
+## Requested release follow-up, 2026-10-22
+
+After sprint acceptance and closure, the user requests minor releases of both
+Rust crate families and their matching PyPI distributions. Prepare Word0.17.0
+and PowerPoint0.15.0 as the next-minor candidates from the current0.16.2 and
+0.14.2 carriers. Confirm registry availability before fixing these versions.
+Release preparation needs its normal approved plan, exact family version
+alignment, changelog and contributor inventory, packaging and build-only CI
+evidence. This request does not mark any current story done or bypass pending
+native Word qualification, integrated acceptance or the exhausted review bound.
+Only `/release` may publish after `/close-sprint`, with separate final approval
+at the reviewed clean main SHA. No version carrier or release tag is changed
+by recording this intent.
 
 ## Definition of done for this sprint
 
