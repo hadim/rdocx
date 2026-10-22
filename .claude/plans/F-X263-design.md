@@ -1,6 +1,6 @@
 # F-X263, Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.3
 **Size**: L
 **Depends on**: F-X259, F-X260, F-X261, F-X262, F-285, F-286, F-287
@@ -157,7 +157,8 @@ qualification pass2 accepts the bounded Word evidence with zero findings.
 Q25 permits at most two further independent final review passes,4and5.
 Record the clean provider-completion commit as the actual F-X263 Base at start.
 Implementation must not copy an old worker tree over the integrated providers.
-The new-version/full-sprint and hosted release-preparation gates remain due.
+Actual new-version local and hosted preparation gates are accepted below.
+Final independent eight-story review remains due.
 
 ## Acceptance criteria
 
@@ -253,8 +254,8 @@ a real consumer, producer and check. Historical contracts and new current
 assertions are separate. The exact five note headings remain Highlights,
 Added, Fixed, Compatibility and Contributors. Provider contracts are approved,
 and actual provider completion is recorded at Base2ddbb13e. No product decision
-remains in this plan. The release-preparation gates remain pending until their
-actual local and hosted observations are accepted.
+remains in this plan. The actual local and hosted preparation gates are accepted below. Publication
+remains a separate exact-main approval and external operation.
 
 ## Implementation checklist
 
@@ -264,9 +265,9 @@ actual local and hosted observations are accepted.
 - [x] Establish actual target-specific RED and preserve historical controls.
 - [x] Align carriers, current assertions, family notes and HLD impact.
 - [x] Qualify local archives, wheels/CLIs, installed consumers and scoped checks.
-- [ ] Obtain clean independent microscope and reviewed source-availability checkpoint.
-- [ ] Qualify actual hosted build-only jobs and downloaded artifacts.
-- [ ] Complete preparation records and applicable final metadata checks.
+- [x] Obtain clean independent microscope and reviewed source-availability checkpoint.
+- [x] Qualify actual hosted build-only jobs and downloaded artifacts.
+- [x] Complete preparation records and applicable final metadata checks.
 
 ## Open questions
 
@@ -288,7 +289,7 @@ configurations, warning-denied docs, README compilation and22archive inventories
 dependency policy pass. Installed local wheel qualifications remain recorded
 separately. The initial missing-viewer failure is retained, not relabeled.
 
-Commit this reviewed local implementation to obtain the clean source required
+At this historical local checkpoint, commit the reviewed implementation to obtain the clean source required
 by the genuine22-package locked verified publication dryrun. This is not
 feature completion or permission to push. Actual verified archives, external
 source-availability reconciliation, hosted build-only execution and downloaded
@@ -302,10 +303,41 @@ looked one directory above Cargo's actual tmp-crate output. That failed probe
 is retained separately. Corrected validation passed without rebuilding or
 substituting the earlier measurement archives.
 
-Prepare the structured source-availability receipt from the canonical worktree,
+The historical source-availability step prepared the structured receipt from the canonical worktree,
 where this sole-writer feature was implemented directly. Preserve the actual
 Base and reviewed implementation Head, with no fictitious worker squash. The
 integrator consumes the validated receipt and records this canonical checkpoint
 as reviewed, keeping delivery in-progress. Only the reviewed canonical sprint
 ref may be pushed without force for wheels.yml workflow_dispatch. Publication
 jobs must remain skipped. Hosted gates and final sprint acceptance stay pending.
+
+
+## Accepted release preparation, 2026-10-22
+
+All A1 through A8 preparation criteria are complete. Clean implementation
+082aafa9 supplies the genuinely verified22archives. Build-only hosted run
+[39792212063](https://github.com/tensorbee/rdocx/actions/runs/39792212063)
+executed exact source c93daae4080993d2852c67a60e6bd1e017b66e8a, with27deciding
+jobs successful and four publication jobs skipped. No tag, upload or release
+was created. The first completed API snapshot contained only30jobs and the
+strict watcher failed. A fresh complete31-job inventory met the original
+27success/fourSKIP checks without relaxing them or rerunning the workflow.
+That failed observation is retained separately.
+
+All26unique raw payloads were downloaded and authenticated against API artifact
+ZIP digests. Both exact six-wheel/one-sdist Python sets and all twelve CLI
+inventories pass their canonical validation. Aggregate copies are not counted.
+Matching host CLIs report0.16.3and0.14.3. Fresh dedicated downloaded-wheel
+environments pass42Word and44PowerPoint priority cases on each Python3.9and3.12,
+172calls total. Both3.12strict mypy and stub checks pass. Installed paths,
+RECORDs and native hashes match the downloaded artifacts, separately from
+local wheels. Complete local installed suites pass1063Word and1028PowerPoint.
+The source manifest authenticates all325qualified Cargo/crate files unchanged.
+
+Independent F-X263 microscope pass1 has zero defects, smells and nitpicks.
+Completion consumes these real producers, not executions relabeled at a later
+metadata commit. Actual logs, receipts, artifacts and retained failures live in
+ignored `.claude/scratch/S95.3-takeover-evidence/release-preparation/`.
+HLD10and15 reflect this contract. Affected completion metadata checks run after
+status changes. The independent final eight-story sprint review and close
+remain separate, followed by fresh release preflights and final approval.

@@ -20871,3 +20871,24 @@ F-X192 is carried and is not part of this grammar.
 **Hash harness.**49hashes and seven deterministic pixel buffers unchanged. No baseline rerecorded.
 
 **Notes for future sessions.** Q23 explicitly refuses all DTD declarations. XML tokenization, lexical validation, namespace conformance and schema validity are distinct. Supported opaque colon names remain. Store removal, general XPath and independent package-data rendering are outside this additive surface.
+
+
+### F-X263, Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases
+
+**Sprint.** S95.3
+**Completed.** 2026-10-22
+**Size.** L, estimated 3 to 5 additional days, actual not recorded
+
+**What was built.** Exact seven-crate Word0.16.3 and fifteen-crate shared/PowerPoint0.14.3 carriers, matching Python distributions, current examples, authenticated contribution inventories and reviewed family notes. Separate WASM versions and historical notes remain. Publication is a later approval and external operation.
+
+**Non-obvious choices.** Runtime/stub/export/default checks exposed missing Word exports/range declarations, an unusable factory constructor annotation, visible schema-default mismatch and a stale PPT typed return union after runtime suites passed. Minimal declaration/default metadata corrections retain the approved mutation contracts. Notes disclose boxed BodyContent variants, CommentRef resolution and other actual source compatibility boundaries despite patch numbering.
+
+**Deviations from the design plan.** No new runtime API. Existing binding declaration corrections implement the approved contract. Earlier failed builds, typing probes and incomplete API job inventory remain historical failures, separate from successful artifacts.
+
+**Spec sections touched.** docs/hld/10-bindings-spec.md and docs/hld/15-build-and-toolchain.md, exact approved impact.
+
+**Tests.** Target-specific original-source RED and fixed-source GREEN pass. Actual local union has6732native passes/73ignored,1063Word and1028PowerPoint installed passes, priorities on3.9/3.12, strict typing/stubs, bothWASM, minimal layout, lint/docs/README,192policy tests with2skips and dependency policy. Genuine clean082aafa9 locked publish dryrun verifies22archives, largest4900980bytes, all below10MiB. Independent feature microscope pass1 has zero findings. Actual build-only hosted39792212063 at c93daae4 has27deciding jobs successful/fourpublicationSKIP,26unique authenticated payloads and exact Python/CLI inventories. Fresh downloaded-wheel installs pass172priority calls across3.9/3.12 and both strict typing/stub suites. Completion metadata checks follow status edits. Source correspondence retains real producer identities.
+
+**Hash harness.**49semantic/render hashes and seven deterministic pixel buffers unchanged. No baseline recorded.
+
+**Notes for future sessions.** Process-only94816e4e sharpens existing implementation, microscope and binding reference instructions after the release typing/default gap. Concrete typed factory/property calls, public export/stub agreement and observable omission defaults are now explicit. This trigger is separate from product repairs. Earlier provider evidence and native limits remain bounded. All eight implementation stories complete, while independent final sprint review, closure and separately approved publication remain due.

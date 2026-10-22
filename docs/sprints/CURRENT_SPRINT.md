@@ -35,7 +35,7 @@ provisionally, making the expanded estimate 31 to 44 developer-days.
 | F-285 | Content control creation and lifecycle | L | done | - |
 | F-286 | Rich, repeating, and typed content controls | L | done | - |
 | F-287 | Custom XML stores and data binding authoring | L | done | - |
-| F-X263 | Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases | L | in-progress | codex |
+| F-X263 | Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases | L | done | - |
 
 ## Sequencing note
 
@@ -148,6 +148,25 @@ dryrun. All archives authenticate that source, match the recorded inventories
 and remain below10MiB. F-X263 still waits for actual hosted build-only execution
 and downloaded artifact qualification. Its canonical source-availability
 checkpoint does not complete the story or authorize tags or publication.
+
+## All eight implementations accepted, 2026-10-22
+
+F-X263 now completes the eight-story delivery union. Actual clean-source
+verified22-package dryrun and hosted run39792212063 pass. The hosted run has
+27successful deciding jobs, four skipped publication jobs and26authenticated
+unique payloads. Downloaded host wheels pass172priority calls over Python3.9
+and3.12, plus both strict typing/stub suites. Complete local installed suites
+pass1063Word and1028PowerPoint. Native6732pass/73ignored, applicable provider
+oracles, bothWASM, minimal layout, lint/docs/README,192policy tests with2skips,
+dependency policy,49hashes and seven deterministic pixels are source-qualified.
+The advisory421-slide SSIM trend remains below target, not passed fidelity.
+Historical checkpoint paragraphs above retain what was pending at those times.
+
+All eight stories are done with no carries. Final independent sprint review
+pass4, main merge and sprint closure remain due. Publication has not started.
+The complete M24 stability gate remains F-310/S99. Issue390's private unreduced
+input stays unqualified and the issue remains open. Later roadmap work has
+not started. Fresh final release approval is still required at clean main.
 
 ## Requested release follow-up, 2026-10-22
 

@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 29 | 0 | 25 |
-| X, Cross-cutting | 277 | 267 | 1 | 5 |
-| **Total** | **608** | **546** | **1** | **57** |
+| X, Cross-cutting | 277 | 268 | 0 | 5 |
+| **Total** | **608** | **547** | **0** | **57** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -831,5 +831,5 @@ HLD14 contract before adopting contributor changes.
 | F-X260 | Restore live handles and bound structural edit cost | S95.3 | L | done |
 | F-X261 | Resolve Word package preservation and inspection contributions | S95.3 | L | done |
 | F-X262 | Resolve PowerPoint authoring and table-render contributions | S95.3 | L | done |
-| F-X263 | Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases | S95.3 | L | in-progress |
+| F-X263 | Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases | S95.3 | L | done |
 <!-- AUTOGEN:backlog-MX END -->
