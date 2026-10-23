@@ -3248,6 +3248,13 @@ impl Presentation {
             "invalid presentation at byte save boundary: {:?}",
             self.validate()
         );
+        let mut output = Cursor::new(Vec::new());
+        self.saved_package()?.write_to(&mut output)?;
+        Ok(output.into_inner())
+    }
+
+    /// The package [`Presentation::to_bytes`] writes.
+    fn saved_package(&self) -> Result<OpcPackage> {
         let package_signatures_invalidated = self.package_signatures_invalidated
             || self.retained_package_signature_would_be_invalidated()?;
         let mut package = self.staged_package(true)?;
@@ -3255,9 +3262,47 @@ impl Presentation {
             &mut package,
             package_signatures_invalidated,
         )?;
+        Ok(package)
+    }
+
+    /// The package that reading back what [`Presentation::to_bytes`] writes
+    /// opens, or the error it raises. It is reread in memory when what the
+    /// last opening parsed is known.
+    fn saved_package_read_back(&self) -> Result<OpcPackage> {
+        debug_assert!(
+            self.save_invariants_preserved(),
+            "invalid presentation at byte save boundary: {:?}",
+            self.validate()
+        );
+        let package = self.saved_package()?;
+        if let Some(parsed) = self.parsed.as_deref() {
+            return Ok(package.reread(&parsed.package)?);
+        }
         let mut output = Cursor::new(Vec::new());
         package.write_to(&mut output)?;
-        Ok(output.into_inner())
+        output.set_position(0);
+        Ok(OpcPackage::from_reader(output)?)
+    }
+
+    /// Whether this presentation and `other` save to the same bytes: what
+    /// comparing their [`Presentation::to_bytes`], this one's first, gives,
+    /// without writing either ZIP. Packages read back are equal exactly when
+    /// the bytes written are.
+    #[doc(hidden)]
+    pub fn saves_as(&self, other: &Presentation) -> Result<bool> {
+        let same: Result<bool> =
+            (|| Ok(self.saved_package_read_back()? == other.saved_package_read_back()?))();
+        // Debug builds, which run the binding tests, compare the bytes too.
+        #[cfg(debug_assertions)]
+        match (
+            &same,
+            (|| Ok::<_, Error>(self.to_bytes()? == other.to_bytes()?))(),
+        ) {
+            (Ok(same), Ok(bytes)) => assert_eq!(*same, bytes, "saves_as differs from to_bytes"),
+            (Err(same), Err(bytes)) => assert_eq!(same.to_string(), bytes.to_string()),
+            (same, bytes) => panic!("saves_as gives {same:?} where to_bytes gives {bytes:?}"),
+        }
+        same
     }
 
     /// Returns the exact modern package class carried by the main part.
@@ -11636,7 +11681,7 @@ impl Presentation {
         )
         .ok_or_else(|| invalid_shape_mutation(OPERATION, "placeholder owner changed"))? =
             ShapeTreeChild::Picture(picture);
-        candidate.to_bytes()?;
+        candidate.saved_package_read_back()?;
         *self = candidate;
         Ok(())
     }
@@ -13004,8 +13049,14 @@ impl Presentation {
                 message: format!("staged diagram graph is invalid: {issues:?}"),
             });
         }
-        let reopened = Self::from_bytes(&staged.to_bytes()?)?;
-        *self = reopened;
+        *self = staged.checked_commit(|staged| {
+            debug_assert!(
+                staged.save_invariants_preserved(),
+                "invalid presentation at byte save boundary: {:?}",
+                staged.validate()
+            );
+            staged.reopen(staged.saved_package()?)
+        })?;
         Ok(())
     }
 
