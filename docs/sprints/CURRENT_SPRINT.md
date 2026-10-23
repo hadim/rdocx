@@ -45,7 +45,7 @@ It starts with the first `/start-feature`. F-X267 remains the largest repair.
 | F-288 | Legacy form field creation | M | pending | - |
 | F-289 | Modern Word form authoring | L | pending | - |
 | F-290 | Mail-merge package and data-source authoring | M | pending | - |
-| F-X264 | Repair Word defaults package inspection and comment projection | L | pending | - |
+| F-X264 | Repair Word defaults package inspection and comment projection | L | in-progress | grok |
 | F-X265 | Preserve fragment relationship targets and duplicate styles | M | pending | - |
 | F-X266 | Bound Word body reads and structural edit cost | L | pending | - |
 | F-X267 | Bound PowerPoint mutation cost across public publishers | L | pending | - |
