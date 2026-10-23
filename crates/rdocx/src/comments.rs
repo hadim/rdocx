@@ -666,7 +666,9 @@ impl Document {
     /// Return checked paired-marker ranges in physical story order.
     ///
     /// Unmatched, reversed and crossing markers are rejected. Unsupported
-    /// marker families remain opaque and are not included.
+    /// marker families remain opaque and are not included, nor is a comment
+    /// whose markers are in different story owners, such as a comment range
+    /// that runs from one table cell into another.
     pub fn story_ranges(&self) -> Result<Vec<StoryRangeRef>> {
         Self::story_ranges_in(&self.story_range_paragraphs()?)
     }
@@ -676,6 +678,30 @@ impl Document {
     pub(crate) fn story_ranges_in(
         paragraphs: &[(ContentLocation, Vec<u8>)],
     ) -> Result<Vec<StoryRangeRef>> {
+        let scanned = paragraphs
+            .iter()
+            .map(|(location, xml)| scan_story_markers(xml, location))
+            .collect::<Result<Vec<_>>>()?;
+        // A comment range may leave its owner, as one across table cells
+        // does. Its one start and one end keep their ordinals but form no
+        // story range. Any other marker set is paired and checked below.
+        let mut comment_markers = HashMap::<i32, Vec<(&crate::StoryId, bool)>>::new();
+        for marker in scanned.iter().flatten() {
+            if let StoryRangeKind::Comment { id } = marker.kind {
+                comment_markers
+                    .entry(id)
+                    .or_default()
+                    .push((marker.location.story(), marker.start));
+            }
+        }
+        let cross_owner_comments = comment_markers
+            .into_iter()
+            .filter(|(_, markers)| {
+                matches!(markers.as_slice(), [(left, left_start), (right, right_start)]
+                    if left != right && left_start != right_start)
+            })
+            .map(|(id, _)| id)
+            .collect::<HashSet<_>>();
         let mut ranges = Vec::new();
         let mut open = Vec::<StoryMarker>::new();
         let mut story = None;
@@ -684,7 +710,7 @@ impl Document {
         let mut comment_ids = HashSet::new();
         let mut permission_ids = HashSet::new();
         let mut marker_ordinal = 0usize;
-        for (location, xml) in paragraphs {
+        for ((location, _), markers) in paragraphs.iter().zip(scanned) {
             if story.as_ref() != Some(location.story()) {
                 if !open.is_empty() {
                     return Err(Error::Other(
@@ -694,9 +720,13 @@ impl Document {
                 story = Some(location.story().clone());
                 marker_ordinal = 0;
             }
-            for mut marker in scan_story_markers(xml, location)? {
+            for mut marker in markers {
                 marker.ordinal = marker_ordinal;
                 marker_ordinal += 1;
+                if matches!(marker.kind, StoryRangeKind::Comment { id } if cross_owner_comments.contains(&id))
+                {
+                    continue;
+                }
                 if marker.start {
                     open.push(marker);
                     continue;

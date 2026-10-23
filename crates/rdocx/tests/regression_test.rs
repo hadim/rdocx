@@ -61513,9 +61513,21 @@ fn comment_anchor_runs_across_table_cells_in_physical_order() {
             Some(expected),
             "{label}"
         );
-        // Moving a range whose ends are in two owners, or placing that
-        // range, refuses and leaves the document unchanged.
+        // A pair whose ends are in two owners is no story range. Moving it
+        // or placing its range refuses and leaves the document unchanged.
         let cross_owner = range.start.location.story() != range.end.location.story();
+        assert_eq!(
+            document
+                .story_ranges()
+                .unwrap()
+                .iter()
+                .any(|entry| matches!(
+                    entry.kind(),
+                    rdocx::StoryRangeKind::Comment { id: found } if *found == id
+                )),
+            !cross_owner,
+            "{label}"
+        );
         if cross_owner {
             assert!(
                 document
