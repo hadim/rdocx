@@ -1,0 +1,3 @@
+open    25 paragraphs:    28.80 ms
+open   100 paragraphs:    83.27 ms
+open  1000 paragraphs:   736.61 ms

@@ -1,0 +1,10 @@
+[package]
+name = "opcprobe"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+oxml-opc = { path = "/Users/hadim/Code/libs/rdocx/worktrees/403-commit/crates/oxml-opc" }
+zip = { version = "9.0.3", default-features = false, features = ["deflate"] }
+
+[workspace]

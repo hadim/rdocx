@@ -1,0 +1,581 @@
+=== Table.indent
+root samples 4123 in 2 root frames
+  copy  0.4%  inv 99.6%  save  0.0%  stage  0.0%  reopen  0.0%  rust  0.0%  edit  0.0%
+[copy] entered through:
+     0.4%  uPKplpui_::rdocx::document::Document::clone_for_staging
+[inv] entered through:
+    99.6%  cvl::_rdocx::document::PyDocument::adopt_property_edit
+=== Table.add_row
+root samples 5276 in 11 root frames
+  copy  0.4%  inv 34.5%  save  0.0%  stage 37.3%  reopen 14.7%  rust 12.9%  edit  0.1%
+[copy] entered through:
+     0.3%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+[inv] entered through:
+    34.5%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.0%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[stage] entered through:
+    20.4%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+    16.9%  uPKplpui_::rdocx::document::Document::flush_to_package
+[reopen] entered through:
+    14.7%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+    12.9%  uPKplpui_::rdocx::document::Document::collect_story_item_snapshots
+     0.0%  zK4KTD5M0::smallvec::SmallVec::lLMf9h::oxml_py_support::PathSeg::ENtNt::core::clone::Clone::clone::cvl::_rdocx
+[edit] entered through:
+     0.1%  -
+=== Row.height
+root samples 4198 in 2 root frames
+  copy  0.3%  inv 99.7%  save  0.0%  stage  0.0%  reopen  0.0%  rust  0.0%  edit  0.0%
+[copy] entered through:
+     0.3%  uPKplpui_::rdocx::document::Document::clone_for_staging
+[inv] entered through:
+    99.7%  cvl::_rdocx::document::PyDocument::adopt_property_edit
+[edit] entered through:
+     0.0%  -
+=== Cell.text
+root samples 5413 in 10 root frames
+  copy  0.5%  inv 29.0%  save  0.0%  stage 52.6%  reopen 12.4%  rust  5.4%  edit  0.0%
+[copy] entered through:
+     0.3%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+[inv] entered through:
+    29.0%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.0%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[stage] entered through:
+    24.7%  NtCs::uPKplpui_::rdocx::comments::document::Document::reconcile_comment_removal
+    16.7%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+    11.3%  uPKplpui_::rdocx::document::Document::flush_to_package
+[reopen] entered through:
+    12.4%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+     5.4%  uPKplpui_::rdocx::document::Document::collect_story_item_snapshots
+[edit] entered through:
+     0.0%  -
+=== Cell.replace_text
+root samples 6380 in 4 root frames
+  copy  0.1%  inv  8.9%  save  0.0%  stage 15.9%  reopen  3.6%  rust 67.4%  edit  4.1%
+[copy] entered through:
+     0.1%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.0%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+     8.9%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+[stage] entered through:
+     9.9%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+     6.0%  uPKplpui_::rdocx::document::Document::flush_to_package
+[reopen] entered through:
+     3.6%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+    31.9%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+    16.9%  U7RUE::em_1::document::CT_Document::from_xml
+    14.5%  uPKplpui_::rdocx::document::scan_story_items
+     3.0%  uPKplpui_::rdocx::document::modeled_owner_spans
+     0.9%  U7RUE::em_1::document::CT_Document::to_xml
+[edit] entered through:
+     4.1%  -
+=== Cell.add_paragraph
+root samples 6208 in 4 root frames
+  copy  0.2%  inv 15.7%  save  0.0%  stage  0.0%  reopen  0.0%  rust 78.9%  edit  5.2%
+[copy] entered through:
+     0.2%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+     0.0%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+    15.7%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+[rust] entered through:
+    52.8%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+    25.6%  uPKplpui_::rdocx::document::scan_story_items
+     0.2%  uPKplpui_::rdocx::document::Document::story_sources
+     0.2%  U7RUE::em_1::document::CT_Document::to_xml
+     0.0%  alloc::collections::btree::map::BTreeMap::core::clone::Clone::clone::clone_subtree::string::String::NtNtBe_5alloc6GlobalECsdK9u::rdocx
+[edit] entered through:
+     5.2%  -
+=== Document.insert_section
+root samples 5645 in 8 root frames
+  copy  0.6%  inv 40.1%  save  0.0%  stage 42.3%  reopen 17.0%  rust  0.0%  edit  0.0%
+[copy] entered through:
+     0.4%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+    40.1%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.1%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[stage] entered through:
+    23.0%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+    19.2%  uPKplpui_::rdocx::document::Document::flush_to_package
+[reopen] entered through:
+    17.0%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+=== Document.set_header
+root samples 5941 in 11 root frames
+  copy  0.8%  inv 28.7%  save  0.0%  stage 58.1%  reopen 12.4%  rust  0.0%  edit  0.0%
+[copy] entered through:
+     0.5%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.2%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+    28.7%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.0%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[stage] entered through:
+    27.7%  NtCs::uPKplpui_::rdocx::comments::document::Document::reconcile_comment_removal
+    16.6%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+    13.8%  uPKplpui_::rdocx::document::Document::flush_to_package
+[reopen] entered through:
+    12.4%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[edit] entered through:
+     0.0%  -
+=== SectionHandle.set_page_border
+root samples 5546 in 5 root frames
+  copy  0.3%  inv 46.4%  save 53.2%  stage  0.0%  reopen  0.0%  rust  0.0%  edit  0.0%
+[copy] entered through:
+     0.2%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+    46.4%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.1%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[save] entered through:
+    53.2%  uPKplpui_::rdocx::document::Document::to_bytes
+[edit] entered through:
+     0.0%  -
+=== HeaderFooter.add_paragraph
+root samples 5735 in 10 root frames
+  copy  0.6%  inv 36.1%  save  0.0%  stage 45.2%  reopen 15.3%  rust  2.7%  edit  0.1%
+[copy] entered through:
+     0.5%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+     0.0%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+    36.1%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.0%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[stage] entered through:
+    24.6%  uPKplpui_::rdocx::document::Document::flush_to_package
+    20.7%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+[reopen] entered through:
+    15.3%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+     1.8%  uPKplpui_::rdocx::document::Document::stories
+     0.7%  uPKplpui_::rdocx::document::Document::story_sources
+     0.1%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+     0.1%  U7RUE::em_1::header_footer::CT_HdrFtr::from_xml
+     0.0%  U7RUE::em_1::document::CT_Document::from_xml
+[edit] entered through:
+     0.1%  -
+=== Document.insert_document
+root samples 5871 in 6 root frames
+  copy  0.5%  inv 16.2%  save 31.5%  stage 28.4%  reopen  9.2%  rust 12.8%  edit  1.4%
+[copy] entered through:
+     0.4%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+     0.0%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+    16.1%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.0%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[save] entered through:
+    31.5%  uPKplpui_::rdocx::document::Document::to_bytes
+[stage] entered through:
+    19.1%  uPKplpui_::rdocx::document::Document::flush_to_package
+     9.3%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+[reopen] entered through:
+     6.7%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+     2.6%  uPKplpui_::rdocx::document::Document::from_package
+[rust] entered through:
+     3.2%  uPKplpui_::rdocx::document::Document::collect_story_item_snapshots
+     2.9%  U7RUE::em_1::document::CT_Document::from_xml
+     1.8%  uPKplpui_::rdocx::document::modeled_owner_spans
+     1.3%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+     1.3%  uPKplpui_::rdocx::document::validated_content_boundary
+[edit] entered through:
+     1.4%  -
+=== Document.add_heading_hyperlink
+root samples 6389 in 9 root frames
+  copy  0.3%  inv 10.2%  save  0.0%  stage 43.9%  reopen 13.5%  rust 28.6%  edit  3.5%
+[copy] entered through:
+     0.2%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+     0.0%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+    10.2%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.0%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[stage] entered through:
+    21.4%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+    14.6%  uPKplpui_::rdocx::document::Document::flush_to_package
+     7.9%  NtCs::uPKplpui_::rdocx::comments::document::Document::reconcile_comment_removal
+[reopen] entered through:
+    13.5%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+     7.5%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+     6.7%  uPKplpui_::rdocx::document::scan_story_items
+     3.9%  U7RUE::em_1::document::CT_Document::from_xml
+     3.2%  uPKplpui_::rdocx::document::Document::stories
+     2.6%  uPKplpui_::rdocx::document::modeled_owner_spans
+[edit] entered through:
+     3.5%  -
+=== Document.move_content
+root samples 5918 in 6 root frames
+  copy  0.5%  inv 28.1%  save  0.0%  stage 36.0%  reopen 12.0%  rust 22.5%  edit  0.8%
+[copy] entered through:
+     0.3%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+[inv] entered through:
+    28.0%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.1%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[stage] entered through:
+    19.4%  uPKplpui_::rdocx::document::Document::flush_to_package
+    16.6%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+[reopen] entered through:
+    12.0%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+     5.2%  uPKplpui_::rdocx::document::Document::collect_story_item_snapshots
+     5.1%  U7RUE::em_1::document::CT_Document::from_xml
+     3.3%  uPKplpui_::rdocx::document::modeled_owner_spans
+     2.3%  uPKplpui_::rdocx::document::validated_content_boundary
+     2.2%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+[edit] entered through:
+     0.8%  -
+=== Document.set_content_control_tag
+root samples 5908 in 4 root frames
+  copy  0.3%  inv 18.3%  save 37.9%  stage 24.4%  reopen  8.3%  rust  8.3%  edit  2.6%
+[copy] entered through:
+     0.2%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+[inv] entered through:
+    18.3%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.0%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[save] entered through:
+    37.9%  uPKplpui_::rdocx::document::Document::to_bytes
+[stage] entered through:
+    13.3%  uPKplpui_::rdocx::document::Document::flush_to_package
+    11.1%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+[reopen] entered through:
+     8.3%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+     3.4%  U7RUE::em_1::document::CT_Document::from_xml
+     2.3%  uPKplpui_::rdocx::document::modeled_owner_spans
+     1.0%  uPKplpui_::rdocx::document::Document::stories
+     0.7%  uPKplpui_::rdocx::document::scan_story_items
+     0.6%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+[edit] entered through:
+     2.6%  -
+=== Run.text
+root samples 5527 in 3 root frames
+  copy  0.1%  inv 30.8%  save 67.5%  stage  0.0%  reopen  0.0%  rust  1.6%  edit  0.0%
+[copy] entered through:
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+     0.1%  uPKplpui_::rdocx::document::Document::clone_for_staging
+[inv] entered through:
+    30.7%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.1%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[save] entered through:
+    67.5%  uPKplpui_::rdocx::document::Document::to_bytes
+[rust] entered through:
+     1.6%  uPKplpui_::rdocx::document::Document::stories
+=== Paragraph.add_run
+root samples 4878 in 1 root frames
+  copy  0.7%  inv 77.7%  save  0.0%  stage  0.0%  reopen  0.0%  rust 21.3%  edit  0.3%
+[copy] entered through:
+     0.5%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.2%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+    77.6%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.1%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[rust] entered through:
+     8.0%  uPKplpui_::rdocx::document::Document::stories
+     5.9%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+     5.5%  uPKplpui_::rdocx::document::scan_story_items
+     1.9%  uPKplpui_::rdocx::document::Document::story_sources
+[edit] entered through:
+     0.3%  -
+=== Paragraph.replace_text
+root samples 6262 in 6 root frames
+  copy  0.2%  inv 15.3%  save  0.0%  stage 28.7%  reopen  6.4%  rust 46.5%  edit  2.9%
+[copy] entered through:
+     0.1%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.0%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+     0.0%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+[inv] entered through:
+    15.2%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.0%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[stage] entered through:
+    18.0%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+    10.7%  uPKplpui_::rdocx::document::Document::flush_to_package
+[reopen] entered through:
+     6.4%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+    30.8%  U7RUE::em_1::document::CT_Document::from_xml
+     5.4%  uPKplpui_::rdocx::document::modeled_owner_spans
+     4.1%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+     2.8%  uPKplpui_::rdocx::document::scan_story_items
+     1.6%  U7RUE::em_1::document::CT_Document::to_xml
+[edit] entered through:
+     2.9%  -
+=== Document.add_footnote
+root samples 5817 in 1 root frames
+  copy  0.6%  inv 31.8%  save  0.0%  stage 29.4%  reopen 13.6%  rust 23.3%  edit  1.2%
+[copy] entered through:
+     0.4%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+[inv] entered through:
+    31.7%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.1%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[stage] entered through:
+    18.4%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+    11.0%  uPKplpui_::rdocx::document::Document::flush_to_package
+     0.0%  uPKplpui_::rdocx::document::Document::refresh_related_story_caches
+[reopen] entered through:
+    13.6%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+     5.8%  U7RUE::em_1::document::CT_Document::from_xml
+     5.7%  uPKplpui_::rdocx::document::scan_story_items
+     4.8%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+     3.8%  uPKplpui_::rdocx::document::modeled_owner_spans
+     1.7%  uPKplpui_::rdocx::document::Document::stories
+[edit] entered through:
+     1.2%  -
+=== FootnoteEndnote.add_paragraph
+root samples 2932 in 9 root frames
+  copy  0.4%  inv 34.7%  save  0.0%  stage 43.8%  reopen 15.0%  rust  6.1%  edit  0.0%
+[copy] entered through:
+     0.2%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+     0.0%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+    34.5%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.1%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[stage] entered through:
+    24.0%  uPKplpui_::rdocx::document::Document::flush_to_package
+    19.8%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+[reopen] entered through:
+    15.0%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+     5.3%  uPKplpui_::rdocx::document::Document::stories
+     0.9%  uPKplpui_::rdocx::document::Document::story_sources
+     0.0%  U7RUE::em_1::footnotes::CT_Footnotes::from_xml
+=== Document.set_font
+root samples 5784 in 6 root frames
+  copy  0.3%  inv 33.1%  save 66.6%  stage  0.0%  reopen  0.0%  rust  0.1%  edit  0.1%
+[copy] entered through:
+     0.2%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+    33.0%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.0%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[save] entered through:
+    66.6%  uPKplpui_::rdocx::document::Document::to_bytes
+[rust] entered through:
+     0.1%  N::U7RUE::em_1::font_table::FontTable::to_xml
+[edit] entered through:
+     0.1%  -
+=== Document.add_picture
+root samples 6219 in 7 root frames
+  copy  0.3%  inv 16.4%  save  0.0%  stage 32.9%  reopen  6.9%  rust 31.6%  edit 12.0%
+[copy] entered through:
+     0.2%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+    16.3%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.0%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[stage] entered through:
+    21.9%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+    11.0%  uPKplpui_::rdocx::document::Document::flush_to_package
+[reopen] entered through:
+     6.9%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+    12.4%  uPKplpui_::rdocx::document::Document::validate_internal_relationship_for_story
+     5.8%  U7RUE::em_1::document::CT_Document::from_xml
+     3.6%  U7RUE::em_1::text::CT_P::from_xml_fragment
+     2.5%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+     2.3%  uPKplpui_::rdocx::document::scan_story_items
+[edit] entered through:
+    12.0%  -
+=== Document.set_picture_size
+root samples 4985 in 5 root frames
+  copy  0.3%  inv 15.1%  save  0.0%  stage 19.2%  reopen  6.5%  rust 37.3%  edit 21.5%
+[copy] entered through:
+     0.3%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.0%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+     0.0%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+    15.1%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.0%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[stage] entered through:
+    10.5%  uPKplpui_::rdocx::document::Document::flush_to_package
+     8.7%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+[reopen] entered through:
+     6.5%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+    21.0%  uPKplpui_::rdocx::document::Document::validate_internal_relationship_for_story
+     6.9%  U7RUE::em_1::text::CT_P::from_xml_fragment
+     2.6%  U7RUE::em_1::document::CT_Document::from_xml
+     2.0%  uPKplpui_::rdocx::document::scan_story_items_with_scope
+     1.8%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+[edit] entered through:
+    21.5%  -
+=== Document.move_comment
+root samples 6133 in 32 root frames
+  copy  0.3%  inv  4.1%  save  0.0%  stage 11.9%  reopen  1.7%  rust 77.6%  edit  4.5%
+[copy] entered through:
+     0.2%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+[inv] entered through:
+     4.0%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.0%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[stage] entered through:
+     9.5%  uPKplpui_::rdocx::document::Document::flush_to_package
+     2.3%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+[reopen] entered through:
+     1.7%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+    26.2%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+    23.6%  uPKplpui_::rdocx::document::scan_story_items
+     9.7%  uPKplpui_::rdocx::document::modeled_owner_spans
+     8.6%  uPKplpui_::rdocx::document::Document::story_sources
+     3.0%  U7RUE::em_1::document::CT_Document::from_xml
+[edit] entered through:
+     4.5%  -
+=== Document.add_comment
+root samples 4606 in 9 root frames
+  copy  1.2%  inv 98.7%  save  0.0%  stage  0.0%  reopen  0.0%  rust  0.1%  edit  0.1%
+[copy] entered through:
+     0.8%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.2%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+[inv] entered through:
+    98.4%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.2%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[rust] entered through:
+     0.0%  U7RUE::em_1::text::CT_P::from_xml_with_prefixes_and_root
+     0.0%  uPKplpui_::rdocx::document::Document::flush_dirty_related_story_models
+     0.0%  U7RUE::em_1::text::CT_P::to_xml::alloc::vec::Vec
+[edit] entered through:
+     0.1%  -
+=== Document.restart_numbering
+root samples 4299 in 3 root frames
+  copy  0.5%  inv 21.1%  save 46.5%  stage  0.0%  reopen  0.0%  rust 31.9%  edit  0.0%
+[copy] entered through:
+     0.3%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+     0.0%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+    21.1%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+[save] entered through:
+    46.5%  uPKplpui_::rdocx::document::Document::to_bytes
+[rust] entered through:
+    31.9%  uPKplpui_::rdocx::document::Document::validate_numbering_graph
+=== Document.accept_revision_id
+root samples 6034 in 5 root frames
+  copy  0.3%  inv 23.3%  save  0.0%  stage 59.3%  reopen  9.8%  rust  5.8%  edit  1.5%
+[copy] entered through:
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+     0.1%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+[inv] entered through:
+    23.2%  cvl::_rdocx::document::PyDocument::prepare_word_revision
+     0.1%  cvl::_rdocx::document::PyDocument::commit_word_revision
+[stage] entered through:
+    26.6%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+    16.7%  NtCs::uPKplpui_::rdocx::comments::document::Document::reconcile_comment_removal
+    16.0%  uPKplpui_::rdocx::document::Document::flush_to_package
+[reopen] entered through:
+     9.8%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+     4.1%  U7RUE::em_1::document::CT_Document::from_xml
+     1.3%  nAj5kJTqS::hashbrown::map::HashMap::alloc::string::String::BKTri5B3M::std::hash::random::RandomState::core::clone::Clone::clone::uPKplpui_::rdocx
+     0.3%  U7RUE::em_1::document::CT_Document::to_xml
+[edit] entered through:
+     1.5%  -
+=== Document.move_content_control
+root samples 5293 in 5 root frames
+  copy  0.6%  inv  0.0%  save 59.1%  stage 10.4%  reopen  0.0%  rust 15.5%  edit 14.5%
+[copy] entered through:
+     0.3%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.2%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document::cvl::_rdocx
+     0.1%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+[save] entered through:
+    59.1%  uPKplpui_::rdocx::document::Document::to_bytes
+[stage] entered through:
+    10.4%  uPKplpui_::rdocx::document::Document::flush_to_package
+[rust] entered through:
+     4.7%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+     3.2%  uPKplpui_::rdocx::document::Document::stories
+     2.5%  uPKplpui_::rdocx::document::validated_content_boundary
+     2.2%  uPKplpui_::rdocx::document::scan_story_items
+     1.5%  uPKplpui_::rdocx::document::Document::story_sources
+[edit] entered through:
+    14.5%  -
+=== Document.set_hyperlink_url
+root samples 3673 in 2 root frames
+  copy  0.2%  inv  0.0%  save  0.0%  stage 58.7%  reopen 17.9%  rust 18.5%  edit  4.7%
+[copy] entered through:
+     0.2%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+     0.1%  uPKplpui_::rdocx::document::Document::clone_for_staging
+[stage] entered through:
+    34.6%  uPKplpui_::rdocx::document::Document::flush_to_package
+    24.1%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+[reopen] entered through:
+    17.9%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+     7.5%  U7RUE::em_1::document::CT_Document::from_xml
+     4.9%  uPKplpui_::rdocx::document::modeled_owner_spans
+     2.2%  uPKplpui_::rdocx::document::Document::stories
+     1.6%  uPKplpui_::rdocx::document::scan_story_items
+     1.5%  uPKplpui_::rdocx::document::scan_story_owners_with_special
+[edit] entered through:
+     4.7%  -
+=== Document.replace_image
+root samples 2567 in 1 root frames
+  copy  0.5%  inv  0.0%  save  0.0%  stage 68.3%  reopen 31.1%  rust  0.0%  edit  0.1%
+[copy] entered through:
+     0.2%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.2%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+[stage] entered through:
+    42.9%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+    25.4%  uPKplpui_::rdocx::document::Document::flush_to_package
+[reopen] entered through:
+    31.1%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[edit] entered through:
+     0.1%  -
+=== Document.add_numbering_definition
+root samples 3028 in 1 root frames
+  copy  2.1%  inv  0.0%  save  0.0%  stage  0.0%  reopen  0.0%  rust 97.8%  edit  0.1%
+[copy] entered through:
+     1.3%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.9%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+[rust] entered through:
+    97.8%  uPKplpui_::rdocx::document::Document::validate_numbering_graph
+[edit] entered through:
+     0.1%  -
+=== Document.link_style_to_numbering
+root samples 3181 in 7 root frames
+  copy  0.8%  inv  0.0%  save  0.0%  stage 31.5%  reopen  0.0%  rust 67.7%  edit  0.1%
+[copy] entered through:
+     0.4%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.4%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+[stage] entered through:
+    31.5%  uPKplpui_::rdocx::document::Document::flush_to_package
+[rust] entered through:
+    67.6%  uPKplpui_::rdocx::document::Document::validate_numbering_graph
+     0.0%  uPKplpui_::rdocx::style::validate_style_graph_change
+[edit] entered through:
+     0.1%  -
+=== Document.set_picture_sizes_for_relationship
+root samples 3258 in 7 root frames
+  copy  0.5%  inv  0.0%  save  0.0%  stage 61.8%  reopen 20.9%  rust 15.3%  edit  1.5%
+[copy] entered through:
+     0.3%  uPKplpui_::rdocx::document::Document::clone_for_staging
+     0.2%  core::ptr::drop_glue::uPKplpui_::rdocx::document::Document
+[stage] entered through:
+    33.6%  uPKplpui_::rdocx::document::Document::flush_to_package
+    28.2%  uPKplpui_::rdocx::document::Document::prepare_staged_package
+[reopen] entered through:
+    20.9%  uPKplpui_::rdocx::document::Document::reopen_prepared_staged_with_limits
+[rust] entered through:
+     8.8%  U7RUE::em_1::document::CT_Document::from_xml
+     5.8%  uPKplpui_::rdocx::document::modeled_owner_spans
+     0.7%  U7RUE::em_1::document::CT_Document::to_xml
+[edit] entered through:
+     1.5%  -

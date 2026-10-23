@@ -1,0 +1,67 @@
+Splice body edits and read direct body items without the whole body
+
+Paragraph.xml, insert_paragraph and remove_content cost a time in
+proportion to the document body (#407), as did Run.xml, Table.xml,
+Cell.xml, add_paragraph, insert_paragraph_before, remove_content_range,
+insert_table and add_table. A read serialized and scanned the whole body
+to find one item, after a linear search of the owner inventory and a
+story enumeration. A body edit cloned the document, then rebuilt the
+Python owner inventory from one body serialization, story scans and a
+reparse of every paragraph.
+
+A direct body paragraph, run, table or cell now serializes alone under
+the main part root, found through the inventory index. Its XML is the
+whole-source XML up to one visible byte change. The whole part declares
+w14 on its root when any of its bytes use it, so a fragment used to carry
+xmlns:w14 whenever any other body item did. A fragment, a cell included,
+now declares w14 only when the part root does or the fragment uses it,
+by name or in a markup compatibility list such as Requires="w14". Every
+other declaration is unchanged.
+
+insert_paragraph, Paragraph.insert_paragraph_before, add_paragraph,
+insert_table and add_table without a style, and remove_content and
+remove_content_range on plain direct paragraphs, now splice the owner
+inventory in place, a comments part present or not. Kept owners move
+their body routes and, after an inserted table, their cell story owners.
+The inserted owners are born and the removed ones retire, with the
+retirements, births and order the rebuild gives, so every handle keeps
+its validity and its stale message. The publication is prepared before
+the native edit, which then happens in place without a staged clone.
+remove_content and remove_content_range remove a plain paragraph in
+place in a document with comments too, since it holds no comment anchor.
+A table inserted in a main part with a text box story keeps the rebuild,
+since the inventory cannot place text box stories.
+
+Documents that python-docx writes for review took none of these routes.
+A paragraph inside a nested content control, such as a repeating section
+item, has no story route, and the snippets python-docx appends declare w
+again on a content control or a tracked change, which kept every local
+edit on the staged path. The splice now counts facade paragraphs from
+the body model and leaves an unrouted paragraph in place, and an
+insertion before a slot that owns no item starts where the previous
+slot's items end. A plain paragraph is a w:p owner and holds only w:r
+owners, so removing or replacing one leaves the snapshots of every other
+nested declaration owner intact: a local edit is now blocked only by a
+shadowed serializer prefix or by a nested declaration on a w:p or a w:r.
+
+Debug builds check every splice against the rebuild and every direct
+read against the whole-source read, and count the rebuilds and
+whole-source reads made outside those checks, which a test of the
+binding uses to prove each call took its direct route.
+
+A conservative publication still retires and rebirths the scopes of
+every owner, so an edit stays linear in the owners, about 0.2 us each.
+With body paragraphs of six runs, insert_paragraph takes 0.14, 1.28 and
+5.51 ms at 100, 1,000 and 4,000 paragraphs, against 45, 471 and 2,297 ms
+before, and a direct read takes about 0.1 ms at every size, against 13,
+126 and 524 ms. On the rdocx-skills scaling documents of 25 and 100
+paragraphs, with pictures, tables, comments, content controls and two
+sections, the seven edits, add_heading and add_page_break take 0.06 to
+0.43 ms and 0.11 to 0.57 ms, against 25 to 75 ms and 72 to 220 ms
+before. Owner index maps hash with a word hasher, since their keys are
+process-local integers.
+
+RevisionCounter::prepare compared retired scopes pairwise, so retiring a
+whole inventory was quadratic. It now keeps a set of their allocations.
+
+Refs #407.

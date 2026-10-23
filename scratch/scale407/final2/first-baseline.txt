@@ -1,0 +1,3 @@
+   25 paragraphs: insert_paragraph first   24.40 ms, second  24.35 ms | remove_content first   70.13 ms, second  66.24 ms
+  100 paragraphs: insert_paragraph first   71.34 ms, second  71.47 ms | remove_content first  210.10 ms, second 202.17 ms
+ 1000 paragraphs: insert_paragraph first  678.66 ms, second 674.63 ms | remove_content first 1923.36 ms, second 1852.24 ms

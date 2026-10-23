@@ -1,0 +1,582 @@
+{
+"Cell.add_paragraph": [
+1,
+0
+],
+"Cell.add_picture": [
+1,
+0
+],
+"Cell.add_table": [
+1,
+0
+],
+"Cell.merge": [
+1,
+0
+],
+"Cell.replace_text": [
+1,
+0
+],
+"Cell.replace_xml": [
+1,
+0
+],
+"Cell.set_border": [
+1,
+0
+],
+"Cell.set_margins": [
+1,
+0
+],
+"Cell.shading": [
+1,
+0
+],
+"Cell.split": [
+1,
+0
+],
+"Cell.text": [
+1,
+0
+],
+"Cell.vertical_alignment": [
+1,
+0
+],
+"Cell.width": [
+1,
+0
+],
+"Document.accept_revision_id": [
+1,
+0
+],
+"Document.add_bullet_list_item": [
+1,
+0
+],
+"Document.add_chart": [
+1,
+0
+],
+"Document.add_comment": [
+1,
+0
+],
+"Document.add_custom_xml_store": [
+1,
+0
+],
+"Document.add_endnote": [
+1,
+0
+],
+"Document.add_footnote": [
+1,
+0
+],
+"Document.add_heading": [
+0,
+0
+],
+"Document.add_heading_hyperlink": [
+1,
+0
+],
+"Document.add_hyperlink_to_story": [
+1,
+0
+],
+"Document.add_numbered_list_item": [
+1,
+0
+],
+"Document.add_numbering_definition": [
+0,
+0
+],
+"Document.add_numbering_instance": [
+0,
+0
+],
+"Document.add_page_break": [
+0,
+0
+],
+"Document.add_paragraph": [
+0,
+0
+],
+"Document.add_picture": [
+1,
+0
+],
+"Document.add_table": [
+0,
+0
+],
+"Document.clone_content": [
+1,
+0
+],
+"Document.clone_content_control": [
+1,
+0
+],
+"Document.create_section_story": [
+1,
+0
+],
+"Document.embed_font": [
+1,
+0
+],
+"Document.embed_system_fonts": [
+1,
+0
+],
+"Document.embed_true_type_fonts": [
+1,
+0
+],
+"Document.import_fragment": [
+1,
+0
+],
+"Document.insert_content": [
+1,
+0
+],
+"Document.insert_content_control": [
+1,
+0
+],
+"Document.insert_document": [
+1,
+0
+],
+"Document.insert_html": [
+1,
+0
+],
+"Document.insert_paragraph": [
+0,
+0
+],
+"Document.insert_section": [
+1,
+0
+],
+"Document.insert_table": [
+0,
+0
+],
+"Document.link_section_story": [
+1,
+0
+],
+"Document.link_style_to_numbering": [
+0,
+0
+],
+"Document.move_comment": [
+1,
+0
+],
+"Document.move_content": [
+1,
+0
+],
+"Document.move_content_control": [
+0,
+0
+],
+"Document.pop_content": [
+1,
+0
+],
+"Document.reject_revision_id": [
+1,
+0
+],
+"Document.remove_comment": [
+1,
+0
+],
+"Document.remove_content": [
+0,
+0
+],
+"Document.remove_content_control": [
+1,
+0
+],
+"Document.remove_content_range": [
+0,
+0
+],
+"Document.remove_embedded_font": [
+1,
+0
+],
+"Document.remove_endnote": [
+1,
+0
+],
+"Document.remove_font": [
+1,
+0
+],
+"Document.remove_footnote": [
+1,
+0
+],
+"Document.remove_hyperlink": [
+1,
+0
+],
+"Document.remove_section": [
+1,
+0
+],
+"Document.repeat_content_control": [
+1,
+0
+],
+"Document.replace_image": [
+0,
+0
+],
+"Document.replace_image_for_story": [
+0,
+0
+],
+"Document.replace_text_at": [
+1,
+0
+],
+"Document.reply_to": [
+1,
+0
+],
+"Document.resolve_comment": [
+1,
+0
+],
+"Document.restart_numbering": [
+1,
+0
+],
+"Document.save_subset_fonts": [
+1,
+0
+],
+"Document.set_chart_legend": [
+1,
+0
+],
+"Document.set_content_control_alias": [
+1,
+0
+],
+"Document.set_content_control_appearance": [
+1,
+0
+],
+"Document.set_content_control_binding": [
+1,
+0
+],
+"Document.set_content_control_lock": [
+1,
+0
+],
+"Document.set_content_control_placeholder": [
+1,
+0
+],
+"Document.set_content_control_tag": [
+1,
+0
+],
+"Document.set_content_control_type": [
+1,
+0
+],
+"Document.set_font": [
+1,
+0
+],
+"Document.set_footer": [
+1,
+0
+],
+"Document.set_header": [
+1,
+0
+],
+"Document.set_hyperlink_url": [
+0,
+0
+],
+"Document.set_image_watermark": [
+1,
+0
+],
+"Document.set_note_policy": [
+1,
+0
+],
+"Document.set_page_color": [
+1,
+0
+],
+"Document.set_picture_size": [
+1,
+0
+],
+"Document.set_picture_sizes_for_relationship": [
+0,
+0
+],
+"Document.set_story_text": [
+1,
+0
+],
+"Document.set_text_watermark": [
+1,
+0
+],
+"Document.split_run": [
+1,
+0
+],
+"Document.unlink_section_story": [
+1,
+0
+],
+"Document.unwrap_content_control": [
+1,
+0
+],
+"FootnoteEndnote.add_paragraph": [
+1,
+0
+],
+"FootnoteEndnote.add_table": [
+1,
+0
+],
+"FootnoteEndnote.delete": [
+1,
+0
+],
+"HeaderFooter.add_paragraph": [
+1,
+0
+],
+"HeaderFooter.add_table": [
+1,
+0
+],
+"HeaderFooter.is_linked_to_previous": [
+1,
+0
+],
+"Paragraph.add_equation": [
+1,
+0
+],
+"Paragraph.add_hyperlink": [
+1,
+0
+],
+"Paragraph.add_internal_hyperlink": [
+1,
+0
+],
+"Paragraph.add_run": [
+1,
+0
+],
+"Paragraph.insert_paragraph_before": [
+0,
+0
+],
+"Paragraph.replace_text": [
+1,
+0
+],
+"Paragraph.replace_xml": [
+1,
+0
+],
+"Paragraph.text": [
+1,
+0
+],
+"Paragraph.xml": [
+0,
+0
+],
+"Row.cant_split": [
+1,
+0
+],
+"Row.height": [
+1,
+0
+],
+"Row.height_rule": [
+1,
+0
+],
+"Row.is_header": [
+1,
+0
+],
+"Run.add_field": [
+1,
+0
+],
+"Run.add_picture": [
+1,
+0
+],
+"Run.remove": [
+1,
+0
+],
+"Run.replace_xml": [
+1,
+0
+],
+"Run.text": [
+1,
+0
+],
+"SectionHandle.remove_watermark": [
+1,
+0
+],
+"SectionHandle.replace_xml": [
+1,
+0
+],
+"SectionHandle.set_image_watermark": [
+1,
+0
+],
+"SectionHandle.set_note_policy": [
+1,
+0
+],
+"SectionHandle.set_page_border": [
+1,
+0
+],
+"SectionHandle.set_text_watermark": [
+1,
+0
+],
+"Settings.odd_and_even_pages_header_footer": [
+1,
+0
+],
+"Table.add_row": [
+1,
+0
+],
+"Table.alignment": [
+1,
+0
+],
+"Table.autofit": [
+1,
+0
+],
+"Table.banded_columns": [
+1,
+0
+],
+"Table.banded_rows": [
+1,
+0
+],
+"Table.clone_row": [
+1,
+0
+],
+"Table.delete_column": [
+1,
+0
+],
+"Table.first_column": [
+1,
+0
+],
+"Table.first_row": [
+1,
+0
+],
+"Table.grid_widths": [
+1,
+0
+],
+"Table.indent": [
+1,
+0
+],
+"Table.insert_column": [
+1,
+0
+],
+"Table.last_column": [
+1,
+0
+],
+"Table.last_row": [
+1,
+0
+],
+"Table.remove_row": [
+1,
+0
+],
+"Table.replace_xml": [
+1,
+0
+],
+"Table.set_border": [
+1,
+0
+],
+"Table.set_borders": [
+1,
+0
+],
+"Table.set_cell_grid_span": [
+1,
+0
+],
+"Table.set_cell_margins": [
+1,
+0
+],
+"Table.set_cell_vertical_merge": [
+1,
+0
+],
+"Table.set_column_width": [
+1,
+0
+],
+"Table.width": [
+1,
+0
+]
+}

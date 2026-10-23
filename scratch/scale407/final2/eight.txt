@@ -1,0 +1,13 @@
+Document.insert_paragraph                N=    0.10 ms  4N=    0.21 ms  bound=    5.15  ok
+Document.remove_content                  N=    0.06 ms  4N=    0.17 ms  bound=    5.09  ok
+Paragraph.insert_paragraph_before        N=    0.10 ms  4N=    0.21 ms  bound=    5.15  ok
+Document.remove_content_range            N=    0.06 ms  4N=    0.17 ms  bound=    5.09  ok
+Document.add_paragraph                   N=    0.08 ms  4N=    0.12 ms  bound=    5.12  ok
+Document.add_heading                     N=    0.10 ms  4N=    0.13 ms  bound=    5.15  ok
+Document.add_page_break                  N=    0.08 ms  4N=    0.11 ms  bound=    5.12  ok
+Document.insert_table                    N=    0.43 ms  4N=    0.55 ms  bound=    5.64  ok
+Document.add_table                       N=    0.42 ms  4N=    0.46 ms  bound=    5.63  ok
+Paragraph.xml                            N=    0.04 ms  4N=    0.04 ms  bound=    5.06  ok
+Run.xml                                  N=    0.04 ms  4N=    0.04 ms  bound=    5.06  ok
+Table.xml                                N=    0.01 ms  4N=    0.01 ms  bound=    5.02  ok
+Cell.xml                                 N=    0.16 ms  4N=    0.15 ms  bound=    5.23  ok
