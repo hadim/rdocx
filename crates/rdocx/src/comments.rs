@@ -665,10 +665,13 @@ impl Document {
 
     /// Return checked paired-marker ranges in physical story order.
     ///
-    /// Unmatched, reversed and crossing markers are rejected. Unsupported
-    /// marker families remain opaque and are not included, nor is a comment
-    /// whose markers are in different story owners, such as a comment range
-    /// that runs from one table cell into another.
+    /// Within one story owner, unmatched, reversed and crossing markers are
+    /// rejected, as is a pair that leaves its owner for another part.
+    /// Unsupported marker families remain opaque and are not included, nor
+    /// is a comment whose one start and one end are in two owners of one
+    /// part, such as a comment range from one table cell into another. Its
+    /// order across the owners is not checked here, [`Self::comment_anchor`]
+    /// checks it.
     pub fn story_ranges(&self) -> Result<Vec<StoryRangeRef>> {
         Self::story_ranges_in(&self.story_range_paragraphs()?)
     }
@@ -682,9 +685,9 @@ impl Document {
             .iter()
             .map(|(location, xml)| scan_story_markers(xml, location))
             .collect::<Result<Vec<_>>>()?;
-        // A comment range may leave its owner, as one across table cells
-        // does. Its one start and one end keep their ordinals but form no
-        // story range. Any other marker set is paired and checked below.
+        // A comment range may leave its owner within one part, as one across
+        // table cells does. Its one start and one end keep their ordinals but
+        // form no story range. Any other marker set is paired and checked below.
         let mut comment_markers = HashMap::<i32, Vec<(&crate::StoryId, bool)>>::new();
         for marker in scanned.iter().flatten() {
             if let StoryRangeKind::Comment { id } = marker.kind {
@@ -698,7 +701,9 @@ impl Document {
             .into_iter()
             .filter(|(_, markers)| {
                 matches!(markers.as_slice(), [(left, left_start), (right, right_start)]
-                    if left != right && left_start != right_start)
+                    if left != right
+                        && left.part_name() == right.part_name()
+                        && left_start != right_start)
             })
             .map(|(id, _)| id)
             .collect::<HashSet<_>>();

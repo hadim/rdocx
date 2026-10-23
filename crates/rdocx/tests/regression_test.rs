@@ -61330,6 +61330,10 @@ fn comment_anchor_related_block_paths_aliases_and_cross_owner_refusal() {
         if cross_owner {
             assert!(document.comment_anchor(id).is_err());
             assert!(document.comment_anchor_text(id).is_err());
+            // A pair from the body into a header leaves its part, which story
+            // ranges still refuse, while the listing keeps the comment.
+            assert!(document.story_ranges().is_err());
+            assert!(document.comment_anchor_snapshots().unwrap()[&id].is_err());
         } else {
             assert_eq!(
                 document.comment_anchor_text(id).unwrap().as_deref(),
