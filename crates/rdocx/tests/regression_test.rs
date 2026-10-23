@@ -61543,8 +61543,19 @@ fn comment_anchor_runs_across_table_cells_in_physical_order() {
             );
             assert!(
                 document
+                    .move_comment_to_text(id, &expected[..1], 0)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("across story owners"),
+                "{label}"
+            );
+            assert!(
+                document
                     .add_story_comment(range.clone(), "Ben", None, "copy")
-                    .is_err()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("one story owner"),
+                "{label}"
             );
             assert_eq!(document.to_bytes().unwrap(), before, "{label}");
         }
@@ -61735,15 +61746,21 @@ fn comment_listing_keeps_other_comments_when_one_anchor_cannot_be_read() {
     };
     let kept = seed.add_comment(range, "Ada", None, "kept").unwrap();
     let wrapped = seed.add_comment(range, "Ben", None, "wrapped").unwrap();
+    let boxed = seed.add_comment(range, "Cy", None, "boxed").unwrap();
     let marked = |id: i32, content: &str| {
         format!(
             r#"<w:p><w:commentRangeStart w:id="{id}"/>{content}<w:commentRangeEnd w:id="{id}"/><w:r><w:commentReference w:id="{id}"/></w:r></w:p>"#
         )
     };
+    // The third range runs from a cell into a text box in the next cell, a
+    // flow of its own, so it has no ordered end in the cells' story.
     let body = marked(kept, "<w:r><w:t>kept</w:t></w:r>")
         + &marked(
             wrapped,
             "<w:smartTag><w:r><w:t>wrapped</w:t></w:r></w:smartTag>",
+        )
+        + &format!(
+            r#"<w:tbl><w:tr><w:tc><w:p><w:commentRangeStart w:id="{boxed}"/><w:r><w:t>A</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B</w:t></w:r><w:r><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml"><v:textbox><w:txbxContent><w:p><w:r><w:t>T</w:t></w:r><w:commentRangeEnd w:id="{boxed}"/><w:r><w:commentReference w:id="{boxed}"/></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>"#
         );
     let bytes = seed.to_bytes().unwrap();
     let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
@@ -61755,8 +61772,16 @@ fn comment_listing_keeps_other_comments_when_one_anchor_cannot_be_read() {
     let listed = document.comment_anchor_snapshots().unwrap();
     assert_eq!(
         listed.keys().copied().collect::<Vec<_>>(),
-        vec![kept, wrapped]
+        vec![kept, wrapped, boxed]
     );
+    assert!(
+        listed[&boxed]
+            .as_ref()
+            .unwrap_err()
+            .to_string()
+            .contains("no ordered end")
+    );
+    assert!(document.comment_anchor(boxed).is_err());
     assert_eq!(listed[&kept].as_ref().unwrap().1.as_deref(), Some("kept"));
     let issue = document.comment_anchor(wrapped).unwrap_err().to_string();
     assert_eq!(listed[&wrapped].as_ref().unwrap_err().to_string(), issue);
@@ -61765,7 +61790,7 @@ fn comment_listing_keeps_other_comments_when_one_anchor_cannot_be_read() {
         document.comment_anchor_text(kept).unwrap().as_deref(),
         Some("kept")
     );
-    assert_eq!(document.comments().len(), 2);
+    assert_eq!(document.comments().len(), 3);
     // Edits that read the range stay strict.
     let anchor = document.comment_anchor(kept).unwrap().unwrap();
     assert!(document.move_comment(wrapped, anchor).is_err());

@@ -1267,7 +1267,7 @@ impl Document {
         validate_comment_date(date)?;
         if range.start.location.story() != range.end.location.story() {
             return Err(Error::Other(
-                "comment story range start must not follow its end".to_owned(),
+                "comment story range must stay in one story owner".to_owned(),
             ));
         }
         if range.start.location != range.end.location
