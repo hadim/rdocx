@@ -1182,10 +1182,14 @@ struct Parsed {
     masters: HashMap<String, Arc<MasterRecord>>,
     notes_master: Option<(String, Arc<CT_NotesMaster>)>,
     handout_master: Option<(String, Arc<CT_HandoutMaster>)>,
+    // The text field identities of each XML part the package holds, but a
+    // part whose XML a scan refuses, carried from what the last opening
+    // parsed while the part bytes are the same.
+    field_ids: HashMap<String, Vec<String>>,
 }
 
 impl Parsed {
-    fn of(presentation: &Presentation) -> Self {
+    fn of(presentation: &Presentation, earlier: Option<&Parsed>) -> Self {
         fn by_part<T>(records: &[Arc<T>], part: impl Fn(&T) -> &str) -> HashMap<String, Arc<T>> {
             records
                 .iter()
@@ -1209,7 +1213,33 @@ impl Parsed {
                 .handout_master_part
                 .clone()
                 .zip(presentation.handout_master.clone()),
+            field_ids: presentation
+                .package
+                .parts
+                .iter()
+                .filter(|(name, _)| name.ends_with(".xml"))
+                .filter_map(|(name, bytes)| {
+                    let carried = earlier.and_then(|earlier| {
+                        earlier
+                            .field_ids
+                            .get(name)
+                            .filter(|_| earlier.same_bytes(&presentation.package, name))
+                    });
+                    let ids = match carried {
+                        Some(ids) => ids.clone(),
+                        None => part_field_identities(name, bytes).ok()?,
+                    };
+                    Some((name.clone(), ids))
+                })
+                .collect(),
         }
+    }
+
+    /// The text field identities of `part` of `package`, when it holds the
+    /// bytes read here.
+    fn field_ids(&self, package: &OpcPackage, part: &str) -> Option<&[String]> {
+        let ids = self.field_ids.get(part)?;
+        self.same_bytes(package, part).then_some(ids.as_slice())
     }
 
     /// Whether `package` holds for `part` the very bytes read for it here.
@@ -3072,7 +3102,7 @@ impl Presentation {
     /// Opens a package read from bytes, keeping what it parsed for commits.
     fn from_read_package(package: OpcPackage) -> Result<Self> {
         let mut presentation = Self::from_package(package)?;
-        presentation.parsed = Some(Arc::new(Parsed::of(&presentation)));
+        presentation.parsed = Some(Arc::new(Parsed::of(&presentation, None)));
         Ok(presentation)
     }
 
@@ -7081,7 +7111,7 @@ impl Presentation {
         };
         let package = package.reread(&parsed.package)?;
         let mut reopened = Self::from_package_reusing(package, Some((parsed, &self.media_store)))?;
-        reopened.parsed = Some(Arc::new(Parsed::of(&reopened)));
+        reopened.parsed = Some(Arc::new(Parsed::of(&reopened, Some(parsed))));
         Ok(reopened)
     }
 
@@ -30563,44 +30593,80 @@ impl Presentation {
     /// Scans current qualified field identities including retained owner parts.
     pub fn field_identity_inventory(&self) -> Result<HashSet<String>> {
         let package = self.staged_package(true)?;
-        let mut ids = HashSet::new();
-        for (name, bytes) in &package.parts {
-            if !name.ends_with(".xml") {
-                continue;
-            }
-            let mut reader = NsReader::from_reader(bytes.as_slice());
-            let mut buffer = Vec::new();
-            loop {
-                let (namespace, event) = reader
-                    .read_resolved_event_into(&mut buffer)
-                    .map_err(|error| footer_malformed(name, error))?;
-                match event {
-                    XmlEvent::Start(start) | XmlEvent::Empty(start)
-                        if matches!(namespace, XmlResolveResult::Bound(XmlNamespace(uri)) if uri == A_NS.as_bytes())
-                            && xml_local_name(start.name().as_ref()) == b"fld" =>
-                    {
-                        for attr in start.attributes() {
-                            let attr = attr.map_err(|error| footer_malformed(name, error))?;
-                            if attr.key.as_ref() == b"id" {
-                                ids.insert(
-                                    attr.decoded_and_normalized_value(
-                                        XmlVersion::Implicit1_0,
-                                        reader.decoder(),
-                                    )
-                                    .map_err(|error| footer_malformed(name, error))?
-                                    .to_uppercase(),
-                                );
-                            }
-                        }
-                    }
-                    XmlEvent::Eof => break,
-                    _ => {}
+        // A part still holding the bytes the last opening read keeps the
+        // identities found then, so only the parts an edit changed are
+        // scanned again.
+        let inventory = field_identities(&package, self.parsed.as_deref());
+        // Debug builds, which run the binding tests, scan every part as
+        // well and assert the same identities or the same error.
+        #[cfg(debug_assertions)]
+        if self.parsed.is_some() {
+            let scanned = without_commit_work(|| field_identities(&package, None));
+            match (&inventory, &scanned) {
+                (Ok(kept), Ok(scanned)) => {
+                    assert_eq!(kept, scanned, "kept field identities differ")
                 }
-                buffer.clear();
+                (Err(kept), Err(scanned)) => assert_eq!(kept.to_string(), scanned.to_string()),
+                (kept, scanned) => {
+                    panic!("kept field identities give {kept:?}, a scan {scanned:?}")
+                }
             }
         }
-        Ok(ids)
+        inventory
     }
+}
+
+/// The text field identities of every XML part of `package`, taking those
+/// `parsed` kept for a part that holds the bytes read.
+fn field_identities(package: &OpcPackage, parsed: Option<&Parsed>) -> Result<HashSet<String>> {
+    let mut ids = HashSet::new();
+    for (name, bytes) in &package.parts {
+        if !name.ends_with(".xml") {
+            continue;
+        }
+        match parsed.and_then(|parsed| parsed.field_ids(package, name)) {
+            Some(found) => ids.extend(found.iter().cloned()),
+            None => ids.extend(part_field_identities(name, bytes)?),
+        }
+    }
+    Ok(ids)
+}
+
+/// The identities of the DrawingML text fields of one XML part, uppercase.
+fn part_field_identities(name: &str, bytes: &[u8]) -> Result<Vec<String>> {
+    note_commit_work(|work| work.parsed += 1);
+    let mut ids = Vec::new();
+    let mut reader = NsReader::from_reader(bytes);
+    let mut buffer = Vec::new();
+    loop {
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| footer_malformed(name, error))?;
+        match event {
+            XmlEvent::Start(start) | XmlEvent::Empty(start)
+                if matches!(namespace, XmlResolveResult::Bound(XmlNamespace(uri)) if uri == A_NS.as_bytes())
+                    && xml_local_name(start.name().as_ref()) == b"fld" =>
+            {
+                for attr in start.attributes() {
+                    let attr = attr.map_err(|error| footer_malformed(name, error))?;
+                    if attr.key.as_ref() == b"id" {
+                        ids.push(
+                            attr.decoded_and_normalized_value(
+                                XmlVersion::Implicit1_0,
+                                reader.decoder(),
+                            )
+                            .map_err(|error| footer_malformed(name, error))?
+                            .to_uppercase(),
+                        );
+                    }
+                }
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(ids)
 }
 
 /// A transition effect.
@@ -34249,6 +34315,31 @@ mod write_tests {
             ("chart legend", |deck, _, chart| {
                 deck.set_chart_legend(0, chart, Some(true), Some(LegendPosition::Top), None)
                     .unwrap()
+            }),
+            ("transition", |deck, _, _| {
+                let transition = SlideTransition {
+                    kind: Some(TransitionKind::Fade),
+                    duration_ms: Some(1500),
+                    ..SlideTransition::default()
+                };
+                assert!(deck.set_slide_transition(0, Some(&transition)).unwrap());
+            }),
+            // The header and footer fields below must avoid this identity,
+            // which the commit keeps for the part of slide 1.
+            ("field on another slide", |deck, _, _| {
+                deck.add_text_field(1, &[0], None, 0, "slidenum", None)
+                    .unwrap();
+            }),
+            ("header and footer", |deck, _, _| {
+                let settings = HeaderFooter {
+                    slide_number: true,
+                    footer: Some("footer".to_owned()),
+                    date: HeaderFooterDate::Automatic {
+                        field_type: "datetime1".to_owned(),
+                        text: None,
+                    },
+                };
+                assert!(deck.set_slide_header_footer(0, &settings).unwrap());
             }),
             ("saves as", |deck, _, _| {
                 let copy = deck.clone();
