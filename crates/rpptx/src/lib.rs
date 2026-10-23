@@ -3269,6 +3269,7 @@ impl Presentation {
             "invalid presentation at byte save boundary: {:?}",
             self.validate()
         );
+        note_commit_work(|work| work.zip_writes += 1);
         let mut output = Cursor::new(Vec::new());
         self.saved_package()?.write_to(&mut output)?;
         Ok(output.into_inner())
@@ -3299,6 +3300,7 @@ impl Presentation {
         if let Some(parsed) = self.parsed.as_deref() {
             return Ok(package.reread(&parsed.package)?);
         }
+        note_commit_work(|work| work.zip_writes += 1);
         let mut output = Cursor::new(Vec::new());
         package.write_to(&mut output)?;
         output.set_position(0);
@@ -34248,6 +34250,10 @@ mod write_tests {
                 deck.set_chart_legend(0, chart, Some(true), Some(LegendPosition::Top), None)
                     .unwrap()
             }),
+            ("saves as", |deck, _, _| {
+                let copy = deck.clone();
+                assert!(deck.saves_as(&copy).unwrap());
+            }),
             ("remove shape", |deck, _, _| {
                 deck.remove_shape_at(ShapeOwner::Slide(0), 0).unwrap()
             }),
@@ -40542,10 +40548,10 @@ fn path_of_id(children: &[ShapeTreeChild], shape_id: u32) -> Option<Vec<usize>> 
     None
 }
 
-/// Work that staging and reopening a package did on this thread, whose
-/// amount could follow the deck: parts parsed, slide and notes parts
-/// serialized, media hashed and packages written as a ZIP. Debug builds
-/// count it.
+/// Work that staging, reopening and saving a package did on this thread,
+/// whose amount could follow the deck: parts parsed, slide and notes parts
+/// serialized, media hashed and packages written as a ZIP, by
+/// `to_bytes` included. Debug builds count it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(not(debug_assertions), allow(dead_code))]
 struct CommitWork {
