@@ -2997,7 +2997,14 @@ impl StyleFormatting {
         }
         if let Some(value) = &self.line_spacing {
             let value = value.bind(py);
-            if value.is_instance_of::<PyFloat>() {
+            let message = "style line_spacing requires a numeric line multiple or a Length";
+            if value.is_instance_of::<PyBool>() {
+                return Err(PyTypeError::new_err(message));
+            }
+            if value.is_instance(&py.import("rdocx")?.getattr("Length")?)? {
+                properties.line_spacing = Some(twips(value.extract()?)?);
+                properties.line_rule = Some("exact".to_owned());
+            } else if value.is_instance_of::<PyInt>() || value.is_instance_of::<PyFloat>() {
                 let multiple = value.extract::<f64>()?;
                 let twip = multiple * 240.0;
                 if !multiple.is_finite() || twip < i32::MIN as f64 || twip > i32::MAX as f64 {
@@ -3008,8 +3015,7 @@ impl StyleFormatting {
                 properties.line_spacing = Some(rdocx::auto_line_spacing(multiple));
                 properties.line_rule = Some("auto".to_owned());
             } else {
-                properties.line_spacing = Some(twips(value.extract()?)?);
-                properties.line_rule = Some("exact".to_owned());
+                return Err(PyTypeError::new_err(message));
             }
         }
         if let Some(value) = self.keep_with_next {

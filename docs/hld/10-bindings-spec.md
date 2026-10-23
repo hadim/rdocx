@@ -415,8 +415,11 @@ explicit empty border/tab collections clear active owned entries. The selected
 Word border or tab container can remain empty to suppress earlier duplicate
 owners while retaining foreign attributes and opaque payload. Border clearing
 leaves no active owned edge, and tab clearing leaves no active owned tab.
-These retained containers do not represent active formatting. Invalid input or
-style graph changes fail before source publication.
+These retained containers do not represent active formatting. Their
+`line_spacing` follows `ParagraphFormat.line_spacing`. A `Length` writes the
+exact rule, a non-bool integer or float writes a multiple with the auto rule,
+and a bool or another type refuses. Invalid input or style graph changes fail
+before source publication.
 
 `add_numbering_instance(definition_id, *, start=None, level=0)` creates an
 instance of one existing definition. Start is a checked u32, including zero,

@@ -10330,6 +10330,38 @@ def test_issue402_style_and_paragraph_multiples_write_back_the_read_line():
     assert paragraph_format.line_spacing == 1.0
 
 
+def test_issue402_style_line_spacing_reads_an_int_as_a_line_multiple():
+    import rdocx
+
+    def spacing(document, style_id):
+        styles = document.part_xml("/word/styles.xml")
+        style = re.search(
+            rf'<w:style [^>]*w:styleId="{style_id}".*?</w:style>', styles, re.S
+        )
+        assert style is not None
+        found = re.search(r"<w:spacing [^>]*/>", style.group(0))
+        return None if found is None else found.group(0)
+
+    document = rdocx.Document()
+    document.set_style("Normal", line_spacing=2)
+    assert 'w:line="480" w:lineRule="auto"' in spacing(document, "Normal")
+    document.add_style("Twice", line_spacing=2)
+    assert 'w:line="480" w:lineRule="auto"' in spacing(document, "Twice")
+    document.set_style("Normal", line_spacing=rdocx.Pt(18))
+    assert 'w:line="360" w:lineRule="exact"' in spacing(document, "Normal")
+    before = document.to_bytes()
+    for value in (True, "2"):
+        with pytest.raises(TypeError):
+            document.set_style("Normal", line_spacing=value)
+        assert document.to_bytes() == before
+        with pytest.raises(TypeError):
+            document.add_style(f"Refused {value}", line_spacing=value)
+        assert document.to_bytes() == before
+    with pytest.raises(ValueError):
+        document.set_style("Normal", line_spacing=float("nan"))
+    assert document.to_bytes() == before
+
+
 def test_issue391_root_attributes_use_declared_namespace_scope():
     import xml.etree.ElementTree as ET
 
