@@ -1204,14 +1204,17 @@ class Document:
         *,
         space_before: _shared.Length | None = ...,
         space_after: _shared.Length | None = ...,
-        line_spacing: _shared.Length | None = ...,
+        line_spacing: _shared.Length | float | None = ...,
     ) -> None:
         """Set document default paragraph spacing.
 
         An omitted keyword keeps its stored value. None clears only that
-        keyword. A Length writes that spacing. line_spacing writes an exact
-        rule. A float, an int or a bool is refused and the document stays
-        unchanged.
+        keyword. A Length writes that spacing. A Length line_spacing writes
+        an exact rule, and a float or int line_spacing writes a line multiple
+        with the auto rule, as set_style does, so the value
+        default_paragraph_format reads writes back unchanged. A float or an
+        int for space_before or space_after, a bool, or any other type is
+        refused and the document stays unchanged.
         """
     def part_names(self) -> tuple[str, ...]: ...
     def part_xml(self, name: str) -> str: ...
