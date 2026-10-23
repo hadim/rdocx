@@ -4769,6 +4769,27 @@ def test_comment_across_table_cells_is_listed_with_its_anchor(start_in_control):
     assert document.comments == ()
 
 
+def test_fields_update_beside_a_self_closing_header_paragraph():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("body")
+    document.set_header("header")
+    archive = zipfile.ZipFile(io.BytesIO(document.to_bytes()))
+    parts = {item.filename: archive.read(item.filename) for item in archive.infolist()}
+    (header,) = [name for name, data in parts.items() if b"<w:hdr" in data]
+    parts[header] = parts[header].replace(
+        b"</w:hdr>",
+        b"<w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p/></w:hdr>",
+    )
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as rewritten:
+        for name, data in parts.items():
+            rewritten.writestr(name, data)
+    reopened = rdocx.Document.from_bytes(output.getvalue())
+    assert reopened.update_fields() == 0
+
+
 @pytest.mark.parametrize("by_story_range", [False, True])
 def test_comment_moves_whichever_range_made_it(by_story_range):
     import rdocx

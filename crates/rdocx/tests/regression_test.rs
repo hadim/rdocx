@@ -61630,7 +61630,7 @@ fn story_edits_work_beside_bookmarks_and_permissions_across_cells() {
         package.set_part(
             header.part_name(),
             format!(
-                r#"<w:hdr xmlns:w="{W_NS}"><w:tbl><w:tr><w:tc><w:p><w:bookmarkStart w:id="2" w:name="header_across"/><w:r><w:t>H1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>H2</w:t></w:r><w:bookmarkEnd w:id="2"/></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>H3</w:t></w:r></w:p></w:hdr>"#
+                r#"<w:hdr xmlns:w="{W_NS}"><w:tbl><w:tr><w:tc><w:p><w:bookmarkStart w:id="2" w:name="header_across"/><w:r><w:t>H1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>H2</w:t></w:r><w:bookmarkEnd w:id="2"/></w:p></w:tc></w:tr></w:tbl><w:p/></w:hdr>"#
             )
             .into_bytes(),
         );
@@ -61726,6 +61726,78 @@ fn story_edits_work_beside_bookmarks_and_permissions_across_cells() {
     document.rebuild_generated_tables().unwrap();
     let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
     assert!(reopened.story_ranges().is_ok());
+}
+
+/// A self-closing paragraph in a header, footer or note, alone, after a table
+/// or in a cell, is one story paragraph for field evaluation as it is for the
+/// layout source inventory, which it was missing from.
+#[test]
+fn fields_evaluate_beside_self_closing_story_paragraphs() {
+    let mut seed = Document::new();
+    seed.add_paragraph("BODY");
+    seed.set_header("HEAD");
+    seed.set_footer("FOOT");
+    seed.add_footnote("FNOTE");
+    let body = seed.paragraph_story_location(0).unwrap().unwrap();
+    seed.create_endnote(&body, "ENOTE").unwrap();
+    let stories = seed.stories().unwrap();
+    let part = |kind: StoryKind| {
+        stories
+            .iter()
+            .find(|story| story.kind() == kind)
+            .unwrap()
+            .part_name()
+            .to_owned()
+    };
+    let parts = [
+        (part(StoryKind::Header), "HEAD"),
+        (part(StoryKind::Footer), "FOOT"),
+        (part(StoryKind::Footnote), "FNOTE"),
+        (part(StoryKind::Endnote), "ENOTE"),
+    ];
+    let seed = seed.to_bytes().unwrap();
+    let page = r#"<w:p><w:fldSimple w:instr=" PAGE "><w:r><w:t>9</w:t></w:r></w:fldSimple></w:p>"#;
+    let after = |xml: &str, marker: &str, insertion: &str| {
+        let end = xml[xml.find(marker).unwrap()..].find("</w:p>").unwrap()
+            + xml.find(marker).unwrap()
+            + "</w:p>".len();
+        format!("{}{insertion}{}", &xml[..end], &xml[end..])
+    };
+    for shape in [
+        "<w:p/>",
+        "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>C</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>",
+        "<w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>",
+    ] {
+        for (part_name, marker) in &parts {
+            let mut package =
+                oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&seed)).unwrap();
+            let xml = String::from_utf8(package.get_part(part_name).unwrap().to_vec()).unwrap();
+            package.set_part(
+                part_name,
+                after(&xml, marker, &format!("{shape}{page}")).into_bytes(),
+            );
+            let mut output = std::io::Cursor::new(Vec::new());
+            package.write_to(&mut output).unwrap();
+            let mut document = Document::from_bytes(output.get_ref()).unwrap();
+            let evaluations = document
+                .evaluate_fields(&FieldEvaluationContext::default())
+                .unwrap_or_else(|error| panic!("{shape} in {part_name}: {error}"));
+            assert_eq!(evaluations.len(), 1, "{shape} in {part_name}");
+            document
+                .update_fields(&FieldEvaluationContext::default())
+                .unwrap();
+            document.update_layout_backed_fields().unwrap();
+            let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            assert_eq!(
+                reopened
+                    .evaluate_fields(&FieldEvaluationContext::default())
+                    .unwrap()
+                    .len(),
+                1,
+                "{shape} in {part_name}"
+            );
+        }
+    }
 }
 
 /// A comment that `add_comment` made from a `RunRange` moves like one made
