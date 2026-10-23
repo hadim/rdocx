@@ -420,8 +420,9 @@ impl Document {
     /// Add a bookmark across one checked story owner.
     pub fn add_story_bookmark(&mut self, name: &str, range: StoryRunRange) -> Result<i32> {
         validate_bookmark_name(name)?;
-        if self.story_ranges()?.iter().any(|entry| {
-            matches!(&entry.kind, StoryRangeKind::Bookmark { name: existing, .. } if existing == name)
+        let (ranges, across) = self.story_range_inventory()?;
+        if ranges.iter().map(StoryRangeRef::kind).chain(&across).any(|kind| {
+            matches!(kind, StoryRangeKind::Bookmark { name: existing, .. } if existing == name)
         }) {
             return Err(Error::Other(format!("bookmark name {name} already exists")));
         }
@@ -458,11 +459,13 @@ impl Document {
         }
         oxml_core::xml::reject_non_xml_characters("permission editor", editor.unwrap_or_default())?;
         oxml_core::xml::reject_non_xml_characters("permission group", group.unwrap_or_default())?;
-        let occupied = self
-            .story_ranges()?
-            .into_iter()
-            .filter_map(|entry| match entry.kind {
-                StoryRangeKind::Permission { id, .. } => Some(id),
+        let (ranges, across) = self.story_range_inventory()?;
+        let occupied = ranges
+            .iter()
+            .map(StoryRangeRef::kind)
+            .chain(&across)
+            .filter_map(|kind| match kind {
+                StoryRangeKind::Permission { id, .. } => Some(*id),
                 _ => None,
             })
             .collect::<HashSet<_>>();
@@ -500,7 +503,15 @@ impl Document {
 
     /// Remove one checked bookmark pair by its identifier.
     pub fn remove_story_bookmark(&mut self, id: i32) -> Result<bool> {
-        let entry = self.story_ranges()?.into_iter().find(|entry| {
+        let (ranges, across) = self.story_range_inventory()?;
+        if across.iter().any(
+            |kind| matches!(kind, StoryRangeKind::Bookmark { id: existing, .. } if *existing == id),
+        ) {
+            return Err(Error::Other(format!(
+                "bookmark {id} runs across story owners and is not one story range"
+            )));
+        }
+        let entry = ranges.into_iter().find(|entry| {
             matches!(entry.kind, StoryRangeKind::Bookmark { id: existing, .. } if existing == id)
         });
         let Some(entry) = entry else {
@@ -668,52 +679,99 @@ impl Document {
     /// Within one story owner, unmatched, reversed and crossing markers are
     /// rejected, as is a pair that leaves its owner for another part.
     /// Unsupported marker families remain opaque and are not included, nor
-    /// is a comment whose one start and one end are in two owners of one
-    /// part, such as a comment range from one table cell into another. Its
-    /// order across the owners is not checked here, [`Self::comment_anchor`]
-    /// checks it.
+    /// is a bookmark, comment or permission pair whose one start and one end
+    /// are in two owners of one part, such as a range from one table cell
+    /// into another. Its name and identifier still count as taken. Its order
+    /// across the owners is not checked here, [`Self::comment_anchor`]
+    /// checks a comment's.
     pub fn story_ranges(&self) -> Result<Vec<StoryRangeRef>> {
+        Ok(self.story_range_inventory()?.0)
+    }
+
+    /// [`Self::story_ranges`] with the kinds of the pairs it leaves out
+    /// across owners, whose names and identifiers stay taken.
+    pub(crate) fn story_range_inventory(
+        &self,
+    ) -> Result<(Vec<StoryRangeRef>, Vec<StoryRangeKind>)> {
         Self::story_ranges_in(&self.story_range_paragraphs()?)
     }
 
     /// Pair the markers of checked range paragraphs listed in physical story
-    /// order, as `story_range_paragraphs` returns them.
+    /// order, as `story_range_paragraphs` returns them, with the kinds of the
+    /// pairs left out across owners.
     pub(crate) fn story_ranges_in(
         paragraphs: &[(ContentLocation, Vec<u8>)],
-    ) -> Result<Vec<StoryRangeRef>> {
+    ) -> Result<(Vec<StoryRangeRef>, Vec<StoryRangeKind>)> {
         let scanned = paragraphs
             .iter()
             .map(|(location, xml)| scan_story_markers(xml, location))
             .collect::<Result<Vec<_>>>()?;
-        // A comment range may leave its owner within one part, as one across
-        // table cells does. Its one start and one end keep their ordinals but
-        // form no story range. Any other marker set is paired and checked below.
-        let mut comment_markers = HashMap::<i32, Vec<(&crate::StoryId, bool)>>::new();
+        let identity = |kind: &StoryRangeKind| match kind {
+            StoryRangeKind::Bookmark { id, .. } => Some((0u8, *id)),
+            StoryRangeKind::Comment { id } => Some((1, *id)),
+            StoryRangeKind::Permission { id, .. } => Some((2, *id)),
+            StoryRangeKind::Proofing { .. } => None,
+        };
+        // A range may leave its owner within one part, as one across table
+        // cells does. Its one start and one end keep their ordinals but form
+        // no story range. Any other marker set is paired and checked below.
+        let mut paired = BTreeMap::<(u8, i32), Vec<&StoryMarker>>::new();
         for marker in scanned.iter().flatten() {
-            if let StoryRangeKind::Comment { id } = marker.kind {
-                comment_markers
-                    .entry(id)
-                    .or_default()
-                    .push((marker.location.story(), marker.start));
+            if let Some(key) = identity(&marker.kind) {
+                paired.entry(key).or_default().push(marker);
             }
         }
-        let cross_owner_comments = comment_markers
-            .into_iter()
-            .filter(|(_, markers)| {
-                matches!(markers.as_slice(), [(left, left_start), (right, right_start)]
-                    if left != right
-                        && left.part_name() == right.part_name()
-                        && left_start != right_start)
-            })
-            .map(|(id, _)| id)
-            .collect::<HashSet<_>>();
-        let mut ranges = Vec::new();
-        let mut open = Vec::<StoryMarker>::new();
-        let mut story = None;
+        let mut cross_owner = HashSet::new();
+        let mut across = Vec::new();
+        for (key, markers) in paired {
+            let [first, second] = markers.as_slice() else {
+                continue;
+            };
+            let (left, right) = (first.location.story(), second.location.story());
+            if left != right && left.part_name() == right.part_name() && first.start != second.start
+            {
+                cross_owner.insert(key);
+                across.push(if first.start { first } else { second }.kind.clone());
+            }
+        }
         let mut bookmark_names = HashSet::new();
         let mut bookmark_ids = HashSet::new();
         let mut comment_ids = HashSet::new();
         let mut permission_ids = HashSet::new();
+        let mut take = |kind: &StoryRangeKind| -> Result<()> {
+            if let StoryRangeKind::Bookmark { name, .. } = kind
+                && (name.is_empty() || !bookmark_names.insert(name.clone()))
+            {
+                return Err(Error::Other(
+                    "bookmark name is missing or duplicated".to_owned(),
+                ));
+            }
+            let unique = match kind {
+                StoryRangeKind::Bookmark { id, .. } => bookmark_ids.insert(*id),
+                StoryRangeKind::Comment { id } => comment_ids.insert(*id),
+                StoryRangeKind::Permission { id, editor, group } => {
+                    if editor.is_some() == group.is_some() {
+                        return Err(Error::Other(
+                            "permission start needs one editor or group".to_owned(),
+                        ));
+                    }
+                    permission_ids.insert(*id)
+                }
+                StoryRangeKind::Proofing { .. } => true,
+            };
+            if !unique {
+                return Err(Error::Other(
+                    "paired marker identity is duplicated".to_owned(),
+                ));
+            }
+            Ok(())
+        };
+        for kind in &across {
+            take(kind)?;
+        }
+        let mut ranges = Vec::new();
+        let mut open = Vec::<StoryMarker>::new();
+        let mut story = None;
         let mut marker_ordinal = 0usize;
         for ((location, _), markers) in paragraphs.iter().zip(scanned) {
             if story.as_ref() != Some(location.story()) {
@@ -728,8 +786,7 @@ impl Document {
             for mut marker in markers {
                 marker.ordinal = marker_ordinal;
                 marker_ordinal += 1;
-                if matches!(marker.kind, StoryRangeKind::Comment { id } if cross_owner_comments.contains(&id))
-                {
+                if identity(&marker.kind).is_some_and(|key| cross_owner.contains(&key)) {
                     continue;
                 }
                 if marker.start {
@@ -744,31 +801,7 @@ impl Document {
                         "paired markers cross or use different identities".to_owned(),
                     ));
                 }
-                if let StoryRangeKind::Bookmark { name, .. } = &start.kind
-                    && (name.is_empty() || !bookmark_names.insert(name.clone()))
-                {
-                    return Err(Error::Other(
-                        "bookmark name is missing or duplicated".to_owned(),
-                    ));
-                }
-                let unique = match &start.kind {
-                    StoryRangeKind::Bookmark { id, .. } => bookmark_ids.insert(*id),
-                    StoryRangeKind::Comment { id } => comment_ids.insert(*id),
-                    StoryRangeKind::Permission { id, editor, group } => {
-                        if editor.is_some() == group.is_some() {
-                            return Err(Error::Other(
-                                "permission start needs one editor or group".to_owned(),
-                            ));
-                        }
-                        permission_ids.insert(*id)
-                    }
-                    StoryRangeKind::Proofing { .. } => true,
-                };
-                if !unique {
-                    return Err(Error::Other(
-                        "paired marker identity is duplicated".to_owned(),
-                    ));
-                }
+                take(&start.kind)?;
                 ranges.push(StoryRangeRef {
                     kind: start.kind,
                     range: StoryRunRange {
@@ -791,7 +824,7 @@ impl Document {
                 "paired marker has an unmatched start".to_owned(),
             ));
         }
-        Ok(ranges)
+        Ok((ranges, across))
     }
 
     pub(crate) fn ensure_fragment_comment_models_staged(&mut self) -> Result<String> {

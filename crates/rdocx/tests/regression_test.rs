@@ -61566,6 +61566,157 @@ fn comment_anchor_runs_across_table_cells_in_physical_order() {
     }
 }
 
+/// Issue 405: a bookmark or permission range across table cells, or from a
+/// body paragraph into a cell, is no story range, yet story edits work on its
+/// document, its name and identifier stay taken, and a REF to it resolves in
+/// the body and refuses by name in a header.
+#[test]
+fn story_edits_work_beside_bookmarks_and_permissions_across_cells() {
+    let mut seed = Document::new();
+    seed.add_paragraph("seed");
+    seed.set_header("header");
+    let id = seed
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "source",
+        )
+        .unwrap();
+    let header = f254_story(&seed, StoryKind::Header);
+    let seed = seed.to_bytes().unwrap();
+    let field = |target: &str| {
+        format!(
+            r#"<w:p><w:fldSimple w:instr=" REF {target} "><w:r><w:t>OLD</w:t></w:r></w:fldSimple></w:p>"#
+        )
+    };
+    let build = |extra: &str| {
+        let body = format!(
+            r#"<w:p><w:bookmarkStart w:id="3" w:name="into"/><w:r><w:t>before</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:bookmarkStart w:id="1" w:name="across"/><w:permStart w:id="0" w:ed="ada"/><w:r><w:t>A</w:t></w:r><w:bookmarkEnd w:id="3"/></w:p></w:tc><w:tc><w:p><w:r><w:t>B</w:t></w:r><w:permEnd w:id="0"/><w:bookmarkEnd w:id="1"/></w:p></w:tc></w:tr></w:tbl><w:p><w:commentRangeStart w:id="{id}"/><w:r><w:t>body</w:t></w:r><w:commentRangeEnd w:id="{id}"/><w:r><w:commentReference w:id="{id}"/></w:r></w:p>{}{}<w:p><w:r><w:t>one</w:t></w:r></w:p><w:p><w:r><w:t>two</w:t></w:r></w:p><w:p><w:r><w:t>three</w:t></w:r></w:p>{extra}"#,
+            field("across"),
+            field("header_across"),
+        );
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&seed)).unwrap();
+        // Keep the section properties, which reference the header.
+        let main =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        let head = main.find("<w:body>").unwrap() + "<w:body>".len();
+        let main = format!(
+            "{}{body}{}",
+            &main[..head],
+            &main[main.find("<w:sectPr").unwrap()..]
+        );
+        package.set_part("/word/document.xml", main.into_bytes());
+        package.set_part(
+            header.part_name(),
+            format!(
+                r#"<w:hdr xmlns:w="{W_NS}"><w:tbl><w:tr><w:tc><w:p><w:bookmarkStart w:id="2" w:name="header_across"/><w:r><w:t>H1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>H2</w:t></w:r><w:bookmarkEnd w:id="2"/></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>H3</w:t></w:r></w:p></w:hdr>"#
+            )
+            .into_bytes(),
+        );
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        Document::from_bytes(output.get_ref()).unwrap()
+    };
+    // An in-owner bookmark reusing a cross-owner name is still a duplicate.
+    let duplicate = build(
+        r#"<w:p><w:bookmarkStart w:id="9" w:name="across"/><w:r><w:t>dup</w:t></w:r><w:bookmarkEnd w:id="9"/></w:p>"#,
+    );
+    assert!(duplicate.story_ranges().is_err());
+    let mut document = build("");
+    let ranges = document.story_ranges().unwrap();
+    assert!(ranges.iter().all(|entry| matches!(
+        entry.kind(),
+        rdocx::StoryRangeKind::Comment { id: found } if *found == id
+    )));
+    let outcomes = document
+        .evaluate_fields(&FieldEvaluationContext::default())
+        .unwrap()
+        .into_iter()
+        .map(|evaluation| evaluation.outcome)
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(&outcomes[0], FieldOutcome::Resolved(text) if text.contains('A') && text.contains('B')),
+        "{outcomes:?}"
+    );
+    assert!(
+        matches!(&outcomes[1], FieldOutcome::KeepStored { diagnostic } if diagnostic.contains("header_across runs across story owners")),
+        "{outcomes:?}"
+    );
+    let at = |document: &Document, text: &str| {
+        document
+            .story_item_snapshots()
+            .unwrap()
+            .into_iter()
+            .find(|item| {
+                item.location().story().kind() == StoryKind::Body
+                    && item.location().item_kind() == StoryItemKind::Paragraph
+                    && item.text() == Some(text)
+            })
+            .unwrap()
+            .location()
+            .clone()
+    };
+    let paragraph = |document: &Document, text: &str| {
+        let location = at(document, text);
+        StoryRunRange {
+            start: StoryRunPosition {
+                location: location.clone(),
+                run_index: 0,
+            },
+            end: StoryRunPosition {
+                location,
+                run_index: 1,
+            },
+        }
+    };
+    for name in ["across", "into", "header_across"] {
+        assert!(
+            document
+                .add_story_bookmark(name, paragraph(&document, "one"))
+                .unwrap_err()
+                .to_string()
+                .contains("already exists"),
+            "{name}"
+        );
+    }
+    assert!(
+        document
+            .remove_story_bookmark(1)
+            .unwrap_err()
+            .to_string()
+            .contains("across story owners")
+    );
+    document
+        .add_story_bookmark("fresh", paragraph(&document, "one"))
+        .unwrap();
+    let permission = document
+        .add_story_permission_range(Some("ben"), None, paragraph(&document, "two"))
+        .unwrap();
+    assert_ne!(permission, 0);
+    document
+        .add_story_comment(paragraph(&document, "three"), "Ben", None, "story")
+        .unwrap();
+    document
+        .move_comment(id, paragraph(&document, "before"))
+        .unwrap();
+    document
+        .insert_caption(&at(&document, "body"), &rdocx::CaptionOptions::default())
+        .unwrap();
+    document.rebuild_generated_tables().unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert!(reopened.story_ranges().is_ok());
+}
+
 /// Issue 405: a comment whose anchor cannot be read does not fail the
 /// listing. Its own entry is the error that `comment_anchor` returns.
 #[test]

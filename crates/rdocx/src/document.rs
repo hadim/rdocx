@@ -22366,9 +22366,15 @@ impl Document {
             oxml_core::xml::reject_non_xml_characters("internal hyperlink", value)?;
         }
         crate::comments::validate_bookmark_name(bookmark)?;
-        let matching = self.story_ranges()?.into_iter().filter(|entry| {
-            matches!(entry.kind(), crate::StoryRangeKind::Bookmark { name, .. } if name == bookmark)
-        }).count();
+        let (ranges, across) = self.story_range_inventory()?;
+        let matching = ranges
+            .iter()
+            .map(crate::StoryRangeRef::kind)
+            .chain(&across)
+            .filter(|kind| {
+                matches!(kind, crate::StoryRangeKind::Bookmark { name, .. } if name == bookmark)
+            })
+            .count();
         if matching != 1 {
             return Err(Error::Other(
                 "internal hyperlink bookmark is missing or ambiguous".into(),
@@ -22477,7 +22483,7 @@ impl Document {
             ));
         }
         let run_count = paragraph.accepted_run_paths().len();
-        let ranges = self.story_ranges()?;
+        let (ranges, across) = self.story_range_inventory()?;
         let existing = ranges.iter().find_map(|entry| {
             let crate::StoryRangeKind::Bookmark { name, .. } = entry.kind() else {
                 return None;
@@ -22496,7 +22502,9 @@ impl Document {
             None => {
                 let names = ranges
                     .iter()
-                    .filter_map(|entry| match entry.kind() {
+                    .map(crate::StoryRangeRef::kind)
+                    .chain(&across)
+                    .filter_map(|kind| match kind {
                         crate::StoryRangeKind::Bookmark { name, .. } => Some(name.as_str()),
                         _ => None,
                     })

@@ -13254,7 +13254,16 @@ fn ref_bookmark_runs(document: &Document, target: &str) -> Result<Option<RefBook
         }
         return Ok(Some(cache));
     }
-    let range = document.story_ranges()?.into_iter().find(|range| matches!(range.kind(), crate::StoryRangeKind::Bookmark { name, .. } if name == target));
+    let (ranges, across) = document.story_range_inventory()?;
+    if across
+        .iter()
+        .any(|kind| matches!(kind, crate::StoryRangeKind::Bookmark { name, .. } if name == target))
+    {
+        return Err(Error::Other(
+            "REF f target bookmark runs across story owners".into(),
+        ));
+    }
+    let range = ranges.into_iter().find(|range| matches!(range.kind(), crate::StoryRangeKind::Bookmark { name, .. } if name == target));
     let Some(range) = range else {
         return Ok(None);
     };
@@ -13345,6 +13354,9 @@ struct Evaluator<'a> {
     document: &'a Document,
     context: &'a FieldEvaluationContext,
     bookmarks: BTreeMap<String, BookmarkValue>,
+    // Related-story bookmarks whose two markers are in two owners. A REF to
+    // one refuses by name instead of reading as missing.
+    cross_owner_bookmarks: HashSet<String>,
     numbering_layout: Option<Arc<rdocx_layout::WordLayoutResult>>,
     numbering_nodes: HashMap<rdocx_layout::WordSourcePath, rdocx_layout::SourceNodeId>,
     navigation_styles: HashMap<String, Vec<rdocx_layout::SourceNodeId>>,
@@ -13405,7 +13417,15 @@ impl<'a> Evaluator<'a> {
         // Related ranges are admitted only by the checked physical inventory.
         // One paragraph inventory serves the ranges and the name counts.
         let paragraphs = document.story_range_paragraphs().ok();
-        if let Some(Ok(ranges)) = paragraphs.as_deref().map(Document::story_ranges_in) {
+        let mut cross_owner_bookmarks = HashSet::new();
+        if let Some(Ok((ranges, across))) = paragraphs.as_deref().map(Document::story_ranges_in) {
+            for kind in across {
+                if let crate::StoryRangeKind::Bookmark { name, .. } = kind
+                    && !bookmarks.contains_key(&name)
+                {
+                    cross_owner_bookmarks.insert(name);
+                }
+            }
             for range in ranges {
                 let crate::StoryRangeKind::Bookmark { name, .. } = range.kind() else {
                     continue;
@@ -13447,6 +13467,7 @@ impl<'a> Evaluator<'a> {
             document,
             context,
             bookmarks,
+            cross_owner_bookmarks,
             numbering_layout: None,
             numbering_nodes: HashMap::new(),
             navigation_styles: HashMap::new(),
@@ -14119,6 +14140,9 @@ impl<'a> Evaluator<'a> {
                     value.push_str(&position);
                 }
                 FieldOutcome::Resolved(value)
+            }
+            None if self.cross_owner_bookmarks.contains(target) => {
+                keep(&format!("REF target {target} runs across story owners"))
             }
             None => keep(&format!("REF target {target} was not found")),
         }

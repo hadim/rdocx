@@ -2429,9 +2429,12 @@ The additive native pre-1.0 story range API exposes `StoryRangeKind`,
 accepted run boundaries and pair order before committing. Permission starts
 retain an editor or group, while proofing pairs use `spell` or `gram` and no
 numeric id. Removing a comment pair retains its reference and definition as
-a point comment. Moving the pair relocates the reference with it. A comment
-pair whose markers are in two owners, such as one across table cells, is not
-listed, and moving that comment refuses. Existing
+a point comment. Moving the pair relocates the reference with it. A
+bookmark, comment or permission pair whose start and end are in two owners of
+one part, such as one across table cells, is not listed, while its name and id
+stay taken. Moving that comment or removing that bookmark refuses. A REF to
+that bookmark reads it in the main story and refuses by name in another story.
+Existing
 Python, WASM and CLI APIs remain source compatible and preserve these markers.
 
 Native Word callers author captions with `CaptionOptions` and `CaptionTarget`,
