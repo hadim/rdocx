@@ -123,9 +123,12 @@ handles capture the new epoch. Other removals retain conservative reconciliation
 
 Word read projections are prepared with that same immutable current-owner
 inventory. The facade supplies batch body and cell-paragraph locations matching
-its existing single lookups. Missing or unsupported projections retain those
-lookups. Route hashes index candidate owners, with exact route comparison and
-first-match selection after hashing. Hash equality alone grants no authority.
+its existing single lookups, and the inventory by block and part gives them
+block by block. Missing or unsupported projections retain those lookups.
+Prepared handles and the edited paragraph's publication route bind through
+the same projections before those lookups. Route hashes index candidate
+owners, with exact route comparison and first-match selection after hashing.
+Hash equality alone grants no authority.
 Accepted paragraph text and table row/cell paragraph counts are derived read
 facts, never serialization sources. Full replacement and property relocation
 prepare fresh facts. Local plain XML prepares its new accepted text before

@@ -432,7 +432,7 @@ impl PyParagraph {
         {
             let document = self.document.borrow(py);
             match document
-                .indexed_paragraph_location(&location)
+                .indexed_paragraph_location(&location, None)
                 .map(Ok)
                 .unwrap_or_else(|| location.native(&document.inner))
             {
@@ -470,8 +470,8 @@ impl PyParagraph {
             || paragraph_location(&self.path),
             |location| Ok(ParagraphLocation::Related(location.clone())),
         )?;
-        let location = location
-            .native(candidate)
+        let location = document
+            .paragraph_route(&location, Some((prepared, candidate)))
             .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         let (path, owner) = document.capture_prepared_owner(
             prepared,
@@ -653,8 +653,8 @@ impl PyParagraph {
                 &candidate,
                 operation,
                 crate::document::WordPublication::ParagraphAppend(
-                    location
-                        .native(&document.inner)
+                    document
+                        .paragraph_route(&location, None)
                         .map_err(|error| crate::rdocx_to_pyerr(py, error))?,
                 ),
             )?;
@@ -891,8 +891,8 @@ impl PyParagraph {
             &candidate,
             "Paragraph.add_equation",
             crate::document::WordPublication::ParagraphAppend(
-                location
-                    .native(&document.inner)
+                document
+                    .paragraph_route(&location, None)
                     .map_err(|error| crate::rdocx_to_pyerr(py, error))?,
             ),
         )?;
@@ -988,8 +988,8 @@ impl PyParagraph {
             py,
             &candidate,
             "Paragraph.text",
-            location
-                .native(&document.inner)
+            document
+                .paragraph_route(&location, None)
                 .map(crate::document::WordPublication::ParagraphText)
                 .unwrap_or(crate::document::WordPublication::Conservative),
         )?;

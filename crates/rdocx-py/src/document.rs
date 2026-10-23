@@ -4522,6 +4522,27 @@ pub(crate) fn assert_direct_read(
     );
 }
 
+/// Under debug assertions, check a handle's route bound from an owner
+/// inventory against the route the document resolves, story fingerprints
+/// aside.
+#[cfg(debug_assertions)]
+pub(crate) fn assert_indexed_route(
+    indexed: &rdocx::ContentLocation,
+    native: impl FnOnce() -> rdocx::Result<rdocx::ContentLocation>,
+    owner: &str,
+) {
+    #[cfg(test)]
+    let visits = fx260_word_visits();
+    let native = guarded(native).expect("an indexed route resolves in the document");
+    assert_eq!(
+        unfingerprinted_location(indexed),
+        unfingerprinted_location(&native),
+        "indexed {owner} route"
+    );
+    #[cfg(test)]
+    FX260_WORD_VISITS.with(|cell| cell.set(visits));
+}
+
 #[cfg(debug_assertions)]
 fn unfingerprinted_location(location: &rdocx::ContentLocation) -> rdocx::ContentLocation {
     let story = location.story();
@@ -8054,53 +8075,77 @@ impl PyDocument {
         owner.owner.same_state(state).then_some((index, owner))
     }
 
+    /// The route of the physical owner of a paragraph handle's location,
+    /// from the inventory of `prepared` when given, or the current one.
     pub(crate) fn indexed_paragraph_location(
         &self,
         location: &ParagraphLocation,
+        prepared: Option<&PreparedWordRevision>,
     ) -> Option<rdocx::ContentLocation> {
         note_fx260_word(1);
+        let (owners, indexes) = prepared.map_or((&self.owners, &self.indexes), |prepared| {
+            (&prepared.owners, &prepared.indexes)
+        });
         let native = match location {
-            ParagraphLocation::Body(index) => self
-                .indexes
-                .body_paragraphs
-                .as_ref()?
-                .get(*index)?
-                .as_ref()?,
+            ParagraphLocation::Body(index) => {
+                indexes.body_paragraphs.as_ref()?.get(*index)?.as_ref()?
+            }
             ParagraphLocation::Cell {
                 table,
                 row,
                 cell,
                 paragraph,
-            } => self
-                .indexes
+            } => indexes
                 .cell_paragraphs
                 .get(&(*table, *row, *cell))?
                 .get(*paragraph)?,
             ParagraphLocation::Related(location) => location,
         };
-        let index = self
-            .indexes
-            .find(&self.owners, &WordOwnerLocation::Paragraph(native.clone()))?;
-        let WordOwnerLocation::Paragraph(location) = &self.owners[index].location else {
+        let index = indexes.find(owners, &WordOwnerLocation::Paragraph(native.clone()))?;
+        let WordOwnerLocation::Paragraph(location) = &owners[index].location else {
             return None;
         };
         Some(location.clone())
     }
 
+    /// The route of the physical owner of a paragraph handle's location in
+    /// the current document, or in `candidate` as `prepared` publishes it:
+    /// from that inventory, which holds the route the document resolves, or
+    /// as the document resolves it.
+    pub(crate) fn paragraph_route(
+        &self,
+        location: &ParagraphLocation,
+        prepared: Option<(&PreparedWordRevision, &rdocx::Document)>,
+    ) -> rdocx::Result<rdocx::ContentLocation> {
+        let document = prepared.map_or(&self.inner, |(_, candidate)| candidate);
+        match self.indexed_paragraph_location(location, prepared.map(|(prepared, _)| prepared)) {
+            Some(indexed) => {
+                #[cfg(debug_assertions)]
+                assert_indexed_route(&indexed, || location.native(document), "paragraph");
+                Ok(indexed)
+            }
+            None => location.native(document),
+        }
+    }
+
+    /// The route of the physical owner of a table handle's location, from
+    /// the inventory of `prepared` when given, or the current one.
     pub(crate) fn indexed_table_location(
         &self,
         index: usize,
         related: &Option<rdocx::ContentLocation>,
+        prepared: Option<&PreparedWordRevision>,
     ) -> Option<rdocx::ContentLocation> {
         note_fx260_word(1);
+        let (owners, indexes) = prepared.map_or((&self.owners, &self.indexes), |prepared| {
+            (&prepared.owners, &prepared.indexes)
+        });
         let native = match related {
             Some(location) => location,
-            None => self.indexes.body_tables.get(index)?.as_ref()?,
+            None => indexes.body_tables.get(index)?.as_ref()?,
         };
-        let index = self
-            .indexes
-            .find(&self.owners, &WordOwnerLocation::Table(native.clone()))?;
-        let WordOwnerLocation::Table(location) = &self.owners[index].location else {
+        let index = indexes.find(owners, &WordOwnerLocation::Table(native.clone()))?;
+        let WordOwnerLocation::Table(location) = &owners[index].location else {
             return None;
         };
         Some(location.clone())
