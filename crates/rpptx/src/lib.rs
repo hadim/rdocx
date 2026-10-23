@@ -12628,8 +12628,12 @@ impl Presentation {
         }
         let mut package = self.package.clone();
         package.set_part_rels(&part_name, relationships);
-        prune_unreachable_parts(&mut package, &removed_parts);
-        let media = MediaStore::scan(&package);
+        // Scanning hashes every medium, so it waits for a removed part.
+        let media = if prune_unreachable_parts(&mut package, &removed_parts) {
+            MediaStore::scan(&package)
+        } else {
+            self.media_store.clone()
+        };
         Arc::make_mut(&mut self.slides[slide_index]).slide = slide;
         self.package = package;
         self.media_store = media;
@@ -19401,7 +19405,10 @@ fn collect_media_targets(package: &OpcPackage, source_part: &str, targets: &mut 
 ///
 /// A removed part's own internal targets become candidates in turn, so a
 /// removed chart also drops its embedded workbook.
-fn prune_unreachable_parts(package: &mut OpcPackage, candidates: &HashSet<String>) {
+/// Removes the candidate parts nothing references any more, and the parts
+/// only they referenced. Returns whether any part was removed.
+fn prune_unreachable_parts(package: &mut OpcPackage, candidates: &HashSet<String>) -> bool {
+    let mut removed = false;
     let mut pending = candidates.iter().cloned().collect::<Vec<_>>();
     pending.sort_unstable();
     while let Some(candidate) = pending.pop() {
@@ -19437,7 +19444,9 @@ fn prune_unreachable_parts(package: &mut OpcPackage, candidates: &HashSet<String
         package.remove_part(&candidate);
         package.remove_part_rels(&candidate);
         package.content_types.remove_override(&candidate);
+        removed = true;
     }
+    removed
 }
 
 fn expanded_property_root(source: &[u8], namespace: &str, root: &str) -> Result<Vec<u8>> {
