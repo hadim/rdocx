@@ -1,396 +1,174 @@
-# Current Sprint, S95.3
+# Current Sprint, S95.4
 
-**Milestone**: M24, Modern DOCX authoring completeness.
+**Milestone**: M24 Modern DOCX authoring completeness.
 
-**Goal**: Author the content control lifecycle before typed values and custom XML
-bindings. F-285 creates, inspects, edits, moves, clones and removes controls.
-F-286 and F-287 then add typed controls and custom XML stores. The original
-three stories retain their 12 to 15 developer-day estimate. The user added
-review repairs and the live Issue387 through Issue392 and PR393 through PR396
-resolution union on 2026-10-18. The expanded seven-story estimate is 28 to 39
-developer-days, not an unchanged sprint-capacity promise.
+**Goal**: compose legacy fields and modern forms, and author mail-merge data.
+Also admit the incoming Word and PowerPoint correctness and performance repairs.
+Provide public creation of legacy form fields, build modern forms on the existing
+content-control model, and author mail-merge packages with offline diagnostics.
+The four repair stories stay pending a full design. They do not replace the
+original authoring contract.
 
-The 2026-10-22 user-authorized refresh adds Issue398/PR399 and Issue400/PR401,
-plus candidate PR397 for existing Issue389. These extend F-X260 and F-X259
-without adding parallel stories. Allow another 3 to 5 developer-days
-provisionally, making the expanded estimate 31 to 44 developer-days.
+**Estimated effort**: the 12 to 17 developer-day figure applies only to the
+original three Rust and Python authoring stories, F-288, F-289 and F-290.
+The earlier 8 to 11 figure is the pre-Python native basis for those same three
+stories. The four repair designs add a provisional 15 to 24 developer-days.
+The expanded planning total is 27 to 41 developer-days. Those figures are
+estimates, not measurements, and they are not a capacity promise. The visible
+over-two-week scope is an approved intake. The sprint clock has not started.
+It starts with the first `/start-feature`. F-X267 remains the largest repair.
 
 ## Spec references
 
-- `docs/hld/14-development-backlog.md`, F-285, F-286 and F-287 define the creation, typed-control and custom-XML scope, their dependencies and the round-trip or differential gates. M24's complete stability boundary remains F-310 in S99.
-- `docs/hld/02-scope-and-non-goals.md`, DOCX-052, DOCX-053 and DOCX-054 name the form rows these stories close.
-- `docs/hld/03-architecture.md`, content-control order, shell identity, data binding and fragment ownership define the structures public creation must reuse.
-- `docs/hld/04-opc-and-packaging.md`, the document-owned custom XML graph, item properties and exact retention of unrelated store bytes govern F-287 publication.
-- `docs/hld/10-bindings-spec.md`, the present content-control read and replacement surfaces define what authoring may expose and what stays internal.
-- `docs/hld/12-testing-strategy.md`, round-trip and differential controls for content controls, bound custom XML and byte-identical unknown stores define the integrated observations.
+- `docs/hld/14-development-backlog.md`, sections F-288, F-289 and F-290 define
+  supported authoring behavior, dependencies and each story's acceptance gate.
+  Sections F-X264, F-X265, F-X266 and F-X267 define the admitted repair scope.
+  The durable issue and PR mapping is the S95.4 issue and PR intake, 2026-10-23 section in `docs/sprints/SPRINT_PLAN.md`.
+  Each repair still needs its own design before approval or claim.
+- `docs/hld/03-architecture.md`, the existing legacy form, field, content-control,
+  protection and mail-merge ownership contracts settle reuse of the document
+  model, staging and publication boundaries.
+- `docs/hld/04-opc-and-packaging.md`, The package defines normalized part identity,
+  relationship ownership, content types and validation before serialization.
+- `docs/hld/10-bindings-spec.md`, the existing native field and merge surfaces
+  and Python content-control contracts establish compatibility. Each design
+  must explicitly decide its new consumer coverage and exact signatures.
+- `docs/hld/12-testing-strategy.md`, Test taxonomy, the legacy form and glossary
+  controls, mail-merge controls and Typed content-control native Word
+  qualification define local regressions, round-trip proof and authentic oracle
+  provenance. Existing evidence qualifies only its recorded source and scope.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X259 | Repair reviewed consistency defects and strengthen acceptance gates | M | done | - |
-| F-X260 | Restore live handles and bound structural edit cost | L | done | - |
-| F-X261 | Resolve Word package preservation and inspection contributions | L | done | - |
-| F-X262 | Resolve PowerPoint authoring and table-render contributions | L | done | - |
-| F-285 | Content control creation and lifecycle | L | done | - |
-| F-286 | Rich, repeating, and typed content controls | L | done | - |
-| F-287 | Custom XML stores and data binding authoring | L | done | - |
-| F-X263 | Prepare Word 0.16.3 and PowerPoint 0.14.3 patch releases | L | done | - |
+| F-288 | Legacy form field creation | M | pending | - |
+| F-289 | Modern Word form authoring | L | pending | - |
+| F-290 | Mail-merge package and data-source authoring | M | pending | - |
+| F-X264 | Repair Word defaults package inspection and comment projection | L | pending | - |
+| F-X265 | Preserve fragment relationship targets and duplicate styles | M | pending | - |
+| F-X266 | Bound Word body reads and structural edit cost | L | pending | - |
+| F-X267 | Bound PowerPoint mutation cost across public publishers | L | pending | - |
 
 ## Sequencing note
 
-Rows are listed in intended execution order, not F-ID order. F-X259 prepares
-the reviewed corrections and shared workflow now. Its final integrated checks
-remain part of this sprint. Then prioritize F-X260, F-X261 and F-X262 before
-new authoring. Their source and binding carriers overlap, so they stay serial:
-F-X260, then F-X261, then F-X262. PR heads are candidates and have not been
-merged or accepted. F-X260 must not trade owner correctness for speed.
+The table above is the sprint inventory. It is not the proposed shared-file integration order. Formal dependency order follows. F-288 depends on completed F-237 and
+F-278. Complete and integrate F-288 through its approved scoped
+dependency-prefix checkpoint before implementing F-289. F-289 also depends on
+completed F-275 and F-285 through F-287. Design approval alone does not satisfy
+the F-288 implementation dependency.
 
-The user requests Grok implementation through the shared commands followed by
-an independent Codex sprint review. Use `/run-sprint --reviewer codex` and stop
-at the review handoff if Codex cannot be invoked in that environment. The Grok
-implementer cannot record its own review as the requested Codex review.
+F-290 depends on completed F-233, F-270 and F-278. It may proceed independently
+of the F-288 to F-289 chain only when actual source and resource leases are
+distinct. Shared facade, binding or HLD files require serial ownership.
 
-The user subsequently asked Codex to take over implementation and resumed that
-takeover on 2026-10-22. Codex is the sole product writer. Grok may propose
-mechanical documentation in isolation, subject to Codex validation. Original
-worker identities and completed independent reviews remain historical facts.
-The original three sprint-review passes remain historical. On 2026-10-22 the
-user approved Q25, allowing at most two further independent Codex passes,
-numbered4and5, after required checks. No pass is reset or counted as clean.
-Native Word is now connected and Q24 accepts the documented native differences.
-The sprint remains in integration until its remaining acceptance checks pass. The documented independent CI
-producer now supplies authenticated F-X195 inputs locally. Their installed
-suite outcomes are recorded separately from native Word qualification.
+All seven stories start pending and unclaimed. The original three remain in
+the design phase on their existing drafts. Public APIs, supported properties,
+binding coverage, native comparison inputs and exact refusal behavior require
+explicit design contracts before implementation. S95.3's native fixtures do
+not automatically certify new form authoring.
 
-Within the authoring group, F-285 comes first. Complete and integrate F-285
-through its scoped dependency-prefix checkpoint before F-286 starts. F-287
-starts only after F-286 leaves the shared content-control files. The three
-stories stay serial. F-X249's bounded existing-control fill repair does not
-replace these authoring contracts.
+F-X264, F-X265, F-X266 and F-X267 are provisional sizes. Draft plans exist and
+stay unapproved. They have no formal dependency on each other. Each depends
+only on the completed S95.3 providers named in HLD14: F-X260 and F-X261 for
+F-X264, F-X261 for F-X265, F-X260 for F-X266, and F-X260 and F-X262 for F-X267.
 
-## Codex implementation checkpoint, 2026-10-22
-
-The latest instruction changes are committed in61306b3b. F-X260's read-handle,
-physical-owner and atomic publication repairs are in8d53993f. F-X259's Issue400
-TOC range correction and measured archive refresh are ina4e4deff. Independent
-feature microscopes are clean. These are local reviewed checkpoints, not
-feature completion or final sprint approval. Run state now retains reviewed
-for both stories, while this delivery table stays in-progress until acceptance.
-Original consumed worker identities and integration receipts remain intact.
-
-Current source passed6732native tests, with73ignored, both WASM configurations,
-minimal layout, workspace lint/docs, README validation and dependency policy.
-All49hashes and seven deterministic pixel buffers match. Allseven Issue389
-release edit ratios and allthree Issue398 read ratios are strictly below3.
-Independent font inputs were rebuilt by the pinned CI producer. The full
-installed Word suite passes1061tests and the full PowerPoint suite passes1028.
-Clean-tree publication dryrun passed for all22publishable archives, each below
-10MiB, largest4900978bytes. The pinned PowerPoint corpus rendered50decks and
-421slides with zero dropped shapes. Its visual fidelity trend is51/421slides
-at SSIM0.95,12.114percent against an80percent target, which is not met.
-Completeness and fidelity are distinct observations. No baseline changed.
-Native Word final qualification, the private unreduced Issue390 input and
-final acceptance remain pending. No fourth sprint review, push, merge or publication occurred.
-
-## Native Word checkpoint, 2026-10-22
-
-Word for Mac16.114(26101123) now authors the external originals through its
-native UI and object model. Two installed external differential tests pass,
-including both date formats and distinct first-item repetition with formatting,
-identity and non-last removal controls. Word also opened and saved all twelve
-library-authored control cases without a repair prompt. Those consumer inputs
-are separate from original Word oracle files. Source and output hashes,
-producer version, VBA sources and exact observations are retained locally.
-
-The user approved Q24: retain clone-first append and last-item refusal,
-document native addressed-item cloning and whole-section deletion as intentional
-differences, and use equivalent native operations for comparison. The user also
-approved Q25: permit at most two further independent sprint-review passes after
-required checks, retaining passes1through3 and every finding. No review is
-called clean by that approval. B1 disposition still requires final evidence
-reconciliation, and the sprint is not accepted by recording the decisions.
-
-Obsolete sprint build products and completed render output have been removed
-from `/private/tmp`, reclaiming818.6MiB. Historical failures, measured outcomes
-and artifact hashes are retained in ignored evidence. Active build caches,
-qualified font producers, pinned viewers and current release artifacts remain
-available for the outstanding gates. Unrelated temporary files are untouched.
-
-## Accepted providers, 2026-10-22
-
-Seven provider stories are complete after actual local and provider-final
-evidence reconciliation. F-285's earlier prefix now has its final delivery
-entry exactly once. Independent native qualification pass2 accepts the bounded
-Word evidence under Q24 with zero findings. The missing-Word condition is
-addressed. Original-source PowerPoint regressions and the authenticated PR394
-functional-parent read close that story's evidence gaps. Capability rows and
-live-owner policy match the bounded completed contracts.
-
-F-X263 is the sole remaining story. Its new-version local wheels and CLIs are
-built. Installed Word1063tests and PowerPoint1028tests pass. Exact42Word and
-44PowerPoint priority cases pass on fresh Python3.9and3.12 environments, and
-both installed typing/stub checks pass. Remaining local and hosted artifact
-gates are pending. No global eight-story full gate or final sprint
-review is called passed. Q25 allows final passes4and5 only after the required
-checks. No push, merge, tag, issue closure or publication has occurred.
-
-The prepared-source local checkpoint now passes6732native tests with73ignored,
-workspace lint, minimal layout, both WASM graphs, warning-denied docs, README
-compilation and22package inventories,192policy tests with2skips and dependency
-policy. All49hashes and seven deterministic pixel buffers match. Independent
-F-X263 microscope pass1 has zero findings. Genuine clean-tree verified archives
-and actual hosted build-only/downloaded-artifact gates remain pending. This is
-an implementation checkpoint, not the final eight-story full gate or review.
-
-Clean-source082aafa9also passes the genuine locked22-package verified archive
-dryrun. All archives authenticate that source, match the recorded inventories
-and remain below10MiB. F-X263 still waits for actual hosted build-only execution
-and downloaded artifact qualification. Its canonical source-availability
-checkpoint does not complete the story or authorize tags or publication.
-
-## All eight implementations accepted, 2026-10-22
-
-F-X263 now completes the eight-story delivery union. Actual clean-source
-verified22-package dryrun and hosted run39792212063 pass. The hosted run has
-27successful deciding jobs, four skipped publication jobs and26authenticated
-unique payloads. Downloaded host wheels pass172priority calls over Python3.9
-and3.12, plus both strict typing/stub suites. Complete local installed suites
-pass1063Word and1028PowerPoint. Native6732pass/73ignored, applicable provider
-oracles, bothWASM, minimal layout, lint/docs/README,192policy tests with2skips,
-dependency policy,49hashes and seven deterministic pixels are source-qualified.
-The advisory421-slide SSIM trend remains below target, not passed fidelity.
-Historical checkpoint paragraphs above retain what was pending at those times.
-
-All eight stories are done with no carries. Final independent sprint review
-pass4, main merge and sprint closure remain due. Publication has not started.
-The complete M24 stability gate remains F-310/S99. Issue390's private unreduced
-input stays unqualified and the issue remains open. Later roadmap work has
-not started. Fresh final release approval is still required at clean main.
-
-## Independent pass4 amendment, 2026-10-22
-
-Pass4 reviewed178d0b06 and reports one blocking B2 finding, zero should-fix and
-zero nice-to-have. B1/B3/B4 are accepted within their bounded contracts.
-A valid customXml row wrapper could relocate into a paragraph, and the same
-name-only admission reached repeating conversion. The eight completed delivery
-entries remain historical implementation records, without new story credit.
-Sprint acceptance, close and publication are blocked pending the separate B2
-amendment, affected source/artifact qualification and independent pass5.
-Old Word wheels and the rdocx archive do not qualify that changed source.
-Unaffected observations retain their original source applicability.
-
-## Requested release follow-up, 2026-10-22
-
-The user explicitly retains Word0.16.x and PowerPoint0.14.x for both Rust
-crate families and matching PyPI distributions. Release preparation belongs
-before the final sprint freeze and review. Publication follows acceptance and
-closure. Determine the next available patch in each retained line from actual
-registry inventories before fixing the versions. Fresh22crate and two PyPI
-inventories select0.16.3 and0.14.3, absent across both complete families.
-Recheck absence at final publication. The earlier0.17.0 and0.15.0
-candidates were a Codex interpretation and are superseded by this correction.
-F-X263 records the approved release-preparation contract. This is an
-eighth story under the added release request, provisionally3to5additional
-developer-days and34to49total, beyond the normal seven-story cadence.
-Implementation waits for actual provider checkpoints. Release preparation
-needs its approved plan, exact family version alignment, changelog and
-contributor inventory, packaging and build-only CI evidence. This request does not mark any current story done or bypass pending
-native Word qualification, integrated acceptance or the approved bounded review.
-Only `/release` may publish after `/close-sprint`, with separate final approval
-at the reviewed clean main SHA. No version carrier or release tag is changed
-by recording this intent.
+Proposed serial integration, because leases overlap, is F-X264, F-X265,
+F-X266, F-X267, then F-288, then its verified local provider prefix, then
+F-289, then F-290. That order is not a set of invented formal dependencies.
+Preserve the F-288 verified local provider prefix before F-289. Final Word
+qualification of that prefix stays pending.
 
 ## Definition of done for this sprint
 
-- Integrate F-285 through its scoped dependency-prefix checkpoint before starting F-286 or F-287.
-- F-285 public creation and mutation of block, row, cell, paragraph and inline controls survives round-trip with no raw-XML fallback.
-- F-286 typed controls pass the pinned native Word comparison under replacement and documented equivalent repetition. Q24 retains clone-first append and last-item refusal as intentional native-default differences. Authentic Word provenance, version and input identity are required. Generated output is not that oracle. Missing evidence stays pending.
-- F-287 bound controls resolve, update and reopen against the correct store, and unknown store content stays byte-identical.
-- One integrated verification and a clean sprint review. Do not start S96. M24's complete stability gate remains F-310 in S99.
-- Issues 264 and 281 stay open. No release tag is prepared by opening this sprint.
+- F-288 creates text, checkbox and drop-down legacy fields with their supported
+  properties. Public-created fields pass an authentic pinned Word differential
+  and retain typed values through update and reopen.
+- F-289 composes controls, protection, editable ranges, validation, placeholders
+  and repeating data without a second document model. A dense public-created
+  form passes the pinned Word behavior and rendering comparison across fill,
+  reset, protect and reopen.
+- F-290 authors settings, mappings, recipients, connection metadata and safe
+  embedded data. Save and reopen retain the declared source and mappings.
+  Unavailable external data produces explicit diagnostics, with retrieval
+  policy-controlled and offline by default.
+- Every F-ID satisfies its approved acceptance matrix, scoped verification,
+  zero-defect and zero-smell microscope, and named HLD updates. The F-288
+  prefix checkpoint retains all named final rider debt until actual acceptance.
+- The integrated tree passes `/verify --full`, applicable risk riders and the
+  independent sprint review. Unexplained hash changes block acceptance, and
+  rendering baselines use deterministic font mode.
+- Missing external evidence stays pending. Sprint closure does not imply
+  completion of M24's later stability gate or authorize another publication.
+- F-X264, F-X265, F-X266 and F-X267 meet the acceptance scope in HLD14 and in
+  the S95.4 intake record. Donor patches stay candidates until a design
+  decides each contract. Contributor CI, debug assertions and fuzz results
+  are candidate evidence. They are not local qualified gates.
 
+## Design checkpoint, 2026-10-23
 
-## Live contribution acceptance inventory
+Drafts: `.claude/plans/F-288-design.md`, `.claude/plans/F-289-design.md`, and `.claude/plans/F-290-design.md`.
+Baseline `a57be365`. Intake is 4 open issues and 0 open PRs. That 4 and 0 figure is a historical snapshot of this design checkpoint, preserved as history, and it is not the later 19:37:06Z receipt. No acceptance work was added. Issue #381 stays a later AcroForm plan.
+Mechanical answer recording is by Grok. Design validation is by Codex. The drafts are not approved.
+Question status: Q1, Q2, Q3, Q4, Q5, Q6, Q7, and Q8 are answered. No user question remains unanswered. Q2 stays the 2026-10-23 source-analysis answer, with its historical provenance retained. Q1, Q3, Q4, Q5, Q6, Q7, and Q8 are user answers from 2026-10-23.
+Q1 selects Rust and Python new APIs. WASM and CLI gain no new authoring methods. Existing consumers retain preservation and current-value behavior. The exact Python surfaces are now recorded in each plan under `## Python API contract`. Root Codex validation is still pending. This checkpoint does not approve the drafts.
+Q3 stores settings and leaves execution to Word. No new native or Python calculation or formatting evaluator is added. Legacy `calculate_on_exit` defaults to false, matching the approved native options default.
+Q4 starts F-289 only after a verified F-288 local provider checkpoint: local RED then GREEN for all five named focused native regressions plus the affected Python factory, attachment, current, and default checks, scoped verification, an independent clean microscope, and an integrated source ancestor. The semantic RED is default and current through the old existing providers. Additive factory absence is a compile failure, not that semantic RED. Final Word differential, full verification, and riders remain pending.
+Q5 selects the proposed modern-form contract. Q6 selects the proposed render gate, and the native independent Word comparison remains unrun. Q7 selects an offline rdocx table plus Word metadata, versioned custom XML identified by document variable `rdocx.mailMerge.storeItemId`, caller-supplied external records, `Err` for offline plus supplied external records, and no pretended Word-native embedded source. Q8 selects payload caps of 16 MiB encoded XML, 100000 records, and 1024 columns.
+Contract closure is still pending root Codex validation of the recorded Python contracts. That pending work is not an unanswered user choice.
+The planning total recorded here is 12 to 17 developer-days for the original three stories, including Python. The prior 8 to 11 figure remains the native basis for those three. Both figures are estimates, not measurements. They are not an estimate of the later seven-story sprint.
+Serial order stays F-288, then its verified local provider checkpoint, then F-289, then F-290, because the facade, tests, and HLD overlap. F-290 still needs distinct source and resource leases, and the Python expansion revises those leases.
+All three features remain pending and unclaimed. Full gates and native qualification are unrun. These drafts do not claim implementation.
+This checkpoint records design state only. It is not delivery or release credit.
 
-Read-only intake on 2026-10-18 found six new issues and four open PRs. Source
-bodies and PR identities are retained locally in
-`.claude/scratch/S95.3-github-intake.json` and
-`.claude/scratch/S95.3-pr-intake.json`, with SHA-256
-`320da690d0469135e1515db51d3855e47156120749ffd4b52b389f065e3bb8e0` and
-`fd0fc0346fbf7ce2cd713fc24cd1a3051d08ef5c6264c14d8b9ad76e72154d43`.
-Refresh and compare remote bodies/heads before using them. The durable contracts
-below and HLD14 retain the scope if local intake files are unavailable.
+## Resume checkpoint, user stop on 2026-10-23
 
-A read-only refresh on 2026-10-18 found issue bodies 264, 281, 377, 381 and
-387 through 392 unchanged. PR393 remains
-`beb9c448d0d99636a799d95f718acccb9ea55646`. PR394, PR395 and PR396 advanced by
-one commit each, and that commit only records archive measurements in README
-files and `scripts/readme_doctests.py`. Their refreshed heads are
-`e9f9fbe7b86388b8702af5757bdfa7e4e4fc6596`,
-`5d481eb53f00926896f9de632115f4cb245fc941` and
-`c71708541397f96128dea2dc8b9c1a21c7da498a`. Functional parents remain the
-previously pinned heads. No issue or pull request was closed, merged or
-commented on.
+All seven user choices are recorded under original Q1 through Q8 (Q2 was source-resolved). Plans F-288/F-289/F-290 remain draft. All features remain pending and unclaimed, run state stays phase design. No implementation, feature review, product verification, commit or push occurred. Codex contract closure still needs: F-288 generic cache publishers and current/default authority, including direct cached_result edits, typed/nested cache changes, attachment and fresh/reopened inventory. Reconcile legacy creation reachability with inventory/fill coverage for comments and text boxes while preserving existing ordinal compatibility. F-289 imported date/list/checkbox/placeholder/bound-value validation authority, and one physical control inventory across overlapping story owners without duplicate counts. Correct Python test paths to crates/rdocx-py/tests/test_core.py and use existing crates/rdocx-py/tests/typing_smoke.py. No further user choices are pending. Resume with contract reconciliation and validation before approving or claiming any feature. Grok handles mechanical work, Codex handles design/validation. The 12 to 17 developer-day total is a planning estimate for the original three stories, including Python.
 
-| Issue or PR | Owner | Acceptance and disposition |
-|---|---|---|
-| [388](https://github.com/tensorbee/rdocx/issues/388), [393](https://github.com/tensorbee/rdocx/pull/393) | F-X260 | Word cell property edit handles and PPT append owners, including fresh/held/nested and stale-collection controls |
-| [389](https://github.com/tensorbee/rdocx/issues/389) | F-X260 | All seven structural-edit scaling rows and range-removal API. PR393 alone does not resolve this issue |
-| [387](https://github.com/tensorbee/rdocx/issues/387) | F-X261 | Word custom-property iteration, items and length against actual saved/read imported metadata |
-| [390](https://github.com/tensorbee/rdocx/issues/390), [396](https://github.com/tensorbee/rdocx/pull/396) | F-X261 | Six reduced observations plus explicit disposition of the unreduced control-owner diagnostic and disclosed asset reinsert regression |
-| [391](https://github.com/tensorbee/rdocx/issues/391), [395](https://github.com/tensorbee/rdocx/pull/395) | F-X261 | All five source/API rows, paired text-box authority and approved public compatibility |
-| [392](https://github.com/tensorbee/rdocx/issues/392), [394](https://github.com/tensorbee/rdocx/pull/394) | F-X262 | All nine authoring/render rows, native table growth and intentional paint deltas |
-| [398](https://github.com/tensorbee/rdocx/issues/398), [399](https://github.com/tensorbee/rdocx/pull/399) | F-X260 | Read-only paragraph, row-cell and cell-paragraph creation, cold and repeated calls, whole walks, table-position independence, nested/related owners and current-state correctness after edits. Candidate PR399 still fails the reporter's cold-call script |
-| [397](https://github.com/tensorbee/rdocx/pull/397) | F-X260 | Additional candidate for Issue389. Preserve all seven strict release ratios and the already approved range signature/error. Its unaddressed Word edit costs and first-fill cost stay acceptance work |
-| [400](https://github.com/tensorbee/rdocx/issues/400), [401](https://github.com/tensorbee/rdocx/pull/401) | F-X259 | Bound outline-derived TOC entries by an explicit heading range, through native, Python and CLI rebuild. Preserve outline-only, custom-style and suppressed-outline selectors |
+## Resume checkpoint, intake only on 2026-10-23
 
-Live API refresh on 2026-10-22 found the existing issue bodies and PR393 through
-PR396 heads unchanged. New PR heads are PR397
-`d9721353314ba969c05bd9f886bdd24d15d51a8d`, PR399
-`34dfd42782de08bc331a5f6c819774720bb60067` and PR401
-`62124737c428a77e0c4fec52b56665c67f221e7c`. All target base
-`b072b9852d5b17c7bcd19889cef058556ce9b67d`, not the current sprint tree.
-Issue398 body SHA-256 is
-`4e940897286f91d30bf5c2b54497462e50077e89313262db6ea38eebccaf6124`.
-Issue400 body SHA-256 is
-`656762fcfaf40919000730cb39099c6d3c0da427cacba45360a9cfcd4fa0836f`.
-Both have zero comments at refresh. The existing local intake files now retain
-the refreshed issues and the three new PR bodies, file patches and commits.
-Their refreshed SHA-256 values are
-`a03525cd237b2081c105ffe55f36e189134164ef0f6052977fbaaa0d846c364e` and
-`26e3454b3c215f8cbda82e7f805f987cb2e105080c4215cc1bf3492734ad1036`.
-No candidate is merged or accepted. No external messages or closures occurred.
+The latest user request folds the 2026-10-23T19:37:06Z intake into S95.4 and leaves implementation paused. The durable mapping is the S95.4 issue and PR intake, 2026-10-23 section in `docs/sprints/SPRINT_PLAN.md`. Original plans F-288, F-289 and F-290 stay draft. All seven features stay pending. The original three-story estimate remains 12 to 17 developer-days. The expanded seven-story estimate is unknown. Original Q1 through Q8 and the three draft plans stay as recorded. Contract closure for those drafts is still outstanding. The four new repairs need designs, a contribution assessment and an estimate before any approval or claim. The original drafts do not need rewriting for this intake because the repairs have distinct owners. Provider reconciliation is still required before any claim, including the original stories. This checkpoint is not delivery credit in AS_BUILT or SPRINT_TRACKER, and it changes no release or version. The seven-story sprint remains not yet estimated, with a visible capacity risk on F-X267. There is no automatic ongoing intake loop.
 
-No external issue/PR was closed, merged or commented on by this preparation.
-`/close-sprint` reconciles them only after acceptance and the integrated main
-push, retaining specific contributor credit for hadim. Issues264/281 remain
-open, Issue381 stays with the S96 form programme, and Issue377's benchmark
-invitation retains its existing disposition without new implementation credit.
+## Resume checkpoint, run request on 2026-10-23
 
-## Additional acceptance and handoff
+Q9 is answered on 2026-10-23. A bounded Rust API change from owned `Vec<u8>` part bytes to shared `Arc<Vec<u8>>` is allowed for OPC. Python stays unchanged. A release version change waits for a later release. Original Q1 through Q8 stay as recorded. Q10 is pending a user choice between consistent numeric multiples across default, paragraph and style, and a narrower rule. This checkpoint does not answer Q10.
 
-- F-X259 must retain individual old-source RED and fixed-source GREEN cases, a reviewed scoped checkpoint and named final rider debt. Its review report remains historical rather than rewritten as proof of repair.
-- Each new contribution plan must map every issue row to an observable acceptance criterion, a test and a final evidence owner. Record partial/unreduced/unavailable criteria explicitly. Do not close a whole issue from PR titles or script exit codes.
-- Complete detailed prepare-mode designs for the pending F-IDs before implementation. Resolve API/compatibility questions in one consolidated round. Budget expansion and overlapping source carriers must be visible in the wave plan.
-- The six designs for F-285, F-286, F-287, F-X260, F-X261 and F-X262 were approved on 2026-10-18. Slide placeholders iterate by ascending idx. Layout and master placeholders iterate in document order, and idx lookup stays a separate compatibility decision. Percentage rounding matches pinned python-pptx 1.0.2 ties-to-even and leaves unrelated truncation in place. Omitted default-paragraph keywords preserve existing values. An individual None clears one property. Clearing the native paragraph-default object preserves run defaults and unrelated opaque source. Content-control creation validates each placement against its schema. Inline controls hold inline content. Unsupported placement and type combinations refuse atomically. F-286 keeps the full differential contract, and missing authentic Word evidence stays pending. The authoring order is the F-285 prefix checkpoint, then F-286, then F-287. F-X259 stays approved and running, with its repairs and final-gate debt intact.
-- Checklist reconciliation on 2026-10-18 keeps Q1 through Q19 answered. Q20, Q21 and Q22 are answered the same day. `part_names` is lexicographic. Content controls use `insert_content_control`, the five setters, `remove_content_control` and `unwrap_content_control`. An imported auto line rule reads back as a float, and assigning a `Length` writes an exact rule. F-X261 and F-285 are approved on completed dependencies. F-286 and F-287 are approved against that provider contract and stay unready until the F-285 prefix checkpoint. F-X260 stays running and F-X262 stays approved. F-286 Word differential evidence remains pending.
-- Design-quality pass 1 on 2026-10-19 closes R1 through R3 in the plans. F-286 names `set_content_control_type`, `repeat_content_control` and F-285 removal, and `RepeatingSectionItem` is a payload with a parent constraint. F-287 uses item bytes plus schema URIs, and binding takes the three `CT_DataBinding` strings. F-X261 projects every stored line rule through the existing paragraph getters. F-X262 no longer cites the pre-integration F-X259 tree. Q1 through Q22 stay answered. The Word differential stays pending. F-X260 A5, HLD and microscope stay open.
-- Final integrated verification includes the new regression and policy union. After final completion edits, rerun affected metadata-dependent checks before adopting evidence. Codex performs the independent final sprint review, with the actual implementing and reviewing identities recorded.
+The intake-only pause in the previous 2026-10-23 checkpoint is superseded by the request to execute `/run-sprint` once this intake preparation is complete. Implementation has not started. The contribution pin is `/private/tmp/s95.4-contributions/`, with the source assessment at `/private/tmp/s95.4-contributions/contracts.txt`. Live GitHub heads matched the captured SHAs before those patches were fetched.
 
+## Resume checkpoint, design assembly on 2026-10-23
 
-## Reviewed B2 repair checkpoint, 2026-10-22
+Q9 through Q14 are answered by the user on 2026-10-23. Q9 allows a bounded OPC public Rust change from owned `Vec<u8>` storage to `Arc<Vec<u8>>`, including removal and the signature break. Python stays unchanged. A release version waits. This is not permission for other public breaks. Q10 is consistent numeric spacing on the Python default, paragraph and style surfaces, with `Length` tested before `int`. Q11 keeps the old strict comment snapshot and adds `comment_anchor_snapshot_results`, plus a readonly `anchor_issue`. Q12 makes `part_names` and `part_xml` a save-equivalent view, with additive `zip_entries`. Q13 adopts the three PR416 behavior changes only as separate declared reviewed behavior commits. Q14 pins the 248-call gate, the 40 and 80 edit budgets, and keeps original strict xfail outcomes separate from `--runxfail`. The literal 212 count is not the runtime catalogue. The loop adds Core 15, app strings 6, app numbers 11 and app bools 4, which is 36, for a total of 248.
 
-Independent F-285 custom-XML placement microscope pass1 accepts the repair with
-zero findings. It covers row/cell/block/inline wrappers, alternating depth,
-metadata retention, identity, atomic refusal and repeating conversion. The
-actual final native3958f3a4 passes the complete1064Word suite, exact42priorities
-on3.9/3.12, strict typing/stubs and the expanded wrapper matrix. Native union
-710library/411integration/twodoctests is composed from actual successful cases,
-without relabeling failed aggregate attempts. BothWASM, scoped clippy,
-49hashes/sevenpixels and README inventories pass. Policy union is190passes
-and two existing skips, not192passes. The earlier192total field is clarified
-in the amendment receipt. A new verified rdocx archive, actual updated hosted
-artifacts and final independent sprint pass5 remain due. No close/publication.
+Drafts now include `.claude/plans/F-X264-design.md` through `.claude/plans/F-X267-design.md`, plus the reconciled F-288, F-289 and F-290 drafts. All seven stay `draft`. All seven features stay pending and unclaimed. Run state stays phase design. The initial 4 and 0 intake remains a historical snapshot. The latest scope is owned by these seven stories. The planning total is 27 to 41 developer-days, which is the original 12 to 17 plus repair estimates of 15 to 24. Estimates are not measurements. The visible over-two-week scope is approved intake. The clock has not started. Proposed serial order is F-X264, F-X265, F-X266, F-X267, F-288, the verified F-288 local prefix, F-289, then F-290. Formal dependencies are only the HLD14 edges. No native, oracle or full-suite execution happened. This checkpoint is design assembly pending root Codex semantic review. It is not approval, delivery credit, or a release action.
 
-## B2 typed-context amendment checkpoint, 2026-10-22
+## Resume checkpoint, mechanical reconciliation on 2026-10-23
 
-Independent designer investigation found that physical repeating-type placement
-and enclosing ownership remain separate from payload grammar. The amendment
-refuses inline repeating types, orphaned item markers and non-item replacement
-children, including relocation and unwrap. Compatible nested ownership, legal
-block/row/cell operations and item-only unwrap remain supported. No new story,
-API or completion credit is added. Current nativee07f191d passes the full1065Word
-suite, priorities and installed typing/stubs. Native integration acceptance
-composes411passed cases and one corrected new case. The failed aggregate
-fixture attempt stays failed. Scoped clippy, bothWASM and actual policy190passes
-with two skips pass. Focused microscope, current verified archive, current
-hosted qualification and final independent sprint pass5 remain pending.
+Q1 through Q15 are answered. Q15, answered 2026-10-23 after the previous assembly, adds `Field::legacy_form_default_value` and `Document::legacy_form_fields_with_defaults`. It does not add a field to `LegacyFormFieldData` or `LegacyFormFieldInfo`. F-290 does not inherit that default type. The latest user request is a full `/run-sprint` after intake. That request supersedes the earlier intake-only pause. Implementation has not started.
 
-Independent F-286 repeating-context microscope pass1 accepts this amendment
-with zero defects, smells and nitpicks, plus five additional installed probes.
-Actual49hashes, seven deterministic pixels and README inventories pass. The
-clean verified archive, updated hosted qualification and final sprint pass5
-remain due. No publication approval or sprint closure is implied.
+Grok applied mechanical contract corrections to the seven existing drafts and to the F-288 definition in HLD 14. All seven plans stay `draft`. All seven features stay pending and unclaimed. Run state stays phase design. The planning total stays 27 to 41 developer-days. Proposed serial order stays F-X264, F-X265, F-X266, F-X267, F-288, the verified F-288 local prefix, F-289, then F-290. This checkpoint does not approve a plan, claim a feature, or pass a gate. Root validation is still outstanding. The F-X266 linear visit bound is specified and not proved against current loops.
 
-## Typed-context qualification checkpoint before sprint review pass 5
+## Resume checkpoint, final contract closure on 2026-10-23
 
-The B2 customXml and typed-context amendments are accepted after both clean
-independent focused microscopes and actual current artifact qualification.
-Clean35238e5b verifies the affected rdocx archive. The other21genuine verified
-archives retain unchanged inputs and their082aafa9producer. Exact7Word0.16.3
-and15shared-PowerPoint0.14.3archives remain below10MiB. Actual build-only
-[39820083897](https://github.com/tensorbee/rdocx/actions/runs/39820083897)
-executes35238e5b with27successful deciding jobs and four publication skips.
-All26unique payloads are authenticated. Fresh installed downloaded wheels pass
-172priority calls, both strict3.12typing/stub checks and four additional
-placement-matrix calls over3.9/3.12. Prior hosted runs retain their identities.
+Q1 through Q15 stay answered. No new user choice was opened. Grok closed only the F-288, F-289, and F-X264 drafts. F-290, F-X265, F-X266, and F-X267 were not rewritten. All seven plans stay `draft`. All seven features stay pending and unclaimed. Run state stays phase design. The planning total stays 27 to 41 developer-days. Proposed serial order is unchanged.
 
-Current local Word1065passes and applicable unchanged PowerPoint1028passes
-qualify installed products. Native acceptance composes6733passes/73ignored,
-including710library,412integration and twodoctests for affected rdocx. The
-411-case successful subset and separately corrected new fixture case remain
-distinct from the failed aggregate attempt. Current lint, bothWASM, README,
-49hashes and seven deterministic pixels pass. Actual policy is190passes and
-two existing skips, plus four applicable final-state checks. No prior failure
-is relabeled. Source correspondence authenticates322unchanged inputs and
-three requalified inputs in the325-file manifest. Native Word, independent
-fonts, strict cost ratios and bounded corpus observations retain their actual
-producers. The advisory SSIM target remains missed and private Issue390 stays
-unqualified/open. Original delivery records and eight-story totals remain
-historical, with no second completion, effort or velocity credit.
+F-288 now leases existing `crates/rdocx-layout/src/engine.rs` for the character-offset, segment, and note-cache consumers, in addition to the files already named. It adds `Field::effective_display`, `Field::effective_projected_text`, and `Field::effective_display_field_segments` with `std::borrow::Cow` returns. Borrowed `projected_text`, `cached_display_field_segments`, and `FieldRef::cached_display_segments` stay physical. `cached_run_display` stays physical. Literal replacement stays on the existing character map. The local test is `cross_consumer_render_fallback_before_empty_assignment` with deterministic fonts. The existing native Word gate stays the only Word gate.
 
-Only independent final sprint pass5 and closure remain before the separate
-exact-clean-main publication preflight and approval. No release is authorized
-by this qualification. Earlier checkpoint sections preserve what was pending
-at those times.
+F-289 no-op is candidate bytes, not typed-value equality. The same current value can repair display and bound state. Checkbox absence and a valueless checked child follow MS-DOCX `CT_OnOff` 2.6.3.17 and `CT_SdtCheckbox` 2.6.3.28. The private physical inventory and the Q15 paired default query stay.
 
-## Namespace amendment qualification, 2026-10-22
+F-X264 records the exact `n/240` domain, the `1.0021` truncation, the signed `i32` endpoints, and the next representable neighbours. A pure Python arithmetic probe is recorded as design evidence and is not a product gate. No story is approved, claimed, committed, or pushed.
 
-The same B2 invariant is repaired through both imported TypeElement parser
-paths. Modeled staging preserves the original qualified type and its namespace
-scope. Newly authored or changed kinds retain canonical authoring. The clean
-independent namespace-identity microscope has zero defects, smells or nitpicks,
-including 120 additional alias/shadow controls. The process refinement requires
-checking transformations before guards, expanded namespace identity and actual
-modeled serialization, with compatible edits and atomic refusals.
+## Resume checkpoint, preapproval polish on 2026-10-23
 
-Actual source-qualified native acceptance composes 6,734 passes with 73 ignored.
-Of these, 4,801 passes are freshly executed for the changed OXML serializer and
-its Word dependents. They include 739 OXML units and one doctest, 710 Word
-library, 412 integration, 2,457 regression and two Word doctests, plus 480
-other Word-dependent cases. Unchanged producers qualify the other 1,933 cases.
-The actual fresh installed local Word wheel passes all 1,066 tests, both
-42-case priorities, strict typing/stubs and three matrices on Python 3.9/3.12.
-The unchanged PowerPoint whole-suite observation remains 1,028 passes. Current
-lint, both WASM graphs, all 49 hashes and seven deterministic pixel buffers,
-22 README inventories and 190 policy passes with two existing skips pass.
-Final metadata-dependent policies are checked after these record edits.
+Q1 through Q16 are answered. Q16, answered 2026-10-23 after the previous closure, selects "Author Word-compatible canonical slots (Recommended)" for F-290 only. Primary source is MS-OI29500 2.1.369. Original Q1 through Q15 stay as recorded. Grok reconciled F-X265, F-X266, F-X267, and F-290, plus the F-290 definition in HLD 14. All seven plans stay `draft`. All seven features stay pending and unclaimed. Run state stays phase design. The planning total stays 27 to 41 developer-days. Proposed serial order is unchanged. This checkpoint does not approve a plan, claim a feature, commit, push, or pass a gate. Root Codex review is still outstanding.
 
-Clean source 01d800f9 genuinely verifies both changed rdocx-oxml and rdocx
-archives. The other 20 archives retain their unchanged inputs and actual
-082aafa9 verification producer. The exact seven Word 0.16.3 and fifteen shared
-OOXML/PowerPoint 0.14.3 archives remain below 10 MiB. Actual build-only
-[CI run 39830343186](https://github.com/tensorbee/rdocx/actions/runs/39830343186)
-executes 01d800f9 with 27 deciding successes and four publication skips.
-Its 26 unique raw payloads are authenticated. Fresh downloaded-wheel installs
-pass 172 priority calls, both strict typing/stub suites and six additional
-matrix calls over Python 3.9/3.12. Source correspondence authenticates 320
-unchanged and five requalified inputs in the original 325-file manifest.
+## Resume checkpoint, preapproval draft fixes on 2026-10-23
 
-The old-native semantic REDs, first OXML aggregate's stale lexical assertion,
-sandbox network failure and all earlier failed attempts remain historical.
-The corrected OXML suite has 739 passes. Current native and installed results
-are real executions, without relabeling previous artifacts at a later SHA.
-Native Word, genuine independent font producers, seven strict edit ratios,
-three strict read ratios and bounded corpus evidence retain their actual
-producers and applicable inputs. The SSIM advisory target remains missed.
-The private unreduced Issue 390 input remains unqualified and open.
+Q1 through Q16 stay answered. No new user question was opened. Grok edited the existing F-288, F-X264, and F-290 drafts, plus the F-290 and F-X264 pending definitions in HLD 14. F-289, F-X265, F-X266, and F-X267 were not rewritten. All seven plans stay `draft`. All seven features stay pending and unclaimed. Run state stays phase design. The planning total stays 27 to 41 developer-days. Proposed serial order is unchanged.
 
-All eight original delivery records remain complete with no carries or new
-story, effort or velocity credit for this amendment. Earlier checkpoint
-paragraphs describe their actual producers and the pending state at that time.
-At this qualification checkpoint, final sprint pass 6 and closure are pending.
-Their actual outcomes follow in the numbered review and sprint tag. Q26 preserves
-passes 1 through 5 and permits pass 7 only if needed. Publication requires
-separate approval at the exact clean main merge SHA after closure.
+The F-288 active provider checkpoint is every named local native group, including A7 and the render-fallback regression, plus the Python bindings. The historical Q4 answer still records that the original list was five groups. The gate is not weakened. F-X264 Python multiples use exact stored-grid rescue and, otherwise, a raw closed `i32` product bound before truncation. The `Comment` stub constructor is `__new__` and returns `Comment`. Anchored run edits publish comment text. F-290 `None` means no recognized owned configuration. Recipient parts stay at most one. Source edges use the exact `mailMergeSource` type and qualified XML ownership. This checkpoint does not approve a plan, claim a feature, commit, push, or pass a gate.
+
+## Resume checkpoint, design approval on 2026-10-23
+
+Codex root completed semantic design validation and approved the seven S95.4 contracts at source `a57be365`. Q1 through Q16 stay answered. No source implementation has started. The provisional planning total stays 27 to 41 developer-days. The implementation order is serial: F-X264, F-X265, F-X266, F-X267, F-288, the actual scoped F-288 local prefix, F-289, then F-290. The order follows shared OPC, facade, Python binding, test, layout, and HLD leases. It does not add a formal dependency beyond the HLD 14 edges and the F-288 provider prefix.
+
+BACKLOG and the current feature table stay pending with owner `-`. Earlier stop and intake snapshots stay as history. This run request supersedes them. There is no `AS_BUILT.md` or `SPRINT_TRACKER.md` credit. No feature is claimed. No product verification has run. The F-289 contract is approved, and its implementation waits for the actual F-288 local prefix. The missing unreduced Issue 404 A2 input stays final acceptance debt and is not a design block. Every other unrun final gate stays pending. Approval does not mark any story completed.

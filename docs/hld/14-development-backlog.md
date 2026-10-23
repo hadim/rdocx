@@ -3136,6 +3136,11 @@ status, default, formatting, size, list, and calculation properties.
 **Depends on**: F-237, F-278.
 **Test gate**: differential. Public-created legacy fields match Word and retain
 their typed values through update and reopen.
+The pending definition reads an explicit reset default through
+`Field::legacy_form_default_value` and one batch
+`Document::legacy_form_fields_with_defaults`. It does not add a `default_value`
+field to `LegacyFormFieldData` or `LegacyFormFieldInfo`. Q15, answered
+2026-10-23, is that additive query disposition. It is not implemented.
 
 ### F-289, Modern Word form authoring (L)
 Compose content controls, protection, editable ranges, validation, placeholders,
@@ -3147,8 +3152,18 @@ the pinned Word form across fill, reset, protect, and reopen operations.
 
 ### F-290, Mail-merge package and data-source authoring (M)
 Author mail-merge settings, field mappings, recipients, connection metadata,
-and safe embedded data while external retrieval remains policy-controlled and
-offline by default.
+and an offline embedded table. External retrieval stays policy-controlled and
+offline by default. New mappings use the 30 Word canonical role ids in
+MS-OI29500 2.1.369 order. Word reads field-map data by position and ignores
+mapped names. A mapped slot uses type dbColumn. An unused slot uses type null.
+Query returns logical mappings in that role order and omits null padding.
+The story does not execute connectors or arbitrary MERGEFIELD aliases.
+`mail_merge_package` is absent only when no recognized owned configuration
+remains. Opaque residual XML is not a configuration. A package has at most
+one recipient-data part. The source relationship type is `mailMergeSource`
+for both data source and ODSO source, and header ownership follows the
+qualified XML reference. Codex root approved the F-290 contract on
+2026-10-23. The story is not implemented.
 **Depends on**: F-233, F-270, F-278.
 **Test gate**: round-trip. A public-created merge package retains its declared
 source and mappings, and unavailable external data returns diagnostics.
@@ -8587,3 +8602,54 @@ story is the eighth S95.3 story under the user's added release request, an
 explicit scope expansion beyond the normal seven-story planning cadence.
 Only close-sprint closes the sprint. Subsequent release commands require the
 separate exact-main-SHA final approval, shared/PowerPoint family first.
+
+
+### F-X264, Repair Word defaults package inspection and comment projection
+
+**Size**: L
+**Depends on**: F-X260, F-X261
+**Test gate**: regression
+**Spec reference**: `10-bindings-spec.md`, Python Word formatting and checked list publication, and Word checked XML owner authority. `04-opc-and-packaging.md`, The package, and Part naming. `03-architecture.md`, Owned publication and causal paths. `12-testing-strategy.md`, Checked Word comment anchor projections, and Word checked XML qualification.
+
+Pending future intent only. Donor tests, contributor CI and benchmarks are not local proof.
+
+[Issue402](https://github.com/tensorbee/rdocx/issues/402) and candidate [PR414](https://github.com/tensorbee/rdocx/pull/414) at 3d3d42db0f9c66f26efb4ab32f37864d8bfb131e stay unmerged. Default paragraph format must write a float line multiple, including Word's own 259 over 240 default, and a `Length` for exact spacing. Shared paragraph, style and default numeric values round-trip. Off-grid truncation stays compatible with the pinned unit rule. The 2026-10-23 Q10 decision records the int, bool, clear, non-finite, and `atLeast` policy in the F-X264 draft. An exact stored-grid multiple normalizes back to its signed `i32` numerator. Every other finite multiple must keep the raw scaled product inside the closed signed `i32` range before toward-zero truncation. The next representable neighbours are refused in Python even when truncation would fit. That policy is not implemented.
+
+[Issue405](https://github.com/tensorbee/rdocx/issues/405) and candidate [PR412](https://github.com/tensorbee/rdocx/pull/412) at 38fefb1730b474cca5e34f2b7996fc448ac38993 stay unmerged. A cross-cell plain comment and a Google Docs SDT comment must list the other comments. Exact text or a diagnostic is pending design. Removal of the listed comment works. Donor `RunRange`, bookmark and self-closing story-field changes explicitly need acceptance and are not adopted by this intake.
+
+[Issue406](https://github.com/tensorbee/rdocx/issues/406) and candidate [PR409](https://github.com/tensorbee/rdocx/pull/409) at 7df1c7e0106ee04c91171e4be41771d8504993a1 stay unmerged. Read-only root, main document and header relationship parts, plus `[Content_Types].xml`, match the exact `to_bytes` producer bytes. Paths, case and error compatibility, and a shared OPC serializer, stay pending design.
+
+### F-X265, Preserve fragment relationship targets and duplicate styles
+
+**Size**: M
+**Depends on**: F-X261
+**Test gate**: regression
+**Spec reference**: `04-opc-and-packaging.md`, Relationship types, and Picture extraction and one-shot publication. `03-architecture.md`, Shared Word document operations. `10-bindings-spec.md`, Word tables, physical pictures and internal links. `12-testing-strategy.md`, Word document-operation parity controls, and Word table, picture and paired-owner controls.
+
+Pending future intent only. Donor tests, contributor CI and benchmarks are not local proof.
+
+[Issue404](https://github.com/tensorbee/rdocx/issues/404) and candidate [PR411](https://github.com/tensorbee/rdocx/pull/411) at 3c9c296c276f69d2b6cc8a1eab5674627709887f stay unmerged. Picture byte identity holds for both insertion orders, the default path and reuse turned off. The original unreduced unused relationships need their own input, separate from donor image 9 and image 10 reconstruction. Returned image and hyperlink relationship IDs retain the intended targets through intervening staged edits. Save and reopen retain the referenced target bytes. Chart and template publishers are in scope for the same relationship rule.
+
+[Issue408](https://github.com/tensorbee/rdocx/issues/408) and candidate [PR410](https://github.com/tensorbee/rdocx/pull/410) at 4070a7886d10bced0e6da60d28e351fbc9b8a831 stay unmerged. Equal style definitions keep the first definition and add no duplicate across repeated imports. When the source first definition differs from the target first definition, import exactly one renamed copy of the source first definition. A shadowed later definition never forces a copy. Shadowed dependencies are not imported. Default-flag validation applies. The target keeps duplicate style XML verbatim. Template, building-block and rich-merge consumers follow the same rule.
+
+### F-X266, Bound Word body reads and structural edit cost
+
+**Size**: L
+**Depends on**: F-X260
+**Test gate**: regression
+**Spec reference**: `10-bindings-spec.md`, Python Word document operations. `03-architecture.md`, Owned publication and causal paths. `04-opc-and-packaging.md`, Checked Word operation source ownership. `12-testing-strategy.md`, Binding tests, and Word document-operation parity controls.
+
+Pending future intent only. Donor tests, contributor CI and benchmarks are not local proof.
+
+[Issue407](https://github.com/tensorbee/rdocx/issues/407) and candidate [PR415](https://github.com/tensorbee/rdocx/pull/415) at 0fbf3e96709198dbd01b9e810181109d106d9f68 stay unmerged. The original comparison is 100 paragraphs against 1000 paragraphs, each with six verbose formatted runs, on three original calls. On the actual same release host the ratio is at most 3 times max(small, 1 ms), with an operation-count proof. No concurrent compilation is part of the measurement. Assess every additional donor route: run, table and cell XML, body paragraph and table adds, inserts and remove-range paths, plus fallbacks. Preserve held handles, refusal, namespace, unknown bytes and the debug full-path comparison.
+
+### F-X267, Bound PowerPoint mutation cost across public publishers
+
+**Size**: L
+**Depends on**: F-X260, F-X262
+**Test gate**: regression
+**Spec reference**: `10-bindings-spec.md`, Packaging, Explicit PowerPoint text fitting, and PowerPoint footer, field, theme and transition authoring. `04-opc-and-packaging.md`, Checked PowerPoint XML transactions. `03-architecture.md`, PowerPoint checked XML ownership. `12-testing-strategy.md`, PowerPoint checked XML qualification, and PowerPoint footer and transition acceptance.
+
+Pending future intent only. Donor tests, contributor CI and benchmarks are not local proof.
+
+[Issue403](https://github.com/tensorbee/rdocx/issues/403), candidate [PR413](https://github.com/tensorbee/rdocx/pull/413) at bdf22890de1762d025b89b83b549c56941ef7199 and stacked candidate [PR416](https://github.com/tensorbee/rdocx/pull/416) at 768f8c109bd43fb9c1f6ecdfe2d913382bcc0368 stay unmerged. The inventory is all 248 public mutating calls from the external pin 3374348a48164f198ef077af46df485d0a1c469d. 159 of those calls grow with the deck, not only the five cases already recorded. Record 5 and 20 slide timings and 10, 40 and 80 media-rich timings, plus counters. Whole-deck operations and fallbacks that are by design are documented as such. PR413 alone leaves 107 package-bound calls. PR416 is incremental only once, on top of PR413 head bdf22890de1762d025b89b83b549c56941ef7199. Q9 on 2026-10-23 allows a bounded Rust change from owned `Vec<u8>` part storage to `Arc<Vec<u8>>`. Python stays unchanged. A release version waits. Q13 adopts the three PR416 behavior changes only as separate declared reviewed behavior commits: untouched slide bytes and digest, `fit_text` local scope, and transition and footer owner scope. The decisions are recorded in the F-X267 draft and are not implemented. Preserve atomicity, errors, bytes and handle validity across new, reopened, in-memory, signed and embedded paths.

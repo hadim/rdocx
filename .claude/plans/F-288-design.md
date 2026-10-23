@@ -1,0 +1,374 @@
+# F-288, Legacy form field creation
+
+**Status**: approved
+**Sprint**: S95.4
+**Size**: M
+**Depends on**: F-237, F-278
+**Base**: a57be365 on sprint/s95.4
+**Design date**: 2026-10-23
+
+## Problem
+
+Public callers can read and fill existing legacy form fields, and they can attach a generic `Field`, but they cannot author a complete text, checkbox, or drop-down legacy field with help, status, defaults, formatting, size, list, and calculation properties. `Field::from_legacy_form` does not exist. The current text projection prefers `w:default` over the result cache (`crates/rdocx-oxml/src/text.rs:4523`). The existing value rewriter writes the new value into `w:default`. That conflates the persistent reset default with the current typed or cached value. `ComplexFieldBuilder::separate_run` (`crates/rdocx-oxml/src/text.rs:5227`) is the physical fact for a present outer result region. The current writer emits an empty begin at `crates/rdocx-oxml/src/text.rs:12632` and has no `ffData` integration. Order and validation already live at `crates/rdocx-oxml/src/text.rs:4820`. Attachment already exists at `Run::add_field_value` (`crates/rdocx/src/run.rs:521`) and `Document::insert_field` (`crates/rdocx/src/field.rs:635`). Inventory and fill remain `Document::legacy_form_fields` and `Document::set_legacy_form_field_value`.
+
+Word 16.114 (16.114.26101123) is installed. No new authentic Word comparison has run. S95.3 evidence does not qualify this authoring. Issue #381 is a separate later AcroForm plan (body SHA `f7d9cbcf79f954046b4e0f7f4bf8da3d8ba8ee85559587dcf6cf6aa966eabcd6`, updated 2026-10-15T19:26:15Z). Intake on 2026-10-23 is read-only: 4 open issues, 0 open PRs, no S95.4 acceptance work.
+
+## Spec reference
+
+- `docs/hld/14-development-backlog.md`, "F-288, Legacy form field creation" (lines 3133-3138). Test gate copied below.
+- `docs/hld/03-architecture.md`, "What stays put" and "Facade conventions".
+- `docs/hld/04-opc-and-packaging.md`, "The package".
+- `docs/hld/10-bindings-spec.md`, "Native Word facade stability".
+- `docs/hld/12-testing-strategy.md`, "Test taxonomy" and "Typed content-control native Word qualification".
+- `.claude/skills/differential-testing.md`, oracle pin, self-generated fixtures, and composition checks.
+- Open XML SDK 3.0.1 [`FormFieldData`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.formfielddata?view=openxml-3.0.1), [`TextInput`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.textinput?view=openxml-3.0.1), [`CheckBox`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.checkbox?view=openxml-3.0.1), and [`DropDownListFormField`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.dropdownlistformfield?view=openxml-3.0.1). These pages are primary API names. They are not a passed Word comparison.
+- Local `Word.sdef` form help, status, check, date, and dropdown scripting names. They are not a passed comparison.
+- Existing parser span `crates/rdocx-oxml/src/text.rs` lines 4304-4855.
+
+## Approach
+
+Work only in existing files. Re-export new types from the `rdocx` facade. No second attachment route, module, trait, generic, feature, or test binary.
+
+```rust
+pub enum LegacyFormInfoText { Text(String), AutoText(String) }
+pub enum LegacyTextInputType { Regular, Number, Date, CurrentTime, CurrentDate, Calculated }
+pub enum LegacyCheckBoxSize { Auto, HalfPoints(u64) }
+pub struct LegacyFormFieldOptions {
+    pub name: Option<String>,
+    pub enabled: bool,
+    pub calculate_on_exit: bool,
+    pub help_text: Option<LegacyFormInfoText>,
+    pub status_text: Option<LegacyFormInfoText>,
+}
+pub enum LegacyFormFieldDefinition {
+    TextInput { input_type: LegacyTextInputType, default: Option<String>, value: String, max_length: Option<usize>, format: Option<String> },
+    CheckBox { size: LegacyCheckBoxSize, default: bool, checked: bool },
+    DropDownList { choices: Vec<String>, default_index: usize, selected_index: usize },
+}
+impl Field {
+    pub fn from_legacy_form(options: LegacyFormFieldOptions, definition: LegacyFormFieldDefinition) -> rdocx_oxml::Result<Self>;
+}
+```
+
+`Default` for `LegacyFormFieldOptions`: `name` is `None`, `enabled` is true, `calculate_on_exit` is false, help and status are `None`.
+
+Do not add `default_value` to `LegacyFormFieldData` or `LegacyFormFieldInfo`. Both public struct shapes stay unchanged. Q15, answered by the user on 2026-10-23, adds queries only.
+
+```rust
+impl Field {
+    pub fn legacy_form_default_value(&self) -> rdocx_oxml::Result<Option<LegacyFormFieldValue>>;
+}
+impl Document {
+    pub fn legacy_form_fields_with_defaults(
+        &self,
+    ) -> Result<Vec<(LegacyFormFieldInfo, Option<LegacyFormFieldValue>)>>;
+}
+```
+
+`Field::legacy_form_default_value` reads explicit reset-default metadata. `None` means that metadata is absent. Existing `legacy_form_value` still distinguishes a non-legacy field. Effective reset fallback stays `Text("")`, `Checked(false)`, or `SelectedIndex(0)`. `set_legacy_form_field_value` changes the cache and current value. It never rewrites the reset default. No new default setter and no second single-field default query are promised. F-289 reset uses the precomputed batch pair and the known fallback.
+
+`Document::legacy_form_fields_with_defaults` is one additive native batch snapshot. It uses the same compatibility ordinal inventory walk as `legacy_form_fields`. The old method keeps its return shape and signature and delegates to that private inventory. The new batch does not walk a second time. Python `legacy_form_fields` converts the fused pairs and freezes the default on the existing `LegacyFormField`. The readonly `.default_value` property stays.
+
+Private `Field` author and source metadata is the only default authority. There is no new public metadata field and no second form tree. The shared parser preserves accepted import states, including an out-of-list explicit default. A valid current import with an invalid reset index does not gain a new read refusal. New factory and reset payloads still validate actual choice bounds. Malformed raw default reading follows the bounded parser and leaves accepted raw states untouched.
+
+Authoritative current read, proposed and not implemented. After the current cache polish, add this display and no-op closure. Keep the raw `Field.cached_result` field as the physical stored cache. Never return early because the typed current value already matches. The controlled setter computes the canonical desired display and its metadata. The final candidate bytes decide the no-op.
+
+```rust
+impl Field {
+    #[doc(hidden)]
+    pub fn legacy_form_value(&self) -> rdocx_oxml::Result<Option<LegacyFormFieldValue>>;
+    pub fn effective_display(&self) -> std::borrow::Cow<'_, str>;
+    pub fn effective_projected_text(&self) -> Option<std::borrow::Cow<'_, str>>;
+    pub fn effective_display_field_segments(
+        &self,
+    ) -> Vec<(std::borrow::Cow<'_, str>, Option<&CT_RPr>, &Field)>;
+}
+```
+
+`effective_projected_text` keeps the complex-field visibility predicate already used by `Field::projected_text` at `crates/rdocx-oxml/src/text.rs:1667`. These three methods are additive. The existing borrowed signatures stay explicit physical stored-cache projections:
+
+```rust
+impl Field {
+    pub fn projected_text(&self) -> Option<&str>;
+    pub fn cached_display_field_segments(&self) -> Vec<(&str, Option<&CT_RPr>, &Field)>;
+}
+impl FieldRef<'_> {
+    pub fn cached_display_segments(&self) -> Vec<FieldDisplaySegmentRef<'_>>;
+}
+```
+
+Those three live at `text.rs:1667`, `text.rs:1707`, and `crates/rdocx/src/run.rs:319`. Do not change their borrowed return types.
+
+Private effective cache policy owns default fallback, actual result presence, observable parent overrides, and nested children. Private explicit default and presence metadata may still return borrowed strings. Nested concatenation uses `std::borrow::Cow::Owned`. An observable parent `cached_result` override wins. Otherwise the segments use effective nested children. `effective_display_field_segments` keeps the actual child owner and that child's `CT_RPr`. No new module, file, generic, or trait.
+
+No-op formula. On an absent result, force a result region when the desired canonical display differs from the raw stored cache, or when the requested typed current differs from the pre-edit effective current. A default fallback with a raw empty cache materializes that fallback when the setter asks for the fallback. A setter that asks for empty materializes empty. An absent default with a raw empty cache and a setter that asks for empty is the existing byte no-op. A typed empty cache that is an explicit publication always materializes. The same checkbox or list typed value can repair a custom or wrong display. An F-289 assignment of the same current value can still repair bound state and display, and this no-op must not skip that repair. The private presence flag participates in raw `is_unchanged` and in the shared selection. Run-aware materialization preserves unknown bytes and shared run content. A factory complex field always has a result region, even when that region is empty.
+
+Checkbox and drop-down typed checked or selected metadata is the authority. Never infer a checkbox from a glyph. A cached custom display is legal. The explicit default does not change because a cache edit happened. The existing public `LegacyFormFieldData.value` projection is documented as limited after arbitrary direct edits. Controlled setters sync it. Do not invent a refusal when a custom display disagrees with the typed state. Refuse only kind or structural contradictions. A raw stored cache that remains empty under the byte no-op is intentional physical state. It is not a stale view of the effective text. Semantic readers use the effective methods.
+
+Semantic consumers route through the effective policy. `CT_R::text` uses the field arm at `text.rs:2870`, which today calls `projected_text`. Layout character offsets at `crates/rdocx-layout/src/engine.rs:2518` today call `projected_text`. Layout segments at `engine.rs:10238` today call `cached_display_field_segments`. The note-cache fallback at `engine.rs:3368` today builds a run from `field.cached_result` when `cached_result_runs` is absent. The new legacy current getter, the inventory, and the CLI read the actual current policy. The new source claim is the existing `crates/rdocx-layout/src/engine.rs` file for those three consumers. Do not add a file.
+
+Do not globally rewrite physical `cached_run_display` at `text.rs:2042`. That function reads `field.cached_result` so parser cache lengths and source offsets keep physical data. Use an effective equivalent only where the consumer is semantic.
+
+Literal replacement stays on the existing physical character map. `Document::replace_batch` at `crates/rdocx/src/document.rs:36514` calls `replace_in_paragraph` at `document.rs:36537`, which calls `rdocx_oxml::placeholder::replace_in_paragraph`. `build_char_map` at `crates/rdocx-oxml/src/placeholder.rs:552` records only `RunContent::Text`. Simple-field physical wrappers enter at `placeholder.rs:412` and write back at `placeholder.rs:714`. Do not add a virtual-default replacement. Those fallback characters are not source bytes. Effective extraction shows fallback text to native text, layout, and PDF. Literal replacement of that fallback returns 0 and leaves the bytes unchanged. A typed legacy setter of empty materializes an empty result and an empty current, and it preserves the default, on a fresh document, after reopen, and through the CLI.
+
+Publishers that must be mapped: direct `cached_result`, `set_cached_runs`, annotation cache, `cached_field_mut`, refresh, attachment, and reopen. Add a discriminating case for a parent override plus a changed child, and direct, typed, and nested cases. Native inventory and downstream getters are the accessor. Python keeps frozen and fresh snapshots. There is no new low-level Python getter.
+
+Inventory fill covers every currently attachable story, including comments and text boxes. Per part, old ordinal prefixes stay. Append newly discoverable physical begin spans in part source order. Dedup a root that is also reached as a cell or text box. Comments use a fresh part sequence. The same frozen ordinal to physical map is used for read and write. Rename any pure source-order claim to compatibility order. Tests cover a text box that precedes an old body field, a related text box, a shared header, and comments, with no renumber and no wrong owner.
+
+Factory output is one complex field whose instruction matches `FORMTEXT`, `FORMCHECKBOX`, or `FORMDROPDOWN`, with typed initialized caches. Character formatting stays the existing `CT_RPr` on the run. `ffData` is written only on the complex begin `fldChar`. Simple, separate, and end marks do not carry it.
+
+Child order reuses the owner at `text.rs:4820`: common `name`, `enabled`, `calcOnExit`, `entryMacro`, `exitMacro`, `helpText`, `statusText`, then exactly one kind. Text children are type, default, maxLength, format. Checkbox children are `size` or `sizeAuto`, then default, then checked. List children are result, default, then `listEntry` items. Imported entry and exit macros and unknown bytes stay verbatim. This story does not execute macros and does not author new macros.
+
+Schema fact from the pinned Open XML SDK v3.0.1 schema at `https://raw.githubusercontent.com/dotnet/Open-XML-SDK/v3.0.1/data/schemas/schemas_openxmlformats_org_wordprocessingml_2006_main.json`. `CT_FFData` / `w:ffData` is around line 30857. That model is a Choice, not a global `xsd:sequence`. The existing bounded parser and the chosen canonical author order remain the owner. This plan does not claim that the canonical common `ffData` order is the normative schema's only valid ordering. Native changed writers follow that chosen existing canonical order and preserve untouched producer bytes. Kind child content models still match the exact schema.
+
+Bounds, refused before attachment, with no destination mutation:
+
+- Name at most 20 Unicode scalars.
+- Help at most 255. Status at most 140. Default at most 255. Format at most 64.
+- `max_length` is `None` (omit) or 1 through 32767.
+- Drop-down has 1 through 25 entries. Each label is at most 255 scalars. Duplicate labels are legal. Indices are zero-based and inside the list.
+- Strings are XML 1.0. Explicit empty help or status is distinct from `None`. `AutoText` is an explicit selector.
+- `HalfPoints(n)` stores the exact integer `n`. `HalfPoints(25)` is 12.5 pt, with no float conversion. `legacy_form_hps_measure_value` at `text.rs:5026` accepts `parse::<u64>()` for every integer from 0 through `u64::MAX`, and it also accepts imported universal measures (`mm`, `cm`, `in`, `pt`, `pc`, `pi`). `HalfPoints(u64)` therefore admits 0 through `u64::MAX`. Imported universal-measure checkbox size stays untouched. The new enum controls only newly authored data. Parser acceptance does not prove native Word behaviour for zero or extreme sizes.
+- A manual `Field` whose public metadata contradicts the kind is refused before attachment.
+
+Placements are the two existing routes only: direct main, table, and nested inline controls, plus supported related stories those routes already allow. Unsupported insertion contexts stay unsupported. Ordinals stay physical and part-scoped. Stale, missing, and wrong-kind targets are rejected. No stable mutable handle is added. Publication stays atomic under existing live-handle rules.
+
+Q3 selected answer, user answer on 2026-10-23: store settings and let Word execute them. Author all six text kinds (`Regular`, `Number`, `Date`, `CurrentTime`, `CurrentDate`, `Calculated`), format strings, and `calcOnExit`. The caller supplies typed values and cached displays. Existing `update_fields` preserves `FORM*` state and keeps its current unsupported-evaluation diagnostics. This crate adds no formula, macro, or locale evaluator in Rust or Python. The historical evaluator alternative stays rejected.
+
+## Python API contract
+
+One frozen public `LegacyFormFieldDefinition` contains the checked native `Field`. There is no generic `Field` grammar wrapper and no new Python XML path. The class is registered on public `rdocx` and `rdocx._rdocx`. `_rdocx.pyi`, `__all__`, and `__init__` imports stay aligned. The existing type-factory private constructor stub is `__new__(cls, *, _private: _Never) -> LegacyFormFieldDefinition`. That return is the class, so the static factories stay callable. Fields are readonly. A readonly definition is reusable. Attachment clones the native `Field`.
+
+Shared error and lifetime contract. Strict wrong Python shapes and types raise `TypeError`. Negative or out-of-domain primitives raise `ValueError`. Nonnegative integers outside the `u32`, `u64`, or `usize` extraction range raise `OverflowError`. Bool is forbidden for numeric indices, counts, and sizes. Native semantic, XML, and package errors keep the existing `rdocx_to_pyerr` at `src/lib.rs:117`. Oxml maps to `XmlError`, package and io map to `PackageError`, and Other and Story map to `RdocxError`. Do not introduce another error hierarchy and do not convert every native error to `ValueError`. Wrong-kind and out-of-list-domain native validation uses that existing mapping. Factories validate in native code before return. All new method results, tuples, PyObjects, and revision tokens are prepared before publishing a candidate. Refusal and no-op preserve bytes, revisions, and live handles. Changed publication follows the existing physical owner policy and never revives dead owners. Owned old inventory snapshots remain old. Structural insertion uses the existing conservative publication.
+
+```python
+class LegacyFormFieldDefinition:  # frozen
+    @staticmethod
+    def text_input(
+        *,
+        value: str = "",
+        default: str | None = None,
+        input_type: Literal["regular", "number", "date", "currentTime", "currentDate", "calculated"] = "regular",
+        max_length: int | None = None,
+        format: str | None = None,
+        name: str | None = None,
+        enabled: bool = True,
+        calculate_on_exit: bool = False,
+        help_text: tuple[Literal["text", "autoText"], str] | None = None,
+        status_text: tuple[Literal["text", "autoText"], str] | None = None,
+    ) -> LegacyFormFieldDefinition: ...
+    @staticmethod
+    def checkbox(
+        *,
+        checked: bool = False,
+        default: bool = False,
+        size_half_points: int | None = None,
+        name: str | None = None,
+        enabled: bool = True,
+        calculate_on_exit: bool = False,
+        help_text: tuple[Literal["text", "autoText"], str] | None = None,
+        status_text: tuple[Literal["text", "autoText"], str] | None = None,
+    ) -> LegacyFormFieldDefinition: ...
+    @staticmethod
+    def drop_down_list(
+        choices: Sequence[str],
+        *,
+        selected_index: int = 0,
+        default_index: int = 0,
+        name: str | None = None,
+        enabled: bool = True,
+        calculate_on_exit: bool = False,
+        help_text: tuple[Literal["text", "autoText"], str] | None = None,
+        status_text: tuple[Literal["text", "autoText"], str] | None = None,
+    ) -> LegacyFormFieldDefinition: ...
+
+class Run:
+    def add_legacy_form_field(self, definition: LegacyFormFieldDefinition) -> None: ...
+
+class Document:
+    def insert_legacy_form_field(self, position: StoryRunPosition, definition: LegacyFormFieldDefinition) -> None: ...
+
+class LegacyFormField:
+    @property
+    def default_value(self) -> str | bool | int | None: ...
+```
+
+`calculate_on_exit` defaults to `False` on every factory. That matches the approved native `LegacyFormFieldOptions` default. The earlier agent recommendation of `True` is not used. Defaults are the actual `inspect.signature` values. Use the existing PyO3 `text_signature` where needed so a no-argument form is `()` and not `Ellipsis`.
+
+Help and status tuples are inline. No additional public alias is required. `("text", "")` is explicit empty text and differs from `None`. A bad tuple or tag is `TypeError` or `ValueError` under the shared mapping. `size_half_points is None` means Auto. An integer half-point size is `0` through `u64::MAX` inclusive, and bool is rejected. Indices are `0` through `usize::MAX`, and native checks enforce the actual choice bounds. `choices` is copied. Duplicates are preserved. `str` and `bytes` are rejected as a sequence of choices.
+
+`Run.add_legacy_form_field` delegates to native `Run::add_field_value`. `Document.insert_legacy_form_field` delegates to native `Document::insert_field`. `StoryRunPosition` is already public. Paragraph-based positions do not admit cell paragraph handles. Table and related insertion use the existing `item: StoryItem` form at `document.rs:7505`. There is no new position carrier.
+
+Disposition. Every new native factory, options, and definition variant is exposed through these static factories and keyword arguments. Generic native `Field` raw construction gets no new Python exposure. Existing `Run.add_field` remains unchanged.
+
+Old snapshots freeze. A new inventory shows current and default matching native and reopen. The Python `default_value` property is readonly.
+
+Python tests in existing `tests/test_core.py`: `test_authored_legacy_form_fields_keep_defaults_and_current_values`, `test_legacy_field_factories_and_attachment_refuse_atomically`, and `test_legacy_field_definition_public_factories_are_typed`. They cover all three public factories, both attachment routes, nested and related `StoryItem`, held frozen, fresh, and reopen, the default and current discriminator, strict bool and indices, help tuples, factory invalid and late attachment byte atomicity, the actual factory class import, typing, and observable defaults. Typed public usage goes through the existing `crates/rdocx-py/tests/typing_smoke.py`. Do not add a temporary string runner. No new tracked file.
+
+Source files for the binding are the existing `src/document.rs`, `src/run.rs`, and `src/lib.rs` under the Python crate, plus `python/rdocx/__init__.py`, `python/rdocx/_rdocx.pyi`, and `tests/test_core.py`. Native and HLD claims retain the files already listed in this plan.
+
+The historical Q4 user answer on 2026-10-23 listed five named local native groups. The active provider checkpoint covers every named local native group in this test plan, including A7 and `cross_consumer_render_fallback_before_empty_assignment`, plus the affected Python factory, attachment, current, and default checks, with scoped verification and an independent clean microscope. The gate is not weakened to the original five. This story is the source ancestor of the F-289 base. Do not leave only three native groups unchecked, and do not leave A7 or the Python bindings unchecked.
+
+## Consumer map
+
+| Rule | Entry points and outputs | Shared provider and caller policy | Lifecycle stages compared |
+|---|---|---|---|
+| Author one legacy field | `Field::from_legacy_form`, then `Run::add_field_value` or `Document::insert_field` | Caller owns options and definition. Factory owns XML order through `text.rs:4820` | Create, serialize, reopen |
+| Distinct default and current | `Field::legacy_form_value` reads current. `Field::effective_display(&self) -> std::borrow::Cow<'_, str>`, `Field::effective_projected_text(&self) -> Option<std::borrow::Cow<'_, str>>`, and `Field::effective_display_field_segments(&self) -> Vec<(std::borrow::Cow<'_, str>, Option<&CT_RPr>, &Field)>` are the semantic reads. `Field::legacy_form_default_value` reads an explicit default. `legacy_form_fields_with_defaults` is the one batch. `legacy_form_fields` keeps its old signature and delegates. `set_legacy_form_field_value` writes current and cache only | Parent `cached_result` override, else effective nested children. Glyph is not checkbox or list authority. Candidate bytes decide the no-op. Physical `projected_text`, `cached_display_field_segments`, and `FieldRef::cached_display_segments` stay borrowed stored projections | Update, serialize, reopen |
+| Effective versus literal | `CT_R::text` at `text.rs:2870`, `engine.rs:2518`, `engine.rs:10238`, `engine.rs:3368`, inventory, and CLI | Effective fallback is visible. `cached_run_display` at `text.rs:2042` stays physical. `replace_batch` at `document.rs:36514` through `placeholder.rs:552`, `412`, and `714` does not invent fallback bytes | Read, layout, render, replace |
+| Field update beside forms | Existing `update_fields` | Ordinary fields may change. `FORM*` state stays | Update, serialize |
+| Read and fill | Existing inventory and `set_legacy_form_field_value` | Part plus ordinal snapshot. Wrong kind refuses | Update, reopen |
+| Python, WASM, CLI | Q1 selected answer: new Rust and Python authoring APIs. The exact surface is `## Python API contract`. WASM and CLI gain no new authoring methods. Existing `Run.add_field` stays unchanged. Existing Python fill, WASM, and CLI consumers retain package preservation and current-value behavior | Frozen `LegacyFormFieldDefinition` factories, both attachment routes, exports, stubs, and the named Python tests. Codex root approved this contract on 2026-10-23. Implementation and final gates stay pending | Serialize, fill, reopen |
+| PDF and AcroForm | Existing consumers | #381 stays later. Requalify observations that read `w:default` as current value | Render, reopen |
+
+## Behavior contracts and evidence
+
+| Surface or placement | Exact behavior and boundary examples | Primary source identity and location | Local discriminator or pending evidence |
+|---|---|---|---|
+| Text input | Six kinds. `default: None` omits `w:default`. `value: ""` with a separate run stores an empty current result. Format `None` omits format. `max_length: None` omits maxLength. `max_length: 0` and `32768` refuse | SDK 3.0.1 `TextInput`. Parser `text.rs:4304-4855`. Current preference of default over cache is the defect at `text.rs:4523` | `legacy_reset_defaults_survive_current_value_updates` |
+| Checkbox | `Auto` writes `sizeAuto`. `HalfPoints(25)` writes integer 25. `default: false`, `checked: true` stay distinct | SDK 3.0.1 `CheckBox`. Local Word.sdef names are not a passed run | Same reopen test, checkbox arm |
+| Drop-down | Two identical labels are legal. `default_index: 0`, `selected_index: 2` stay distinct when the list has at least three entries | SDK 3.0.1 `DropDownListFormField` | Same reopen test, list arm |
+| Help and status | `None` omits the element. `Some(Text(""))` stores empty text. `Some(AutoText("x"))` stores the AutoText selector | SDK `FormFieldData`. Word.sdef help and status names | Property reopen test |
+| Begin-only `ffData` | Present on complex begin. Absent on separate and end | Writer gap `text.rs:12632`. Order owner `text.rs:4820` | Ordered attachment in A1 |
+| Result region | Present empty region wins over default. Absent region uses default, then empty fallback. Candidate bytes decide materialization. A raw empty cache can remain while effective text shows the fallback | `separate_run` at `text.rs:5227`. Semantic reads at `text.rs:2870` and `engine.rs:2518`, `10238`, `3368`. Literal map at `placeholder.rs:552` | A2 and A7 |
+| Literal replace | Fallback display `foo` is visible to text, layout, and PDF. Replacing `foo` returns 0 and leaves bytes unchanged. Typed empty materializes empty current and keeps default `foo` | `document.rs:36514`, `document.rs:36537`, `placeholder.rs:412`, `placeholder.rs:552`, `placeholder.rs:714` | `cross_consumer_render_fallback_before_empty_assignment` |
+| Native Word | Compare stored current and default, field structure, and display after an actual Word open, update, save, and reopen | Installed 16.114 / 16.114.26101123. Comparisons have not run. Schema child order is not claimed as Word-verified | A6 pending |
+
+## Dependency readiness
+
+`docs/sprints/BACKLOG.md` records F-237 and F-278 done. F-288 is pending and unclaimed. F-237 building blocks remain the glossary route for any later placeholder document part. This story does not add a second glossary store. Codex root approved this contract on 2026-10-23 at source `a57be365`. That approval does not mark F-288 implemented. F-289 implementation waits for the actual F-288 local prefix. Q4, answered by the user on 2026-10-23, requires a verified local provider checkpoint before F-289. That checkpoint is local RED then GREEN for every named focused regression, scoped verification, a clean microscope, and an integrated source ancestor. Final Word differential, full verification, and riders remain pending. `/start-feature` still requires F-237 and F-278 done in the worktree base.
+
+## Acceptance criteria
+
+| ID | Input or setup | Expected observation or refusal | Consumers | Local test | Final gate or pending evidence |
+|---|---|---|---|---|---|
+| A1 | Three factories with the property set, attached by both existing routes, including the Python static factories and both Python attachment routes | Ordered `ffData` on begin only. Typed caches match the definition. Formatting stays `CT_RPr`. A new API check is distinct from the semantic default and current RED | Rust facade and the Python contract below | `public_legacy_fields_keep_properties_and_typed_values_on_reopen` and `test_authored_legacy_form_fields_keep_defaults_and_current_values` | Differential gate pending Word |
+| A2 | Unequal default and current, then fill and reopen. Held frozen snapshots stay old. Fresh inventory and reopen match. Fresh, reopen, unchanged default, and no-op cover the publication flag | Explicit default from `legacy_form_default_value` is unchanged. `None` is absence. Current follows the separator flag. Python `.default_value` stays readonly `str`, `bool`, `int`, or `None` on the existing object | Rust fill. Python property and fill. CLI fill, PDF and AcroForm requalified | `legacy_reset_defaults_survive_current_value_updates` and the Python defaults test | Native unequal pairs pending |
+| A3 | One ordinary field plus one legacy field, then `update_fields` | Ordinary result may change. `FORM*` state and metadata remain. No new native or Python evaluator | Existing field update | `generic_field_updates_preserve_legacy_form_state` | Word-open effects pending under the Q3 store-settings answer |
+| A4 | Bound violations, bad Python shapes, and contradictory manual metadata | Native `Err` or the Python error mapping before attachment. Destination bytes unchanged. Factory invalid and late attachment failure are byte atomic | Both native routes and both Python routes | `invalid_legacy_field_creation_cannot_change_destination` and `test_legacy_field_factories_and_attachment_refuse_atomically` | Local atomicity. Native not required for refusal |
+| A5 | Alias text, opaque unknown bytes, nested and related owners. Table and related insertion use the existing `item: StoryItem` form at `document.rs:7505`. Paragraph positions do not admit cell paragraph handles. No new position carrier | Macros and unknown bytes preserved. Owner part and ordinal stay physical | Existing story routes and the Python `StoryRunPosition` route | `legacy_authoring_respects_nested_story_owners_and_opaque_xml` | Reopen fidelity |
+| A6 | Word-created originals and library-created files for all three kinds | Stored-property equality separated from Word-open formatting and calculation effects | Native Word 16.114 | None until oracle inputs exist | Pending. Inputs listed in the test plan. This remains the only Word gate |
+| A7 | Absent result, raw stored cache empty, explicit default `foo`. Then a typed empty assignment. Deterministic bundled fonts | Before assignment, native text, layout, and PDF text show `foo`. Literal replace of `foo` returns 0 and the package bytes stay unchanged. After the typed empty setter, fresh, reopen, and CLI current are empty and the default remains `foo`. Physical `cached_result` follows the no-op formula and is not rewritten into a virtual display | Rust text, layout, PDF, literal replace, CLI | `cross_consumer_render_fallback_before_empty_assignment` | Local regression only. No new external oracle |
+
+Backlog promise mapped above: complete help, status, default, formatting, size, list, and calculation properties, with typed values through update and reopen. Calculation properties are stored metadata under the Q3 answer. Word executes them. Evaluated output parity is not claimed.
+
+## Test matrix
+
+| Case | Modes or state combined | Expected difference or agreement | Wrong implementation rejected |
+|---|---|---|---|
+| C1 | Text, checkbox, and list. Explicit default unequal to current. Reopen | Inventory shows both facts | A projection that still prefers `w:default` as current fails |
+| C2 | `None` help versus `Text("")` versus `AutoText` | Omission, empty text, and AutoText stay distinct | Collapsing `None` and empty fails |
+| C3 | `update_fields` with a changed ordinary field beside a form | Form bytes that encode state stay | An evaluator or a wiped `ffData` fails |
+| C4 | Valid `HalfPoints(0)` and `HalfPoints(25)` beside an overlong name, 26 list entries, an index past the end, and a contradictory kind | Valid 0 and 25 attach. Invalid list, length, and kind refuse atomically | A partial write, or a rejection of valid 0 or 25, fails |
+| C5 | Nested table run and a supported related story, plus opaque imported bytes | Same physical owner. Unknown span preserved | A main-only insert or a dropped macro fails |
+| C6 | Absent result region versus present empty result, then literal replace of the fallback and a typed empty setter | Effective text, layout, and PDF show the fallback. Literal replace count is 0. Typed empty materializes empty current and keeps the default | A virtual-default replacer, or an early return on typed equality, fails |
+| C7 | Parent override plus a changed nested child, and a text box before an old body field, plus comments | Override wins. Ordinal prefixes stay. New spans append in part source order | A glyph boolean or a source-order renumber fails |
+
+Omitted: a generic Python `Field` grammar wrapper and any new Python XML path. Generic native `Field` raw construction stays without a new Python exposure. Existing `Run.add_field` stays unchanged. WASM and CLI gain no new authoring method. Existing consumers retain preservation and current-value behavior. Picture and modern controls belong to F-289. Mail merge belongs to F-290. The historical Q1 recommendation of native-only scope stays in the question table as history.
+
+## Rejected alternatives
+
+- Keeping the mirrored `w:default` write. Source analysis on 2026-10-23 shows that write conflates reset and current. Q2 is a necessary correction, with a separate behaviour commit and consumer disclosure.
+- A new formula, macro, or locale evaluator. Q3, user answer on 2026-10-23, stores settings and leaves execution to Word. The evaluator alternative stays rejected.
+- A second attachment API or mutable field handle. Existing routes and part-scoped ordinals remain.
+- Calling metadata-only storage equal to Word-evaluated display.
+
+## Test plan
+
+Backlog test gate, verbatim: differential. Public-created legacy fields match Word and retain their typed values through update and reopen.
+
+| Timing | Category | Test | Asserts |
+|---|---|---|---|
+| local scoped | regression | `public_legacy_fields_keep_properties_and_typed_values_on_reopen` | Properties and typed values survive save and reopen |
+| local scoped | regression | `legacy_reset_defaults_survive_current_value_updates` | Reset default stays while current changes |
+| local scoped | regression | `generic_field_updates_preserve_legacy_form_state` | `FORM*` state remains beside an updated ordinary field |
+| local scoped | regression | `invalid_legacy_field_creation_cannot_change_destination` | Refusal leaves the destination unchanged |
+| local scoped | regression | `legacy_authoring_respects_nested_story_owners_and_opaque_xml` | Owners and unknown bytes survive |
+| local scoped | regression | `cross_consumer_render_fallback_before_empty_assignment` | A7. Deterministic fonts. Fallback `foo` is visible in native text, layout, and PDF text. Literal replace of `foo` returns 0 with unchanged bytes. Typed empty then shows empty current and default `foo` on fresh, reopen, and CLI |
+| provider prefix | Q4 local gate | Every named local native group in this test plan, including A7 and `cross_consumer_render_fallback_before_empty_assignment`, plus the affected Python factory, attachment, current, and default checks | The 2026-10-23 user answer originally listed five native groups. The active contract includes the later focused regressions and the Python bindings. Do not weaken the gate back to those five, and do not leave only three native groups unchecked. Local RED then GREEN, scoped verification, an independent clean microscope, and an integrated source ancestor before F-289. The semantic RED is default and current through the old existing providers. Additive factory absence is a compile failure, not that semantic RED. The A1 new API check is distinct and comes first. Differential, full verification, and riders stay pending |
+| final sprint | oracle | Word 16.114 comparison | Inputs: text reset versus filled, checkbox false versus true, list index 0 versus 2 with duplicate labels, literal and AutoText, 12.5 pt, disabled and calc toggles. Compare current, default, fields, and display after native update and reopen. Bind input and output SHA-256 and the Word version |
+| local scoped | regression | `test_authored_legacy_form_fields_keep_defaults_and_current_values` | Python public factories, both attachment routes, nested and related `StoryItem`, held frozen, fresh, and reopen, default and current discriminator |
+| local scoped | regression | `test_legacy_field_factories_and_attachment_refuse_atomically` | Strict bool, indices, help tuples, factory invalid, late attachment failure, byte atomic |
+| local scoped | typing | `test_legacy_field_definition_public_factories_are_typed` | Factory class import and observable defaults in `crates/rdocx-py/tests/test_core.py`. Typing uses existing `crates/rdocx-py/tests/typing_smoke.py`. No temporary string runner and no new tracked file |
+| final sprint | risk rider | Integrated `/verify --full` once, hash harness, strict mypy and stubtest, WASM, and a genuine publish dry-run with archive under 10 MiB, plus riders in Risk routing. Native Word only in that final union | Existing fixture hashes unchanged aside from the declared behaviour commit. Scoped public API tests stay on this feature |
+
+Local readiness for this feature is the Q4 checkpoint. It does not close the differential gate, full verification, or the riders.
+
+## HLD impact
+
+- `docs/hld/02-scope-and-non-goals.md` (stored form properties, no new evaluator or macro execution)
+- `docs/hld/02-scope-and-non-goals.md` (stored form properties, no new evaluator or macro execution)
+- `docs/hld/03-architecture.md`, "What stays put", "Facade conventions", and "Owned publication and causal paths" for effective versus physical field cache
+- `docs/hld/04-opc-and-packaging.md`, "The package"
+- `docs/hld/10-bindings-spec.md`, "Native Word facade stability", including `effective_display`, `effective_projected_text`, and `effective_display_field_segments`
+- `docs/hld/12-testing-strategy.md`, "Test taxonomy", "Typed content-control native Word qualification", and the local deterministic-font PDF regression for fallback display versus literal replace
+
+## Risk routing
+
+Matched rows from `.claude/skills/risk-routing.md`. Extra checks run once on the integrated sprint:
+
+- Parser or serialiser. Round-trip proving unmodelled `ffData` siblings and macros stay byte for byte. Fixed prefixes on write.
+- Public API of a published crate. Semver note. Genuine `cargo publish --dry-run` with archive under 10 MiB, only in the final union. README measured package inventory may be recomputed by the existing `README.md` and `scripts/readme_doctests.py` only if that archive change requires it. Do not fabricate those values. No Cargo dependency change and no new module.
+- External oracle. Pin Word 16.114 / 16.114.26101123. Evidence remains pending.
+- Compatibility and collection ordering. Field-specific bounds and the `text.rs:4820` order. Q2 behaviour commit states any hash delta.
+- New getter projection. Inventory explicit default, absent default, present empty result, and absent result.
+- Cached read facts. Publishers are factory initialization and `set_legacy_form_field_value`. `LegacyFormFieldInfo` is owned, so a held pre-edit snapshot keeps the old current value. A fresh inventory, the native current value, and the reopened current value agree, and the reset default stays unchanged. Existing Python live handles follow their survival and staleness policies. A refusal or a no-op preserves valid handles. This story does not revive a dead owner. Native agreement is pending.
+- XML in multiple parents. Both existing insertion paths and supported related stories.
+- Shared semantic behavior. Rust authoring and the Python contract below. Existing CLI fill, PDF, and AcroForm observations after the repair. The prior native planning basis remains 8 to 11 developer-days across the sprint. Q1 Python scope is an explicit planning estimate of 4 to 6 additional developer-days, for an expanded planning total of 12 to 17. That figure is an estimate, not a measurement, and it is not an undisclosed capacity promise.
+- Grammar and empty collection. Empty strings, omitted elements, and one-to-25 list entries.
+- PyO3 is in scope under the Q1 answer. The exact classes, factories, and errors are `## Python API contract`. Scoped affected public API tests and the small typed use run with this feature. Strict mypy, stubtest, the installed full suite, WASM, publish dry-run, full verify, and the hash harness run only in the final union. WASM gains no new authoring method. Existing WASM and CLI consumers retain preservation and current-value behavior. Workspace tests keep `--exclude rdocx-py --exclude rpptx-py`. Codex root semantic validation on 2026-10-23 approved this contract. Implementation and the final union stay pending.
+
+## Hash harness
+
+Existing fixtures are expected to stay unchanged. The Q2 repair is a separate labelled behaviour commit during implementation. That commit states its expected delta if any current fixture observes the mirrored default write. No baseline is re-recorded in this approval. Rendering baselines stay on deterministic fonts. No fixture move is combined with the behaviour change.
+
+## Implementation checklist
+
+- [ ] Add the enums, options, definition, and `Field::from_legacy_form` in existing `text.rs` and re-export them. Native and HLD edits stay on files already named in this plan.
+- [ ] Bind Python only in existing `crates/rdocx-py/src/document.rs`, `crates/rdocx-py/src/run.rs`, `crates/rdocx-py/src/lib.rs`, `python/rdocx/__init__.py`, `python/rdocx/_rdocx.pyi`, and `tests/test_core.py`. No new tracked file, module, or test binary.
+- [ ] Add `Field::legacy_form_default_value` and `Document::legacy_form_fields_with_defaults` without a new field on `LegacyFormFieldData` or `LegacyFormFieldInfo`.
+- [ ] Split current result selection from `w:default` with the candidate-byte no-op and the private presence flag, not typed-value equality and not a string diff alone.
+- [ ] Add `effective_display`, `effective_projected_text`, and `effective_display_field_segments` on `Field` with the `std::borrow::Cow` signatures in Approach. Leave `projected_text`, `cached_display_field_segments`, and `FieldRef::cached_display_segments` borrowed.
+- [ ] Route `text.rs:2870`, `engine.rs:2518`, `engine.rs:10238`, `engine.rs:3368`, inventory, and CLI through the effective policy. Leave `cached_run_display` at `text.rs:2042` physical.
+- [ ] Keep literal replacement on `placeholder.rs:552` and the simple-field wrappers at `placeholder.rs:412` and `714`.
+- [ ] Stop value updates from rewriting the reset default.
+- [ ] Integrate `ffData` into the empty begin writer, reusing `text.rs:4820`.
+- [ ] Refuse invalid bounds and kind contradictions before publication.
+- [ ] Preserve imported macros, unknown bytes, and universal-measure sizes.
+- [ ] Land native tests in the existing integration entrypoint. Land the three named Python tests in existing `tests/test_core.py`.
+- [ ] Register the frozen class on public `rdocx` and `rdocx._rdocx`, with `_rdocx.pyi`, `__all__`, and `__init__` imports aligned.
+- [ ] Requalify Python fill, CLI fill, and PDF and AcroForm observations.
+- [ ] Leave Word differential and schema-order native proof pending.
+
+## Open questions
+
+| ID | Affected F-IDs and A-IDs | Decision and recommendation | Status and answer/source |
+|---|---|---|---|
+| Q1 | F-288 A1 and A6. Also F-289 and F-290 | Historical recommendation: native Rust additions only, matching existing generic field and mail-merge authoring. Existing Python, WASM, and CLI behaviour preserves authored packages and form-fill compatibility. No new APIs there. Alternative: add Python creation APIs in this sprint, with exact binding, stub, and export signatures plus installed strict typing, stubtest, and real public calls fully specified before approval. Native-only fits the bounded sprint. If Python is selected, revise this plan before approval. | Answered 2026-10-23 by user answer. Rust and Python new APIs. WASM and CLI gain no new authoring methods. Existing consumers retain preservation and current-value behavior. The exact Python surface is now recorded in `## Python API contract`. Codex root later approved this contract on 2026-10-23. This row keeps the original answer. |
+| Q2 | F-288 A2 and A3. F-289 A3 and A4 | Separate persistent legacy reset defaults from current typed values. | Answered 2026-10-23 by source analysis. Necessary correction. Explicit `w:default` stays metadata. `None` is absent. Fallback `Text("")`, `Checked(false)`, `SelectedIndex(0)`. A published empty result wins. An absent separator uses default then empty. `set_legacy_form_field_value` does not change the reset default. No new default setter. Disclose Python fill, CLI fill, and PDF and AcroForm. Separate behaviour commit. The later Q15 answer keeps this split and refuses a new struct field. |
+| Q15 | F-288 A2. F-289 A3 and A4 | Additive default queries. Do not change existing public struct shapes. | Answered 2026-10-23 by user answer, after the earlier assembly. `Field::legacy_form_default_value(&self) -> rdocx_oxml::Result<Option<LegacyFormFieldValue>>` reads explicit reset-default metadata and returns `None` when it is absent. Existing `legacy_form_value` distinguishes a non-legacy field. `Document::legacy_form_fields_with_defaults(&self) -> Result<Vec<(LegacyFormFieldInfo, Option<LegacyFormFieldValue>)>>` is one shared physical inventory walk. `legacy_form_fields` keeps its old signature and maps owned info from that walk. Python inventory uses the fused batch and freezes `.default_value` on the existing object. F-289 reset uses the pre-batch pair. No new singular query. No `default_value` field on `LegacyFormFieldData` or `LegacyFormFieldInfo`. Private `Field` author and source metadata is the only authority. The shared parser preserves accepted import states, including an out-of-list explicit default. No new read refusal beyond structural or malformed input. Factory bounds stay. |
+| Q3 | F-288 A1, A3, and A6 | Historical recommendation: author all six text kinds, format, and `calcOnExit`, with caller-supplied caches. `update_fields` preserves `FORM*` state and existing diagnostics. Word performs formatting and calculation. Alternative: native execution inside rdocx needs a separate design. Do not call stored metadata equal to evaluated output. | Answered 2026-10-23 by user answer. Store settings. Word executes. No new native or Python calculation or formatting evaluator. |
+| Q4 | F-288 A1, A2, A4, and A7. F-289 dependency | Historical recommendation: approve the genuine local provider gate named in the test plan so F-289 prefix work can proceed, with Word differential, full verify, and riders still pending. Alternative: wait for the final F-288 differential before F-289 starts. That alternative contradicts one final oracle pass and needs workflow reconciliation. A reviewed local gate is not completed differential evidence. | Answered 2026-10-23 by user answer. The original answer listed five named local native groups. After a verified local provider checkpoint. The active contract is F-288 local RED then GREEN for every named focused regression now in this test plan, including A7 and the render-fallback case, plus the Python factory, attachment, current, and default checks, scoped verification, a clean microscope, and an integrated source ancestor, before F-289. That expansion does not weaken the original gate. Final Word differential, full verification, and riders remain pending. |
+
+Q16 is answered on F-290 only. Provenance is the 2026-10-23 user choice "Author Word-compatible canonical slots (Recommended)". It is not a decision of this story. Original Q1 through Q15 on this plan stay unchanged.
+
+## Contract closure
+
+Result: user answers recorded. Codex root semantic validation on 2026-10-23 approved this contract at source `a57be365`. Q15 additive default queries, `Cow` readers, and candidate-byte no-op materialization stay the approved contract. Implementation, native Word qualification, and final gates stay pending. This approval does not mark the story completed.
+
+Remaining decisions: Q1, Q2, Q3, Q4, and Q15 are answered. Q2 keeps its source-analysis provenance. Q15 is the 2026-10-23 user answer recorded above. No blocked product choice remains. Implementation and final evidence stay pending.
+
+Blockers before approval:
+
+- Q1 selects Rust and Python. The signatures in `## Python API contract` are the approved surface. Implementation has not started.
+- Q3 stores settings. Word executes them. Evaluated-output parity is out of scope. An evaluator would need a new design.
+- Q4 selects the local checkpoint. The 2026-10-23 user answer originally listed five named local native groups. The active checkpoint is every named focused regression in this test plan, including A7 and the render-fallback case, plus the Python bindings. The gate is not weakened. That checkpoint is not completed differential evidence. Word differential, full verification, and riders remain pending.
+- Authored `HalfPoints` values are exact integers from 0 through `u64::MAX`, the same set `legacy_form_hps_measure_value` accepts. Native Word behaviour for zero and extreme sizes is not proved by that parser and is not claimed.
+- Absent-default fallback and child order are specified as policy plus existing writer order. They are not claimed as verified by a new Word run.
+- Native inputs for A6 are specified and unrun. Source pins, measured archives, and actual Word files stay final evidence. Do not mark them passed.
+
+Inventory of operations: `from_legacy_form` creates. `add_field_value` and `insert_field` attach. `Field::legacy_form_value` reads the authoritative current value. `Field::legacy_form_default_value` reads an explicit default. `legacy_form_fields_with_defaults` is the one batch. `legacy_form_fields` delegates and keeps its old shape. `set_legacy_form_field_value` updates current values. `update_fields` is the preservation publisher. No repeat, remove, clone, or unwrap API is added for legacy fields.
+
+Cached projection: source facts are `w:default`, typed checkbox and list metadata, and the physical `cached_result`. Effective readers are `effective_display(&self) -> std::borrow::Cow<'_, str>`, `effective_projected_text(&self) -> Option<std::borrow::Cow<'_, str>>`, and `effective_display_field_segments(&self) -> Vec<(std::borrow::Cow<'_, str>, Option<&CT_RPr>, &Field)>`. Borrowed `projected_text`, `cached_display_field_segments`, and `FieldRef::cached_display_segments` stay physical. A present empty publication wins over the default. An absent outer result falls back for effective text only. The setter no-op is the candidate-byte formula in Approach, never typed-value equality. Publishers are the factory, `set_legacy_form_field_value`, direct `cached_result`, `set_cached_runs`, annotation cache, `cached_field_mut`, and refresh. Attachment and reopen are compared. An observable parent `cached_result` override wins over effective nested children. Typed run format stays. Custom display that disagrees with a checkbox or list is legal and can be repaired by the same typed value. Kind and structural contradictions refuse. `LegacyFormFieldInfo` is owned, so a held pre-edit snapshot keeps the old current value. A fresh inventory, the native current value, and the reopened current value agree, and the reset default stays unchanged. Python uses frozen and fresh snapshots and adds no low-level getter. Existing Python live handles follow their survival and staleness policies. A refusal or a byte no-op preserves valid handles. This story does not revive a dead owner. Literal replacement does not search effective fallback text. Native Word agreement remains the existing A6 gate only. The A7 render check is local and uses deterministic fonts.
+
+Story inventory: every currently attachable story, including comments and text boxes. Old per-part ordinal prefixes stay. Newly discoverable physical begin spans append in part source order. A root reached again as a cell or text box is deduped. Comments use a fresh part sequence. Read and write share one frozen ordinal to physical map. Compatibility order replaces a pure source-order claim. Proving case is C7. Codex root semantic validation on 2026-10-23 approved this contract. Implementation has not started.

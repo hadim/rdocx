@@ -2846,13 +2846,24 @@ contracts.
 #### Sprint S95.4, Complete form and mail-merge authoring
 
 **Goal**: compose legacy fields and modern forms, and author mail-merge data.
-Three stories total 8 to 11 developer-days.
+Also admit the incoming Word and PowerPoint correctness and performance repairs.
+The original three authoring stories keep the 12 to 17 developer-day planning
+estimate. The earlier 8 to 11 figure is only the pre-Python native basis for
+those three stories. The four repair drafts add a provisional 15 to 24
+developer-days. The expanded planning total is 27 to 41 developer-days.
+Those figures are estimates, not measurements, and they are not a capacity
+promise. The visible over-two-week scope is approved intake. The clock has
+not started. F-X267 is the largest repair. No timing is invented here.
 
 | F-ID | Title | Size |
 |------|-------|------|
 | F-288 | Legacy form field creation | M |
 | F-289 | Modern Word form authoring | L |
 | F-290 | Mail-merge package and data-source authoring | M |
+| F-X264 | Repair Word defaults package inspection and comment projection | L |
+| F-X265 | Preserve fragment relationship targets and duplicate styles | M |
+| F-X266 | Bound Word body reads and structural edit cost | L |
+| F-X267 | Bound PowerPoint mutation cost across public publishers | L |
 
 Complete and integrate F-288 through its scoped dependency-prefix checkpoint
 before F-289. Its F-285 through F-287 prerequisites complete in S95.3. F-290
@@ -2860,8 +2871,63 @@ keeps its existing dependencies and may proceed only under distinct leases.
 Public-created forms/templates require save/reopen and explicit diagnostics for
 unavailable external mail-merge data. S96 follows the completed form programme.
 
+The four repair stories are provisional sizes. Draft plans exist and stay
+unapproved. Q9 through Q14 were answered by the user on 2026-10-23 and are
+recorded in those drafts and in `CURRENT_SPRINT.md`. There is no formal
+dependency among F-X264, F-X265, F-X266 and F-X267. Applicable completed
+providers are F-X260 and F-X261 for F-X264, F-X261 for F-X265, F-X260 for
+F-X266, and F-X260 and F-X262 for F-X267.
+
+Proposed serial order, because leases overlap, is F-X264, F-X265, F-X266,
+F-X267, F-288, the verified F-288 local prefix, F-289, then F-290. That order
+does not invent formal dependencies. Preserve the F-288 verified local
+provider prefix before F-289, with final Word qualification still pending.
+Design assembly is pending root Codex semantic review. It is not approval.
+All seven features stay pending and unclaimed, phase design.
+
+Q15 was answered on 2026-10-23 after that assembly. It adds legacy default
+queries and does not change the existing public struct shapes. F-290 does not
+inherit that type. The request to execute `/run-sprint` after intake supersedes
+the intake-only pause. The seven drafts now carry the mechanical root
+corrections. They stay unapproved. The 27 to 41 developer-day figure is
+unchanged and is still an estimate. No story is claimed.
+
+A later 2026-10-23 contract pass updated only the F-288, F-289, and F-X264
+drafts, plus this note and the current-sprint checkpoint. F-288 adds a source
+lease on existing `crates/rdocx-layout/src/engine.rs` for effective field
+display consumers. The other four drafts were left as they stood. All seven
+plans stay draft and unapproved. All seven features stay pending and
+unclaimed. Phase stays design. Nothing in this note approves a plan.
+
+A 2026-10-23 preapproval polish then reconciled F-X265, F-X266, F-X267, and
+F-290. Q16 is answered for F-290 only: Word-compatible canonical mapping slots,
+MS-OI29500 2.1.369, position over mapped name. HLD 14 records that pending
+definition. Original Q1 through Q15 stay unchanged. All seven plans stay draft
+and unapproved. All seven features stay pending and unclaimed. Phase stays
+design. Nothing in this note approves a plan.
+
+A later 2026-10-23 draft fix updated F-288, F-X264, and F-290 only, plus the
+F-290 and F-X264 lines in HLD 14. Q1 through Q16 stay answered. The F-288
+provider checkpoint includes every named local regression and the Python
+bindings. The historical five-group list stays provenance. F-X264 uses exact
+grid rescue and a raw closed range before truncation. F-290 treats `None` as
+no recognized owned configuration and keeps at most one recipient part. All
+seven plans stay draft and unapproved. All seven features stay pending and
+unclaimed. Phase stays design. Nothing in this note approves a plan.
+
+Codex root later completed semantic validation on 2026-10-23 and approved the
+seven contracts at source `a57be365`. Q1 through Q16 stay answered. BACKLOG
+rows stay pending with no owner. Implementation order is serial: F-X264,
+F-X265, F-X266, F-X267, F-288, the actual F-288 local prefix, F-289, then
+F-290. No story is implemented, claimed, or credited in `AS_BUILT.md` or
+`SPRINT_TRACKER.md`. Earlier paragraphs in this section remain the historical
+intake record.
+
 The five boundaries retain twenty stories: eleven cross-cutting additions
-and nine existing stories, provisionally totalling60 to80 developer-days. The
+and nine existing stories, provisionally totalling 60 to 80 developer-days.
+That twenty-story count, and the 8 to 11 native basis inside it, are the
+pre-refresh programme totals. They are not the active S95.4 story count and
+they do not estimate the four new repairs. The
 two original stories F-X219 and F-X192 are explicitly carried unfinished to S96.
 These are effort ranges, not elapsed-time promises. Every boundary retains the normal complete
 integrated gate and sprint review. Only the selected S95 opens after S94 closes.
@@ -2934,6 +3000,54 @@ Preserve all checked owner, opaque XML, schema order and atomic publication
 contracts. Intentional paint/admission compatibility changes require explicit
 design and labelled expected-delta commits. Optional Issue377 badge, Issue281
 spreadsheet demand and broader Issue264 discussion are not added stories.
+
+
+##### S95.4 issue and PR intake, 2026-10-23
+
+Receipt timestamp 2026-10-23T19:37:06Z. The receipt lists 11 open issues and 8 open pull requests. Seven new issues, 402 through 408, are admitted. All eight pull requests, 409 through 416, are admitted as unmerged candidates. Issue381 stays the longstanding later S96 AcroForm request. Issue377 stays a benchmark discussion. Issues264 and281 stay discussion items, excluded and open. There is no automatic intake loop.
+
+Donor behavior and compatibility decisions, recorded here so they are not inferred from a patch:
+
+- PR414 does not settle int, bool, clear, non-finite, range or atLeast policy, and it does not by itself reverse the old Q12 reading. That policy is pending design.
+- PR412 donor changes to RunRange, bookmarks and self-closing story fields need explicit acceptance. They are not adopted by listing the comment fix.
+- Issue404 original unreduced unused relationships need their own input. Donor image 9 and image 10 reconstruction does not supply that input.
+- PR413 alone leaves 107 package-bound calls. PR416 is incremental only once and is stacked after PR413 head bdf22890de1762d025b89b83b549c56941ef7199. The JSON base_sha of PR416 remains a57be36578b1b419b87986b1accbcfca481277ce.
+- Q9, answered 2026-10-23: a bounded Rust API change from owned `Vec<u8>` part storage to shared `Arc<Vec<u8>>` is allowed for OPC. Python stays unchanged. Any release version change is later. This answer does not approve a patch, a design or a claim.
+- Q10 is pending a user choice between consistent numeric multiples across default, paragraph and style, and a narrower rule. This intake does not choose.
+- Three PR416 behavior changes are not adopted. Untouched slide bytes and digest, fit_text local scope, and transition and footer local scope require declared reviewed separate behavior commits.
+- Donor tests, contributor CI and benchmarks are candidate evidence. They are not local proof.
+
+The 2026-10-23 intake-only pause is superseded by the request to execute `/run-sprint` after this intake preparation. Implementation has not started. F-X264 through F-X267 still need new designs. Original Q1 through Q8 stay unchanged. Nothing in this note approves or claims a story. Pinned contributor bytes and the source assessment live only at `/private/tmp/s95.4-contributions/`.
+
+The temporary receipt path `/private/tmp/s95.4-latest-intake.json` is supplementary only. The mapping below is the durable record. Body digests are SHA-256 of the fetched issue body string as UTF-8.
+
+| Issue | Owner | Acceptance scope | Body SHA-256 | Updated |
+|---|---|---|---|---|
+| [402](https://github.com/tensorbee/rdocx/issues/402) | F-X264 | Write a float line multiple, including Word 259 over 240, and a Length for exact. Shared paragraph, style and default numbers round-trip. Off-grid truncation stays compatible. Int, bool, clear, non-finite, range and atLeast policy, including reversal of old Q12, is pending design. | `603e4c5b8a7382dbb5ebf46e7a99fcc8c8f9e387438991fdc12265c116474f85` | 2026-10-23T06:11:18Z |
+| [403](https://github.com/tensorbee/rdocx/issues/403) | F-X267 | Bound all 248 public mutating calls from external pin 3374348a48164f198ef077af46df485d0a1c469d. 159 grow with the deck. Timings at 5 and 20 slides and at 10, 40 and 80 media-rich slides, plus counters. Document by-design whole-deck work. 413 leaves 107 package-bound calls. 416 is incremental only once. | `03f2246e3785e12779e91843fe88640a45c032c6069026f98d9dfefb7cd362c2` | 2026-10-23T08:39:06Z |
+| [404](https://github.com/tensorbee/rdocx/issues/404) | F-X265 | Picture byte identity for both orders, the default path and reuse off. Original unreduced unused relationships need separate input, not donor image 9 or 10 reconstruction. Returned image and hyperlink IDs retain their intended targets through intervening staged edits. Save and reopen retain referenced target bytes. Chart and template publishers included. | `7ce9b483f759fd6607b8a4a0bee637b4bcef1929c28deb8ad8b5b5701073e46b` | 2026-10-23T09:09:02Z |
+| [405](https://github.com/tensorbee/rdocx/issues/405) | F-X264 | Cross-cell plain comments and Google Docs SDT comments must list the other comments. Exact text or a diagnostic is pending design. Removal works. Donor RunRange, bookmark and self-closing story-field edits need explicit acceptance. | `c615fe58292bd85c4ade2b1daa7cbd57ba0778fb8250f76fc54c1716bb474cab` | 2026-10-23T09:09:03Z |
+| [406](https://github.com/tensorbee/rdocx/issues/406) | F-X264 | Read-only root, main and header relationship parts plus Content_Types match exact to_bytes producer bytes. Paths, case, errors and a shared OPC serializer are pending design. | `69130ad24823bbda2cbfd4375149301a4c5171624a8d942cd0341abf6c61d404` | 2026-10-23T09:09:04Z |
+| [407](https://github.com/tensorbee/rdocx/issues/407) | F-X266 | Original 100 versus 1000 paragraphs with six verbose formatted runs, three original calls, same release host, ratio at most 3 times max(small, 1 ms), plus an operation-count proof. No concurrent compilation. Assess run, table and cell XML, body adds, inserts, remove ranges and fallbacks. Preserve handles, refusal, namespace, unknown bytes and debug full-path comparison. | `e90e6dad452e4402e9bbeee0d261af376dd01240caf223bb16fdfc3713c9154b` | 2026-10-23T09:09:06Z |
+| [408](https://github.com/tensorbee/rdocx/issues/408) | F-X265 | Equal duplicate style IDs keep the first definition and do not copy it again across repeated imports. A source first definition that differs from the target first definition produces exactly one renamed copy. A shadowed later definition never forces a copy. Shadowed dependencies are not imported. Validate the default flag. Target duplicate XML stays verbatim. Template, building-block and rich-merge consumers included. | `94b4a44a16db3b5f031091a81bb27dd9f42d46284c053aba759097759071122b` | 2026-10-23T09:09:07Z |
+
+Excluded open issues from the same receipt, with the same body digest rule:
+
+- [381](https://github.com/tensorbee/rdocx/issues/381) by `hadim`, updated 2026-10-15T19:26:15Z, body SHA-256 `f7d9cbcf79f954046b4e0f7f4bf8da3d8ba8ee85559587dcf6cf6aa966eabcd6`. Longstanding form-to-fillable-PDF request. Later S96. Not an S95.4 story.
+- [377](https://github.com/tensorbee/rdocx/issues/377) by `arthrod`, updated 2026-10-15T03:52:49Z, body SHA-256 `6edb1d8691a011cb71fdd4ec48da7c6682d1905998b616a4914e1d648cd6e873`. Benchmark discussion and optional README badge. Excluded from this intake and left open.
+- [264](https://github.com/tensorbee/rdocx/issues/264) by `Andrewkoro105`, updated 2026-10-18T15:50:57Z, body SHA-256 `62195027ea4a6c7b5d5ba4c38da9187212cfb6a53e298c39041d63017da7fd78`. High-level styles API discussion. Excluded from this intake and left open.
+- [281](https://github.com/tensorbee/rdocx/issues/281) by `hadim`, updated 2026-10-18T15:50:58Z, body SHA-256 `e84e96bf29d4e1b115293afe7d7a7cd5c61ba43c4bc78c9367a6cb980e03ad52`. Spreadsheet programme discussion. Excluded from this intake and left open.
+
+| PR | Story | Author | Head SHA | Base SHA | Stack note |
+|---|---|---|---|---|---|
+| [409](https://github.com/tensorbee/rdocx/pull/409) | F-X264 | `hadim` | `7df1c7e0106ee04c91171e4be41771d8504993a1` | `a57be36578b1b419b87986b1accbcfca481277ce` | JSON base is sprint head. |
+| [410](https://github.com/tensorbee/rdocx/pull/410) | F-X265 | `hadim` | `4070a7886d10bced0e6da60d28e351fbc9b8a831` | `a57be36578b1b419b87986b1accbcfca481277ce` | JSON base is sprint head. |
+| [411](https://github.com/tensorbee/rdocx/pull/411) | F-X265 | `hadim` | `3c9c296c276f69d2b6cc8a1eab5674627709887f` | `a57be36578b1b419b87986b1accbcfca481277ce` | JSON base is sprint head. |
+| [412](https://github.com/tensorbee/rdocx/pull/412) | F-X264 | `hadim` | `38fefb1730b474cca5e34f2b7996fc448ac38993` | `a57be36578b1b419b87986b1accbcfca481277ce` | JSON base is sprint head. |
+| [413](https://github.com/tensorbee/rdocx/pull/413) | F-X267 | `hadim` | `bdf22890de1762d025b89b83b549c56941ef7199` | `a57be36578b1b419b87986b1accbcfca481277ce` | First Issue403 candidate. JSON linked issues list is empty. Stack parent of PR416. |
+| [414](https://github.com/tensorbee/rdocx/pull/414) | F-X264 | `hadim` | `3d3d42db0f9c66f26efb4ab32f37864d8bfb131e` | `a57be36578b1b419b87986b1accbcfca481277ce` | JSON base is sprint head. |
+| [415](https://github.com/tensorbee/rdocx/pull/415) | F-X266 | `hadim` | `0fbf3e96709198dbd01b9e810181109d106d9f68` | `a57be36578b1b419b87986b1accbcfca481277ce` | JSON base is sprint head. |
+| [416](https://github.com/tensorbee/rdocx/pull/416) | F-X267 | `hadim` | `768f8c109bd43fb9c1f6ecdfe2d913382bcc0368` | `a57be36578b1b419b87986b1accbcfca481277ce` | Stacked after PR413 head bdf22890de1762d025b89b83b549c56941ef7199. Incremental only once. JSON base_sha stays a57be36578b1b419b87986b1accbcfca481277ce. |
 
 #### Sprint S96, Fillable PDF forms
 
