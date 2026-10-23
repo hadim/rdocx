@@ -57616,7 +57616,7 @@ mod watermark_tests {
             .get_or_create_part_rels("/word/header1.xml")
             .add_with_id("rId9", "urn:producer", "producer.bin");
         let header = package.remove_part("/word/header1.xml").unwrap();
-        package.parts.insert(MIXED_HEADER.to_owned(), header);
+        package.parts.insert(MIXED_HEADER.to_owned(), header.into());
         let relationships = package.remove_part_rels("/word/header1.xml").unwrap();
         package
             .part_rels

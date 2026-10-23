@@ -19,6 +19,7 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::Arc;
 
 #[cfg(feature = "render")]
 use diagram::{DiagramResources, ScopedDiagramResources};
@@ -2708,7 +2709,8 @@ struct NotesRecord {
 #[derive(Clone, Debug)]
 struct MediaEntry {
     part_name: String,
-    bytes: Vec<u8>,
+    // The same allocation as the package part, so a clone copies no media.
+    bytes: Arc<Vec<u8>>,
     extension: String,
     content_type: String,
     newly_inserted: bool,
@@ -2784,7 +2786,7 @@ impl MediaStore {
         if let Some(existing) = self
             .by_id
             .get(&media_id)
-            .and_then(|bucket| bucket.iter().find(|entry| entry.bytes == bytes))
+            .and_then(|bucket| bucket.iter().find(|entry| entry.bytes.as_slice() == bytes))
         {
             return existing.part_name.clone();
         }
@@ -2793,11 +2795,12 @@ impl MediaStore {
         let extension = format.extension();
         let content_type = format.content_type();
         let part_name = self.namer.next_part_name(extension);
-        package.set_part(&part_name, bytes.to_vec());
+        let bytes = Arc::new(bytes.to_vec());
+        package.set_part(&part_name, Arc::clone(&bytes));
         register_content_type(package, &part_name, extension, content_type);
         self.by_id.entry(media_id).or_default().push(MediaEntry {
             part_name: part_name.clone(),
-            bytes: bytes.to_vec(),
+            bytes,
             extension: extension.to_owned(),
             content_type: content_type.to_owned(),
             newly_inserted: true,
@@ -2815,7 +2818,7 @@ impl MediaStore {
         let media_id = MediaId::from_bytes(bytes);
         if let Some(existing) = self.by_id.get(&media_id).and_then(|bucket| {
             bucket.iter().find(|entry| {
-                entry.bytes == bytes
+                entry.bytes.as_slice() == bytes
                     && entry.extension == extension
                     && entry.content_type == content_type
             })
@@ -2823,11 +2826,12 @@ impl MediaStore {
             return existing.part_name.clone();
         }
         let part_name = self.media_namer.next_part_name(extension);
-        package.set_part(&part_name, bytes.to_vec());
+        let bytes = Arc::new(bytes.to_vec());
+        package.set_part(&part_name, Arc::clone(&bytes));
         register_content_type(package, &part_name, extension, content_type);
         self.by_id.entry(media_id).or_default().push(MediaEntry {
             part_name: part_name.clone(),
-            bytes: bytes.to_vec(),
+            bytes,
             extension: extension.to_owned(),
             content_type: content_type.to_owned(),
             newly_inserted: true,
@@ -2838,7 +2842,7 @@ impl MediaStore {
     fn write_new_parts(&self, package: &mut OpcPackage) {
         for entry in self.by_id.values().flatten() {
             if entry.newly_inserted {
-                package.set_part(&entry.part_name, entry.bytes.clone());
+                package.set_part(&entry.part_name, Arc::clone(&entry.bytes));
                 register_content_type(
                     package,
                     &entry.part_name,
@@ -31370,7 +31374,7 @@ mod write_tests {
                     if part != &chart && part != &workbook {
                         assert_eq!(
                             reopened.package.get_part(part).unwrap(),
-                            bytes,
+                            bytes.as_slice(),
                             "{name}/{label}: unrelated {part}"
                         );
                     }
@@ -31621,7 +31625,7 @@ mod write_tests {
             if name != &part {
                 assert_eq!(
                     required_part(&deck.staged_package(true).unwrap(), name).unwrap(),
-                    bytes
+                    bytes.as_slice()
                 );
             }
         }
@@ -33617,7 +33621,7 @@ mod write_tests {
                 ("/ppt/slides/slide1.xml", selected),
                 ("/ppt/slides/slide2.xml", other),
             ] {
-                let xml = String::from_utf8(package.parts[part].clone()).unwrap();
+                let xml = String::from_utf8(package.parts[part].to_vec()).unwrap();
                 assert_eq!(xml.matches("<a:normAutofit/>").count(), 1);
                 let numeric = if part.ends_with("slide2.xml") {
                     " fontScale=\"100000\" lnSpcReduction=\"0\""
@@ -33631,7 +33635,7 @@ mod write_tests {
                 package.set_part(part, xml.into_bytes());
             }
             let part = "/ppt/slides/slide1.xml";
-            let xml = String::from_utf8(package.parts[part].clone()).unwrap();
+            let xml = String::from_utf8(package.parts[part].to_vec()).unwrap();
             assert_eq!(xml.matches("<a:bodyPr/>").count(), 1);
             package.set_part(
                 part,
@@ -33643,7 +33647,7 @@ mod write_tests {
             );
             if inherited {
                 for part in ["/ppt/slides/slide1.xml", "/ppt/slides/slide2.xml"] {
-                    let xml = String::from_utf8(package.parts[part].clone()).unwrap();
+                    let xml = String::from_utf8(package.parts[part].to_vec()).unwrap();
                     let namespace_scope = " xmlns:q='http://schemas.openxmlformats.org/drawingml/2006/main' xmlns:e='urn:example' xmlns:mc='http://schemas.openxmlformats.org/markup-compatibility/2006' mc:Ignorable='e'";
                     // Imported provider bodies can already carry local canonical
                     // declarations. Move only the fixture choice declarations first,
@@ -33678,7 +33682,7 @@ mod write_tests {
             let saved = deck.to_bytes().unwrap();
             let reopened = Presentation::from_bytes(&saved).unwrap();
             let after = reopened.staged_package(true).unwrap();
-            let changed_xml = String::from_utf8(after.parts[part].clone()).unwrap();
+            let changed_xml = String::from_utf8(after.parts[part].to_vec()).unwrap();
             assert!(
                 changed_xml.contains(if inherited {
                     "e:proof='selected&amp;keep'"
@@ -33743,7 +33747,7 @@ mod write_tests {
             let fitted = deck.to_bytes().unwrap();
             let fitted_deck = Presentation::from_bytes(&fitted).unwrap();
             let fitted_xml =
-                String::from_utf8(fitted_deck.staged_package(true).unwrap().parts[part].clone())
+                String::from_utf8(fitted_deck.staged_package(true).unwrap().parts[part].to_vec())
                     .unwrap();
             assert!(
                 fitted_xml.contains(if inherited {
@@ -33781,7 +33785,7 @@ mod write_tests {
                 .unwrap();
             let mut package = deck.staged_package(true).unwrap();
             let part = "/ppt/slides/slide1.xml";
-            let xml = String::from_utf8(package.parts[part].clone()).unwrap();
+            let xml = String::from_utf8(package.parts[part].to_vec()).unwrap();
             assert_eq!(xml.matches("<a:bodyPr/>").count(), 1);
             let xml = xml
                 .replace(
@@ -34352,9 +34356,11 @@ mod write_tests {
                             != frames[0].update.location.child_path)
             );
             assert!(
-                String::from_utf8(foreign_deck.staged_package(false).unwrap().parts[&part].clone())
-                    .unwrap()
-                    .contains(&foreign)
+                String::from_utf8(
+                    foreign_deck.staged_package(false).unwrap().parts[&part].to_vec()
+                )
+                .unwrap()
+                .contains(&foreign)
             );
         }
     }

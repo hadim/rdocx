@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use zip::ZipWriter;
 use zip::read::ZipArchive;
@@ -71,8 +72,9 @@ pub struct OpcPackage {
     /// Key is the part name (e.g. "/word/document.xml"),
     /// value is the parsed relationships.
     pub part_rels: HashMap<String, Relationships>,
-    /// All parts keyed by their URI (e.g. "/word/document.xml").
-    pub parts: HashMap<String, Vec<u8>>,
+    /// All parts keyed by their URI (e.g. "/word/document.xml"). The bytes
+    /// are shared, so cloning a package copies pointers, not part content.
+    pub parts: HashMap<String, Arc<Vec<u8>>>,
     content_types_source: Option<ContentTypesSource>,
     /// The bytes of each XML entry that was read already holding a character
     /// XML 1.0 cannot carry, keyed by ZIP entry name. Such producer bytes
@@ -236,7 +238,7 @@ impl OpcPackage {
             } else {
                 format!("/{name}")
             };
-            parts.insert(normalized, data.clone());
+            parts.insert(normalized, Arc::new(data.clone()));
         }
 
         let malformed_source_entries = raw_parts
@@ -333,7 +335,7 @@ impl OpcPackage {
     /// Get raw bytes of a part by its URI.
     pub fn get_part(&self, part_name: &str) -> Option<&[u8]> {
         let key = deterministic_part_key(&self.parts, part_name)?;
-        self.parts.get(key).map(Vec::as_slice)
+        self.parts.get(key).map(|data| data.as_slice())
     }
 
     /// Return whether a case-equivalent normalized part name exists.
@@ -346,18 +348,18 @@ impl OpcPackage {
         deterministic_part_key(&self.parts, part_name).map(String::as_str)
     }
 
-    /// Set (or replace) a part's raw bytes.
-    pub fn set_part(&mut self, part_name: &str, data: Vec<u8>) {
+    /// Set (or replace) a part's raw bytes, owned or already shared.
+    pub fn set_part(&mut self, part_name: &str, data: impl Into<Arc<Vec<u8>>>) {
         let key = deterministic_part_key(&self.parts, part_name)
             .cloned()
             .unwrap_or_else(|| part_name.to_owned());
-        self.parts.insert(key, data);
+        self.parts.insert(key, data.into());
     }
 
     /// Remove and return a case-equivalent normalized part.
     pub fn remove_part(&mut self, part_name: &str) -> Option<Vec<u8>> {
         let key = deterministic_part_key(&self.parts, part_name)?.clone();
-        self.parts.remove(&key)
+        self.parts.remove(&key).map(Arc::unwrap_or_clone)
     }
 
     pub(crate) fn content_types_bytes(&self) -> Result<Vec<u8>> {
@@ -1388,10 +1390,10 @@ mod tests {
         let mut package = OpcPackage::new();
         package
             .parts
-            .insert("/WORD/DOCUMENT.XML".to_owned(), b"first".to_vec());
+            .insert("/WORD/DOCUMENT.XML".to_owned(), b"first".to_vec().into());
         package
             .parts
-            .insert("/word/document.xml".to_owned(), b"second".to_vec());
+            .insert("/word/document.xml".to_owned(), b"second".to_vec().into());
         let mut output = std::io::Cursor::new(Vec::new());
         assert!(matches!(
             package.write_to(&mut output),
