@@ -16362,6 +16362,61 @@ fn issue398_read_handles_visit_only_the_selected_owner_after_open() {
     .unwrap();
 }
 
+#[cfg(debug_assertions)]
+#[test]
+fn word_owner_pieces_read_only_the_blocks_an_edit_changes() {
+    Python::initialize();
+    Python::attach(|py| -> PyResult<()> {
+        let mut samples = Vec::new();
+        for count in [50usize, 200] {
+            let mut native = rdocx::Document::new();
+            for index in 0..count {
+                native.add_paragraph(&format!("p{index}"));
+                if index % 10 == 9 {
+                    native.add_table(2, 2);
+                }
+            }
+            let document = Py::new(py, PyDocument::from_document(native, py)?)?;
+            let object = document.bind(py);
+            let paragraphs = object.getattr("paragraphs")?;
+            let table = object.getattr("tables")?.get_item(2)?;
+            let cell = table.call_method1("cell", (0, 0))?;
+            let mut sample = Vec::new();
+            let reads = |edit: &dyn Fn() -> PyResult<()>| -> PyResult<usize> {
+                let before = word_piece_work();
+                edit()?;
+                Ok(word_piece_work() - before)
+            };
+            sample.push(reads(&|| table.setattr("indent", 182_880))?);
+            sample.push(reads(&|| cell.setattr("width", 914_400))?);
+            sample.push(reads(&|| {
+                cell.call_method1("add_paragraph", ("x",)).map(|_| ())
+            })?);
+            sample.push(reads(&|| {
+                paragraphs.get_item(count / 2)?.setattr("text", "x")
+            })?);
+            sample.push(reads(&|| {
+                paragraphs
+                    .get_item(count / 3)?
+                    .call_method1("add_run", ("x",))
+                    .map(|_| ())
+            })?);
+            assert!(
+                sample.iter().all(|reads| *reads == 1),
+                "{count}: {sample:?}"
+            );
+            // Without its pieces, the next inventory reads every block again.
+            document.borrow_mut(py).pieces = WordPieces::default();
+            let all = reads(&|| paragraphs.get_item(1)?.setattr("text", "y"))?;
+            assert!(all > count, "{count}: {all}");
+            samples.push(sample);
+        }
+        assert_eq!(samples[0], samples[1]);
+        Ok(())
+    })
+    .unwrap();
+}
+
 #[test]
 fn issue398_route_hash_collisions_preserve_exact_first_match() {
     let addresses = (0..2)

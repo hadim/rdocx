@@ -11175,3 +11175,227 @@ def test_issue407_direct_routes_do_no_whole_body_work(root_w14):
     before = work()
     assert doc.bind_content_controls({"t": "value"}) == 1
     assert work()[0] > before[0]
+
+
+def _word_piece_work():
+    from rdocx import _rdocx
+
+    work = getattr(_rdocx, "_word_piece_work", None)
+    if work is None:
+        pytest.skip("the owner piece counter exists in debug builds only")
+    return work
+
+
+def _word_piece_edits():
+    """Edits whose next owner inventory is read by body block and story part, each given the document and returning
+    the call that makes the edit."""
+    import rdocx
+
+    def paragraph(doc):
+        return next(p for p in reversed(list(doc.paragraphs)) if p.text.startswith("run 0 of paragraph"))
+
+    def table(doc):
+        return doc.tables[-1]
+
+    def runs(doc):
+        at = doc.find_content_index(paragraph(doc))
+        return rdocx.RunRange(start=rdocx.RunPosition(body_index=at, run_index=0),
+                              end=rdocx.RunPosition(body_index=at, run_index=1))
+
+    def comment(doc):
+        return next(c.id for c in doc.comments if c.text == "comment 0")
+
+    def chart(doc):
+        data = rdocx.CategoryChartData()
+        data.categories = ["a", "b"]
+        data.add_series("s", (1, 2))
+        after = paragraph(doc)
+        return lambda: doc.add_chart(rdocx.XL_CHART_TYPE.COLUMN_CLUSTERED, data, rdocx.Inches(4),
+                                     rdocx.Inches(3), after=after)
+
+    def settings(doc):
+        settings = doc.settings
+        return lambda: setattr(settings, "odd_and_even_pages_header_footer", True)
+
+    def setter(target, name, value):
+        def make(doc):
+            obj = target(doc)
+            return lambda: setattr(obj, name, value)
+        return make
+
+    def method(target, name, *args, **kwargs):
+        def make(doc):
+            obj = target(doc)
+            values = [value(doc) if callable(value) else value for value in args]
+            return lambda: getattr(obj, name)(*values, **kwargs)
+        return make
+
+    def document(doc):
+        return doc
+
+    return {
+        "Table.indent": setter(table, "indent", rdocx.Inches(0.2)),
+        "Table.set_borders": method(table, "set_borders", "single", size=8, color="000000"),
+        "Row.height": setter(lambda doc: table(doc).rows[0], "height", rdocx.Inches(0.5)),
+        "Cell.shading": setter(lambda doc: table(doc).cell(0, 0), "shading", rdocx.RGBColor(0x7B, 0x1E, 0x3A)),
+        "Cell.add_paragraph": method(lambda doc: table(doc).cell(0, 0), "add_paragraph", "x"),
+        "Paragraph.text": setter(paragraph, "text", "x"),
+        "Paragraph.add_run": method(paragraph, "add_run", "x"),
+        "Paragraph.add_hyperlink": method(paragraph, "add_hyperlink", "x", "https://example.com/a"),
+        "Paragraph.add_equation": method(paragraph, "add_equation", "x^2", format="latex"),
+        "Run.remove": method(lambda doc: paragraph(doc).runs[1], "remove"),
+        "Run.add_field": method(lambda doc: paragraph(doc).runs[0], "add_field", "PAGE", "1"),
+        "Document.split_run": method(document, "split_run", paragraph, 0, 3),
+        "Document.add_comment": method(document, "add_comment", runs, author="Reviewer", text="c",
+                                       date="2026-10-01T12:00:00Z"),
+        "Document.reply_to": method(document, "reply_to", comment, author="Author", text="r",
+                                    date="2026-10-01T12:00:00Z"),
+        "Document.resolve_comment": method(document, "resolve_comment", comment),
+        "Document.add_chart": chart,
+        "Document.set_text_watermark": method(document, "set_text_watermark", "DRAFT"),
+        "Document.set_note_policy": method(document, "set_note_policy", "footnote", start=2),
+        "Settings.odd_and_even_pages_header_footer": settings,
+    }
+
+
+_WORD_PIECE_DOCUMENTS = {}
+
+
+def _word_piece_document(paragraphs):
+    import rdocx
+
+    if paragraphs not in _WORD_PIECE_DOCUMENTS:
+        _WORD_PIECE_DOCUMENTS[paragraphs] = _issue407_review_document(paragraphs).to_bytes()
+    return rdocx.Document.from_bytes(_WORD_PIECE_DOCUMENTS[paragraphs])
+
+
+@pytest.mark.parametrize("edit", sorted(_word_piece_edits()))
+def test_word_owner_inventory_reads_only_what_an_edit_changes(edit):
+    import rdocx
+
+    # The owner inventory of an edit reads again only the body blocks and story parts the edit changed: as many in
+    # a body four times as large, and never the whole document. Debug builds check each inventory read by block
+    # and part against the rebuild.
+    work = _issue407_work()
+    pieces = _word_piece_work()
+    reads = []
+    for paragraphs in (20, 80):
+        doc = _word_piece_document(paragraphs)
+        call = _word_piece_edits()[edit](doc)
+        before = (work(), pieces())
+        call()
+        assert work() == before[0], (edit, paragraphs)
+        reads.append(pieces() - before[1])
+        reopened = rdocx.Document.from_bytes(doc.to_bytes())
+        assert [p.text for p in reopened.paragraphs] == [p.text for p in doc.paragraphs]
+    assert reads[0] == reads[1] <= 2, (edit, reads)
+
+
+_WORD_PIECE_BOX_DRAWING = (
+    '<w:drawing><wp:anchor xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+    'distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" '
+    'allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset>'
+    '</wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>'
+    '<wp:extent cx="914400" cy="914400"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/>'
+    '<wp:docPr id="7" name="Box"/><wp:cNvGraphicFramePr/>'
+    '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData '
+    'uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp '
+    'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:cNvSpPr txBox="1"/>'
+    '<wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm><a:prstGeom prst="rect">'
+    '<a:avLst/></a:prstGeom></wps:spPr><wps:txbx><w:txbxContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p>'
+    '<w:tbl><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>boxed cell</w:t></w:r></w:p>'
+    '</w:tc></w:tr></w:tbl><w:p/></w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic>'
+    '</wp:anchor></w:drawing>'
+)
+_WORD_PIECE_BOXED_TABLE = ('<w:tbl><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:p><w:r>'
+                           '<w:t>boxed cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>')
+# A bare DrawingML box, the box Word writes (a DrawingML choice and its VML fallback, both stories), and a table
+# whose cell holds a box. A table inside a box inside a table cell does not open, on main either.
+_WORD_PIECE_TEXT_BOXES = (
+    '<w:p><w:r>' + _WORD_PIECE_BOX_DRAWING + '</w:r></w:p>',
+    '<w:p><w:r><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+    'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><mc:Choice Requires="wps">'
+    + _WORD_PIECE_BOX_DRAWING + '</mc:Choice><mc:Fallback><w:pict><v:rect xmlns:v="urn:schemas-microsoft-com:vml" '
+    'style="width:72pt;height:72pt"><v:textbox><w:txbxContent><w:p><w:r><w:t>{text} fallback</w:t></w:r></w:p>'
+    '</w:txbxContent></v:textbox></v:rect></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>',
+    '<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r>'
+    + _WORD_PIECE_BOX_DRAWING.replace(_WORD_PIECE_BOXED_TABLE, "") + '</w:r></w:p></w:tc></w:tr></w:tbl>',
+)
+
+
+def _word_piece_text_box_document(paragraphs):
+    import rdocx
+
+    table = ('<w:tbl><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid>'
+             + '<w:tr><w:tc><w:p><w:r><w:t>c</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr>' * 2 + '</w:tbl>')
+    body = [table]
+    for i in range(paragraphs):
+        body.append(f'<w:p><w:r><w:t>paragraph {i}</w:t></w:r></w:p>')
+        if i % 10 in (2, 4, 6):
+            body.append(_WORD_PIECE_TEXT_BOXES[i % 10 // 2 - 1].format(text=f"box {i}"))
+        if i % 10 == 9:
+            body.append(table)
+    return _replace_document_body(rdocx.Document(), "".join(body) + "<w:sectPr/>")
+
+
+def test_word_owner_inventory_reads_one_block_beside_text_boxes():
+    # Text box stories, and the table cells inside them, number across the main part as table cells do, so the
+    # inventory places them by offsets too and an edit reads only the block it changed.
+    work = _issue407_work()
+    pieces = _word_piece_work()
+    reads = []
+    for paragraphs in (20, 80):
+        doc = _word_piece_text_box_document(paragraphs)
+        edits = [
+            lambda: setattr(doc.paragraphs[-1], "text", "edited"),
+            lambda: setattr(doc.tables[-1].cell(0, 0), "width", 914400),
+            # Cell paragraphs route up to the first table cell of a text box, as on main.
+            lambda: doc.tables[0].cell(0, 1).add_paragraph("added"),
+        ]
+        for edit in edits:
+            before = (work(), pieces())
+            edit()
+            assert work() == before[0], paragraphs
+            reads.append((paragraphs, pieces() - before[1]))
+        xml = doc.part_xml("/word/document.xml")
+        assert all(text in xml for text in ("box 12", "box 14 fallback", "box 16", "boxed cell", "edited"))
+    assert [count for _, count in reads] == [1] * 6, reads
+
+
+def test_word_owner_inventory_reads_no_piece_for_a_part_read_twice():
+    import rdocx
+
+    # One part referenced as a header and as a footer is two story sources: the rebuild reads that inventory and
+    # the pieces are not read at all.
+    doc = rdocx.Document()
+    for i in range(12):
+        doc.add_paragraph(f"paragraph {i}")
+    doc.add_table(1, 2)
+    doc.section(0).header.add_paragraph("shared")
+    source = io.BytesIO(doc.to_bytes())
+    output = io.BytesIO()
+    with zipfile.ZipFile(source) as source_zip, zipfile.ZipFile(output, "w") as result_zip:
+        rels = source_zip.read("word/_rels/document.xml.rels").decode()
+        target = re.search(r'Type="[^"]*/header" Target="([^"]+)"', rels) or re.search(
+            r'Target="([^"]+)" Type="[^"]*/header"', rels)
+        for info in source_zip.infolist():
+            data = source_zip.read(info.filename)
+            if info.filename == "word/_rels/document.xml.rels":
+                footer = ('<Relationship Id="rIdSharedFooter" Type="http://schemas.openxmlformats.org/officeDocument/'
+                          f'2006/relationships/footer" Target="{target.group(1)}"/>')
+                data = data.decode().replace("</Relationships>", footer + "</Relationships>").encode()
+            if info.filename == "word/document.xml":
+                text = data.decode()
+                at = text.index("<w:headerReference")
+                text = text[:at] + '<w:footerReference w:type="default" r:id="rIdSharedFooter"/>' + text[at:]
+                data = text.encode()
+            result_zip.writestr(info, data)
+    work = _issue407_work()
+    pieces = _word_piece_work()
+    before = (work(), pieces())
+    doc = rdocx.Document.from_bytes(output.getvalue())
+    doc.paragraphs[3].text = "edited"
+    doc.tables[0].cell(0, 0).width = 914400
+    assert pieces() == before[1]
+    assert work()[0] >= before[0][0] + 3
+    assert rdocx.Document.from_bytes(doc.to_bytes()).paragraphs[3].text == "edited"
