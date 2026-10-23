@@ -2923,6 +2923,18 @@ F-290. No story is implemented, claimed, or credited in `AS_BUILT.md` or
 `SPRINT_TRACKER.md`. Earlier paragraphs in this section remain the historical
 intake record.
 
+Q17, answered 2026-10-23, amends only the active Issue 404 A2 obligation in
+the approved F-X265 plan. The original unreduced input is unavailable. A2 uses
+the best available unused-relationship reproducer and the best available
+copied-target and body-replaced scenario. Exact inserted picture bytes hold
+through policies, save and reopen. Local RED then GREEN on those available
+cases is mandatory. Donor image 9 and image 10 stay a reconstructed additional
+case and are not an equivalent original. The exact original stays an unverified
+reporter follow-up and does not block sprint closure. A reporter comment is
+authorized only after a tested fix on a reviewed sprint ref, or in the proper
+close phase. This note does not send it. The Issue 404 body digest below is
+unchanged. No other issue changes, including Issue 390.
+
 The five boundaries retain twenty stories: eleven cross-cutting additions
 and nine existing stories, provisionally totalling 60 to 80 developer-days.
 That twenty-story count, and the 8 to 11 native basis inside it, are the
@@ -3010,7 +3022,7 @@ Donor behavior and compatibility decisions, recorded here so they are not inferr
 
 - PR414 does not settle int, bool, clear, non-finite, range or atLeast policy, and it does not by itself reverse the old Q12 reading. That policy is pending design.
 - PR412 donor changes to RunRange, bookmarks and self-closing story fields need explicit acceptance. They are not adopted by listing the comment fix.
-- Issue404 original unreduced unused relationships need their own input. Donor image 9 and image 10 reconstruction does not supply that input.
+- At intake, Issue 404 original unreduced unused relationships were recorded as needing their own input. Donor image 9 and image 10 reconstruction does not supply that input. Q17, recorded above in this S95.4 section, replaces that acceptance blocker with the available-case qualification. The body digest in the mapping table is unchanged.
 - PR413 alone leaves 107 package-bound calls. PR416 is incremental only once and is stacked after PR413 head bdf22890de1762d025b89b83b549c56941ef7199. The JSON base_sha of PR416 remains a57be36578b1b419b87986b1accbcfca481277ce.
 - Q9, answered 2026-10-23: a bounded Rust API change from owned `Vec<u8>` part storage to shared `Arc<Vec<u8>>` is allowed for OPC. Python stays unchanged. Any release version change is later. This answer does not approve a patch, a design or a claim.
 - Q10 is pending a user choice between consistent numeric multiples across default, paragraph and style, and a narrower rule. This intake does not choose.
@@ -3025,7 +3037,7 @@ The temporary receipt path `/private/tmp/s95.4-latest-intake.json` is supplement
 |---|---|---|---|---|
 | [402](https://github.com/tensorbee/rdocx/issues/402) | F-X264 | Write a float line multiple, including Word 259 over 240, and a Length for exact. Shared paragraph, style and default numbers round-trip. Off-grid truncation stays compatible. Int, bool, clear, non-finite, range and atLeast policy, including reversal of old Q12, is pending design. | `603e4c5b8a7382dbb5ebf46e7a99fcc8c8f9e387438991fdc12265c116474f85` | 2026-10-23T06:11:18Z |
 | [403](https://github.com/tensorbee/rdocx/issues/403) | F-X267 | Bound all 248 public mutating calls from external pin 3374348a48164f198ef077af46df485d0a1c469d. 159 grow with the deck. Timings at 5 and 20 slides and at 10, 40 and 80 media-rich slides, plus counters. Document by-design whole-deck work. 413 leaves 107 package-bound calls. 416 is incremental only once. | `03f2246e3785e12779e91843fe88640a45c032c6069026f98d9dfefb7cd362c2` | 2026-10-23T08:39:06Z |
-| [404](https://github.com/tensorbee/rdocx/issues/404) | F-X265 | Picture byte identity for both orders, the default path and reuse off. Original unreduced unused relationships need separate input, not donor image 9 or 10 reconstruction. Returned image and hyperlink IDs retain their intended targets through intervening staged edits. Save and reopen retain referenced target bytes. Chart and template publishers included. | `7ce9b483f759fd6607b8a4a0bee637b4bcef1929c28deb8ad8b5b5701073e46b` | 2026-10-23T09:09:02Z |
+| [404](https://github.com/tensorbee/rdocx/issues/404) | F-X265 | Picture byte identity for both orders, the default path and reuse off. A2 uses the actual available unused-relationship reproducer. Exact inserted picture bytes hold through policies, save and reopen, including the best available copied-target and body-replaced scenario. Local RED then GREEN on those available cases is mandatory. The original unreduced input is unavailable and stays unverified. Donor image 9 and image 10 stay a reconstructed additional case and are not claimed equivalent. Returned image and hyperlink IDs retain their intended targets through intervening staged edits. Save and reopen retain referenced target bytes. Chart and template publishers included. A reporter note is authorized only after a tested fix on a reviewed sprint ref, or in the proper close phase, and is not sent by this mapping. | `7ce9b483f759fd6607b8a4a0bee637b4bcef1929c28deb8ad8b5b5701073e46b` | 2026-10-23T09:09:02Z |
 | [405](https://github.com/tensorbee/rdocx/issues/405) | F-X264 | Cross-cell plain comments and Google Docs SDT comments must list the other comments. Exact text or a diagnostic is pending design. Removal works. Donor RunRange, bookmark and self-closing story-field edits need explicit acceptance. | `c615fe58292bd85c4ade2b1daa7cbd57ba0778fb8250f76fc54c1716bb474cab` | 2026-10-23T09:09:03Z |
 | [406](https://github.com/tensorbee/rdocx/issues/406) | F-X264 | Read-only root, main and header relationship parts plus Content_Types match exact to_bytes producer bytes. Paths, case, errors and a shared OPC serializer are pending design. | `69130ad24823bbda2cbfd4375149301a4c5171624a8d942cd0341abf6c61d404` | 2026-10-23T09:09:04Z |
 | [407](https://github.com/tensorbee/rdocx/issues/407) | F-X266 | Original 100 versus 1000 paragraphs with six verbose formatted runs, three original calls, same release host, ratio at most 3 times max(small, 1 ms), plus an operation-count proof. No concurrent compilation. Assess run, table and cell XML, body adds, inserts, remove ranges and fallbacks. Preserve handles, refusal, namespace, unknown bytes and debug full-path comparison. | `e90e6dad452e4402e9bbeee0d261af376dd01240caf223bb16fdfc3713c9154b` | 2026-10-23T09:09:06Z |

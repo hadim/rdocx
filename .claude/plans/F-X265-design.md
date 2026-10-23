@@ -75,7 +75,7 @@ Style import dedups the first definition before dependency closure.
 |---|---|---|---|
 | Picture order | Insert A then B, and B then A. Default path and reuse off | Issue 404. Donor is not authority for a reduced image pair | `picture_order_and_reuse_keep_bytes` |
 | Returned ids | Picture, chart, then hyperlink, then another staged edit | Existing relationship maps | `staged_ids_keep_targets` |
-| Inserted pictures beside unused rels | Own inserted picture bytes stay. Unused relationship bytes are not a preservation promise | Issue 404. The original unreduced input is still missing. Donor image 9 and image 10 are extra only | `inserted_picture_bytes_survive_unused_rels` stays pending the original input |
+| Inserted pictures beside unused rels | Own inserted picture bytes stay through policies, save and reopen, including the best available copied-target and body-replaced scenario. Unused relationship bytes are not a preservation promise | Issue 404. The original unreduced input is unavailable and unverified. Donor image 9 and image 10 remain a reconstructed additional case and are not claimed equivalent | `inserted_picture_bytes_survive_unused_rels` local RED then GREEN on the available cases |
 | Equal styles | Two identical first definitions | PR410 candidate | `equal_styles_add_no_copy` |
 | Different first | Source first differs from target first | One renamed copy. Later shadow ignored | `different_first_style_copies_once` |
 | Default flag | Same id, differing default Normal. Separate case: source default id differs from the target default id | Same id yields one renamed non-default copy. A different source default id keeps the existing refusal | `same_id_default_copies_once_nondefault` |
@@ -89,7 +89,7 @@ F-X261 is done in `BACKLOG.md`. F-X265 is pending and unclaimed. No in-sprint pr
 | ID | Input or setup | Expected observation or refusal | Consumers | Local test | Final gate or pending evidence |
 |---|---|---|---|---|---|
 | A1 | Issue 404. Both picture orders, default path, reuse off. Mixed picture, chart and hyperlink. Returned ids after intervening staging | Byte identity and stable targets through native library save and reopen | Existing insert and import | `picture_order_and_reuse_keep_bytes`, `staged_ids_keep_targets` | Native library save and reopen. No invented Word oracle |
-| A2 | Issue 404 pictures inserted while unused relationships exist | Inserted picture bytes match. Unused relationship bytes are not required to survive. The original unreduced input is still pending. No equivalent reduction is invented | Import | `inserted_picture_bytes_survive_unused_rels` | Pending the original input. Donor reconstruction is extra only |
+| A2 | Issue 404 pictures inserted while unused relationships exist, using the actual available reproducer, plus the best available copied-target and body-replaced scenario | Exact inserted picture byte identity through policies, save and reopen. Unused relationship bytes are not required to survive. Do not claim the original unreduced input was tested or is equivalent | Import | `inserted_picture_bytes_survive_unused_rels` | Local RED then GREEN on the available cases. The exact original stays an unverified reporter follow-up and is not a final acceptance blocker |
 | A3 | Issue 408. Equal first definitions | Zero copies | Style import | `equal_styles_add_no_copy` | Local regression |
 | A4 | Source first differs from target first. A later shadowed definition and its dependencies | Exactly one renamed copy. Shadow ignored | Style import | `different_first_style_copies_once` | Target duplicate XML verbatim |
 | A5 | Same style id whose first Normal definitions differ on the default flag. Separate case: the source default id differs from the target default id | Same id yields one renamed non-default copy. A different source default id keeps the existing refusal | Style import | `same_id_default_copies_once_nondefault` | Local regression |
@@ -122,7 +122,7 @@ Backlog test gate, verbatim: regression.
 |---|---|---|---|
 | local scoped | regression | `picture_order_and_reuse_keep_bytes` | A1 orders and reuse |
 | local scoped | regression | `staged_ids_keep_targets` | A1 mixed ids |
-| local scoped | regression | `inserted_picture_bytes_survive_unused_rels` | A2 stays pending without the original input. It does not assert unused-rel byte identity |
+| local scoped | regression | `inserted_picture_bytes_survive_unused_rels` | A2 asserts exact inserted picture byte identity on the available unused-relationship reproducer and the best available copied-target and body-replaced scenario. It does not assert unused-rel byte identity and it does not claim the original input |
 | local scoped | regression | `equal_styles_add_no_copy` | A3 |
 | local scoped | regression | `different_first_style_copies_once` | A4 |
 | local scoped | regression | `same_id_default_copies_once_nondefault` | A5 |
@@ -146,7 +146,7 @@ Existing integration entrypoint and `crates/rdocx-py/tests/test_core.py` only.
 - PyO3 and WASM. No new binding. Final union still checks WASM because the sprint union includes it.
 - Compatibility and collection ordering. Picture byte order and style first-definition order are specified above.
 - Shared consumers. Fragment import, template, building block, rich merge, and typed insert.
-- Contributed criteria. A2 stays pending for the unreduced input.
+- Contributed criteria. A2 is qualified on the available cases. The exact original stays unverified.
 - Cached facts are not the defect. No new projection API.
 
 ## Hash harness
@@ -158,18 +158,19 @@ Expected unchanged for existing fixtures. New tests use new inputs. If a style-d
 - [ ] Add `register_pending_relationship` in the existing document module.
 - [ ] Dedup style first definitions before dependency closure.
 - [ ] Cover picture order, mixed ids, and the style rows in existing tests.
-- [ ] Leave A2 pending until the original input or a proved equivalent exists.
+- [ ] Cover A2 with local RED then GREEN on the available unused-relationship reproducer and the best available copied-target and body-replaced scenario. Do not claim original-input equivalence. Donor image 9 and image 10 stay an additional reconstructed case.
 - [ ] Add no public API.
 
 ## Open questions
 
 | ID | Affected F-IDs and A-IDs | Decision and recommendation | Status and answer/source |
 |---|---|---|---|
-| none | F-X265 | No product choice remains. A2's missing original input is an evidence blocker for final credit, not a user choice. Q16 is answered on F-290 only. | Answered by the 2026-10-23 assembly request. The missing unreduced Issue 404 input is final acceptance debt and stays fully pending. It is not a design block and it is not a substitute donor case. Q16 provenance is the 2026-10-23 user choice on F-290, "Author Word-compatible canonical slots (Recommended)". |
+| none | F-X265 | No product choice remained at assembly. Q16 is answered on F-290 only. | Answered by the 2026-10-23 assembly request. At that time the missing unreduced Issue 404 input was recorded as final acceptance debt. Q17 replaces that debt. It was not a design block and it is not a substitute donor case. Q16 provenance is the 2026-10-23 user choice on F-290, "Author Word-compatible canonical slots (Recommended)". |
+| Q17 | F-X265 A2 | Qualify Issue 404 on the best available reproductions. The original unreduced input is unavailable. Do not claim it was tested or is equivalent. Donor image 9 and image 10 stay a reconstructed additional case. Local RED then GREEN is mandatory for the available unused-relationship reproducer and the best available copied-target and body-replaced scenario. Exact inserted picture bytes must match through policies, save and reopen. The exact original stays an unverified reporter follow-up and is not a sprint-closure blocker. | Answered by the user on 2026-10-23: "Original input is unavailable we will fix it now as best as we can and leave a note to the reporter to test against their original image and the can reopen if this is not fixed with the example image". The user authorizes a reporter comment only after an actual tested fix is available on a reviewed sprint ref, or in the proper close phase. The note invites a test of the original image and a reopen if it still fails. This amendment does not send that comment, close the issue, or record a fix. |
 
 ## Contract closure
 
-Codex root semantic validation on 2026-10-23 approved this contract at source `a57be365`. Evidence is unexecuted. The missing unreduced Issue 404 A2 input is final acceptance debt and stays fully pending. It is not a design block. No donor case is a substitute. Implementation and final gates stay pending. This approval does not mark the story completed.
+Codex root semantic validation on 2026-10-23 approved this contract at source `a57be365`. Evidence is unexecuted. At approval, the missing unreduced Issue 404 A2 input was recorded as final acceptance debt and was not a design block. No donor case is a substitute. Q17, below, replaces that debt. Implementation and final gates stay pending. This approval does not mark the story completed. The plan stays approved.
 
 `register_pending_relationship(owner, id)` is crate-local. It has no Python exposure. Removal is internal when a reference appears or the id leaves the relationship registry. A1 through A6 name the proofs. No Word oracle is added.
 
@@ -177,4 +178,12 @@ The shared provider preserves every fragment kind it already admits. The local d
 
 The equal-style, different-first, shadowed-dependency, target-duplicate, and default-flag rows are the whole style contract. There is no broader "all styles" claim.
 
-A2 is the only open evidence item. It does not ask the user to choose a policy.
+Before Q17, A2 was the only open evidence item. It did not ask the user to choose a policy. Q17 is that answer.
+
+## Q17 amendment, 2026-10-23
+
+The contract stays approved. This section amends only the active A2 obligation. The approval paragraph above records the pre-Q17 reading. That reading is no longer the acceptance rule.
+
+A2 requires an actual available unused-relationship reproducer. Exact inserted picture byte identity holds through policies, save and reopen, including the best available copied-target and body-replaced scenario. Local RED then GREEN on those available cases is mandatory. Donor image 9 and image 10 remain a reconstructed additional case. They are not claimed equivalent to the original. The exact original input stays unverified. Reporter follow-up comes after a concrete tested fix. It is not a final acceptance blocker. No original-input requirement blocks sprint closure.
+
+The user authorizes a reporter comment only after that tested fix exists on a reviewed sprint ref, or during the proper close phase. The comment invites the reporter to test the original image and to reopen the issue if the example still fails. This amendment does not send the comment, close Issue 404, fetch, push, or record a result. The exact note is drafted later with the real head and the real test details.
