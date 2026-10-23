@@ -289,32 +289,35 @@ impl OpcPackage {
     /// and reading the bytes back gives, or the error the write raises,
     /// without building the ZIP.
     ///
-    /// `read` is a package read from bytes, or given by this function, that
-    /// this one was edited from. A part this package still shares with it is
-    /// not checked again, and relationships and content types that still hold
-    /// what they were read from are kept as they are: only what changed is
-    /// serialized and parsed again. A package whose new part names a write
-    /// would rename, or that kept producer bytes holding a character XML 1.0
-    /// cannot carry, goes through the ZIP.
+    /// Precondition: `read` is a package read from bytes, or given by this
+    /// function, and this one was edited from it. The parts this package
+    /// still shares with `read` are taken to pass the checks of a write
+    /// because a read or an earlier reread made them: with a `read` built
+    /// in memory, a shared part holding a character XML 1.0 forbids rereads
+    /// where a write fails. Relationships and content types that still hold
+    /// what they were read from are kept as they are, and only what changed
+    /// is serialized and parsed again. A package with a name a write would
+    /// store under another entry name, a part too large for a plain ZIP
+    /// entry, or producer bytes holding a forbidden character goes through
+    /// the ZIP.
+    #[doc(hidden)]
     pub fn reread(mut self, read: &OpcPackage) -> Result<Self> {
         let renamed_part = |name: &String| {
-            !read.parts.contains_key(name)
-                && (name.len() < 2
-                    || normalize_part_name(name) != *name
-                    || name.to_ascii_lowercase().ends_with(".rels")
-                    || part_identity(name) == part_identity("/[Content_Types].xml"))
-        };
-        let renamed_owner = |owner: &String| {
-            !read.part_rels.contains_key(owner)
-                && (normalize_part_name(owner) != *owner
-                    || rels_path_to_part_name(&part_name_to_rels_path(owner)) != *owner
-                    || part_identity(&part_name_to_rels_path(owner))
-                        == part_identity("/_rels/.rels"))
+            !written_as_is(name)
+                || name
+                    .len()
+                    .checked_sub(".rels".len())
+                    .is_some_and(|start| name.as_bytes()[start..].eq_ignore_ascii_case(b".rels"))
+                || name.eq_ignore_ascii_case("/[Content_Types].xml")
         };
         if !self.malformed_source_entries.is_empty()
             || !read.malformed_source_entries.is_empty()
             || self.parts.keys().any(renamed_part)
-            || self.part_rels.keys().any(renamed_owner)
+            || self.part_rels.keys().any(|owner| !written_as_is(owner))
+            || self
+                .parts
+                .values()
+                .any(|data| data.len() >= u32::MAX as usize)
         {
             let mut bytes = std::io::Cursor::new(Vec::new());
             self.write_to(&mut bytes)?;
@@ -826,6 +829,21 @@ fn deterministic_part_key<'a, T>(
         .keys()
         .filter(|candidate| has_part_identity(candidate, &identity))
         .min()
+}
+
+/// Whether a write stores the part or relationship owner `name` under a ZIP
+/// entry that reading it back names `name` again: an absolute name with no
+/// empty or dot segment, no trailing backslash, which the reader takes for
+/// a directory, and short enough for a ZIP entry name with its `_rels`
+/// segment and suffix.
+fn written_as_is(name: &str) -> bool {
+    name.len() < usize::from(u16::MAX) - "_rels/.rels".len()
+        && name.starts_with('/')
+        && !name.ends_with('\\')
+        && name
+            .split('/')
+            .skip(1)
+            .all(|segment| !matches!(segment, "" | "." | ".."))
 }
 
 /// Whether `candidate` names the part `identity` names. A name that is its
@@ -2635,11 +2653,13 @@ mod tests {
         defaults.set_part("/ppt/media/image2.gif", vec![1]);
         assert_rereads_as_written(&defaults, &read);
 
-        // Names a write would rename go through the ZIP.
+        // Names a write would rename, or that the reader takes for a
+        // directory, go through the ZIP.
         for name in [
             "ppt/slides/slide3.xml",
             "/ppt/./slides/slide3.xml",
             "/ppt/x.rels",
+            "/ppt/b\\",
         ] {
             let mut renamed = read.clone();
             renamed
@@ -2656,6 +2676,33 @@ mod tests {
 
     #[test]
     fn reread_raises_the_error_a_write_raises() {
+        // A root `.rels` entry reads as the relationships of owner "/",
+        // whose entry every write refuses as a second `_rels/.rels`.
+        let stray = OpcPackage::from_reader(package_zip(&[
+            (
+                "[Content_Types].xml",
+                br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#,
+            ),
+            (
+                "_rels/.rels",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="a.xml"/></Relationships>"#,
+            ),
+            (
+                ".rels",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#,
+            ),
+            ("a.xml", b"<a/>"),
+        ]))
+        .unwrap();
+        assert!(stray.part_rels.contains_key("/"));
+        let mut edited = stray.clone();
+        edited.set_part("/a.xml", b"<a>edited</a>".to_vec());
+        assert_rereads_as_written(&edited, &stray);
+        assert!(matches!(
+            edited.reread(&stray),
+            Err(OpcError::DuplicatePartName(name)) if name == "_rels/.rels"
+        ));
+
         let read = read_pptx();
 
         let mut invalid = read.clone();
