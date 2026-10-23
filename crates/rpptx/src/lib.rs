@@ -14,7 +14,7 @@ pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,
 };
 
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
@@ -1137,6 +1137,9 @@ pub struct Presentation {
     masters: Vec<Arc<MasterRecord>>,
     themes: Vec<ThemeRecord>,
     slides: Vec<Arc<SlideRecord>>,
+    // What the last opening of a package read from bytes parsed, which
+    // staging and commits reuse. None for a package built in memory.
+    parsed: Option<Arc<Parsed>>,
 }
 
 #[derive(Clone, Debug)]
@@ -1160,6 +1163,113 @@ struct ThemeRecord {
     part_name: String,
     theme: CT_OfficeStyleSheet,
     dirty: bool,
+}
+
+/// What the last opening of a package read from bytes parsed: the package
+/// as read, and the records parsed from its parts. Holding the records makes
+/// a later edit of one copy it, so a record held here is still what parsing
+/// the bytes this package holds for its part gives. Staging skips comparing
+/// such a record with its part, and a commit reuses it, instead of parsing
+/// the part again, when the staged package still shares those bytes.
+#[derive(Debug)]
+struct Parsed {
+    package: OpcPackage,
+    slides: HashMap<String, Arc<SlideRecord>>,
+    layouts: HashMap<String, Arc<LayoutRecord>>,
+    masters: HashMap<String, Arc<MasterRecord>>,
+    notes_master: Option<(String, Arc<CT_NotesMaster>)>,
+    handout_master: Option<(String, Arc<CT_HandoutMaster>)>,
+}
+
+impl Parsed {
+    fn of(presentation: &Presentation) -> Self {
+        fn by_part<T>(records: &[Arc<T>], part: impl Fn(&T) -> &str) -> HashMap<String, Arc<T>> {
+            records
+                .iter()
+                .map(|record| (part(record).to_owned(), Arc::clone(record)))
+                .collect()
+        }
+        Self {
+            package: presentation.package.clone(),
+            slides: by_part(&presentation.slides, |record| &record.part_name),
+            layouts: by_part(&presentation.layouts, |record| &record.part_name),
+            masters: by_part(&presentation.masters, |record| &record.part_name),
+            notes_master: presentation
+                .notes_master_part
+                .clone()
+                .zip(presentation.notes_master.clone()),
+            handout_master: presentation
+                .handout_master_part
+                .clone()
+                .zip(presentation.handout_master.clone()),
+        }
+    }
+
+    /// Whether `package` holds for `part` the very bytes read for it here.
+    /// Names are compared exactly: a package that opened or a write
+    /// accepted holds no two equivalent part names.
+    fn same_bytes(&self, package: &OpcPackage, part: &str) -> bool {
+        matches!(
+            (package.parts.get(part), self.package.parts.get(part)),
+            (Some(now), Some(read)) if Arc::ptr_eq(now, read)
+        )
+    }
+
+    /// Whether `record` is the slide record parsed here for its part.
+    fn holds_slide(&self, record: &Arc<SlideRecord>) -> bool {
+        self.slides
+            .get(&record.part_name)
+            .is_some_and(|parsed| Arc::ptr_eq(parsed, record))
+    }
+
+    /// The record that opening slide `id` at `part` of `package` gives,
+    /// when its part, relationships, notes and comments are those it was
+    /// parsed from here.
+    fn slide(&self, package: &OpcPackage, part: &str, id: u32) -> Option<Arc<SlideRecord>> {
+        let record = self.slides.get(part)?;
+        let relationships = package.part_rels.get(part)?;
+        (record.id == id
+            && self.same_bytes(package, part)
+            && self
+                .package
+                .part_rels
+                .get(part)
+                .is_some_and(|parsed| parsed.items == relationships.items)
+            && record
+                .notes
+                .as_ref()
+                .is_none_or(|notes| self.same_bytes(package, &notes.part_name))
+            && record
+                .comments
+                .as_ref()
+                .is_none_or(|comments| self.same_bytes(package, &comments.part_name)))
+        .then(|| Arc::clone(record))
+    }
+
+    fn layout(&self, package: &OpcPackage, part: &str) -> Option<Arc<LayoutRecord>> {
+        let record = self.layouts.get(part)?;
+        self.same_bytes(package, part).then(|| Arc::clone(record))
+    }
+
+    fn master(
+        &self,
+        package: &OpcPackage,
+        part: &str,
+        id: Option<u32>,
+    ) -> Option<Arc<MasterRecord>> {
+        let record = self.masters.get(part)?;
+        (record.id == id && self.same_bytes(package, part)).then(|| Arc::clone(record))
+    }
+
+    fn notes_master(&self, package: &OpcPackage, part: &str) -> Option<Arc<CT_NotesMaster>> {
+        let (parsed, master) = self.notes_master.as_ref()?;
+        (parsed == part && self.same_bytes(package, part)).then(|| Arc::clone(master))
+    }
+
+    fn handout_master(&self, package: &OpcPackage, part: &str) -> Option<Arc<CT_HandoutMaster>> {
+        let (parsed, master) = self.handout_master.as_ref()?;
+        (parsed == part && self.same_bytes(package, part)).then(|| Arc::clone(master))
+    }
 }
 
 /// A checked shape-tree owner. Indices follow each existing public inventory.
@@ -2728,6 +2838,30 @@ struct MediaStore {
 
 impl MediaStore {
     fn scan(package: &OpcPackage) -> Self {
+        Self::scan_hashing(package, |bytes| hash_medium(bytes))
+    }
+
+    /// The store [`MediaStore::scan`] gives for `package`, hashing only the
+    /// media whose bytes this store does not hold.
+    fn rescan(&self, package: &OpcPackage) -> Self {
+        let known = self
+            .by_id
+            .iter()
+            .flat_map(|(id, bucket)| {
+                bucket
+                    .iter()
+                    .map(move |entry| (Arc::as_ptr(&entry.bytes), *id))
+            })
+            .collect::<HashMap<_, _>>();
+        Self::scan_hashing(package, |bytes| {
+            known
+                .get(&Arc::as_ptr(bytes))
+                .copied()
+                .unwrap_or_else(|| hash_medium(bytes))
+        })
+    }
+
+    fn scan_hashing(package: &OpcPackage, id_of: impl Fn(&Arc<Vec<u8>>) -> MediaId) -> Self {
         let namer = MediaNamer::scan(
             "/ppt/media",
             "image",
@@ -2756,16 +2890,13 @@ impl MediaStore {
                 .content_type_for(part_name)
                 .unwrap_or_else(|| format.content_type())
                 .to_owned();
-            by_id
-                .entry(MediaId::from_bytes(bytes))
-                .or_default()
-                .push(MediaEntry {
-                    part_name: part_name.clone(),
-                    bytes: bytes.clone(),
-                    extension,
-                    content_type,
-                    newly_inserted: false,
-                });
+            by_id.entry(id_of(bytes)).or_default().push(MediaEntry {
+                part_name: part_name.clone(),
+                bytes: bytes.clone(),
+                extension,
+                content_type,
+                newly_inserted: false,
+            });
         }
         Self {
             by_id,
@@ -2857,6 +2988,12 @@ impl MediaStore {
     }
 }
 
+/// Hashes a medium a scan finds in a package.
+fn hash_medium(bytes: &[u8]) -> MediaId {
+    note_commit_work(|work| work.hashed += 1);
+    MediaId::from_bytes(bytes)
+}
+
 fn register_content_type(
     package: &mut OpcPackage,
     part_name: &str,
@@ -2879,19 +3016,19 @@ impl Presentation {
 
     /// Opens a presentation from a `.pptx` path.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        Self::from_package(OpcPackage::open(path)?)
+        Self::from_read_package(OpcPackage::open(path)?)
     }
 
     /// Opens a password-protected Agile-encrypted presentation from a path.
     #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
     pub fn open_encrypted<P: AsRef<Path>>(path: P, password: &str) -> Result<Self> {
         let file = std::fs::File::open(path).map_err(OpcError::from)?;
-        Self::from_package(OpcPackage::from_encrypted_reader(file, password)?)
+        Self::from_read_package(OpcPackage::from_encrypted_reader(file, password)?)
     }
 
     /// Opens a presentation from in-memory `.pptx` bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        Self::from_package(OpcPackage::from_reader(Cursor::new(bytes))?)
+        Self::from_read_package(OpcPackage::from_reader(Cursor::new(bytes))?)
     }
 
     /// Opens a password-protected Agile-encrypted presentation from bytes.
@@ -2907,17 +3044,39 @@ impl Presentation {
         password: &str,
         limits: PackageReadLimits,
     ) -> Result<Self> {
-        Self::from_package(OpcPackage::from_encrypted_reader_with_limits(
+        Self::from_read_package(OpcPackage::from_encrypted_reader_with_limits(
             Cursor::new(bytes),
             password,
             limits,
         )?)
     }
 
+    /// Opens a package read from bytes, keeping what it parsed for commits.
+    fn from_read_package(package: OpcPackage) -> Result<Self> {
+        let mut presentation = Self::from_package(package)?;
+        presentation.parsed = Some(Arc::new(Parsed::of(&presentation)));
+        Ok(presentation)
+    }
+
     fn from_package(package: OpcPackage) -> Result<Self> {
+        Self::from_package_reusing(package, None)
+    }
+
+    /// Opens `package`, taking from `earlier` each record still parsed from
+    /// the bytes the package holds for its part, and the hash of each medium
+    /// whose bytes its media store holds, instead of parsing and hashing
+    /// them again.
+    fn from_package_reusing(
+        package: OpcPackage,
+        earlier: Option<(&Parsed, &MediaStore)>,
+    ) -> Result<Self> {
+        let parsed = earlier.map(|(parsed, _)| parsed);
         let package_signatures_invalidated =
             embedded::known_invalid_package_signature_on_open(&package);
-        let media_store = MediaStore::scan(&package);
+        let media_store = match earlier {
+            Some((_, media)) => media.rescan(&package),
+            None => MediaStore::scan(&package),
+        };
         let main_relationship = package
             .package_rels
             .get_by_type(rel_types::DOCUMENT)
@@ -2977,14 +3136,15 @@ impl Presentation {
                 .map_err(|error| invalid_shape_mutation("custom properties", error.to_string()))
         })
         .transpose()?;
-        let layouts = resolve_layouts(&package, &presentation_part, &presentation)?;
-        let masters = resolve_master_records(&package, &presentation_part, &presentation)?;
+        let layouts = resolve_layouts(&package, &presentation_part, &presentation, parsed)?;
+        let masters = resolve_master_records(&package, &presentation_part, &presentation, parsed)?;
         let themes = Vec::new();
         let (comment_authors_part, comment_authors) =
             resolve_comment_authors(&package, &presentation_part)?;
-        let (notes_master_part, notes_master) = resolve_notes_master(&package, &presentation_part)?;
+        let (notes_master_part, notes_master) =
+            resolve_notes_master(&package, &presentation_part, parsed)?;
         let (handout_master_part, handout_master) =
-            resolve_handout_master(&package, &presentation_part)?;
+            resolve_handout_master(&package, &presentation_part, parsed)?;
 
         let presentation_relationships = package.get_part_rels(&presentation_part);
         let mut slides = Vec::with_capacity(presentation.slide_ids.len());
@@ -2999,6 +3159,13 @@ impl Presentation {
             reject_external(&presentation_part, relationship)?;
             let slide_part =
                 OpcPackage::resolve_rel_target(&presentation_part, &relationship.target);
+            if let Some(record) =
+                parsed.and_then(|parsed| parsed.slide(&package, &slide_part, slide_id.id))
+            {
+                slides.push(record);
+                continue;
+            }
+            note_commit_work(|work| work.parsed += 1);
             let slide_xml = required_part(&package, &slide_part)?;
             let slide = CT_Slide::from_xml(slide_xml).map_err(|error| Error::MalformedPart {
                 part_name: slide_part.clone(),
@@ -3006,13 +3173,13 @@ impl Presentation {
             })?;
             let notes = resolve_notes(&package, &slide_part)?;
             let comments = resolve_comments(&package, &slide_part, &slide)?;
-            slides.push(SlideRecord {
+            slides.push(Arc::new(SlideRecord {
                 id: slide_id.id,
                 part_name: slide_part,
                 slide,
                 notes,
                 comments,
-            });
+            }));
         }
         validate_collaboration_model(&comment_authors, &slides).map_err(|message| {
             Error::MalformedPart {
@@ -3036,17 +3203,18 @@ impl Presentation {
             comment_authors,
             comment_authors_dirty: false,
             notes_master_part,
-            notes_master: notes_master.map(Arc::from),
+            notes_master,
             notes_master_dirty: false,
             handout_master_part,
-            handout_master: handout_master.map(Arc::from),
+            handout_master,
             handout_master_dirty: false,
             embedded_invalidated_signatures: HashSet::new(),
             package_signatures_invalidated,
-            layouts: layouts.into_iter().map(Arc::new).collect(),
-            masters: masters.into_iter().map(Arc::new).collect(),
+            layouts,
+            masters,
             themes,
-            slides: slides.into_iter().map(Arc::new).collect(),
+            slides,
+            parsed: None,
         })
     }
 
@@ -4016,21 +4184,23 @@ impl Presentation {
     }
 
     #[cfg(feature = "render")]
-    fn publish_authoring_package(&mut self, mut package: OpcPackage) -> Result<()> {
-        let invalidated = self.package_signatures_invalidated
-            || package
-                .package_rels
-                .get_by_type(rel_types::DIGITAL_SIGNATURE_ORIGIN)
-                .is_some();
-        embedded::persist_invalidated_package_signature(&mut package, invalidated)?;
-        let mut bytes = Cursor::new(Vec::new());
-        package.write_to(&mut bytes)?;
-        let mut candidate = Self::from_bytes(bytes.get_ref())?;
-        candidate.embedded_invalidated_signatures = self.embedded_invalidated_signatures.clone();
-        candidate.package_signatures_invalidated = invalidated;
-        // The loaded candidate has already validated all changed model roots.
-        // Publication happens once, after complete package serialization/reopen.
-        *self = candidate;
+    fn publish_authoring_package(&mut self, package: OpcPackage) -> Result<()> {
+        // The reopened candidate has already validated all changed model
+        // roots. Publication happens once, after the complete package reopens.
+        *self = self.checked_commit(|staged| {
+            let mut package = package.clone();
+            let invalidated = staged.package_signatures_invalidated
+                || package
+                    .package_rels
+                    .get_by_type(rel_types::DIGITAL_SIGNATURE_ORIGIN)
+                    .is_some();
+            embedded::persist_invalidated_package_signature(&mut package, invalidated)?;
+            let mut candidate = staged.reopen(package)?;
+            candidate.embedded_invalidated_signatures =
+                staged.embedded_invalidated_signatures.clone();
+            candidate.package_signatures_invalidated = invalidated;
+            Ok(candidate)
+        })?;
         Ok(())
     }
 
@@ -4342,12 +4512,12 @@ impl Presentation {
                 );
             }
         }
-        for record in &self.layouts {
+        for record in self.layouts.iter().filter(|record| record.dirty) {
             let original = self
                 .package
                 .get_part(&record.part_name)
                 .and_then(|xml| CT_SlideLayout::from_xml(xml).ok());
-            if record.dirty && original.as_ref() != Some(&record.layout) {
+            if original.as_ref() != Some(&record.layout) {
                 package.set_part(
                     &record.part_name,
                     record
@@ -4380,13 +4550,23 @@ impl Presentation {
         }
         for record in &self.slides {
             note_fx260_slide(1);
-            let slide_changed = self
-                .package
-                .get_part(&record.part_name)
-                .and_then(|xml| CT_Slide::from_xml(xml).ok())
-                .as_ref()
-                != Some(&record.slide);
+            // A record parsed from the bytes its parts still hold is unchanged
+            // without parsing them again.
+            let parsed = self
+                .parsed
+                .as_deref()
+                .filter(|parsed| parsed.holds_slide(record));
+            let parsed_from =
+                |part: &str| parsed.is_some_and(|parsed| parsed.same_bytes(&self.package, part));
+            let slide_changed = !parsed_from(&record.part_name)
+                && self
+                    .package
+                    .get_part(&record.part_name)
+                    .and_then(|xml| CT_Slide::from_xml(xml).ok())
+                    .as_ref()
+                    != Some(&record.slide);
             if !preserve_unchanged_modelled_parts || slide_changed {
+                note_commit_work(|work| work.serialized += 1);
                 package.set_part(
                     &record.part_name,
                     record
@@ -4399,13 +4579,15 @@ impl Presentation {
                 );
             }
             if let Some(notes) = &record.notes {
-                let notes_changed = self
-                    .package
-                    .get_part(&notes.part_name)
-                    .and_then(|xml| CT_NotesSlide::from_xml(xml).ok())
-                    .as_ref()
-                    != Some(&notes.notes);
+                let notes_changed = !parsed_from(&notes.part_name)
+                    && self
+                        .package
+                        .get_part(&notes.part_name)
+                        .and_then(|xml| CT_NotesSlide::from_xml(xml).ok())
+                        .as_ref()
+                        != Some(&notes.notes);
                 if !preserve_unchanged_modelled_parts || notes_changed {
+                    note_commit_work(|work| work.serialized += 1);
                     package.set_part(
                         &notes.part_name,
                         notes.notes.to_xml().map_err(|error| Error::MalformedPart {
@@ -6309,7 +6491,7 @@ impl Presentation {
                 let retained = relationships.rebind_for_import(retained, &HashMap::new())?;
                 candidate.package.set_part_rels(&part, retained);
                 prune_unreachable_parts(&mut candidate.package, &released);
-                candidate.media_store = MediaStore::scan(&candidate.package);
+                candidate.media_store = candidate.media_store.rescan(&candidate.package);
             }
         }
         candidate.commit_owned_parts(Some(owner.part()))?;
@@ -6752,33 +6934,69 @@ impl Presentation {
 
     /// Reopen validates the changed source before any live record is replaced.
     fn commit_owned_parts(&mut self, xml_owner: Option<ShapeOwner>) -> Result<()> {
-        let mut package = self.staged_package(true)?;
-        let mut forced_changed = false;
-        if let Some(owner) = xml_owner {
-            // A checked XML edit may change retained root attributes which
-            // rendering-model equality intentionally does not compare.
-            // Force only this actual part, preserving all unrelated sources.
-            let name = self.owner_part_name(owner)?.to_owned();
-            let xml = self.checked_owner_xml(PptXmlOwner::Part(owner))?;
-            forced_changed = self.package.get_part(&name) != Some(xml.as_slice());
-            package.set_part(&name, xml);
-        }
-        let invalidated = self.package_signatures_invalidated
-            || self.retained_package_signature_would_be_invalidated()?
-            || forced_changed
-                && self
-                    .package
-                    .package_rels
-                    .get_by_type(rel_types::DIGITAL_SIGNATURE_ORIGIN)
-                    .is_some();
-        embedded::persist_invalidated_package_signature(&mut package, invalidated)?;
-        let mut output = Cursor::new(Vec::new());
-        package.write_to(&mut output)?;
-        let mut reopened = Self::from_bytes(output.get_ref())?;
-        reopened.embedded_invalidated_signatures = self.embedded_invalidated_signatures.clone();
-        reopened.package_signatures_invalidated = invalidated;
-        *self = reopened;
+        *self = self.checked_commit(|staged| {
+            let mut package = staged.staged_package(true)?;
+            let mut forced_changed = false;
+            if let Some(owner) = xml_owner {
+                // A checked XML edit may change retained root attributes which
+                // rendering-model equality intentionally does not compare.
+                // Force only this actual part, preserving all unrelated sources.
+                let name = staged.owner_part_name(owner)?.to_owned();
+                let xml = staged.checked_owner_xml(PptXmlOwner::Part(owner))?;
+                forced_changed = staged.package.get_part(&name) != Some(xml.as_slice());
+                package.set_part(&name, xml);
+            }
+            let invalidated = staged.package_signatures_invalidated
+                || staged.retained_package_signature_would_be_invalidated()?
+                || forced_changed
+                    && staged
+                        .package
+                        .package_rels
+                        .get_by_type(rel_types::DIGITAL_SIGNATURE_ORIGIN)
+                        .is_some();
+            embedded::persist_invalidated_package_signature(&mut package, invalidated)?;
+            let mut reopened = staged.reopen(package)?;
+            reopened.embedded_invalidated_signatures =
+                staged.embedded_invalidated_signatures.clone();
+            reopened.package_signatures_invalidated = invalidated;
+            Ok(reopened)
+        })?;
         Ok(())
+    }
+
+    /// Opens the staged `package` again, as writing it and reading the bytes
+    /// back does. With what the last opening parsed, the package is reread
+    /// in memory, each record whose part bytes it still shares is reused,
+    /// and only new media are hashed. Without it, the package goes through
+    /// the ZIP.
+    fn reopen(&self, package: OpcPackage) -> Result<Self> {
+        let Some(parsed) = self.parsed.as_deref() else {
+            note_commit_work(|work| work.zip_writes += 1);
+            let mut output = Cursor::new(Vec::new());
+            package.write_to(&mut output)?;
+            return Self::from_bytes(output.get_ref());
+        };
+        let package = package.reread(&parsed.package)?;
+        let mut reopened = Self::from_package_reusing(package, Some((parsed, &self.media_store)))?;
+        reopened.parsed = Some(Arc::new(Parsed::of(&reopened)));
+        Ok(reopened)
+    }
+
+    /// Runs `commit` on this staged presentation. Debug builds, which run the
+    /// binding tests, run it again on a copy that forgets what the last
+    /// opening parsed, so that it stages by parsing every slide part and
+    /// reopens through the ZIP as every commit did before, and assert that
+    /// both give the same presentation or the same error.
+    fn checked_commit(&self, commit: impl Fn(&Self) -> Result<Self>) -> Result<Self> {
+        let committed = commit(self);
+        #[cfg(debug_assertions)]
+        {
+            let mut through_zip = self.clone();
+            through_zip.parsed = None;
+            let expected = without_commit_work(|| commit(&through_zip));
+            assert_same_commit(&committed, &expected);
+        }
+        committed
     }
 
     fn theme_part_for_edit(&self, master_index: usize) -> Result<String> {
@@ -7760,7 +7978,7 @@ impl Presentation {
             .remove_override(&record.part_name);
         candidate.layouts.remove(index);
         prune_unreachable_parts(&mut candidate.package, &media);
-        candidate.media_store = MediaStore::scan(&candidate.package);
+        candidate.media_store = candidate.media_store.rescan(&candidate.package);
         candidate.commit_owned_parts(None)?;
         *self = candidate;
         Ok(())
@@ -8526,20 +8744,20 @@ impl Presentation {
     }
 
     fn commit_candidate(&mut self, staged: Self) -> Result<()> {
-        let embedded_invalidated_signatures = staged.embedded_invalidated_signatures.clone();
-        let package_signatures_invalidated = staged.package_signatures_invalidated
-            || staged.retained_package_signature_would_be_invalidated()?;
-        let mut package = staged.staged_package(true)?;
-        embedded::persist_invalidated_package_signature(
-            &mut package,
-            package_signatures_invalidated,
-        )?;
-        let mut output = Cursor::new(Vec::new());
-        package.write_to(&mut output)?;
-        let mut reopened = Self::from_bytes(output.get_ref())?;
-        reopened.embedded_invalidated_signatures = embedded_invalidated_signatures;
-        reopened.package_signatures_invalidated = package_signatures_invalidated;
-        *self = reopened;
+        *self = staged.checked_commit(|staged| {
+            let package_signatures_invalidated = staged.package_signatures_invalidated
+                || staged.retained_package_signature_would_be_invalidated()?;
+            let mut package = staged.staged_package(true)?;
+            embedded::persist_invalidated_package_signature(
+                &mut package,
+                package_signatures_invalidated,
+            )?;
+            let mut reopened = staged.reopen(package)?;
+            reopened.embedded_invalidated_signatures =
+                staged.embedded_invalidated_signatures.clone();
+            reopened.package_signatures_invalidated = package_signatures_invalidated;
+            Ok(reopened)
+        })?;
         Ok(())
     }
 
@@ -9449,7 +9667,7 @@ impl Presentation {
         self.presentation.slide_ids.remove(index);
         self.slides.remove(index);
         prune_unreachable_parts(&mut self.package, &media_candidates);
-        self.media_store = MediaStore::scan(&self.package);
+        self.media_store = self.media_store.rescan(&self.package);
         Ok(())
     }
 
@@ -11653,7 +11871,7 @@ impl Presentation {
         if !released.is_empty() {
             self.package.set_part_rels(&part_name, relationships);
             prune_unreachable_parts(&mut self.package, &released);
-            self.media_store = MediaStore::scan(&self.package);
+            self.media_store = self.media_store.rescan(&self.package);
         }
         Ok(())
     }
@@ -11856,7 +12074,7 @@ impl Presentation {
         }
         staged.package.set_part_rels(&slide_part, relationships);
         prune_unreachable_parts(&mut staged.package, &HashSet::from([old_part]));
-        staged.media_store = MediaStore::scan(&staged.package);
+        staged.media_store = staged.media_store.rescan(&staged.package);
         if matches!(owner, ShapeOwner::Slide(_)) {
             self.commit_candidate(staged)
         } else {
@@ -11974,7 +12192,7 @@ impl Presentation {
             });
         }
         prune_unreachable_parts(&mut staged.package, &candidates);
-        staged.media_store = MediaStore::scan(&staged.package);
+        staged.media_store = staged.media_store.rescan(&staged.package);
         if matches!(owner, ShapeOwner::Slide(_)) {
             self.commit_candidate(staged)
         } else {
@@ -12303,7 +12521,7 @@ impl Presentation {
         candidate.package.set_part(&part_name, rewritten);
         candidate.package.set_part_rels(&part_name, relationships);
         prune_unreachable_parts(&mut candidate.package, &removed_parts);
-        candidate.media_store = MediaStore::scan(&candidate.package);
+        candidate.media_store = candidate.media_store.rescan(&candidate.package);
         candidate.commit_owned_parts(None)?;
         *self = candidate;
         Ok(())
@@ -12626,9 +12844,8 @@ impl Presentation {
         }
         let mut package = self.package.clone();
         package.set_part_rels(&part_name, relationships);
-        // Scanning hashes every medium, so it waits for a removed part.
         let media = if prune_unreachable_parts(&mut package, &removed_parts) {
-            MediaStore::scan(&package)
+            self.media_store.rescan(&package)
         } else {
             self.media_store.clone()
         };
@@ -13020,7 +13237,7 @@ impl Presentation {
         });
         staged.package.set_part_rels(&slide_part, relationships);
         prune_unreachable_parts(&mut staged.package, &candidates);
-        staged.media_store = MediaStore::scan(&staged.package);
+        staged.media_store = staged.media_store.rescan(&staged.package);
         self.commit_candidate(staged)
     }
 
@@ -13108,7 +13325,7 @@ impl Presentation {
         });
         staged.package.set_part_rels(&slide_part, relationships);
         prune_unreachable_parts(&mut staged.package, &candidates);
-        staged.media_store = MediaStore::scan(&staged.package);
+        staged.media_store = staged.media_store.rescan(&staged.package);
         self.commit_candidate(staged)
     }
 
@@ -20168,7 +20385,8 @@ fn resolve_master_records(
     package: &OpcPackage,
     presentation_part: &str,
     presentation: &CT_Presentation,
-) -> Result<Vec<MasterRecord>> {
+    parsed: Option<&Parsed>,
+) -> Result<Vec<Arc<MasterRecord>>> {
     let mut masters = Vec::with_capacity(presentation.slide_master_ids.len());
     for entry in &presentation.slide_master_ids {
         let relationship = package
@@ -20181,14 +20399,20 @@ fn resolve_master_records(
         require_relationship_type(presentation_part, relationship, rel_types::SLIDE_MASTER)?;
         reject_external(presentation_part, relationship)?;
         let part_name = OpcPackage::resolve_rel_target(presentation_part, &relationship.target);
+        if let Some(record) = parsed.and_then(|parsed| parsed.master(package, &part_name, entry.id))
+        {
+            masters.push(record);
+            continue;
+        }
+        note_commit_work(|work| work.parsed += 1);
         let master = CT_SlideMaster::from_xml(required_part(package, &part_name)?)
             .map_err(|error| error.to_string());
-        masters.push(MasterRecord {
+        masters.push(Arc::new(MasterRecord {
             id: entry.id,
             part_name,
             master,
             dirty: false,
-        });
+        }));
     }
     Ok(masters)
 }
@@ -20197,7 +20421,8 @@ fn resolve_layouts(
     package: &OpcPackage,
     presentation_part: &str,
     presentation: &CT_Presentation,
-) -> Result<Vec<LayoutRecord>> {
+    parsed: Option<&Parsed>,
+) -> Result<Vec<Arc<LayoutRecord>>> {
     let presentation_relationships = package.get_part_rels(presentation_part);
     let mut layouts = Vec::new();
     let mut seen = HashSet::new();
@@ -20225,16 +20450,21 @@ fn resolve_layouts(
             if !seen.insert(part_name.clone()) {
                 continue;
             }
+            if let Some(record) = parsed.and_then(|parsed| parsed.layout(package, &part_name)) {
+                layouts.push(record);
+                continue;
+            }
+            note_commit_work(|work| work.parsed += 1);
             let xml = required_part(package, &part_name)?;
             let layout = CT_SlideLayout::from_xml(xml).map_err(|error| Error::MalformedPart {
                 part_name: part_name.clone(),
                 message: error.to_string(),
             })?;
-            layouts.push(LayoutRecord {
+            layouts.push(Arc::new(LayoutRecord {
                 part_name,
                 layout,
                 dirty: false,
-            });
+            }));
         }
     }
     Ok(layouts)
@@ -21409,7 +21639,8 @@ fn resolve_comments(
 fn resolve_notes_master(
     package: &OpcPackage,
     presentation_part: &str,
-) -> Result<(Option<String>, Option<Box<CT_NotesMaster>>)> {
+    parsed: Option<&Parsed>,
+) -> Result<(Option<String>, Option<Arc<CT_NotesMaster>>)> {
     let Some(relationships) = package.get_part_rels(presentation_part) else {
         return Ok((None, None));
     };
@@ -21426,6 +21657,10 @@ fn resolve_notes_master(
     };
     reject_external(presentation_part, relationship)?;
     let part_name = OpcPackage::resolve_rel_target(presentation_part, &relationship.target);
+    if let Some(master) = parsed.and_then(|parsed| parsed.notes_master(package, &part_name)) {
+        return Ok((Some(part_name), Some(master)));
+    }
+    note_commit_work(|work| work.parsed += 1);
     let master =
         CT_NotesMaster::from_xml(required_part(package, &part_name)?).map_err(|error| {
             Error::MalformedPart {
@@ -21433,13 +21668,14 @@ fn resolve_notes_master(
                 message: error.to_string(),
             }
         })?;
-    Ok((Some(part_name), Some(Box::new(master))))
+    Ok((Some(part_name), Some(Arc::new(master))))
 }
 
 fn resolve_handout_master(
     package: &OpcPackage,
     presentation_part: &str,
-) -> Result<(Option<String>, Option<Box<CT_HandoutMaster>>)> {
+    parsed: Option<&Parsed>,
+) -> Result<(Option<String>, Option<Arc<CT_HandoutMaster>>)> {
     let Some(relationships) = package.get_part_rels(presentation_part) else {
         return Ok((None, None));
     };
@@ -21456,6 +21692,10 @@ fn resolve_handout_master(
     };
     reject_external(presentation_part, relationship)?;
     let part_name = OpcPackage::resolve_rel_target(presentation_part, &relationship.target);
+    if let Some(master) = parsed.and_then(|parsed| parsed.handout_master(package, &part_name)) {
+        return Ok((Some(part_name), Some(master)));
+    }
+    note_commit_work(|work| work.parsed += 1);
     let master =
         CT_HandoutMaster::from_xml(required_part(package, &part_name)?).map_err(|error| {
             Error::MalformedPart {
@@ -21463,7 +21703,7 @@ fn resolve_handout_master(
                 message: error.to_string(),
             }
         })?;
-    Ok((Some(part_name), Some(Box::new(master))))
+    Ok((Some(part_name), Some(Arc::new(master))))
 }
 
 fn invalid_presentation_mutation(operation: &'static str, message: String) -> Error {
@@ -21472,7 +21712,7 @@ fn invalid_presentation_mutation(operation: &'static str, message: String) -> Er
 
 fn validate_collaboration_model(
     authors: &CommentAuthorList,
-    slides: &[SlideRecord],
+    slides: &[Arc<SlideRecord>],
 ) -> std::result::Result<(), String> {
     let mut author_ids = HashSet::new();
     for author in &authors.authors {
@@ -33758,6 +33998,210 @@ mod write_tests {
         assert_eq!(Arc::as_ptr(&text.slides[3]), owned);
     }
 
+    #[cfg(feature = "default-template")]
+    fn issue403_deck(slides: usize) -> (Presentation, u32, u32) {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_comment_author(
+            CommentAuthor::new(ISSUE403_AUTHOR, "Reviewer", None, "Reviewer", "None").unwrap(),
+        )
+        .unwrap();
+        let mut picture = 0;
+        for index in 0..slides {
+            deck.add_slide(6).unwrap();
+            let mut slide = deck.slide_mut(index).unwrap();
+            slide
+                .add_textbox(Emu(0), Emu(0), Emu(100), Emu(100))
+                .unwrap()
+                .set_text("text")
+                .unwrap();
+            slide
+                .add_table(2, 2, Emu(0), Emu(200), Emu(400), Emu(200))
+                .unwrap();
+            let image = [b"\x89PNG\r\n\x1a\nissue403 ".as_slice(), &[index as u8]].concat();
+            let id = deck
+                .add_picture(
+                    index,
+                    &image,
+                    "picture.png",
+                    Emu(0),
+                    Emu(0),
+                    Some(Emu(100)),
+                    Some(Emu(100)),
+                )
+                .unwrap()
+                .child
+                .non_visual_id()
+                .unwrap();
+            if index == 0 {
+                picture = id;
+            } else {
+                deck.set_notes_text(index, "notes").unwrap();
+            }
+        }
+        let data = ChartData {
+            categories: vec!["North".into(), "South".into()],
+            series: vec![("Revenue".into(), vec![10.0, 20.0])],
+            ..ChartData::default()
+        };
+        let chart = deck
+            .add_chart(
+                0,
+                ChartKind::Bar,
+                Emu(0),
+                Emu(0),
+                Emu(2_000_000),
+                Emu(1_000_000),
+                &data,
+            )
+            .unwrap()
+            .child
+            .non_visual_id()
+            .unwrap();
+        (
+            Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap(),
+            picture,
+            chart,
+        )
+    }
+
+    #[cfg(feature = "default-template")]
+    const ISSUE403_AUTHOR: &str = "{6F1B3A52-0000-4000-8000-0000000000A0}";
+
+    /// Package-bound edits of tensorbee/rdocx#403, one per commit family,
+    /// on slide 0 of a deck whose other slides each hold shapes, a table, a
+    /// picture and notes.
+    #[cfg(feature = "default-template")]
+    #[allow(clippy::type_complexity)]
+    fn issue403_package_edits() -> Vec<(&'static str, fn(&mut Presentation, u32, u32))> {
+        vec![
+            ("core title", |deck, _, _| {
+                let mut properties = deck.core_properties().cloned().unwrap_or_default();
+                properties.title = Some("Edited".to_owned());
+                deck.set_core_properties(properties).unwrap();
+            }),
+            ("first notes", |deck, _, _| {
+                deck.set_notes_text(0, "first notes").unwrap()
+            }),
+            ("comment", |deck, _, _| {
+                let comment = Comment::new(
+                    "{6F1B3A52-0000-4000-8000-0000000000B0}",
+                    ISSUE403_AUTHOR,
+                    "2026-10-01T12:00:00Z",
+                    "comment",
+                )
+                .unwrap();
+                deck.add_comment(0, comment).unwrap();
+            }),
+            ("replace image", |deck, picture, _| {
+                deck.replace_picture_image_at(
+                    ShapeOwner::Slide(0),
+                    picture,
+                    b"\x89PNG\r\n\x1a\nissue403 replaced",
+                )
+                .unwrap()
+            }),
+            ("cell fill", |deck, _, _| {
+                let mut fill = SolidFill::default();
+                fill.color = Some(ColorChoice::srgb(RgbColor::new(0xFF, 0, 0)));
+                let cell = FillOwnerLocation::TableCell {
+                    slide_index: 0,
+                    shape_path: vec![1],
+                    row: 0,
+                    column: 0,
+                };
+                deck.set_fill_at(&cell, Fill::Solid(fill)).unwrap();
+            }),
+            ("theme colour", |deck, _, _| {
+                deck.set_theme_color(0, "accent1", RgbColor::new(17, 34, 51))
+                    .unwrap()
+            }),
+            ("layout name", |deck, _, _| {
+                deck.set_layout_name(1, Some("Renamed")).unwrap()
+            }),
+            ("chart legend", |deck, _, chart| {
+                deck.set_chart_legend(0, chart, Some(true), Some(LegendPosition::Top), None)
+                    .unwrap()
+            }),
+            ("remove shape", |deck, _, _| {
+                deck.remove_shape_at(ShapeOwner::Slide(0), 0).unwrap()
+            }),
+            ("remove slide", |deck, _, _| deck.remove_slide(1).unwrap()),
+        ]
+    }
+
+    #[cfg(all(feature = "default-template", debug_assertions))]
+    #[test]
+    fn issue403_package_edits_do_the_same_commit_work_at_n_and_4n_slides() {
+        let work = |slides| {
+            let (mut deck, picture, chart) = issue403_deck(slides);
+            take_commit_work();
+            let counts = issue403_package_edits()
+                .into_iter()
+                .map(|(name, edit)| {
+                    edit(&mut deck, picture, chart);
+                    (name, take_commit_work())
+                })
+                .collect::<Vec<_>>();
+            (deck, counts)
+        };
+        let (small, small_work) = work(3);
+        let (_, large_work) = work(12);
+        assert_eq!(small_work, large_work);
+        for (name, work) in &small_work {
+            assert_eq!(work.zip_writes, 0, "{name} wrote the package as a ZIP");
+        }
+        // Without what the opening parsed, the same edits go through the ZIP
+        // and parse every slide again, and give the same deck.
+        let (mut through_zip, picture, chart) = issue403_deck(3);
+        through_zip.parsed = None;
+        take_commit_work();
+        for (index, (_, edit)) in issue403_package_edits().into_iter().enumerate() {
+            edit(&mut through_zip, picture, chart);
+            if index == 0 {
+                let work = take_commit_work();
+                assert_eq!(work.zip_writes, 1);
+                assert!(work.parsed >= 3, "{work:?}");
+            }
+            through_zip.parsed = None;
+        }
+        assert_eq!(small.to_bytes().unwrap(), through_zip.to_bytes().unwrap());
+    }
+
+    #[cfg(feature = "default-template")]
+    #[test]
+    fn issue403_a_commit_reuses_unchanged_records_and_keeps_edits_made_in_place() {
+        let (mut deck, _, _) = issue403_deck(3);
+        // An edit in place leaves the slide part as it was read.
+        deck.shape_mut_at(ShapeOwner::Slide(2), &[0])
+            .unwrap()
+            .set_position(Emu(4321), Emu(1234))
+            .unwrap();
+        let before = deck.slides.clone();
+        let layouts = deck.layouts.clone();
+        let mut through_zip = deck.clone();
+        through_zip.parsed = None;
+        for deck in [&mut deck, &mut through_zip] {
+            let mut properties = deck.core_properties().cloned().unwrap_or_default();
+            properties.title = Some("Edited".to_owned());
+            deck.set_core_properties(properties).unwrap();
+        }
+        assert!(Arc::ptr_eq(&deck.slides[0], &before[0]));
+        assert!(Arc::ptr_eq(&deck.slides[1], &before[1]));
+        assert!(!Arc::ptr_eq(&deck.slides[2], &before[2]));
+        assert!(
+            deck.layouts
+                .iter()
+                .zip(&layouts)
+                .all(|(now, before)| Arc::ptr_eq(now, before))
+        );
+        let saved = deck.to_bytes().unwrap();
+        assert_eq!(saved, through_zip.to_bytes().unwrap());
+        let reopened = Presentation::from_bytes(&saved).unwrap();
+        let xml =
+            String::from_utf8(reopened.shape_xml_at(ShapeOwner::Slide(2), &[0]).unwrap()).unwrap();
+        assert!(xml.contains(r#"<a:off x="4321" y="1234"/>"#), "{xml}");
+    }
+
     #[cfg(feature = "render")]
     #[test]
     fn fx207_refresh_preserves_unknown_autofit_on_selected_and_unrelated_owners() {
@@ -39927,6 +40371,204 @@ fn path_of_id(children: &[ShapeTreeChild], shape_id: u32) -> Option<Vec<usize>> 
         }
     }
     None
+}
+
+/// Work that staging and reopening a package did on this thread, whose
+/// amount could follow the deck: parts parsed, slide and notes parts
+/// serialized, media hashed and packages written as a ZIP. Debug builds
+/// count it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+struct CommitWork {
+    parsed: usize,
+    serialized: usize,
+    hashed: usize,
+    zip_writes: usize,
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    static COMMIT_WORK: Cell<CommitWork> = const {
+        Cell::new(CommitWork { parsed: 0, serialized: 0, hashed: 0, zip_writes: 0 })
+    };
+    static COMMIT_WORK_PAUSED: Cell<bool> = const { Cell::new(false) };
+}
+
+fn note_commit_work(count: impl FnOnce(&mut CommitWork)) {
+    #[cfg(debug_assertions)]
+    if !COMMIT_WORK_PAUSED.get() {
+        let mut work = COMMIT_WORK.get();
+        count(&mut work);
+        COMMIT_WORK.set(work);
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = count;
+}
+
+/// Returns the work counted since the last call, and starts again.
+#[cfg(all(test, debug_assertions))]
+fn take_commit_work() -> CommitWork {
+    COMMIT_WORK.replace(CommitWork::default())
+}
+
+#[cfg(debug_assertions)]
+fn without_commit_work<T>(run: impl FnOnce() -> T) -> T {
+    let paused = COMMIT_WORK_PAUSED.replace(true);
+    let result = run();
+    COMMIT_WORK_PAUSED.set(paused);
+    result
+}
+
+/// Asserts that a commit gives what the commit through the ZIP gives: the
+/// same error, or the same package, the same records serialized, the same
+/// media store and the same package a save stages.
+#[cfg(debug_assertions)]
+fn assert_same_commit(committed: &Result<Presentation>, through_zip: &Result<Presentation>) {
+    fn xml<E: std::fmt::Display>(
+        xml: std::result::Result<Vec<u8>, E>,
+    ) -> std::result::Result<Vec<u8>, String> {
+        xml.map_err(|error| error.to_string())
+    }
+    fn state(presentation: &Presentation) -> impl PartialEq + std::fmt::Debug {
+        let slides = presentation
+            .slides
+            .iter()
+            .map(|record| {
+                (
+                    record.id,
+                    record.part_name.clone(),
+                    xml(record.slide.to_xml()),
+                    record
+                        .notes
+                        .as_ref()
+                        .map(|notes| (notes.part_name.clone(), xml(notes.notes.to_xml()))),
+                    record.comments.as_ref().map(|comments| {
+                        (
+                            comments.part_name.clone(),
+                            xml(comments.comments.to_xml()),
+                            comments.dirty,
+                        )
+                    }),
+                )
+            })
+            .collect::<Vec<_>>();
+        let layouts = presentation
+            .layouts
+            .iter()
+            .map(|record| {
+                (
+                    record.part_name.clone(),
+                    xml(record.layout.to_xml()),
+                    record.dirty,
+                )
+            })
+            .collect::<Vec<_>>();
+        let masters = presentation
+            .masters
+            .iter()
+            .map(|record| {
+                let master = match &record.master {
+                    Ok(master) => xml(master.to_xml()),
+                    Err(message) => Err(message.clone()),
+                };
+                (record.id, record.part_name.clone(), master, record.dirty)
+            })
+            .collect::<Vec<_>>();
+        let mut media = presentation
+            .media_store
+            .by_id
+            .iter()
+            .map(|(id, bucket)| {
+                let bucket = bucket
+                    .iter()
+                    .map(|entry| {
+                        (
+                            entry.part_name.clone(),
+                            entry.bytes.clone(),
+                            entry.extension.clone(),
+                            entry.content_type.clone(),
+                            entry.newly_inserted,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                (id.0, bucket)
+            })
+            .collect::<Vec<_>>();
+        media.sort();
+        let mut invalidated = presentation
+            .embedded_invalidated_signatures
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        invalidated.sort();
+        (
+            (
+                presentation.package.clone(),
+                presentation.presentation_part.clone(),
+                xml(presentation.presentation.to_xml()),
+                presentation
+                    .core_properties
+                    .as_ref()
+                    .map(|properties| xml(properties.to_xml())),
+                presentation.core_properties_part_name.clone(),
+                presentation.core_properties_dirty,
+                presentation
+                    .application_properties
+                    .as_ref()
+                    .map(|properties| xml(properties.to_xml())),
+                presentation
+                    .custom_properties
+                    .as_ref()
+                    .map(|properties| xml(properties.to_xml())),
+            ),
+            (
+                presentation.comment_authors_part.clone(),
+                xml(presentation.comment_authors.to_xml()),
+                presentation.comment_authors_dirty,
+                presentation.notes_master_part.clone(),
+                presentation
+                    .notes_master
+                    .as_ref()
+                    .map(|master| xml(master.to_xml())),
+                presentation.notes_master_dirty,
+                presentation.handout_master_part.clone(),
+                presentation
+                    .handout_master
+                    .as_ref()
+                    .map(|master| xml(master.to_xml())),
+                presentation.handout_master_dirty,
+            ),
+            (
+                invalidated,
+                presentation.package_signatures_invalidated,
+                presentation.themes.len(),
+            ),
+            (slides, layouts, masters, media),
+            presentation.parsed.is_some(),
+            presentation
+                .staged_package(true)
+                .map_err(|error| error.to_string()),
+        )
+    }
+    match (committed, through_zip) {
+        (Ok(committed), Ok(through_zip)) => {
+            assert_eq!(
+                state(committed),
+                state(through_zip),
+                "a commit differs from its ZIP round trip"
+            )
+        }
+        (Err(committed), Err(through_zip)) => assert_eq!(
+            committed.to_string(),
+            through_zip.to_string(),
+            "a commit fails otherwise than its ZIP round trip"
+        ),
+        (committed, through_zip) => panic!(
+            "a commit gives {:?} where its ZIP round trip gives {:?}",
+            committed.as_ref().map(|_| ()),
+            through_zip.as_ref().map(|_| ())
+        ),
+    }
 }
 
 #[cfg(test)]
