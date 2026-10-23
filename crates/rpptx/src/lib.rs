@@ -4843,6 +4843,20 @@ impl Presentation {
             .collect()
     }
 
+    /// Whether every layout and master record is still the one of `earlier`,
+    /// in the same order.
+    #[doc(hidden)]
+    pub fn unchanged_layouts_and_masters_since(&self, earlier: &Presentation) -> bool {
+        fn shared<T>(records: &[Arc<T>], earlier: &[Arc<T>]) -> bool {
+            records.len() == earlier.len()
+                && records
+                    .iter()
+                    .zip(earlier)
+                    .all(|(record, earlier)| Arc::ptr_eq(record, earlier))
+        }
+        shared(&self.layouts, &earlier.layouts) && shared(&self.masters, &earlier.masters)
+    }
+
     /// Replaces literal text across regular DrawingML runs in every editable shape.
     ///
     /// Replacement text retains the formatting and opaque run content of the
@@ -22514,7 +22528,7 @@ impl<'a> SlideRef<'a> {
 }
 
 /// The structural kind of one PresentationML shape-tree child.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ShapeKind {
     Shape,
     Picture,
@@ -33646,8 +33660,18 @@ mod write_tests {
             candidate.unchanged_slides_since(&live),
             [Some(0), Some(1), None, Some(3)]
         );
-        assert!(shared(&live.layouts, &candidate.layouts));
-        assert!(shared(&live.masters, &candidate.masters));
+        assert!(candidate.unchanged_layouts_and_masters_since(&live));
+        let mut layout_edit = live.clone();
+        layout_edit
+            .shapes_mut_at(ShapeOwner::Layout(1), &[])
+            .unwrap()
+            .add_textbox(Emu(0), Emu(0), Emu(100), Emu(100))
+            .unwrap();
+        assert!(!layout_edit.unchanged_layouts_and_masters_since(&live));
+        assert_eq!(
+            layout_edit.unchanged_slides_since(&live),
+            [Some(0), Some(1), Some(2), Some(3)]
+        );
         candidate.move_slide(3, 0).unwrap();
         assert_eq!(
             candidate.unchanged_slides_since(&live),
