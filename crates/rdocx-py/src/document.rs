@@ -594,6 +594,7 @@ pub struct PyComment {
     pub resolved: Option<bool>,
     pub anchor_text: Option<String>,
     pub anchor: Option<PyStoryRunRange>,
+    pub anchor_issue: Option<String>,
 }
 
 // Preserve the established metadata value equality. Derived anchor snapshots
@@ -615,7 +616,7 @@ impl Eq for PyComment {}
 #[pymethods]
 impl PyComment {
     #[new]
-    #[pyo3(signature = (*, id, author, initials, date, text, parent_id, resolved, anchor_text=None, anchor=None))]
+    #[pyo3(signature = (*, id, author, initials, date, text, parent_id, resolved, anchor_text=None, anchor=None, anchor_issue=None))]
     #[allow(clippy::too_many_arguments)] // Preserve seven original fields plus optional anchor snapshots.
     fn new(
         id: i32,
@@ -627,10 +628,12 @@ impl PyComment {
         resolved: Option<bool>,
         anchor_text: Option<String>,
         anchor: Option<PyRef<'_, PyStoryRunRange>>,
+        anchor_issue: Option<String>,
     ) -> Self {
         Self {
             anchor_text,
             anchor: anchor.map(|range| (*range).clone()),
+            anchor_issue,
             id,
             author,
             initials,
@@ -9439,11 +9442,15 @@ impl PyDocument {
             .comments()
             .into_iter()
             .map(|comment| {
-                let (range, anchor_text) = anchors.remove(&comment.id()).ok_or_else(|| {
-                    PyValueError::new_err(
-                        "comment snapshot is missing its checked ownership record",
-                    )
-                })?;
+                let ((range, anchor_text), anchor_issue) =
+                    match anchors.remove(&comment.id()).ok_or_else(|| {
+                        PyValueError::new_err(
+                            "comment snapshot is missing its checked ownership record",
+                        )
+                    })? {
+                        Ok(anchor) => (anchor, None),
+                        Err(error) => ((None, None), Some(error.to_string())),
+                    };
                 let anchor = range
                     .map(|range| -> PyResult<PyStoryRunRange> {
                         Ok(PyStoryRunRange {
@@ -9467,6 +9474,7 @@ impl PyDocument {
                     resolved: comment.resolved(),
                     anchor_text,
                     anchor,
+                    anchor_issue,
                 })
             })
             .collect::<PyResult<Vec<_>>>()?;

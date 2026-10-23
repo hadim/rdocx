@@ -61251,7 +61251,15 @@ fn comment_anchor_refuses_malformed_or_unrepresentable_without_losing_source() {
         let before = document.to_bytes().unwrap();
         assert!(document.comment_anchor(id).is_err(), "{content}");
         assert!(document.comment_anchor_text(id).is_err(), "{content}");
-        assert!(document.comment_anchor_snapshots().is_err(), "{content}");
+        // The listing keeps the comment, its anchor the same error.
+        assert_eq!(
+            document.comment_anchor_snapshots().unwrap()[&id]
+                .as_ref()
+                .unwrap_err()
+                .to_string(),
+            document.comment_anchor(id).unwrap_err().to_string(),
+            "{content}"
+        );
         assert_eq!(document.to_bytes().unwrap(), before);
     }
     // Foreign lookalikes never supply an endpoint or contribute accepted text.
@@ -61348,6 +61356,253 @@ fn comment_anchor_related_block_paths_aliases_and_cross_owner_refusal() {
             assert_eq!(document.to_bytes().unwrap(), before);
         }
     }
+}
+
+/// Issue 405: a comment range that runs from one table cell into another, as
+/// Google Docs writes one selected across two cells with its start plain or in
+/// a `goog_rdk` content control, reads in physical order across the cells.
+#[test]
+fn comment_anchor_runs_across_table_cells_in_physical_order() {
+    let mut seed = Document::new();
+    seed.add_paragraph("seed");
+    let id = seed
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "source",
+        )
+        .unwrap();
+    let seed = seed.to_bytes().unwrap();
+    let start = format!(r#"<w:commentRangeStart w:id="{id}"/>"#);
+    let goog = format!(
+        r#"<w:sdt><w:sdtPr><w:id w:val="-346012225"/><w:tag w:val="goog_rdk_0"/></w:sdtPr><w:sdtContent>{start}</w:sdtContent></w:sdt>"#
+    );
+    let end =
+        format!(r#"<w:commentRangeEnd w:id="{id}"/><w:r><w:commentReference w:id="{id}"/></w:r>"#);
+    let p = |head: &str, text: &str, tail: &str| {
+        format!("<w:p>{head}<w:r><w:t>{text}</w:t></w:r>{tail}</w:p>")
+    };
+    let row = |left: String, right: String| {
+        format!("<w:tr><w:tc>{left}</w:tc><w:tc>{right}</w:tc></w:tr>")
+    };
+    let table = |rows: String| format!("<w:tbl>{rows}</w:tbl>");
+    let cell = StoryKind::TableCell;
+    let body = StoryKind::Body;
+    for (label, xml, expected, start_at, end_at) in [
+        (
+            "plain start",
+            table(row(
+                p(&start, "Preconditions and test data", ""),
+                p("", "the second cell", &end),
+            )),
+            "Preconditions and test data\nthe second cell",
+            (cell, 0, 0),
+            (cell, 1, 0),
+        ),
+        (
+            "goog_rdk start",
+            table(row(
+                p(&goog, "Preconditions and test data", ""),
+                p("", "the second cell", &end),
+            )),
+            "Preconditions and test data\nthe second cell",
+            (cell, 0, 0),
+            (cell, 1, 0),
+        ),
+        (
+            "next row",
+            table(row(p("", "A", ""), p(&start, "B", "")) + &row(p("", "C", &end), p("", "D", ""))),
+            "B\nC",
+            (cell, 1, 0),
+            (cell, 2, 0),
+        ),
+        (
+            "body into cell",
+            p(&start, "before", "")
+                + &table(row(p("", "A", ""), p("", "B", &end)))
+                + &p("", "after", ""),
+            "before\nA\nB",
+            (body, 0, 0),
+            (cell, 1, 0),
+        ),
+        (
+            "cell into body",
+            p("", "before", "")
+                + &table(row(p("", "A", ""), p(&start, "B", "")))
+                + &p("", "after", &end),
+            "B\nafter",
+            (cell, 1, 0),
+            (body, 0, 2),
+        ),
+        (
+            "body around a table",
+            p(&start, "before", "")
+                + &table(row(p("", "A", ""), p("", "B", "")))
+                + &p("", "after", &end),
+            "before\nA\nB\nafter",
+            (body, 0, 0),
+            (body, 0, 2),
+        ),
+        (
+            "nested table",
+            table(row(
+                p(&start, "A", "") + &table(row(p("", "N", ""), p("", "M", ""))) + &p("", "A2", ""),
+                p("", "B", &end),
+            )),
+            "A\nN\nM\nA2\nB",
+            (cell, 0, 0),
+            (cell, 3, 0),
+        ),
+    ] {
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&seed)).unwrap();
+        package.set_part("/word/document.xml", wrap_word_body(&xml).into_bytes());
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        let mut document = Document::from_bytes(output.get_ref()).unwrap();
+        let before = document.to_bytes().unwrap();
+        let endpoint = |position: &StoryRunPosition| {
+            let story = position.location.story();
+            (
+                story.kind(),
+                story.owner_index(),
+                position.location.index_path()[0],
+                position.run_index,
+            )
+        };
+        let range = document.comment_anchor(id).unwrap().unwrap();
+        assert_eq!(
+            (endpoint(&range.start), endpoint(&range.end)),
+            (
+                (start_at.0, start_at.1, start_at.2, 0),
+                (end_at.0, end_at.1, end_at.2, 1)
+            ),
+            "{label}"
+        );
+        assert_eq!(
+            document.comment_anchor_text(id).unwrap().as_deref(),
+            Some(expected),
+            "{label}"
+        );
+        assert_eq!(
+            document.comment_anchor_snapshots().unwrap()[&id]
+                .as_ref()
+                .unwrap(),
+            &(Some(range.clone()), Some(expected.to_owned())),
+            "{label}"
+        );
+        assert_eq!(document.to_bytes().unwrap(), before, "{label}");
+        let reopened = Document::from_bytes(&before).unwrap();
+        let again = reopened.comment_anchor(id).unwrap().unwrap();
+        assert_eq!(
+            (endpoint(&again.start), endpoint(&again.end)),
+            (endpoint(&range.start), endpoint(&range.end)),
+            "{label}"
+        );
+        assert_eq!(
+            reopened.comment_anchor_text(id).unwrap().as_deref(),
+            Some(expected),
+            "{label}"
+        );
+        // Moving a range whose ends are in two owners, or placing that
+        // range, refuses and leaves the document unchanged.
+        let cross_owner = range.start.location.story() != range.end.location.story();
+        if cross_owner {
+            assert!(
+                document
+                    .move_comment(id, range.clone())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("across story owners"),
+                "{label}"
+            );
+            assert!(
+                document
+                    .add_story_comment(range.clone(), "Ben", None, "copy")
+                    .is_err()
+            );
+            assert_eq!(document.to_bytes().unwrap(), before, "{label}");
+        }
+        // Thread edits keep the range, and removal takes the comment whole.
+        document.reply_to(id, "Ben", "reply").unwrap();
+        assert!(document.resolve_comment(id, true).unwrap());
+        assert_eq!(
+            document.comment_anchor_text(id).unwrap().as_deref(),
+            Some(expected),
+            "{label}"
+        );
+        assert!(document.remove_comment(id).unwrap(), "{label}");
+        assert!(document.comments().is_empty(), "{label}");
+        let main = document_xml(&mut document);
+        assert!(
+            !main.contains("commentRange") && !main.contains("commentReference"),
+            "{label}"
+        );
+    }
+}
+
+/// Issue 405: a comment whose anchor cannot be read does not fail the
+/// listing. Its own entry is the error that `comment_anchor` returns.
+#[test]
+fn comment_listing_keeps_other_comments_when_one_anchor_cannot_be_read() {
+    let mut seed = Document::new();
+    seed.add_paragraph("kept");
+    let range = RunRange {
+        start: RunPosition {
+            body_index: 0,
+            run_index: 0,
+        },
+        end: RunPosition {
+            body_index: 0,
+            run_index: 1,
+        },
+    };
+    let kept = seed.add_comment(range, "Ada", None, "kept").unwrap();
+    let wrapped = seed.add_comment(range, "Ben", None, "wrapped").unwrap();
+    let marked = |id: i32, content: &str| {
+        format!(
+            r#"<w:p><w:commentRangeStart w:id="{id}"/>{content}<w:commentRangeEnd w:id="{id}"/><w:r><w:commentReference w:id="{id}"/></w:r></w:p>"#
+        )
+    };
+    let body = marked(kept, "<w:r><w:t>kept</w:t></w:r>")
+        + &marked(
+            wrapped,
+            "<w:smartTag><w:r><w:t>wrapped</w:t></w:r></w:smartTag>",
+        );
+    let bytes = seed.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    package.set_part("/word/document.xml", wrap_word_body(&body).into_bytes());
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    let mut document = Document::from_bytes(output.get_ref()).unwrap();
+    let before = document.to_bytes().unwrap();
+    let listed = document.comment_anchor_snapshots().unwrap();
+    assert_eq!(
+        listed.keys().copied().collect::<Vec<_>>(),
+        vec![kept, wrapped]
+    );
+    assert_eq!(listed[&kept].as_ref().unwrap().1.as_deref(), Some("kept"));
+    let issue = document.comment_anchor(wrapped).unwrap_err().to_string();
+    assert_eq!(listed[&wrapped].as_ref().unwrap_err().to_string(), issue);
+    assert!(document.comment_anchor_text(wrapped).is_err());
+    assert_eq!(
+        document.comment_anchor_text(kept).unwrap().as_deref(),
+        Some("kept")
+    );
+    assert_eq!(document.comments().len(), 2);
+    // Edits that read the range stay strict.
+    let anchor = document.comment_anchor(kept).unwrap().unwrap();
+    assert!(document.move_comment(wrapped, anchor).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
 }
 
 #[test]
@@ -61503,7 +61758,7 @@ fn comment_anchor_listing_proves_absence_without_weakening_owned_graph() {
     let before = document.to_bytes().unwrap();
     let snapshots = document.comment_anchor_snapshots().unwrap();
     assert_eq!(snapshots.keys().copied().collect::<Vec<_>>(), vec![id]);
-    assert_eq!(snapshots[&id].1.as_deref(), Some("owned"));
+    assert_eq!(snapshots[&id].as_ref().unwrap().1.as_deref(), Some("owned"));
     assert!(document.comment_anchor(77).is_err());
     assert!(document.validate_comment_ownership().is_err());
     assert_eq!(document.to_bytes().unwrap(), before);

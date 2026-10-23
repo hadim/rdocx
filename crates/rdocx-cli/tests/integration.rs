@@ -3543,6 +3543,7 @@ fn comment_commands_round_trip_one_resolved_thread() {
                         "start": { "story_kind": "body", "part_name": "/word/document.xml", "owner_index": 0, "item_kind": "paragraph", "index_path": [0], "run_index": 0, "direct_body_index": 0 },
                         "end": { "story_kind": "body", "part_name": "/word/document.xml", "owner_index": 0, "item_kind": "paragraph", "index_path": [0], "run_index": 1, "direct_body_index": 0 },
                     },
+                    "anchor_issue": null,
                 },
                 {
                     "id": 1,
@@ -3554,6 +3555,7 @@ fn comment_commands_round_trip_one_resolved_thread() {
                     "resolved": false,
                     "anchor_text": null,
                     "anchor": null,
+                    "anchor_issue": null,
                 },
             ],
         })

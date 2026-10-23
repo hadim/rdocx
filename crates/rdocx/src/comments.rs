@@ -65,6 +65,10 @@ pub struct StoryRunPosition {
 }
 
 /// A half-open run range within one checked story owner.
+///
+/// A comment anchor that [`Document::comment_anchor`] reads may instead run
+/// from one table cell into a later cell of the same story, or between a cell
+/// and the story around its table. Placing a range still takes one owner.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StoryRunRange {
     pub start: StoryRunPosition,
@@ -553,9 +557,16 @@ impl Document {
             )));
         }
         // This exact accepted projection also rejects hidden, reversed,
-        // cross-owner or unrepresentable endpoints rather than inventing one.
-        self.comment_anchor(id)?
+        // cross-story or unrepresentable endpoints rather than inventing one.
+        // A range across table cells is read but placing it takes one owner.
+        let anchor = self
+            .comment_anchor(id)?
             .ok_or_else(|| Error::Other(format!("comment {id} has no movable paired range")))?;
+        if anchor.start.location.story() != anchor.end.location.story() {
+            return Err(Error::Other(format!(
+                "comment {id} range runs across story owners and cannot be moved"
+            )));
+        }
         let mut selected = self.story_ranges()?.into_iter().filter(
             |entry| matches!(entry.kind(), StoryRangeKind::Comment { id: found } if *found == id),
         );
@@ -2625,31 +2636,40 @@ fn comment_part_entries(
 impl Document {
     /// Return a selected comment's exact accepted-view run range.
     /// Unknown or malformed ownership and unrepresentable endpoints are errors.
-    /// Known orphans and reference-only points have no paired range.
+    /// Known orphans and reference-only points have no paired range. A range
+    /// may run from one table cell into a later cell of the same story, or
+    /// between a table cell and the story around its table, so its two ends
+    /// are then in different story owners.
     pub fn comment_anchor(&self, id: i32) -> Result<Option<StoryRunRange>> {
         Ok(self
             .comment_anchor_snapshots_selected(Some(id))?
             .remove(&id)
-            .ok_or_else(|| Error::Other(format!("unknown comment {id}")))?
+            .ok_or_else(|| Error::Other(format!("unknown comment {id}")))??
             .0)
     }
 
     /// Return accepted span text, empty for a reference-only point and absent
-    /// for a known orphan or a reply without its own source markers.
+    /// for a known orphan or a reply without its own source markers. One
+    /// newline separates two paragraphs, table cells included.
     pub fn comment_anchor_text(&self, id: i32) -> Result<Option<String>> {
         Ok(self
             .comment_anchor_snapshots_selected(Some(id))?
             .remove(&id)
-            .ok_or_else(|| Error::Other(format!("unknown comment {id}")))?
+            .ok_or_else(|| Error::Other(format!("unknown comment {id}")))??
             .1)
     }
 
     /// Build checked owned anchor snapshots with one source inventory for listings.
+    ///
+    /// A failure of the document, such as its comment ownership, fails the
+    /// whole listing. The anchor of one comment that cannot be read is that
+    /// comment's own error, which [`Self::comment_anchor`] returns, so the
+    /// other comments are still listed.
     #[doc(hidden)]
     #[allow(clippy::type_complexity)] // Concrete shared range and text listing contract.
     pub fn comment_anchor_snapshots(
         &self,
-    ) -> Result<BTreeMap<i32, (Option<StoryRunRange>, Option<String>)>> {
+    ) -> Result<BTreeMap<i32, Result<(Option<StoryRunRange>, Option<String>)>>> {
         self.comment_anchor_snapshots_selected(None)
     }
 
@@ -2657,7 +2677,7 @@ impl Document {
     fn comment_anchor_snapshots_selected(
         &self,
         selected: Option<i32>,
-    ) -> Result<BTreeMap<i32, (Option<StoryRunRange>, Option<String>)>> {
+    ) -> Result<BTreeMap<i32, Result<(Option<StoryRunRange>, Option<String>)>>> {
         let mut source = self.clone_for_staging();
         source.flush_to_package()?;
         let ownership = source.comment_owned_graph_at(&source.doc_part_name)?;
@@ -2670,39 +2690,46 @@ impl Document {
         let paragraphs = source
             .comment_story_range_paragraphs()?
             .into_iter()
-            .map(|(location, xml)| {
+            .map(|(flow, offset, location, xml)| {
                 let ids = comment_source_markers(&xml)?
                     .into_iter()
                     .map(|marker| marker.id)
                     .collect::<HashSet<_>>();
-                Ok((location, CT_P::from_xml_fragment(&xml)?, ids, xml))
+                Ok((
+                    location,
+                    CT_P::from_xml_fragment(&xml)?,
+                    ids,
+                    xml,
+                    flow,
+                    offset,
+                ))
             })
             .collect::<Result<Vec<_>>>()?;
+        // Physical order: the source, then the offset in it.
+        let order = |index: &usize| (paragraphs[*index].4.0, paragraphs[*index].5);
         let mut marker_paragraphs = HashMap::<i32, Vec<usize>>::new();
-        let mut owner_paragraphs = HashMap::<crate::StoryId, Vec<usize>>::new();
-        for (index, (location, _, ids, _)) in paragraphs.iter().enumerate() {
-            owner_paragraphs
-                .entry(location.story().clone())
-                .or_default()
-                .push(index);
+        // A range runs through one flow, the paragraphs of one story owner and
+        // of the table cells it holds, in physical order.
+        let mut flow_paragraphs = HashMap::<(usize, usize), Vec<usize>>::new();
+        for (index, (_, _, ids, _, flow, _)) in paragraphs.iter().enumerate() {
+            flow_paragraphs.entry(*flow).or_default().push(index);
             for &id in ids {
                 marker_paragraphs.entry(id).or_default().push(index);
             }
         }
-        let mut snapshots = BTreeMap::new();
-        for &id in ownership
-            .parents
-            .keys()
-            .filter(|id| selected.is_none_or(|selected| selected == **id))
+        for indexes in flow_paragraphs
+            .values_mut()
+            .chain(marker_paragraphs.values_mut())
         {
+            indexes.sort_by_key(order);
+        }
+        let project = |id: i32| -> Result<(Option<StoryRunRange>, Option<String>)> {
             let count = counts.get(&id).copied().unwrap_or_default();
             if count == [0; 3] {
-                snapshots.insert(id, (None, None));
-                continue;
+                return Ok((None, None));
             }
             if count == [0, 0, 1] {
-                snapshots.insert(id, (None, Some(String::new())));
-                continue;
+                return Ok((None, Some(String::new())));
             }
             if count[0] != 1 || count[1] != 1 || count[2] > 1 {
                 return Err(Error::Other(format!(
@@ -2715,7 +2742,7 @@ impl Document {
             let mut text = String::new();
             let mut first_paragraph = None;
             for &index in marker_paragraphs.get(&id).into_iter().flatten() {
-                let (_, _, _, xml) = &paragraphs[index];
+                let (_, _, _, xml, _, _) = &paragraphs[index];
                 let (_, _, first, last) = CT_P::accepted_comment_source_projection(xml, id, false)?;
                 if first.is_some() || last.is_some() {
                     first_paragraph = Some(index);
@@ -2725,12 +2752,12 @@ impl Document {
             let first_paragraph = first_paragraph.ok_or_else(|| Error::Other(format!(
                 "comment {id} source cannot be projected faithfully on the existing accepted run axis"
             )))?;
-            let owner = &owner_paragraphs[paragraphs[first_paragraph].0.story()];
-            let offset = owner
-                .binary_search(&first_paragraph)
-                .expect("registered owner paragraph");
-            for &index in &owner[offset..] {
-                let (location, paragraph, ids, xml) = &paragraphs[index];
+            let flow = &flow_paragraphs[&paragraphs[first_paragraph].4];
+            let offset = flow
+                .binary_search_by_key(&order(&first_paragraph), order)
+                .expect("registered flow paragraph");
+            for &index in &flow[offset..] {
+                let (location, paragraph, ids, xml, _, _) = &paragraphs[index];
                 let was_open = open;
                 let (contribution, next_open, first, last) = if ids.contains(&id) {
                     CT_P::accepted_comment_source_projection(xml, id, open)?
@@ -2770,19 +2797,24 @@ impl Document {
                     break;
                 }
             }
-            let (Some(start), Some(end)) = (start, end) else {
-                return Err(Error::Other(format!(
+            match (start, end) {
+                (Some(start), Some(end)) if !open => {
+                    Ok((Some(StoryRunRange { start, end }), Some(text)))
+                }
+                (None, _) => Err(Error::Other(format!(
                     "comment {id} source cannot be projected faithfully on the existing accepted run axis"
-                )));
-            };
-            if open || start.location.story() != end.location.story() {
-                return Err(Error::Other(format!(
-                    "comment {id} range has no ordered end in the same story owner"
-                )));
+                ))),
+                _ => Err(Error::Other(format!(
+                    "comment {id} range has no ordered end in the same story or its table cells"
+                ))),
             }
-            snapshots.insert(id, (Some(StoryRunRange { start, end }), Some(text)));
-        }
-        Ok(snapshots)
+        };
+        Ok(ownership
+            .parents
+            .keys()
+            .filter(|id| selected.is_none_or(|selected| selected == **id))
+            .map(|&id| (id, project(id)))
+            .collect())
     }
 
     /// Classify glossary review ownership from one actual internal relationship.

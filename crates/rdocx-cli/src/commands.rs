@@ -1510,12 +1510,16 @@ pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
     let records = comments
         .iter()
         .map(|comment| -> Result<Value> {
-            let (range, anchor_text) = if json_output {
-                anchors
+            let ((range, anchor_text), anchor_issue) = if json_output {
+                match anchors
                     .remove(&comment.id())
                     .ok_or_else(|| io::Error::other("checked comment ownership record missing"))?
+                {
+                    Ok(anchor) => (anchor, None),
+                    Err(error) => ((None, None), Some(error.to_string())),
+                }
             } else {
-                (None, None)
+                ((None, None), None)
             };
             let anchor = range
                 .map(|range| -> Result<Value> {
@@ -1529,6 +1533,7 @@ pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
                 "id": comment.id(), "author": comment.author(), "initials": comment.initials(),
                 "date": comment.date(), "text": comment.text(), "parent_id": comment.parent_id(),
                 "resolved": comment.resolved() == Some(true), "anchor_text": anchor_text, "anchor": anchor,
+                "anchor_issue": anchor_issue,
             }))
         })
         .collect::<Result<Vec<_>>>()?;
