@@ -1976,9 +1976,13 @@ impl PyCell {
                     let location = match document.indexed_cell_location(&table, row, cell) {
                         Some(location) => location,
                         None => {
+                            // An inventory's body story has no fingerprint.
+                            let native = TableLocation::Related(table.clone())
+                                .native(&document.inner)
+                                .map_err(|error| rdocx_to_pyerr(py, error))?;
                             let story = document
                                 .inner
-                                .story_table_cell(&table, row, cell)
+                                .story_table_cell(&native, row, cell)
                                 .map_err(|error| rdocx_to_pyerr(py, error))?;
                             crate::document::WordOwnerLocation::Cell {
                                 table,

@@ -36,6 +36,8 @@ static WORD_INVENTORY_REBUILDS: std::sync::atomic::AtomicUsize =
 static WORD_WHOLE_SOURCE_READS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 #[cfg(debug_assertions)]
+static WORD_PIECE_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(debug_assertions)]
 thread_local! {
     static WORD_GUARDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -45,6 +47,14 @@ fn note_word_inventory_rebuild() {
     #[cfg(debug_assertions)]
     if !WORD_GUARDING.with(std::cell::Cell::get) {
         WORD_INVENTORY_REBUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Count one body block or story part whose owners are read again.
+fn note_word_piece_read() {
+    #[cfg(debug_assertions)]
+    if !WORD_GUARDING.with(std::cell::Cell::get) {
+        WORD_PIECE_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -79,6 +89,15 @@ pub(crate) fn word_whole_body_work() -> (usize, usize) {
         WORD_INVENTORY_REBUILDS.load(std::sync::atomic::Ordering::Relaxed),
         WORD_WHOLE_SOURCE_READS.load(std::sync::atomic::Ordering::Relaxed),
     )
+}
+
+/// The body blocks and story parts whose owners were read again, rather
+/// than reused from the inventory by block and part. Debug builds only.
+#[cfg(debug_assertions)]
+#[pyfunction]
+#[pyo3(name = "_word_piece_work")]
+pub(crate) fn word_piece_work() -> usize {
+    WORD_PIECE_READS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 use oxml_py_support::{
@@ -4335,16 +4354,19 @@ impl WordOwnerLocation {
 }
 
 impl WordOwnerIndexes {
-    fn prepare(owners: &[WordOwner], document: &rdocx::Document) -> PyResult<Self> {
+    fn prepare(owners: &[WordOwner], projections: WordIndexProjections) -> PyResult<Self> {
+        let WordIndexProjections {
+            body_paragraphs,
+            cell_paragraphs,
+            table_slots,
+        } = projections;
         let mut indexes = Self {
             by_generation: IndexMap::default(),
             by_route: IndexMap::default(),
             direct_body_paragraphs: IndexMap::default(),
-            body_paragraphs: document.paragraph_story_locations().ok(),
+            body_paragraphs,
             body_tables: Vec::new(),
-            cell_paragraphs: document
-                .cell_paragraph_story_locations()
-                .unwrap_or_default(),
+            cell_paragraphs,
             paragraphs_by_parent: IndexMap::default(),
             tables_by_parent: IndexMap::default(),
         };
@@ -4360,12 +4382,9 @@ impl WordOwnerIndexes {
             .try_reserve(owners.len())
             .map_err(fail)?;
         let body_tables = indexes.index_owners(owners);
-        indexes.body_tables = (0..document.table_count())
-            .map(|index| {
-                document
-                    .content_index_of_table(index)
-                    .and_then(|slot| body_tables.get(&slot).cloned())
-            })
+        indexes.body_tables = table_slots
+            .into_iter()
+            .map(|slot| slot.and_then(|slot| body_tables.get(&slot).cloned()))
             .collect();
         Ok(indexes)
     }
@@ -4462,6 +4481,18 @@ pub(crate) struct PreparedWordRevision {
     owners: Vec<WordOwner>,
     indexes: WordOwnerIndexes,
     snapshot_scope: RevisionState,
+    /// The pieces of the next inventory, unless the rebuild read it.
+    pieces: Option<WordPieces>,
+}
+
+/// What a revision does with the current owner states: the states of each
+/// next owner it keeps, by scope, the scopes of those it gives birth to,
+/// in order, the states it retires, and whether the snapshot scope stays.
+struct WordRevisionPlan {
+    retained: Vec<Vec<Option<RevisionState>>>,
+    births: Vec<RevisionScope>,
+    retired: Vec<RevisionState>,
+    preserve_snapshot: bool,
 }
 
 /// Under debug assertions, check a direct read against the whole-source
@@ -4503,18 +4534,31 @@ fn unfingerprinted_location(location: &rdocx::ContentLocation) -> rdocx::Content
 
 #[cfg(debug_assertions)]
 fn unfingerprinted_owner_location(location: &WordOwnerLocation) -> WordOwnerLocation {
+    owner_location_without(location, |_| true)
+}
+
+/// `location` with the fingerprints of the stories that `strip` names set
+/// aside.
+#[cfg(debug_assertions)]
+fn owner_location_without(
+    location: &WordOwnerLocation,
+    strip: impl Fn(&rdocx::StoryId) -> bool,
+) -> WordOwnerLocation {
+    let content = |location: &rdocx::ContentLocation| {
+        if strip(location.story()) {
+            unfingerprinted_location(location)
+        } else {
+            location.clone()
+        }
+    };
     match location {
-        WordOwnerLocation::Paragraph(location) => {
-            WordOwnerLocation::Paragraph(unfingerprinted_location(location))
-        }
-        WordOwnerLocation::Table(location) => {
-            WordOwnerLocation::Table(unfingerprinted_location(location))
-        }
+        WordOwnerLocation::Paragraph(location) => WordOwnerLocation::Paragraph(content(location)),
+        WordOwnerLocation::Table(location) => WordOwnerLocation::Table(content(location)),
         WordOwnerLocation::Run(location, path) => {
-            WordOwnerLocation::Run(unfingerprinted_location(location), path.clone())
+            WordOwnerLocation::Run(content(location), path.clone())
         }
         WordOwnerLocation::Hyperlink(location, index) => {
-            WordOwnerLocation::Hyperlink(unfingerprinted_location(location), *index)
+            WordOwnerLocation::Hyperlink(content(location), *index)
         }
         WordOwnerLocation::Cell {
             table,
@@ -4522,13 +4566,98 @@ fn unfingerprinted_owner_location(location: &WordOwnerLocation) -> WordOwnerLoca
             cell,
             story,
         } => WordOwnerLocation::Cell {
-            table: unfingerprinted_location(table),
+            table: content(table),
             row: *row,
             cell: *cell,
-            story: rdocx::StoryId::new(story.kind(), story.part_name(), story.owner_index()),
+            story: if strip(story) {
+                rdocx::StoryId::new(story.kind(), story.part_name(), story.owner_index())
+            } else {
+                story.clone()
+            },
         },
         WordOwnerLocation::Section(index) => WordOwnerLocation::Section(*index),
     }
+}
+
+/// Whether a story is the main body, whose fingerprint covers the whole
+/// body, so that an inventory read by block and part cannot give it.
+#[cfg(debug_assertions)]
+fn body_story(story: &rdocx::StoryId) -> bool {
+    story.kind() == rdocx::StoryKind::Body
+}
+
+/// An owner address with the body story fingerprint set aside.
+#[cfg(debug_assertions)]
+fn body_unfingerprinted_address(address: &WordOwnerAddress) -> WordOwnerAddress {
+    WordOwnerAddress {
+        location: owner_location_without(&address.location, body_story),
+        parent: address.parent,
+        body_slot: address.body_slot,
+        projection_ordinal: address.projection_ordinal,
+        read_facts: address.read_facts.clone(),
+    }
+}
+
+/// Under debug assertions, prove an owner inventory and index projections
+/// read by block and part equal their rebuild from the whole document,
+/// fingerprints included but the body story's: a block's body story is
+/// that of its block alone.
+#[cfg(debug_assertions)]
+fn assert_word_pieces_rebuild(
+    document: &rdocx::Document,
+    locations: &[WordOwnerAddress],
+    projections: &WordIndexProjections,
+) {
+    #[cfg(test)]
+    let visits = fx260_word_visits();
+    let expected = guarded(|| word_owner_locations(document, None))
+        .expect("an inventory from pieces has a rebuild");
+    assert_eq!(
+        locations
+            .iter()
+            .map(body_unfingerprinted_address)
+            .collect::<Vec<_>>(),
+        expected
+            .iter()
+            .map(body_unfingerprinted_address)
+            .collect::<Vec<_>>(),
+        "Word owner inventory from pieces"
+    );
+    let expected = guarded(|| WordIndexProjections::of(document));
+    let paragraphs = |projections: &WordIndexProjections| {
+        projections.body_paragraphs.as_ref().map(|locations| {
+            locations
+                .iter()
+                .map(|location| location.as_ref().map(unfingerprinted_location))
+                .collect::<Vec<_>>()
+        })
+    };
+    let cells = |projections: &WordIndexProjections| {
+        projections
+            .cell_paragraphs
+            .iter()
+            .map(|(key, locations)| {
+                // Cell stories keep their fingerprints.
+                (*key, locations.clone())
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    assert_eq!(
+        paragraphs(projections),
+        paragraphs(&expected),
+        "body paragraph projection from pieces"
+    );
+    assert_eq!(
+        cells(projections),
+        cells(&expected),
+        "cell paragraph projection from pieces"
+    );
+    assert_eq!(
+        projections.table_slots, expected.table_slots,
+        "body table projection from pieces"
+    );
+    #[cfg(test)]
+    FX260_WORD_VISITS.with(|cell| cell.set(visits));
 }
 
 fn word_owner_capture(
@@ -4735,105 +4864,199 @@ type WordOwnerSnapshots = (
     Vec<(rdocx::ContentLocation, rdocx::LinkInfo)>,
 );
 
+/// A range paragraph's location, accepted text and accepted run paths.
+type WordParagraphFacts = (
+    rdocx::ContentLocation,
+    String,
+    Vec<rdocx_oxml::text::AcceptedRunPath>,
+);
+
+/// What the owner inventory reads of owner snapshots, each family in
+/// snapshot order: every table, paragraph and content control item, with
+/// its direct body index when it is a direct body child and a table's read
+/// facts, the physical cells, the range paragraphs, and the item that owns
+/// each hyperlink.
+#[derive(Clone, Default)]
+struct WordOwnerFacts {
+    items: Vec<(rdocx::ContentLocation, Option<usize>, WordReadFacts)>,
+    cells: Vec<(rdocx::ContentLocation, usize, usize, rdocx::StoryId)>,
+    paragraphs: Vec<WordParagraphFacts>,
+    links: Vec<rdocx::ContentLocation>,
+}
+
+/// The owner facts of `snapshots`, each table's read facts from
+/// `table_facts`.
+fn word_owner_facts(
+    (snapshots, cells, paragraphs, links): WordOwnerSnapshots,
+    table_facts: impl Fn(&rdocx::StoryItemSnapshot) -> WordReadFacts,
+) -> rdocx::Result<WordOwnerFacts> {
+    let items = snapshots
+        .iter()
+        .filter(|snapshot| {
+            matches!(
+                snapshot.location().item_kind(),
+                rdocx::StoryItemKind::Table
+                    | rdocx::StoryItemKind::Paragraph
+                    | rdocx::StoryItemKind::ContentControl
+            )
+        })
+        .map(|snapshot| {
+            let read_facts = if snapshot.location().item_kind() == rdocx::StoryItemKind::Table {
+                table_facts(snapshot)
+            } else {
+                WordReadFacts::None
+            };
+            let slot = snapshot
+                .direct_body_index()
+                .filter(|_| snapshot.is_direct_child());
+            (snapshot.location().clone(), slot, read_facts)
+        })
+        .collect();
+    let paragraphs = paragraphs
+        .into_iter()
+        .map(|(location, xml)| {
+            let paragraph = rdocx_oxml::CT_P::from_xml_fragment(&xml)?;
+            Ok((
+                location,
+                paragraph.accepted_text(),
+                paragraph.accepted_run_paths(),
+            ))
+        })
+        .collect::<rdocx::Result<_>>()?;
+    Ok(WordOwnerFacts {
+        items,
+        cells,
+        paragraphs,
+        links: links.into_iter().map(|(location, _)| location).collect(),
+    })
+}
+
 fn word_owner_locations(
     document: &rdocx::Document,
-    form_sources: Option<&mut FormSources>,
+    mut form_sources: Option<&mut FormSources>,
 ) -> rdocx::Result<Vec<WordOwnerAddress>> {
     note_fx260_word(document.content_count().max(1));
     note_word_inventory_rebuild();
     let table_facts = word_table_read_facts(document);
-    word_owner_addresses(
-        document.story_owner_snapshots()?,
-        &table_facts,
-        Some(document),
-        form_sources,
-    )
-}
-
-/// The owner inventory of the given snapshots. Sections are those of
-/// `document`, and a snapshot of a detached item has none.
-fn word_owner_addresses(
-    (snapshots, cell_snapshots, paragraph_snapshots, link_snapshots): WordOwnerSnapshots,
-    table_facts: &HashMap<rdocx::ContentLocation, WordReadFacts>,
-    document: Option<&rdocx::Document>,
-    mut form_sources: Option<&mut FormSources>,
-) -> rdocx::Result<Vec<WordOwnerAddress>> {
-    let mut result = Vec::new();
-    let mut table_ordinals = HashMap::new();
+    let snapshots = document.story_owner_snapshots()?;
     if let Some(sources) = form_sources.as_deref_mut() {
-        for snapshot in &snapshots {
-            if snapshot.location().item_kind() == rdocx::StoryItemKind::Table {
-                let key = FormOwnerRoute::Table(form_source_key(snapshot.location()));
-                sources
-                    .xml
-                    .entry(key)
-                    .and_modify(|xml| *xml = None)
-                    .or_insert_with(|| Some(snapshot.xml().to_vec()));
-            }
-        }
-        // Preserve raw multiplicity before the legacy cell-parent map collapses it.
-        for (table, row, cell, story) in &cell_snapshots {
-            let story_key = (
-                story.kind(),
-                story.part_name().to_owned(),
-                story.owner_index(),
+        record_form_sources(sources, &snapshots);
+    }
+    let facts = word_owner_facts(snapshots, |snapshot| {
+        table_facts
+            .get(snapshot.location())
+            .cloned()
+            .unwrap_or_default()
+    })?;
+    let sections = document.section_count();
+    if let Some(sources) = form_sources {
+        for index in 0..sections {
+            sources.xml.insert(
+                FormOwnerRoute::Section(index),
+                Some(document.section_properties_xml(index)?),
             );
-            *sources.cell_stories.entry(story_key.clone()).or_default() += 1;
-            *sources
-                .cells
-                .entry(FormOwnerRoute::Cell(
-                    form_source_key(table),
-                    *row,
-                    *cell,
-                    story_key,
-                ))
-                .or_default() += 1;
         }
     }
+    Ok(word_owner_addresses(facts, sections))
+}
+
+/// Record what a form publication compares of `snapshots`: the XML of each
+/// table and paragraph route, and how many cells share each cell route
+/// and story.
+fn record_form_sources(
+    sources: &mut FormSources,
+    (snapshots, cell_snapshots, paragraph_snapshots, _): &WordOwnerSnapshots,
+) {
+    for snapshot in snapshots {
+        if snapshot.location().item_kind() == rdocx::StoryItemKind::Table {
+            let key = FormOwnerRoute::Table(form_source_key(snapshot.location()));
+            sources
+                .xml
+                .entry(key)
+                .and_modify(|xml| *xml = None)
+                .or_insert_with(|| Some(snapshot.xml().to_vec()));
+        }
+    }
+    // Preserve raw multiplicity before the legacy cell-parent map collapses it.
+    for (table, row, cell, story) in cell_snapshots {
+        let story_key = (
+            story.kind(),
+            story.part_name().to_owned(),
+            story.owner_index(),
+        );
+        *sources.cell_stories.entry(story_key.clone()).or_default() += 1;
+        *sources
+            .cells
+            .entry(FormOwnerRoute::Cell(
+                form_source_key(table),
+                *row,
+                *cell,
+                story_key,
+            ))
+            .or_default() += 1;
+    }
+    for (location, xml) in paragraph_snapshots {
+        let key = FormOwnerRoute::Paragraph(form_source_key(location));
+        sources
+            .xml
+            .entry(key)
+            .and_modify(|source| *source = None)
+            .or_insert_with(|| Some(xml.clone()));
+    }
+}
+
+/// The owner inventory of `facts` and of `sections` sections, in the order
+/// that births and generations follow: tables, each followed by its cells,
+/// then paragraphs, each followed by its runs, then sections, then
+/// hyperlinks, each family in the order of `facts`.
+fn word_owner_addresses(facts: WordOwnerFacts, sections: usize) -> Vec<WordOwnerAddress> {
+    let WordOwnerFacts {
+        items,
+        cells,
+        paragraphs,
+        links,
+    } = facts;
+    let mut result = Vec::new();
+    let mut table_ordinals = HashMap::new();
     let mut body_slots = HashMap::new();
     let mut cell_parents = HashMap::new();
     let mut table_cells = HashMap::<rdocx::ContentLocation, Vec<_>>::new();
-    for (table, row, cell, story) in cell_snapshots {
+    for (table, row, cell, story) in cells {
         table_cells
             .entry(table)
             .or_default()
             .push((row, cell, story));
     }
-    for snapshot in &snapshots {
-        let location = snapshot.location();
+    for (location, slot, _) in &items {
         if location.story().kind() == rdocx::StoryKind::Body
-            && snapshot.is_direct_child()
             && matches!(
                 location.item_kind(),
                 rdocx::StoryItemKind::Paragraph | rdocx::StoryItemKind::ContentControl
             )
+            && let Some(slot) = slot
         {
-            body_slots.insert(location.clone(), snapshot.direct_body_index());
+            body_slots.insert(location.clone(), *slot);
         }
     }
-    for snapshot in &snapshots {
-        if snapshot.location().item_kind() != rdocx::StoryItemKind::Table {
+    for (location, slot, read_facts) in items {
+        if location.item_kind() != rdocx::StoryItemKind::Table {
             continue;
         }
-        let location = snapshot.location().clone();
         let ordinal = table_ordinals
             .entry(location.story().clone())
             .or_insert(0usize);
         let projection_ordinal = Some(*ordinal);
         *ordinal += 1;
         let table_index = result.len();
+        let cells = table_cells.remove(&location).unwrap_or_default();
         result.push(WordOwnerAddress {
             location: WordOwnerLocation::Table(location.clone()),
             parent: None,
             projection_ordinal,
-            read_facts: table_facts.get(&location).cloned().unwrap_or_default(),
-            body_slot: if snapshot.is_direct_child() {
-                snapshot.direct_body_index()
-            } else {
-                None
-            },
+            read_facts,
+            body_slot: slot,
         });
-        for (row, cell, story) in table_cells.remove(&location).unwrap_or_default() {
+        for (row, cell, story) in cells {
             result.push(WordOwnerAddress {
                 location: WordOwnerLocation::Cell {
                     table: location.clone(),
@@ -4875,15 +5098,7 @@ fn word_owner_addresses(
         }
     }
     let mut paragraph_ordinals = HashMap::new();
-    for (location, xml) in paragraph_snapshots {
-        if let Some(sources) = form_sources.as_deref_mut() {
-            let key = FormOwnerRoute::Paragraph(form_source_key(&location));
-            sources
-                .xml
-                .entry(key)
-                .and_modify(|source| *source = None)
-                .or_insert_with(|| Some(xml.clone()));
-        }
+    for (location, text, runs) in paragraphs {
         let story = location.story();
         let parent = cell_parents
             .get(&(
@@ -4898,7 +5113,6 @@ fn word_owner_addresses(
         let projection_ordinal = Some(*ordinal);
         *ordinal += 1;
         let index = result.len();
-        let paragraph = rdocx_oxml::CT_P::from_xml_fragment(&xml)?;
         // Reuse the containing item's fact from this exact immutable source
         // inventory, matching the native paragraph snapshot's containing route.
         let body_slot = if location.story().kind() == rdocx::StoryKind::Body {
@@ -4911,7 +5125,7 @@ fn word_owner_addresses(
                 )),
                 _ => None,
             };
-            containing.and_then(|containing| body_slots.get(&containing).copied().flatten())
+            containing.and_then(|containing| body_slots.get(&containing).copied())
         } else {
             None
         };
@@ -4920,9 +5134,9 @@ fn word_owner_addresses(
             parent,
             body_slot,
             projection_ordinal,
-            read_facts: WordReadFacts::Paragraph(paragraph.accepted_text()),
+            read_facts: WordReadFacts::Paragraph(text),
         });
-        for path in paragraph.accepted_run_paths() {
+        for path in runs {
             result.push(WordOwnerAddress {
                 location: WordOwnerLocation::Run(location.clone(), path),
                 parent: Some(index),
@@ -4932,13 +5146,7 @@ fn word_owner_addresses(
             });
         }
     }
-    for index in 0..document.map_or(0, rdocx::Document::section_count) {
-        if let (Some(sources), Some(document)) = (form_sources.as_deref_mut(), document) {
-            sources.xml.insert(
-                FormOwnerRoute::Section(index),
-                Some(document.section_properties_xml(index)?),
-            );
-        }
+    for index in 0..sections {
         result.push(WordOwnerAddress {
             location: WordOwnerLocation::Section(index),
             parent: None,
@@ -4949,7 +5157,7 @@ fn word_owner_addresses(
     }
     let mut local_indexes = HashMap::<rdocx::ContentLocation, usize>::new();
     let mut story_indexes = HashMap::<rdocx::StoryId, usize>::new();
-    for (location, _) in link_snapshots {
+    for location in links {
         let local = local_indexes.entry(location.clone()).or_default();
         let position = story_indexes.entry(location.story().clone()).or_default();
         result.push(WordOwnerAddress {
@@ -4962,7 +5170,419 @@ fn word_owner_addresses(
         *local += 1;
         *position += 1;
     }
-    Ok(result)
+    result
+}
+
+/// What the owner indexes read of the document besides the owners: the
+/// story route of each body paragraph, the routes of the paragraphs of each
+/// body table cell, and the direct body slot of each body table.
+struct WordIndexProjections {
+    body_paragraphs: Option<Vec<Option<rdocx::ContentLocation>>>,
+    cell_paragraphs: CellParagraphRoutes,
+    table_slots: Vec<Option<usize>>,
+}
+
+/// The routes of the paragraphs of each body table cell, by body table,
+/// row and cell.
+type CellParagraphRoutes = HashMap<(usize, usize, usize), Vec<rdocx::ContentLocation>>;
+
+impl WordIndexProjections {
+    fn of(document: &rdocx::Document) -> Self {
+        Self {
+            body_paragraphs: document.paragraph_story_locations().ok(),
+            cell_paragraphs: document
+                .cell_paragraph_story_locations()
+                .unwrap_or_default(),
+            table_slots: (0..document.table_count())
+                .map(|index| document.content_index_of_table(index))
+                .collect(),
+        }
+    }
+}
+
+/// The owners of one body block, read from a main part whose body holds
+/// only that block: body routes count from the block's first story item
+/// and the body story is that part's, table cell and text box stories
+/// count from its first, and tables from its first.
+struct WordBlockOwners {
+    facts: WordOwnerFacts,
+    /// The hyperlink relationships that its links name.
+    relationships: Vec<String>,
+    body_items: usize,
+    cell_stories: usize,
+    text_boxes: usize,
+    /// The body story path of each of its paragraphs that
+    /// `Document::paragraphs` counts.
+    paragraphs: Vec<Option<Vec<usize>>>,
+    tables: usize,
+    /// Its part of `Document::cell_paragraph_story_locations`, and whether
+    /// that routed every cell of the block, or `None` where it fails.
+    cell_paragraphs: Option<(CellParagraphRoutes, bool)>,
+}
+
+/// The owners of `block` as the only body child of `document`, or `None`
+/// when they cannot take their place among other blocks by offsets: the
+/// block does not read as one direct body item.
+fn word_block_owners(
+    document: &rdocx::Document,
+    block: &rdocx_oxml::BodyContent,
+) -> rdocx::Result<Option<WordBlockOwners>> {
+    let rdocx::BodyItemOwners {
+        snapshots,
+        cells,
+        paragraphs,
+        links,
+        cell_stories,
+        text_boxes,
+        paragraph_routes,
+        tables,
+        cell_paragraphs,
+    } = document.body_item_owners(block)?;
+    let body = |snapshot: &&rdocx::StoryItemSnapshot| {
+        snapshot.location().story().kind() == rdocx::StoryKind::Body
+    };
+    let mut direct = snapshots
+        .iter()
+        .filter(body)
+        .filter(|snapshot| snapshot.is_direct_child())
+        .map(rdocx::StoryItemSnapshot::direct_body_index);
+    if direct.next() != Some(Some(0)) || direct.next().is_some() {
+        return Ok(None);
+    }
+    let body_items = snapshots.iter().filter(body).count();
+    let relationships = link_relationships(&links);
+    let facts = word_owner_facts((snapshots, cells, paragraphs, links), |snapshot| {
+        word_table_facts(snapshot.xml()).unwrap_or_default()
+    })?;
+    Ok(Some(WordBlockOwners {
+        facts,
+        relationships,
+        body_items,
+        cell_stories,
+        text_boxes,
+        paragraphs: paragraph_routes,
+        tables,
+        cell_paragraphs,
+    }))
+}
+
+/// The hyperlink relationships that `links` name, once each.
+fn link_relationships(links: &[(rdocx::ContentLocation, rdocx::LinkInfo)]) -> Vec<String> {
+    let mut relationships = links
+        .iter()
+        .filter_map(|(_, link)| link.rel_id.clone())
+        .collect::<Vec<_>>();
+    relationships.sort_unstable();
+    relationships.dedup();
+    relationships
+}
+
+/// A route of a block's owners placed among the main part's blocks: body
+/// story item paths move by `items` into `body`, and table cell and text
+/// box stories by `stories`, the counts of each before the block.
+fn placed_route(
+    location: &rdocx::ContentLocation,
+    body: &rdocx::StoryId,
+    (items, stories): (usize, (usize, usize)),
+) -> rdocx::ContentLocation {
+    let story = location.story();
+    if story.kind() == rdocx::StoryKind::Body {
+        let mut placed = rdocx::ContentLocation::new(
+            body.clone(),
+            location.item_kind(),
+            location.index_path().to_vec(),
+        );
+        if let Some(head) = location.index_path().first() {
+            placed.set_index_path_head(head + items);
+        }
+        placed
+    } else {
+        rdocx::ContentLocation::new(
+            placed_story(story, stories),
+            location.item_kind(),
+            location.index_path().to_vec(),
+        )
+    }
+}
+
+/// A table cell or text box story of a block's owners placed after the
+/// `cells` table cell and `boxes` text box stories before the block.
+fn placed_story(story: &rdocx::StoryId, (cells, boxes): (usize, usize)) -> rdocx::StoryId {
+    let mut placed = story.clone();
+    let before = if story.kind() == rdocx::StoryKind::TextBox {
+        boxes
+    } else {
+        cells
+    };
+    placed.set_owner_index(story.owner_index() + before);
+    placed
+}
+
+/// One body block and its owners, which hold while the document has an
+/// equal block under an equal [`rdocx::BodyItemContext`].
+struct WordBlockPiece {
+    block: rdocx_oxml::BodyContent,
+    /// `None` when the owners cannot be read or placed by offsets.
+    owners: Option<WordBlockOwners>,
+}
+
+/// One story part after the main part and its owners, which hold while
+/// its bytes do.
+struct WordPartPiece {
+    kind: rdocx::StoryKind,
+    part_name: String,
+    xml: Vec<u8>,
+    /// The owner facts and the hyperlink relationships their links name,
+    /// or `None` when they cannot be read.
+    owners: Option<(WordOwnerFacts, Vec<String>)>,
+}
+
+/// The owner inventory of a document by body block and story part, each
+/// piece kept with the value it was read from. A piece is reused only
+/// where the document still holds an equal value: the same bytes for a
+/// part, and for a block an equal `BodyContent` under an equal
+/// [`rdocx::BodyItemContext`]. That holds while equal blocks own the same,
+/// which the manual `PartialEq` of `Field`, `CT_TabStop` and
+/// `BookmarkMarker` must keep, since each ignores fields: the first two
+/// fields that serialize, the last a read projection.
+#[derive(Clone, Default)]
+pub(crate) struct WordPieces {
+    context: Option<rdocx::BodyItemContext>,
+    blocks: Vec<std::sync::Arc<WordBlockPiece>>,
+    parts: Vec<std::sync::Arc<WordPartPiece>>,
+}
+
+impl WordPieces {
+    /// The pieces of `document`: those of `self` whose block or part it
+    /// still holds, and the others read again. With them, the inventory
+    /// and index projections that `word_owner_locations` and
+    /// [`WordIndexProjections::of`] give, or `None` where the pieces
+    /// cannot give them and the rebuild must.
+    fn assemble(
+        &self,
+        document: &rdocx::Document,
+    ) -> (Self, Option<(Vec<WordOwnerAddress>, WordIndexProjections)>) {
+        let context = document.body_item_context();
+        let blocks = document.body_children();
+        // A part read as two sources admits its owners once, which a part
+        // read alone does not know, so the rebuild reads that inventory,
+        // and nothing is read for the pieces.
+        let Ok(sources) = document.story_part_sources() else {
+            return (self.clone(), None);
+        };
+        let mut names = std::collections::HashSet::from([context.part_name()]);
+        if !sources.iter().all(|(_, name, _)| names.insert(name)) {
+            return (self.clone(), None);
+        }
+        // Equal blocks keep their pieces: the common prefix and suffix of
+        // the body. Equality is that of `BodyContent`, which reads the same
+        // owners only while its manual `PartialEq` impls ignore no field
+        // that changes them (see `WordPieces`). Another root or package
+        // namespace fact reads them all.
+        let old = if self.context.as_ref() == Some(&context) {
+            self.blocks.as_slice()
+        } else {
+            &[]
+        };
+        let prefix = old
+            .iter()
+            .zip(blocks)
+            .take_while(|(piece, block)| piece.block == **block)
+            .count();
+        let suffix = old[prefix..]
+            .iter()
+            .rev()
+            .zip(blocks[prefix..].iter().rev())
+            .take_while(|(piece, block)| piece.block == **block)
+            .count();
+        let mut pieces = Self {
+            context: Some(context),
+            blocks: Vec::with_capacity(blocks.len()),
+            parts: Vec::new(),
+        };
+        pieces.blocks.extend_from_slice(&old[..prefix]);
+        for block in &blocks[prefix..blocks.len() - suffix] {
+            note_word_piece_read();
+            pieces.blocks.push(std::sync::Arc::new(WordBlockPiece {
+                block: block.clone(),
+                owners: word_block_owners(document, block).ok().flatten(),
+            }));
+        }
+        pieces.blocks.extend_from_slice(&old[old.len() - suffix..]);
+        for (kind, part_name, xml) in sources {
+            if let Some(piece) = self.parts.iter().find(|piece| {
+                piece.kind == kind && piece.part_name == part_name && piece.xml == *xml
+            }) {
+                pieces.parts.push(piece.clone());
+                continue;
+            }
+            note_word_piece_read();
+            let owners = document
+                .story_part_owner_snapshots(kind, &part_name, &xml)
+                .and_then(|snapshots| {
+                    let relationships = link_relationships(&snapshots.3);
+                    let facts = word_owner_facts(snapshots, |snapshot| {
+                        word_table_facts(snapshot.xml()).unwrap_or_default()
+                    })?;
+                    Ok((facts, relationships))
+                })
+                .ok();
+            pieces.parts.push(std::sync::Arc::new(WordPartPiece {
+                kind,
+                part_name,
+                xml: xml.into_owned(),
+                owners,
+            }));
+        }
+        let inventory = pieces.inventory(document);
+        (pieces, inventory)
+    }
+
+    /// The inventory and index projections of these pieces, which are those
+    /// of `document`, placed by offsets.
+    fn inventory(
+        &self,
+        document: &rdocx::Document,
+    ) -> Option<(Vec<WordOwnerAddress>, WordIndexProjections)> {
+        let main = self.context.as_ref()?.part_name();
+        let body = rdocx::StoryId::new(rdocx::StoryKind::Body, main, 0);
+        // The links of every piece name relationships that must still be
+        // external hyperlinks of its part, as the rebuild checks them.
+        let mut links = None;
+        // Each owner family of a story source lists the body story first,
+        // then the table cell and text box stories in source order.
+        let mut facts = WordOwnerFacts::default();
+        let mut cells = WordOwnerFacts::default();
+        let mut projections = WordIndexProjections {
+            body_paragraphs: Some(Vec::new()),
+            cell_paragraphs: HashMap::new(),
+            table_slots: Vec::new(),
+        };
+        let mut cell_paragraphs = Some(HashMap::new());
+        let mut routed = true;
+        let (mut items, mut stories, mut tables) = (0, (0, 0), 0);
+        for (slot, piece) in self.blocks.iter().enumerate() {
+            let owners = piece.owners.as_ref()?;
+            if !owners.relationships.is_empty() {
+                let valid =
+                    links.get_or_insert_with(|| document.story_hyperlink_relationships(main));
+                if !owners
+                    .relationships
+                    .iter()
+                    .all(|relationship| valid.contains(relationship.as_str()))
+                {
+                    return None;
+                }
+            }
+            let place = |location| placed_route(location, &body, (items, stories));
+            let in_body = |location: &rdocx::ContentLocation| {
+                location.story().kind() == rdocx::StoryKind::Body
+            };
+            for (location, direct, read_facts) in &owners.facts.items {
+                let family = if in_body(location) {
+                    &mut facts.items
+                } else {
+                    &mut cells.items
+                };
+                family.push((place(location), direct.map(|_| slot), read_facts.clone()));
+            }
+            for (table, row, cell, story) in &owners.facts.cells {
+                facts
+                    .cells
+                    .push((place(table), *row, *cell, placed_story(story, stories)));
+            }
+            for (location, text, runs) in &owners.facts.paragraphs {
+                let family = if in_body(location) {
+                    &mut facts.paragraphs
+                } else {
+                    &mut cells.paragraphs
+                };
+                family.push((place(location), text.clone(), runs.clone()));
+            }
+            for location in &owners.facts.links {
+                let family = if in_body(location) {
+                    &mut facts.links
+                } else {
+                    &mut cells.links
+                };
+                family.push(place(location));
+            }
+            if let Some(paragraphs) = &mut projections.body_paragraphs {
+                paragraphs.extend(owners.paragraphs.iter().map(|path| {
+                    path.as_ref().map(|path| {
+                        let mut location = rdocx::ContentLocation::new(
+                            body.clone(),
+                            rdocx::StoryItemKind::Paragraph,
+                            path.clone(),
+                        );
+                        location.set_index_path_head(path[0] + items);
+                        location
+                    })
+                }));
+            }
+            if matches!(piece.block, rdocx_oxml::BodyContent::Table(_)) {
+                projections.table_slots.push(Some(slot));
+            } else {
+                projections
+                    .table_slots
+                    .extend(std::iter::repeat_n(None, owners.tables));
+            }
+            // The whole inventory stops at the first cell it cannot route,
+            // and fails as a whole where any block it reaches fails.
+            if routed {
+                match &owners.cell_paragraphs {
+                    Some((routes, complete)) => {
+                        if let Some(all) = &mut cell_paragraphs {
+                            for ((table, row, cell), locations) in routes {
+                                all.insert(
+                                    (table + tables, *row, *cell),
+                                    locations
+                                        .iter()
+                                        .map(|location| {
+                                            placed_route(location, &body, (items, stories))
+                                        })
+                                        .collect(),
+                                );
+                            }
+                        }
+                        routed = *complete;
+                    }
+                    None => {
+                        cell_paragraphs = None;
+                        routed = false;
+                    }
+                }
+            }
+            items += owners.body_items;
+            stories.0 += owners.cell_stories;
+            stories.1 += owners.text_boxes;
+            tables += owners.tables;
+        }
+        projections.cell_paragraphs = cell_paragraphs.unwrap_or_default();
+        facts.items.append(&mut cells.items);
+        facts.paragraphs.append(&mut cells.paragraphs);
+        facts.links.append(&mut cells.links);
+        for piece in &self.parts {
+            let (owners, relationships) = piece.owners.as_ref()?;
+            if !relationships.is_empty() {
+                let valid = document.story_hyperlink_relationships(&piece.part_name);
+                if !relationships
+                    .iter()
+                    .all(|relationship| valid.contains(relationship.as_str()))
+                {
+                    return None;
+                }
+            }
+            facts.items.extend_from_slice(&owners.items);
+            facts.cells.extend_from_slice(&owners.cells);
+            facts.paragraphs.extend_from_slice(&owners.paragraphs);
+            facts.links.extend_from_slice(&owners.links);
+        }
+        Some((
+            word_owner_addresses(facts, document.section_count()),
+            projections,
+        ))
+    }
 }
 
 /// One direct body item that a splice inserts, with what the owner
@@ -5925,8 +6545,9 @@ impl PyDocument {
             })
             .collect::<Vec<_>>();
         assert_eq!(actual, expected, "spliced Word owner inventory");
-        let indexes = WordOwnerIndexes::prepare(&self.owners, &self.inner)
-            .expect("a spliced inventory has rebuilt indexes");
+        let indexes =
+            WordOwnerIndexes::prepare(&self.owners, WordIndexProjections::of(&self.inner))
+                .expect("a spliced inventory has rebuilt indexes");
         let locations = |locations: &[Option<rdocx::ContentLocation>]| {
             locations
                 .iter()
@@ -6000,11 +6621,16 @@ fn spliced_table_blocks(
     {
         return None;
     }
-    let facts = word_table_facts(&xml)
-        .map(|facts| (item.location().clone(), facts))
-        .into_iter()
-        .collect::<HashMap<_, _>>();
-    let addresses = word_owner_addresses(snapshots, &facts, None, None).ok()?;
+    let table = item.location().clone();
+    let facts = word_owner_facts(snapshots, |snapshot| {
+        if snapshot.location() == &table {
+            word_table_facts(&xml).unwrap_or_default()
+        } else {
+            WordReadFacts::None
+        }
+    })
+    .ok()?;
+    let addresses = word_owner_addresses(facts, 0);
     let cells = addresses
         .iter()
         .skip(1)
@@ -6867,6 +7493,9 @@ pub struct PyDocument {
     indexes: WordOwnerIndexes,
     removal_scope: RevisionState,
     snapshot_scope: RevisionState,
+    /// The owner inventory by body block and story part, from which the
+    /// next inventory reads only what changed.
+    pieces: WordPieces,
 }
 
 #[pyclass(name = "FragmentConflictPolicy", frozen, skip_from_py_object)]
@@ -8171,13 +8800,98 @@ impl PyDocument {
         );
         let mut old_sources = FormSources::default();
         let mut new_sources = FormSources::default();
-        let locations = word_owner_locations(candidate, forms.then_some(&mut new_sources))
-            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        // A form publication compares the sources that only the rebuild
+        // records.
+        let (pieces, inventory) = if forms {
+            (None, None)
+        } else {
+            let (pieces, inventory) = self.pieces.assemble(candidate);
+            (Some(pieces), inventory)
+        };
+        let (locations, projections) = match inventory {
+            Some((locations, projections)) => (locations, Some(projections)),
+            None => (
+                word_owner_locations(candidate, forms.then_some(&mut new_sources))
+                    .map_err(|error| rdocx_to_pyerr(py, error))?,
+                None,
+            ),
+        };
         if forms {
             word_owner_locations(&self.inner, Some(&mut old_sources))
                 .map_err(|error| rdocx_to_pyerr(py, error))?;
         }
-        let selected = match &publication {
+        let plan = self.word_revision_plan(
+            py,
+            candidate,
+            &locations,
+            &publication,
+            (&old_sources, &new_sources),
+        )?;
+        #[cfg(debug_assertions)]
+        if let Some(projections) = &projections {
+            assert_word_pieces_rebuild(candidate, &locations, projections);
+            self.assert_word_plan_rebuilds(py, candidate, &publication, &plan);
+        }
+        let WordRevisionPlan {
+            retained,
+            births,
+            retired,
+            preserve_snapshot,
+        } = plan;
+        let revision = if matches!(
+            publication,
+            WordPublication::ElementXml(_) | WordPublication::RunText(_) | WordPublication::Signing
+        ) {
+            self.revisions
+                .prepare_local_scopes(operation, &retired, &births)
+        } else {
+            self.revisions.prepare_scopes(operation, &retired, &births)
+        }
+        .map_err(revision_to_pyerr)?;
+        let mut born = 0;
+        let mut states = Vec::new();
+        for record in retained {
+            for state in record {
+                states.push(state.unwrap_or_else(|| {
+                    let state = revision.born(born).expect("prepared owner birth");
+                    born += 1;
+                    state
+                }));
+            }
+        }
+        let snapshot_scope = if preserve_snapshot {
+            self.snapshot_scope.clone()
+        } else {
+            revision.born(born).expect("prepared snapshot birth")
+        };
+        let owners = word_owners_with_states(locations, &states);
+        let projections = projections.unwrap_or_else(|| WordIndexProjections::of(candidate));
+        let indexes = WordOwnerIndexes::prepare(&owners, projections)?;
+        Ok(PreparedWordRevision {
+            revision,
+            owners,
+            indexes,
+            snapshot_scope,
+            pieces,
+        })
+    }
+
+    /// Which owner states of the current inventory the next inventory
+    /// `locations` of `candidate` keeps for `publication`, which it retires,
+    /// and the scopes of the states it gives birth to, in order.
+    fn word_revision_plan(
+        &self,
+        py: Python<'_>,
+        candidate: &rdocx::Document,
+        locations: &[WordOwnerAddress],
+        publication: &WordPublication,
+        (old_sources, new_sources): (&FormSources, &FormSources),
+    ) -> PyResult<WordRevisionPlan> {
+        let forms = matches!(
+            publication,
+            WordPublication::FormValues | WordPublication::Signing
+        );
+        let selected = match publication {
             WordPublication::HeaderFooterAppend(index) => Some(WordOwnerLocation::Section(*index)),
             WordPublication::ParagraphText(location)
             | WordPublication::ParagraphAppend(location) => {
@@ -8221,23 +8935,11 @@ impl PyDocument {
                 "checked XML owner has no current physical authority",
             ));
         }
-        let matches = indexed_inventory_matches(&self.owners, &locations, &publication);
+        let matches = indexed_inventory_matches(&self.owners, locations, publication);
         let form_certificates = if matches!(publication, WordPublication::Signing) {
-            signing_owner_certificates(
-                &self.owners,
-                &locations,
-                &matches,
-                &old_sources,
-                &new_sources,
-            )
+            signing_owner_certificates(&self.owners, locations, &matches, old_sources, new_sources)
         } else if forms {
-            form_owner_certificates(
-                &self.owners,
-                &locations,
-                &matches,
-                &old_sources,
-                &new_sources,
-            )
+            form_owner_certificates(&self.owners, locations, &matches, old_sources, new_sources)
         } else {
             std::collections::HashSet::new()
         };
@@ -8367,40 +9069,57 @@ impl PyDocument {
             retired.push(self.snapshot_scope.clone());
             births.push(RevisionScope::Text);
         }
-        let revision = if matches!(
-            publication,
-            WordPublication::ElementXml(_) | WordPublication::RunText(_) | WordPublication::Signing
-        ) {
-            self.revisions
-                .prepare_local_scopes(operation, &retired, &births)
-        } else {
-            self.revisions.prepare_scopes(operation, &retired, &births)
-        }
-        .map_err(revision_to_pyerr)?;
-        let mut born = 0;
-        let mut states = Vec::new();
-        for record in retained {
-            for state in record {
-                states.push(state.unwrap_or_else(|| {
-                    let state = revision.born(born).expect("prepared owner birth");
-                    born += 1;
-                    state
-                }));
-            }
-        }
-        let snapshot_scope = if preserve_snapshot {
-            self.snapshot_scope.clone()
-        } else {
-            revision.born(born).expect("prepared snapshot birth")
-        };
-        let owners = word_owners_with_states(locations, &states);
-        let indexes = WordOwnerIndexes::prepare(&owners, candidate)?;
-        Ok(PreparedWordRevision {
-            revision,
-            owners,
-            indexes,
-            snapshot_scope,
+        Ok(WordRevisionPlan {
+            retained,
+            births,
+            retired,
+            preserve_snapshot,
         })
+    }
+
+    /// Under debug assertions, prove that a revision plans the same
+    /// retained states, births and retirements from the rebuilt inventory
+    /// of `candidate` as from the inventory read by block and part.
+    #[cfg(debug_assertions)]
+    fn assert_word_plan_rebuilds(
+        &self,
+        py: Python<'_>,
+        candidate: &rdocx::Document,
+        publication: &WordPublication,
+        plan: &WordRevisionPlan,
+    ) {
+        #[cfg(test)]
+        let visits = fx260_word_visits();
+        let rebuilt = guarded(|| word_owner_locations(candidate, None))
+            .expect("an inventory from pieces has a rebuild");
+        let sources = FormSources::default();
+        let expected = guarded(|| {
+            self.word_revision_plan(py, candidate, &rebuilt, publication, (&sources, &sources))
+        })
+        .expect("a revision from pieces has one from the rebuild");
+        let retained = |plan: &WordRevisionPlan| {
+            plan.retained
+                .iter()
+                .map(|states| {
+                    states
+                        .iter()
+                        .map(|state| state.as_ref().map(RevisionState::generation))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let retired = |plan: &WordRevisionPlan| {
+            plan.retired
+                .iter()
+                .map(RevisionState::generation)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(retained(plan), retained(&expected), "retained owner states");
+        assert_eq!(plan.births, expected.births, "owner birth order");
+        assert_eq!(retired(plan), retired(&expected), "retired owner states");
+        assert_eq!(plan.preserve_snapshot, expected.preserve_snapshot);
+        #[cfg(test)]
+        FX260_WORD_VISITS.with(|cell| cell.set(visits));
     }
 
     pub(crate) fn commit_word_revision(&mut self, prepared: PreparedWordRevision) -> PyResult<()> {
@@ -8410,6 +9129,9 @@ impl PyDocument {
         self.owners = prepared.owners;
         self.indexes = prepared.indexes;
         self.snapshot_scope = prepared.snapshot_scope;
+        if let Some(pieces) = prepared.pieces {
+            self.pieces = pieces;
+        }
         Ok(())
     }
 
@@ -8445,10 +9167,25 @@ impl PyDocument {
         candidate: rdocx::Document,
         operation: &'static str,
     ) -> PyResult<()> {
-        let locations =
-            word_owner_locations(&candidate, None).map_err(|error| rdocx_to_pyerr(py, error))?;
+        let (pieces, inventory) = self.pieces.assemble(&candidate);
+        let (locations, projections) = match inventory {
+            Some((locations, projections)) => {
+                #[cfg(debug_assertions)]
+                assert_word_pieces_rebuild(&candidate, &locations, &projections);
+                (locations, Some(projections))
+            }
+            None => (
+                word_owner_locations(&candidate, None)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?,
+                None,
+            ),
+        };
+        // The pieces hold for whichever document holds their values, so the
+        // conservative publication below reuses them.
+        self.pieces = pieces;
         if let Some(owners) = relocated_property_owners(&self.owners, &locations) {
-            let indexes = WordOwnerIndexes::prepare(&owners, &candidate)?;
+            let projections = projections.unwrap_or_else(|| WordIndexProjections::of(&candidate));
+            let indexes = WordOwnerIndexes::prepare(&owners, projections)?;
             self.owners = owners;
             self.indexes = indexes;
             self.inner = candidate;
@@ -8643,8 +9380,18 @@ impl PyDocument {
     }
 
     fn from_document(inner: rdocx::Document, py: Python<'_>) -> PyResult<Self> {
-        let locations =
-            word_owner_locations(&inner, None).map_err(|error| rdocx_to_pyerr(py, error))?;
+        let (pieces, inventory) = WordPieces::default().assemble(&inner);
+        let (locations, projections) = match inventory {
+            Some((locations, projections)) => {
+                #[cfg(debug_assertions)]
+                assert_word_pieces_rebuild(&inner, &locations, &projections);
+                (locations, Some(projections))
+            }
+            None => (
+                word_owner_locations(&inner, None).map_err(|error| rdocx_to_pyerr(py, error))?,
+                None,
+            ),
+        };
         let mut scopes = locations
             .iter()
             .flat_map(|address| address.location.scopes().iter().copied())
@@ -8658,7 +9405,8 @@ impl PyDocument {
         let removal_scope = states.last().expect("removal epoch allocated").clone();
         let snapshot_scope = states[states.len() - 2].clone();
         let owners = word_owners_with_states(locations, &states[..states.len() - 2]);
-        let indexes = WordOwnerIndexes::prepare(&owners, &inner)?;
+        let projections = projections.unwrap_or_else(|| WordIndexProjections::of(&inner));
+        let indexes = WordOwnerIndexes::prepare(&owners, projections)?;
         Ok(Self {
             inner,
             revisions,
@@ -8666,6 +9414,7 @@ impl PyDocument {
             snapshot_scope,
             removal_scope,
             indexes,
+            pieces,
         })
     }
 
@@ -15589,7 +16338,9 @@ fn issue398_route_hash_collisions_preserve_exact_first_match() {
         ])
         .unwrap();
     let owners = word_owners_with_states(addresses, &states);
-    let mut indexes = WordOwnerIndexes::prepare(&owners, &rdocx::Document::new()).unwrap();
+    let mut indexes =
+        WordOwnerIndexes::prepare(&owners, WordIndexProjections::of(&rdocx::Document::new()))
+            .unwrap();
     assert_eq!(
         indexes.find(&owners, &WordOwnerLocation::Section(0)),
         Some(0)

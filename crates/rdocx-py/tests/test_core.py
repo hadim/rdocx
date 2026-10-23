@@ -11163,10 +11163,15 @@ def test_issue407_direct_routes_do_no_whole_body_work(root_w14):
     direct(lambda: doc.add_table(1, 2))
     direct(lambda: doc.tables[0].cell(1, 1).xml)
     assert [p.text for p in doc.paragraphs][-2:] == ["last", "appended"]
-    # The counters do see the whole-body routes.
+    # The counters do see the whole-body routes. A staged edit reads the
+    # owner inventory by body block and story part, and a form publication
+    # rebuilds it from the whole document.
     before = work()
     _ = doc.paragraphs[4].xml
     assert work()[1] > before[1]
+    item = next(it for it in doc.story_items if it.story.kind == "body" and it.kind == "paragraph")
+    doc.insert_content_control(rdocx.ContentLocation(item.story, item.kind, item.index_path), "block",
+                               "plain_text", tag="t")
     before = work()
-    assert doc.remove_content(1)
+    assert doc.bind_content_controls({"t": "value"}) == 1
     assert work()[0] > before[0]
