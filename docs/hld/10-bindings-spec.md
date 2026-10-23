@@ -2369,7 +2369,11 @@ identity. Document listing materializes real `StoryRunRange`
 endpoints with checked story identity, paragraph path and revision. A range
 that runs from one table cell into another, or between a cell and the story
 around its table, reads in physical order, its text one newline between
-paragraphs, and its two endpoints then name different story owners. Paragraphs
+paragraphs, and its two endpoints then name different story owners. The same
+walk reads the cells of a table inside a range: a body range from `before`
+around a table of cells `A` and `B` to `after` reads `before\nA\nB\nafter`,
+where it read `before\nafter` before, and a cell range around a nested table
+reads the nested cells. Paragraphs
 directly inside block controls retain their two-segment path and actual containing
 body index. Recursive facade handles use the actual direct paragraph identity,
 so nested control or table descendants have no two-segment location. Non-body

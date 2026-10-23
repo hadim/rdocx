@@ -2218,7 +2218,11 @@ accepted-view `StoryRunRange`, and `comment_anchor_text` returns exactly the
 selected accepted display, with one newline between paragraphs. A range
 runs in physical order through one flow, a story owner with the table cells it
 holds, so a range across cells or between a cell and the story around its
-table has endpoints in two owners. A known
+table has endpoints in two owners. A body range around a whole table now reads
+the paragraphs of its cells, which it used to skip: paragraphs `before` and
+`after` around a table of cells `A` and `B` read `before\nA\nB\nafter`
+instead of `before\nafter`, and a cell range around a nested table reads the
+nested cells too. A known
 orphan returns no range or text, and a reference-only point returns no paired
 range with empty text. Replies do not inherit a fabricated parent range.
 Unknown identities and malformed, ambiguous or unprojectable selected sources
