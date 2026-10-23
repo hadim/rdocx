@@ -29890,11 +29890,13 @@ impl Document {
         Ok(candidate.package)
     }
 
-    /// Package part names a save would write, each with a leading slash,
-    /// in lexicographic order. They are the ZIP entries of [`Self::to_bytes`],
-    /// so they include `/[Content_Types].xml`, `/_rels/.rels`, every
+    /// Package part names [`Self::to_bytes`] would write now, each with a
+    /// leading slash, in lexicographic order. They are its ZIP entries, so
+    /// they include `/[Content_Types].xml`, `/_rels/.rels`, every
     /// relationship part such as `/word/_rels/document.xml.rels`, and parts
-    /// with no relationship.
+    /// with no relationship. When the package would not save, this returns
+    /// the save error, such as a graph validation failure, a duplicate part
+    /// identity or a character XML cannot carry.
     pub fn part_names(&self) -> Result<Vec<String>> {
         let package = self.staged_output_package()?;
         let mut names = package
@@ -29906,13 +29908,15 @@ impl Document {
         Ok(names)
     }
 
-    /// UTF-8 XML of one package part as a save would write it now.
+    /// UTF-8 XML of one package part as [`Self::to_bytes`] would write it now.
     ///
     /// The part is the ZIP entry of [`Self::to_bytes`] with that name, a
     /// relationship part and `/[Content_Types].xml` included. The name may
     /// omit its leading slash and matches without regard to case. A missing,
     /// binary, or non-UTF-8 part returns an error that names the part and its
-    /// content type. A UTF-8 BOM is stripped. UTF-16 is not decoded.
+    /// content type. A UTF-8 BOM is stripped. UTF-16 is not decoded. When the
+    /// package would not save, this returns the save error, as
+    /// [`Self::part_names`] does.
     pub fn part_xml(&self, part_name: &str) -> Result<String> {
         let requested = part_name.trim();
         let requested = requested.strip_prefix('/').unwrap_or(requested);

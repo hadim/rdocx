@@ -406330,12 +406330,14 @@ fn issue406_part_inspection_lists_and_reads_relationship_parts_and_content_types
     writer.finish().unwrap();
     let mut opened = Document::from_bytes(cursor.get_ref()).unwrap();
     let saved = issue406_assert_parts_match_saved_entries(&mut opened);
-    assert!(
-        saved
-            .iter()
-            .filter(|(entry, _)| *entry == "[Content_Types].xml" || entry.ends_with(".rels"))
-            .any(|(_, bytes)| String::from_utf8_lossy(bytes).contains("issue 406 producer"))
-    );
+    for (entry, bytes) in &saved {
+        if entry == "[Content_Types].xml" || entry.ends_with(".rels") {
+            assert!(
+                String::from_utf8_lossy(bytes).contains("issue 406 producer"),
+                "{entry}"
+            );
+        }
+    }
 }
 
 #[test]

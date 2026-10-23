@@ -298,8 +298,9 @@ impl OpcPackage {
     /// entry name without a leading slash and its bytes.
     ///
     /// `[Content_Types].xml` and `_rels/.rels` come first, then one
-    /// relationship part per relationship owner, then the parts. Both lists
-    /// are sorted, so the same package always yields the same entries.
+    /// relationship part per relationship owner, sorted by owner part name,
+    /// then the parts, sorted by part name. The same package always yields
+    /// the same entries.
     pub fn zip_entries(&self) -> Result<Vec<(String, Cow<'_, [u8]>)>> {
         let serialized = self.serialize()?;
         let mut entries =
