@@ -1176,6 +1176,7 @@ struct ThemeRecord {
 #[derive(Debug)]
 struct Parsed {
     package: OpcPackage,
+    presentation: (String, CT_Presentation),
     slides: HashMap<String, Arc<SlideRecord>>,
     layouts: HashMap<String, Arc<LayoutRecord>>,
     masters: HashMap<String, Arc<MasterRecord>>,
@@ -1193,6 +1194,10 @@ impl Parsed {
         }
         Self {
             package: presentation.package.clone(),
+            presentation: (
+                presentation.presentation_part.clone(),
+                presentation.presentation.clone(),
+            ),
             slides: by_part(&presentation.slides, |record| &record.part_name),
             layouts: by_part(&presentation.layouts, |record| &record.part_name),
             masters: by_part(&presentation.masters, |record| &record.part_name),
@@ -1215,6 +1220,13 @@ impl Parsed {
             (package.parts.get(part), self.package.parts.get(part)),
             (Some(now), Some(read)) if Arc::ptr_eq(now, read)
         )
+    }
+
+    /// The presentation model parsing `part` of `package` gives, when it
+    /// holds the bytes read here.
+    fn presentation(&self, package: &OpcPackage, part: &str) -> Option<&CT_Presentation> {
+        let (parsed, presentation) = &self.presentation;
+        (parsed == part && self.same_bytes(package, part)).then_some(presentation)
     }
 
     /// Whether `record` is the slide record parsed here for its part.
@@ -2878,7 +2890,11 @@ impl MediaStore {
         let mut parts = package
             .parts
             .iter()
-            .filter(|(part_name, _)| part_name.to_ascii_lowercase().starts_with("/ppt/media/"))
+            .filter(|(part_name, _)| {
+                part_name
+                    .get(.."/ppt/media/".len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("/ppt/media/"))
+            })
             .collect::<Vec<_>>();
         parts.sort_unstable_by_key(|(part_name, _)| part_name.as_str());
         for (part_name, bytes) in parts {
@@ -3093,12 +3109,15 @@ impl Presentation {
             .ok_or(Error::UnsupportedPackageClass {
                 content_type: main_content_type,
             })?;
-        let presentation_xml = required_part(&package, &presentation_part)?;
         let presentation =
-            CT_Presentation::from_xml(presentation_xml).map_err(|error| Error::MalformedPart {
-                part_name: presentation_part.clone(),
-                message: error.to_string(),
-            })?;
+            match parsed.and_then(|parsed| parsed.presentation(&package, &presentation_part)) {
+                Some(presentation) => presentation.clone(),
+                None => CT_Presentation::from_xml(required_part(&package, &presentation_part)?)
+                    .map_err(|error| Error::MalformedPart {
+                        part_name: presentation_part.clone(),
+                        message: error.to_string(),
+                    })?,
+            };
         let core_properties_relationship =
             package.package_rels.get_by_type(rel_types::CORE_PROPERTIES);
         if let Some(relationship) = core_properties_relationship {
@@ -4496,12 +4515,20 @@ impl Presentation {
                 package.package_rels.add(rel_types::CORE_PROPERTIES, target);
             }
         }
-        let presentation_changed = self
-            .package
-            .get_part(&self.presentation_part)
-            .and_then(|xml| CT_Presentation::from_xml(xml).ok())
-            .as_ref()
-            != Some(&self.presentation);
+        let presentation_changed = match self
+            .parsed
+            .as_deref()
+            .and_then(|parsed| parsed.presentation(&self.package, &self.presentation_part))
+        {
+            Some(parsed) => *parsed != self.presentation,
+            None => {
+                self.package
+                    .get_part(&self.presentation_part)
+                    .and_then(|xml| CT_Presentation::from_xml(xml).ok())
+                    .as_ref()
+                    != Some(&self.presentation)
+            }
+        };
         if !preserve_unchanged_modelled_parts || presentation_changed {
             package.set_part(
                 &self.presentation_part,
@@ -19704,8 +19731,19 @@ fn prune_unreachable_parts(package: &mut OpcPackage, candidates: &HashSet<String
     let mut pending = candidates.iter().cloned().collect::<Vec<_>>();
     pending.sort_unstable();
     while let Some(candidate) = pending.pop() {
-        let reachable_from_root = package.package_rels.items.iter().any(|relationship| {
+        // Resolving keeps the last segment of a target unless it is empty or
+        // a dot segment, so any other target with a different file name
+        // cannot name the candidate and is not resolved.
+        let file_name = candidate.rsplit('/').next().unwrap_or_default();
+        let targets = |relationship: &Relationship| {
             !relationship_is_external(relationship)
+                && match relationship.target.rsplit('/').next().unwrap_or_default() {
+                    "" | "." | ".." => true,
+                    last => last.eq_ignore_ascii_case(file_name),
+                }
+        };
+        let reachable_from_root = package.package_rels.items.iter().any(|relationship| {
+            targets(relationship)
                 && OpcPackage::resolve_rel_target("/", &relationship.target)
                     .eq_ignore_ascii_case(&candidate)
         });
@@ -19714,7 +19752,7 @@ fn prune_unreachable_parts(package: &mut OpcPackage, candidates: &HashSet<String
             .iter()
             .any(|(source_part, relationships)| {
                 relationships.items.iter().any(|relationship| {
-                    !relationship_is_external(relationship)
+                    targets(relationship)
                         && OpcPackage::resolve_rel_target(source_part, &relationship.target)
                             .eq_ignore_ascii_case(&candidate)
                 })
