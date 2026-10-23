@@ -39917,6 +39917,59 @@ fn issue_408_insert_copies_a_repeated_style_id_whose_first_definition_differs() 
     );
 }
 
+/// Word, Google Docs and python-docx write a Normal that differs from the one
+/// `Document::new` writes, so importing a new document renames its Normal.
+#[test]
+fn issue_408_insert_renames_a_differing_default_style_without_its_default_flag() {
+    let mut target = Document::new();
+    target.add_paragraph("target");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(target.to_bytes().unwrap()))
+            .unwrap();
+    let styles = String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            r#"<w:name w:val="Normal"/></w:style>"#,
+            r#"<w:name w:val="Normal"/><w:rPr><w:sz w:val="22"/></w:rPr></w:style>"#,
+            1,
+        );
+    assert!(styles.contains(r#"<w:sz w:val="22"/>"#));
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut target = Document::from_bytes(bytes.get_ref()).unwrap();
+    let mut source = Document::new();
+    source.add_paragraph("inserted");
+    let mut expected = issue_408_style_elements(&mut target);
+
+    issue_408_insert(&mut target, &source);
+
+    target.validate_style_graph().unwrap();
+    let defaults = target
+        .styles()
+        .iter()
+        .filter(|style| style.is_default() && style.style_type() == StyleType::Paragraph)
+        .map(|style| style.style_id().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(defaults, ["Normal"]);
+    let copy = target.style("NormalMerge1").unwrap();
+    assert!(!copy.is_default());
+    let elements = issue_408_style_elements(&mut target);
+    let copied = elements
+        .iter()
+        .position(|element| element.contains(r#"w:styleId="NormalMerge1""#))
+        .unwrap();
+    expected.insert(copied, elements[copied].clone());
+    assert_eq!(elements, expected);
+    let texts = target
+        .paragraphs()
+        .iter()
+        .map(|paragraph| paragraph.text())
+        .collect::<Vec<_>>();
+    assert_eq!(texts, ["target", "inserted"]);
+    assert_eq!(issue_408_paragraph_styles(&target), ["", ""]);
+}
+
 #[test]
 fn fragment_import_rejects_incomplete_graph_atomically() {
     let mut source = Document::new();
