@@ -3311,8 +3311,11 @@ impl Presentation {
     /// the bytes written are.
     #[doc(hidden)]
     pub fn saves_as(&self, other: &Presentation) -> Result<bool> {
-        let same: Result<bool> =
-            (|| Ok(self.saved_package_read_back()? == other.saved_package_read_back()?))();
+        let same: Result<bool> = (|| {
+            Ok(self
+                .saved_package_read_back()?
+                .same_package_as(&other.saved_package_read_back()?))
+        })();
         // Debug builds, which run the binding tests, compare the bytes too.
         #[cfg(debug_assertions)]
         match (
@@ -40674,7 +40677,6 @@ fn assert_same_commit(committed: &Result<Presentation>, through_zip: &Result<Pre
         invalidated.sort();
         (
             (
-                presentation.package.clone(),
                 presentation.presentation_part.clone(),
                 xml(presentation.presentation.to_xml()),
                 presentation
@@ -40716,18 +40718,35 @@ fn assert_same_commit(committed: &Result<Presentation>, through_zip: &Result<Pre
             ),
             (slides, layouts, masters, media),
             presentation.parsed.is_some(),
-            presentation
-                .staged_package(true)
-                .map_err(|error| error.to_string()),
         )
+    }
+    fn same_package(committed: &OpcPackage, through_zip: &OpcPackage, what: &str) {
+        assert!(
+            committed.same_package_as(through_zip),
+            "a commit gives another {what} than its ZIP round trip: {committed:?} where {through_zip:?}"
+        );
     }
     match (committed, through_zip) {
         (Ok(committed), Ok(through_zip)) => {
+            same_package(&committed.package, &through_zip.package, "package");
             assert_eq!(
                 state(committed),
                 state(through_zip),
                 "a commit differs from its ZIP round trip"
-            )
+            );
+            match (
+                committed.staged_package(true),
+                through_zip.staged_package(true),
+            ) {
+                (Ok(committed), Ok(through_zip)) => {
+                    same_package(&committed, &through_zip, "saved package")
+                }
+                (committed, through_zip) => assert_eq!(
+                    committed.err().map(|error| error.to_string()),
+                    through_zip.err().map(|error| error.to_string()),
+                    "a commit saves otherwise than its ZIP round trip"
+                ),
+            }
         }
         (Err(committed), Err(through_zip)) => assert_eq!(
             committed.to_string(),

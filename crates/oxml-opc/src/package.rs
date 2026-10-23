@@ -62,7 +62,7 @@ impl PackageReadLimits {
 }
 
 /// An in-memory representation of an OPC package (ZIP archive).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct OpcPackage {
     /// Content types from `[Content_Types].xml`
     pub content_types: ContentTypes,
@@ -336,7 +336,12 @@ impl OpcPackage {
         let mut owners = self
             .part_rels
             .iter()
-            .filter(|(owner, relationships)| read.part_rels.get(*owner) != Some(*relationships))
+            .filter(|(owner, relationships)| {
+                !read
+                    .part_rels
+                    .get(*owner)
+                    .is_some_and(|read| read.same_as(relationships))
+            })
             .map(|(owner, _)| owner.clone())
             .collect::<Vec<_>>();
         owners.sort();
@@ -414,6 +419,32 @@ impl OpcPackage {
             }
         }
         Ok(self)
+    }
+
+    /// Whether two packages hold the same parts, relationships and content
+    /// types, and keep the same bytes they were read from. Two packages
+    /// given by [`OpcPackage::reread`] or read from bytes are the same
+    /// exactly when the bytes written for them are.
+    #[doc(hidden)]
+    pub fn same_package_as(&self, other: &OpcPackage) -> bool {
+        self.content_types == other.content_types
+            && self.content_types_source == other.content_types_source
+            && self.malformed_source_entries == other.malformed_source_entries
+            && self.package_rels.same_as(&other.package_rels)
+            && self.part_rels.len() == other.part_rels.len()
+            && self.part_rels.iter().all(|(owner, relationships)| {
+                other
+                    .part_rels
+                    .get(owner)
+                    .is_some_and(|other| relationships.same_as(other))
+            })
+            && self.parts.len() == other.parts.len()
+            && self.parts.iter().all(|(name, data)| {
+                other
+                    .parts
+                    .get(name)
+                    .is_some_and(|other| Arc::ptr_eq(data, other) || data == other)
+            })
     }
 
     fn write_serialized<W: Write + Seek>(
@@ -2590,7 +2621,10 @@ mod tests {
     /// error.
     fn assert_rereads_as_written(package: &OpcPackage, read: &OpcPackage) {
         match (package.clone().reread(read), written_and_read(package)) {
-            (Ok(reread), Ok(written)) => assert_eq!(reread, written),
+            (Ok(reread), Ok(written)) => assert!(
+                reread.same_package_as(&written),
+                "reread {reread:?}, written {written:?}"
+            ),
             (Err(reread), Err(written)) => assert_eq!(reread.to_string(), written.to_string()),
             (reread, written) => panic!("reread {reread:?}, written {written:?}"),
         }
@@ -2611,7 +2645,7 @@ mod tests {
     fn reread_gives_what_a_write_and_a_read_give() {
         let read = read_pptx();
         assert_rereads_as_written(&read, &read);
-        assert_eq!(read.clone().reread(&read).unwrap(), read);
+        assert!(read.clone().reread(&read).unwrap().same_package_as(&read));
 
         let mut edited = read.clone();
         edited.set_part(

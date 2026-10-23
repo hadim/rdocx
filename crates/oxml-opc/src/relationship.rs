@@ -141,7 +141,7 @@ pub struct Relationship {
 }
 
 /// A collection of relationships parsed from a `.rels` file.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct Relationships {
     pub items: Vec<Relationship>,
     next_id: u32,
@@ -701,6 +701,12 @@ impl Relationships {
             }
         }
         unreachable!("the generated relationship id space is unbounded")
+    }
+
+    /// Whether two relationship sets hold the same items, identifier counter
+    /// and source.
+    pub(crate) fn same_as(&self, other: &Relationships) -> bool {
+        self.items == other.items && self.next_id == other.next_id && self.source == other.source
     }
 
     /// Whether these relationships still hold the items their source bytes
