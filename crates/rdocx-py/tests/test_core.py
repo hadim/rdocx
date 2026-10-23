@@ -10821,3 +10821,191 @@ def test_issue389_retained_paragraph_alias_never_publishes_unsavable_text():
     else:
         assert paragraph.text == 'new'
         assert rdocx.Document.from_bytes(doc.to_bytes()).paragraphs[0].text == 'new'
+
+
+def _issue407_document(root_w14):
+    import rdocx
+
+    w14 = "http://schemas.microsoft.com/office/word/2010/wordml"
+    body = "".join([
+        '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>heading</w:t></w:r></w:p>',
+        '<w:p><w:r><w:t xml:space="preserve">see </w:t></w:r><w:hyperlink w:anchor="target"><w:r><w:t>target</w:t></w:r></w:hyperlink></w:p>',
+        '<w:p><w:bookmarkStart w:id="1" w:name="target"/><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="1"/></w:p>',
+        '<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p>'
+        '<w:tbl><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>nested</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+        '<w:p/></w:tc></w:tr></w:tbl>',
+        '<w:sdt><w:sdtPr><w:alias w:val="block"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>block one</w:t></w:r></w:p><w:p><w:r><w:t>block two</w:t></w:r></w:p></w:sdtContent></w:sdt>',
+        *(f'<w:p><w:r><w:rPr><w:i/></w:rPr><w:t>{text}</w:t></w:r><w:r><w:tab/><w:t>tail</w:t></w:r></w:p>' for text in "abc"),
+        f'<w:p xmlns:w14="{w14}" w14:paraId="388B6825"><w:r><w:t>identified</w:t></w:r></w:p>',
+        '<w:p><w:r><w:t>last</w:t></w:r></w:p>',
+    ])
+    document = rdocx.Document()
+    document.add_paragraph("first")
+    document.section(0).header.add_paragraph("header text")
+    source = io.BytesIO(document.to_bytes())
+    output = io.BytesIO()
+    with zipfile.ZipFile(source) as source_zip, zipfile.ZipFile(output, "w") as result_zip:
+        for info in source_zip.infolist():
+            data = source_zip.read(info.filename)
+            if info.filename == "word/document.xml":
+                text = data.decode()
+                at = text.index("<w:sectPr")
+                text = text[:at] + body + text[at:]
+                if root_w14:
+                    text = text.replace("<w:document ", f'<w:document xmlns:w14="{w14}" ', 1)
+                data = text.encode()
+            result_zip.writestr(info, data)
+    return rdocx.Document.from_bytes(output.getvalue())
+
+
+@pytest.mark.parametrize("root_w14", [False, True])
+def test_issue407_plain_body_splices_keep_owner_lifetimes(root_w14):
+    import rdocx
+
+    doc = _issue407_document(root_w14)
+
+    def texts():
+        return [paragraph.text for paragraph in doc.paragraphs]
+
+    def read_all():
+        # Debug builds compare every direct read with the whole-source read.
+        for paragraph in doc.paragraphs:
+            assert paragraph.xml.startswith("<w:p")
+            for run in paragraph.runs:
+                assert run.xml.startswith("<w:r")
+        for table in doc.tables:
+            assert table.xml.startswith("<w:tbl")
+            for row in table.rows:
+                for cell in row.cells:
+                    assert cell.xml.startswith("<w:tc")
+
+    expected = ["first", "heading", "see target", "1", "block one", "block two",
+                "a\ttail", "b\ttail", "c\ttail", "identified", "last"]
+    assert texts() == expected
+    read_all()
+    # A read declares w14 when its root or its own bytes use it, never only
+    # because another paragraph does.
+    assert ("xmlns:w14" in doc.paragraphs[0].xml) == root_w14
+    assert "xmlns:w14" in doc.paragraphs[9].xml
+    edits = [
+        ("Document.insert_paragraph", lambda: doc.insert_paragraph(2, "inserted"), 2, "inserted"),
+        ("Document.insert_paragraph", lambda: doc.insert_paragraph(0, "zero"), 0, "zero"),
+        ("Document.remove_content", lambda: doc.remove_content(0), 0, None),
+        ("Document.insert_paragraph", lambda: doc.insert_paragraph(5, "before table", "Heading1"), 5, "before table"),
+        ("Document.insert_paragraph", lambda: doc.insert_paragraph(7, "before control"), 6, "before control"),
+        ("Document.remove_content", lambda: doc.remove_content(9), 9, None),
+        ("Document.insert_paragraph", lambda: doc.paragraphs[9].insert_paragraph_before("before b"), 9, "before b"),
+        ("Document.remove_content_range", lambda: doc.remove_content_range(10, 12), 10, None),
+        ("Document.insert_paragraph", lambda: doc.insert_paragraph(12, "end"), 12, "end"),
+    ]
+    for operation, edit, at, text in edits:
+        held = doc.paragraphs[0]
+        held_run = held.runs[0]
+        held_table = doc.tables[0]
+        before = len(expected)
+        result = edit()
+        if text is None:
+            removed = 2 if operation.endswith("range") else 1
+            del expected[at:at + removed]
+            assert result == (2 if removed == 2 else True)
+        else:
+            expected.insert(at, text)
+            assert result.text == text
+            assert result.xml.startswith("<w:p")
+        assert len(expected) != before
+        for stale in (lambda: held.text, lambda: held_run.text, lambda: held_table.xml):
+            with pytest.raises(rdocx.StaleElementError, match=operation):
+                stale()
+        assert texts() == expected
+        read_all()
+    held = doc.paragraphs[3]
+    held_table = doc.tables[0]
+    held_cell = held_table.cell(0, 0)
+    table = doc.insert_table(4, 2, 3)
+    assert len(table.rows) == 2 and table.cell(1, 2).text == ""
+    for stale in (lambda: held.text, lambda: held_table.xml, lambda: held_cell.text):
+        with pytest.raises(rdocx.StaleElementError, match="Document.insert_table"):
+            stale()
+    table.cell(1, 2).text = "new cell"
+    assert doc.tables[0].cell(1, 2).text == "new cell"
+    assert doc.tables[1].cell(0, 0).paragraphs[0].text == "cell"
+    assert texts() == expected
+    read_all()
+    held = doc.paragraphs[3]
+    held_table = doc.tables[1]
+    appended_table = doc.add_table(1, 2)
+    assert len(doc.tables) == 3 and appended_table.cell(0, 1).text == ""
+    assert held.text == expected[3] and held_table.xml.startswith("<w:tbl")
+    read_all()
+    held = doc.paragraphs[3]
+    held_run = held.runs[0]
+    appended = doc.add_paragraph("appended")
+    expected.append("appended")
+    # An append keeps paragraph owners, while runs keep the document epoch.
+    assert appended.text == "appended" and held.text == expected[3]
+    with pytest.raises(rdocx.StaleElementError, match="Document.add_paragraph"):
+        _ = held_run.xml
+    assert texts() == expected
+    read_all()
+    reopened = rdocx.Document.from_bytes(doc.to_bytes())
+    assert [paragraph.text for paragraph in reopened.paragraphs] == expected
+
+
+def _issue407_work():
+    from rdocx import _rdocx
+
+    work = getattr(_rdocx, "_word_whole_body_work", None)
+    if work is None:
+        pytest.skip("the whole-body work counters exist in debug builds only")
+    return work
+
+
+@pytest.mark.parametrize("root_w14", [False, True])
+def test_issue407_direct_routes_do_no_whole_body_work(root_w14):
+    import rdocx
+
+    work = _issue407_work()
+    doc = _issue407_document(root_w14)
+    # A comments part does not keep plain paragraph removal off its route.
+    doc.add_comment(
+        rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=1, run_index=0),
+            end=rdocx.RunPosition(body_index=1, run_index=1),
+        ),
+        author="Ada",
+        text="review",
+    )
+
+    def direct(call):
+        before = work()
+        result = call()
+        assert work() == before, (call, before, work())
+        return result
+
+    for index in (0, 1, 2, 3, 6, 7, 8, 9, 10):
+        paragraph = doc.paragraphs[index]
+        direct(lambda: paragraph.xml)
+        for run in paragraph.runs:
+            direct(lambda: run.xml)
+    table = doc.tables[0]
+    direct(lambda: table.xml)
+    for row in table.rows:
+        for cell in row.cells:
+            direct(lambda: cell.xml)
+    direct(lambda: doc.insert_paragraph(2, "inserted"))
+    direct(lambda: doc.remove_content(2))
+    direct(lambda: doc.paragraphs[7].insert_paragraph_before("before"))
+    direct(lambda: doc.insert_paragraph(7, "x"))
+    assert direct(lambda: doc.remove_content_range(7, 9)) == 2
+    direct(lambda: doc.add_paragraph("appended"))
+    direct(lambda: doc.insert_table(4, 2, 2))
+    direct(lambda: doc.add_table(1, 2))
+    direct(lambda: doc.tables[0].cell(1, 1).xml)
+    assert [p.text for p in doc.paragraphs][-2:] == ["last", "appended"]
+    # The counters do see the whole-body routes.
+    before = work()
+    _ = doc.paragraphs[4].xml
+    assert work()[1] > before[1]
+    before = work()
+    assert doc.remove_content(1)
+    assert work()[0] > before[0]
