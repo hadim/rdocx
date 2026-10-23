@@ -4,22 +4,23 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use oxml_py_support::RevisionCounter;
-#[cfg(test)]
+#[cfg(debug_assertions)]
 use std::cell::Cell;
 
-#[cfg(test)]
+// Debug builds, which the binding tests use, count the owner inventory work.
+#[cfg(debug_assertions)]
 thread_local! {
     static FX260_PPT_VISITS: Cell<usize> = const { Cell::new(0) };
 }
 
 pub(crate) fn note_fx260_ppt(count: usize) {
-    #[cfg(test)]
+    #[cfg(debug_assertions)]
     FX260_PPT_VISITS.with(|cell| cell.set(cell.get().saturating_add(count)));
-    #[cfg(not(test))]
+    #[cfg(not(debug_assertions))]
     let _ = count;
 }
 
-#[cfg(test)]
+#[cfg(debug_assertions)]
 fn fx260_ppt_visits() -> usize {
     FX260_PPT_VISITS.with(|cell| cell.get())
 }
@@ -29,6 +30,14 @@ fn reset_fx260_ppt_visits() {
     FX260_PPT_VISITS.with(|cell| cell.set(0));
 }
 
+/// Debug builds only: the owner inventory work counted since the previous
+/// call, so that the Python tests can compare decks of N and 4N slides.
+#[cfg(debug_assertions)]
+#[pyfunction]
+#[pyo3(name = "_inventory_work")]
+pub(crate) fn inventory_work() -> usize {
+    FX260_PPT_VISITS.with(|cell| cell.replace(0))
+}
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyList, PyString, PyTuple};
@@ -2986,10 +2995,8 @@ pub(crate) struct PreparedOwners {
 /// Runs a debug-only cross-check without counting its work.
 #[cfg(debug_assertions)]
 fn without_work_count<T>(run: impl FnOnce() -> T) -> T {
-    #[cfg(test)]
     let visits = fx260_ppt_visits();
     let result = run();
-    #[cfg(test)]
     FX260_PPT_VISITS.with(|cell| cell.set(visits));
     result
 }
