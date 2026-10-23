@@ -61728,6 +61728,73 @@ fn story_edits_work_beside_bookmarks_and_permissions_across_cells() {
     assert!(reopened.story_ranges().is_ok());
 }
 
+/// A comment that `add_comment` made from a `RunRange` moves like one made
+/// from a `StoryRunRange`. That in-place edit left the main part of the
+/// package behind the typed body, and the move read that part as its source.
+#[test]
+fn comment_added_from_a_run_range_moves_before_and_after_reopen() {
+    for reopen in [false, true] {
+        for to_text in [false, true] {
+            let mut document = Document::new();
+            document.add_paragraph("the commented paragraph");
+            document.add_paragraph("the paragraph the comment moves to");
+            let id = document
+                .add_comment(
+                    RunRange {
+                        start: RunPosition {
+                            body_index: 0,
+                            run_index: 0,
+                        },
+                        end: RunPosition {
+                            body_index: 0,
+                            run_index: 1,
+                        },
+                    },
+                    "Reviewer",
+                    None,
+                    "a remark",
+                )
+                .unwrap();
+            if reopen {
+                document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            }
+            let expected = if to_text {
+                document.move_comment_to_text(id, "moves", 0).unwrap();
+                "moves"
+            } else {
+                let location = document.paragraph_story_location(1).unwrap().unwrap();
+                document
+                    .move_comment(
+                        id,
+                        StoryRunRange {
+                            start: StoryRunPosition {
+                                location: location.clone(),
+                                run_index: 0,
+                            },
+                            end: StoryRunPosition {
+                                location,
+                                run_index: 1,
+                            },
+                        },
+                    )
+                    .unwrap();
+                "the paragraph the comment moves to"
+            };
+            assert_eq!(document.comments().len(), 1);
+            assert_eq!(document.comments()[0].id(), id);
+            assert_eq!(
+                document.comment_anchor_text(id).unwrap().as_deref(),
+                Some(expected)
+            );
+            let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            assert_eq!(
+                reopened.comment_anchor_text(id).unwrap().as_deref(),
+                Some(expected)
+            );
+        }
+    }
+}
+
 /// Issue 405: a comment whose anchor cannot be read does not fail the
 /// listing. Its own entry is the error that `comment_anchor` returns.
 #[test]

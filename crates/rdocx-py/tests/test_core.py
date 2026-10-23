@@ -4769,6 +4769,27 @@ def test_comment_across_table_cells_is_listed_with_its_anchor(start_in_control):
     assert document.comments == ()
 
 
+@pytest.mark.parametrize("by_story_range", [False, True])
+def test_comment_moves_whichever_range_made_it(by_story_range):
+    import rdocx
+
+    def story_range(document, body_index):
+        item = next(item for item in document.story_items if item.story.kind == "body"
+                    and item.kind == "paragraph" and item.direct_body_index == body_index)
+        return rdocx.StoryRunRange(start=rdocx.StoryRunPosition(item=item, run_index=0),
+                                   end=rdocx.StoryRunPosition(item=item, run_index=1))
+
+    document = rdocx.Document()
+    document.add_paragraph("the commented paragraph")
+    document.add_paragraph("the paragraph the comment moves to")
+    where = story_range(document, 0) if by_story_range else rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=0, run_index=0),
+        end=rdocx.RunPosition(body_index=0, run_index=1))
+    comment = document.add_comment(where, author="Reviewer", text="a remark")
+    document.move_comment(comment, story_range(document, 1))
+    assert [item.anchor_text for item in document.comments] == ["the paragraph the comment moves to"]
+
+
 def test_comment_listing_keeps_the_others_when_one_anchor_cannot_be_read():
     import rdocx
 

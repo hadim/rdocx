@@ -538,6 +538,9 @@ impl Document {
     pub fn move_comment_to_text(&mut self, id: i32, anchor: &str, occurrence: usize) -> Result<()> {
         let selected = self.checked_movable_comment(id)?;
         let mut candidate = self.clone_for_staging();
+        // The move reads the main part as its source authority, which an
+        // in-place edit such as `add_comment` leaves behind the typed body.
+        candidate.flush_to_package()?;
         let reference = candidate.remove_comment_source_for_move(&selected)?;
         candidate.anchor_existing_comment_on_text(id, anchor, occurrence)?;
         candidate.restore_comment_reference_run(id, reference)?;
@@ -606,6 +609,8 @@ impl Document {
                 return Err(Error::Other("selected comment range is stale".into()));
             }
             let mut candidate = self.clone_for_staging();
+            // As in `move_comment_to_text`, bring the main part up to date.
+            candidate.flush_to_package()?;
             candidate.move_comment_story_range(selected, &range, *id)?;
             candidate.flush_to_package()?;
             candidate.comment_ownership_at(&candidate.doc_part_name)?;
