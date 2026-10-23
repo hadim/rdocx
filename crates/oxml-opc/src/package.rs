@@ -356,10 +356,11 @@ impl OpcPackage {
         self.parts.insert(key, data.into());
     }
 
-    /// Remove and return a case-equivalent normalized part.
-    pub fn remove_part(&mut self, part_name: &str) -> Option<Vec<u8>> {
+    /// Remove and return a case-equivalent normalized part, with the bytes
+    /// it may still share with a clone of this package.
+    pub fn remove_part(&mut self, part_name: &str) -> Option<Arc<Vec<u8>>> {
         let key = deterministic_part_key(&self.parts, part_name)?.clone();
-        self.parts.remove(&key).map(Arc::unwrap_or_clone)
+        self.parts.remove(&key)
     }
 
     pub(crate) fn content_types_bytes(&self) -> Result<Vec<u8>> {
@@ -1380,8 +1381,8 @@ mod tests {
         );
         assert!(package.remove_part_rels("/word/document.xml").is_some());
         assert_eq!(
-            package.remove_part("/word/document.xml"),
-            Some(b"second".to_vec())
+            package.remove_part("/word/document.xml").as_deref(),
+            Some(&b"second".to_vec())
         );
     }
 
