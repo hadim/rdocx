@@ -300,6 +300,7 @@ pub struct FitReport {
 }
 
 #[cfg(feature = "render")]
+#[derive(Debug, PartialEq)]
 struct AutofitContext {
     slide_index: usize,
     context: String,
@@ -309,6 +310,7 @@ struct AutofitContext {
 }
 
 #[cfg(feature = "render")]
+#[derive(Debug, PartialEq)]
 struct AutofitOwner {
     update: AutofitUpdate,
     empty: bool,
@@ -3808,7 +3810,7 @@ impl Presentation {
                 validate_autofit_authoring_namespaces(xml, part)?;
             }
         }
-        let mut owners = autofit_inventory(self, &package)?;
+        let mut owners = autofit_inventory(self, &package, None)?;
         let mut fonts = authoring_fonts(self, font_files)?;
         let mut plans = Vec::new();
         for owner in &mut owners {
@@ -3889,7 +3891,7 @@ impl Presentation {
             let mut bytes = Cursor::new(Vec::new());
             package.write_to(&mut bytes)?;
             let candidate = Self::from_bytes(bytes.get_ref())?;
-            let proposed = autofit_inventory(&candidate, &package)?;
+            let proposed = autofit_inventory(&candidate, &package, None)?;
             for (location, change) in &plans {
                 if !matches!(change, AuthoringChange::Shape(_)) {
                     continue;
@@ -3961,7 +3963,7 @@ impl Presentation {
     #[cfg(feature = "render")]
     pub fn fit_report(&self, font_files: &[(&str, &[u8])]) -> Result<FitReport> {
         let package = self.staged_package(false)?;
-        let owners = autofit_inventory(self, &package)?;
+        let owners = autofit_inventory(self, &package, None)?;
         let mut fonts = authoring_fonts(self, font_files)?;
         let mut frames = Vec::new();
         let mut diagnostics = Vec::new();
@@ -4128,10 +4130,32 @@ impl Presentation {
             required_part(&package, &location.owner_part)?,
             &location.owner_part,
         )?;
-        let mut owner = autofit_inventory(self, &package)?
+        // The owners of a slide part take their contexts from that slide
+        // alone, so only that slide is measured.
+        let slide_part = self
+            .slides
+            .iter()
+            .any(|slide| slide.part_name == location.owner_part)
+            .then_some(location.owner_part.as_str());
+        let mut owner = autofit_inventory(self, &package, slide_part)?
             .into_iter()
             .find(|owner| owner.update.location == *location)
             .ok_or_else(|| autofit_failure(location, "stale or foreign physical owner"))?;
+        // Debug builds, which run the binding tests, find the same owner in
+        // the inventory of every slide when it can be taken.
+        #[cfg(debug_assertions)]
+        if slide_part.is_some()
+            && let Ok(owners) = autofit_inventory(self, &package, None)
+        {
+            let whole = owners
+                .into_iter()
+                .find(|owner| owner.update.location == *location);
+            assert_eq!(
+                whole.as_ref(),
+                Some(&owner),
+                "fit_text measured another owner"
+            );
+        }
         if let Some(reason) = &owner.unsupported {
             return Err(autofit_failure(location, reason));
         }
@@ -27649,9 +27673,12 @@ fn append_autofit_context(
 }
 
 #[cfg(feature = "render")]
+/// The text owners of the deck and their measured contexts, or with
+/// `slide_part` only those of that slide, measured on it.
 fn autofit_inventory(
     presentation: &Presentation,
     package: &OpcPackage,
+    slide_part: Option<&str>,
 ) -> Result<Vec<AutofitOwner>> {
     let default_style = presentation
         .presentation
@@ -27664,6 +27691,9 @@ fn autofit_inventory(
     let mut owners = Vec::new();
     let table_styles = render_table_styles(package, &presentation.presentation_part)?;
     for (index, record) in presentation.slides.iter().enumerate() {
+        if slide_part.is_some_and(|part| part != record.part_name) {
+            continue;
+        }
         let layout_part = render_related_part(package, &record.part_name, rel_types::SLIDE_LAYOUT)?;
         let master_part = render_related_part(package, &layout_part, rel_types::SLIDE_MASTER)?;
         let theme_part = render_related_part(package, &master_part, rel_types::THEME)?;
@@ -27703,7 +27733,9 @@ fn autofit_inventory(
     }
     // Notes use their own theme, notes page dimensions and notesStyle. The
     // ordinary export overlays complete owned text bodies, not slide textStyle.
-    if let Some(notes_master_part) = &presentation.notes_master_part {
+    if slide_part.is_none()
+        && let Some(notes_master_part) = &presentation.notes_master_part
+    {
         let notes_master = CT_NotesMaster::from_xml(required_part(package, notes_master_part)?)
             .map_err(|e| render_failure(format!("{notes_master_part}: {e}")))?;
         let theme_part = render_related_part(package, notes_master_part, rel_types::THEME)?;
@@ -34218,6 +34250,47 @@ mod write_tests {
         assert_eq!(small.to_bytes().unwrap(), through_zip.to_bytes().unwrap());
     }
 
+    /// Fitting the text of a frame measures its own slide only: a slide
+    /// whose layout relationship is missing, or a notes master without its
+    /// theme, which fail the reports of the whole deck, do not fail it.
+    #[cfg(all(feature = "default-template", feature = "render"))]
+    #[test]
+    fn issue403_fit_text_does_not_fail_on_another_broken_slide() {
+        let mut deck = Presentation::new().unwrap();
+        for index in 0..3 {
+            deck.add_slide(6).unwrap();
+            deck.slide_mut(index)
+                .unwrap()
+                .add_textbox(Emu(0), Emu(0), Emu(3_000_000), Emu(1_000_000))
+                .unwrap()
+                .set_text(&"fit me ".repeat(20))
+                .unwrap();
+        }
+        deck.set_notes_text(1, "notes").unwrap();
+        let bytes = deck.to_bytes().unwrap();
+        let broken = |owner: &str, rel_type: &str| {
+            let mut package = OpcPackage::from_reader(Cursor::new(&bytes)).unwrap();
+            package
+                .get_part_rels_mut(owner)
+                .unwrap()
+                .items
+                .retain(|relationship| relationship.rel_type != rel_type);
+            let mut output = Cursor::new(Vec::new());
+            package.write_to(&mut output).unwrap();
+            Presentation::from_bytes(output.get_ref()).unwrap()
+        };
+        let notes_master = deck.notes_master_part.clone().unwrap();
+        for mut broken in [
+            broken(&deck.slides[2].part_name, rel_types::SLIDE_LAYOUT),
+            broken(&notes_master, rel_types::THEME),
+        ] {
+            assert!(broken.fit_report(&[]).is_err());
+            let last = broken.slide(0).unwrap().shapes().count() - 1;
+            let location = broken.text_frame_location(0, &[last], None).unwrap();
+            broken.fit_text_at(&location, None, 18, &[]).unwrap();
+        }
+    }
+
     #[cfg(feature = "default-template")]
     #[test]
     fn issue403_a_commit_reuses_unchanged_records_and_keeps_edits_made_in_place() {
@@ -34609,7 +34682,7 @@ mod write_tests {
                 .set_properties(p);
         }
         let before = deck.to_bytes().unwrap();
-        let owners = autofit_inventory(&deck, &deck.staged_package(false).unwrap()).unwrap();
+        let owners = autofit_inventory(&deck, &deck.staged_package(false).unwrap(), None).unwrap();
         let owner = owners
             .iter()
             .find(|o| {
@@ -34714,7 +34787,7 @@ mod write_tests {
             .collect::<Vec<_>>();
         assert_eq!(frames.len(), 10);
         assert_ne!(frames[0].context, frames[1].context);
-        let inventory = autofit_inventory(&deck, &before).unwrap();
+        let inventory = autofit_inventory(&deck, &before, None).unwrap();
         let physical = inventory
             .iter()
             .find(|o| o.update.location.owner_part == master_part && o.update.shape_id == Some(100))
@@ -34822,7 +34895,8 @@ mod write_tests {
                 let mut bytes = Cursor::new(Vec::new());
                 package.write_to(&mut bytes).unwrap();
                 let mut deck = Presentation::from_bytes(bytes.get_ref()).unwrap();
-                let old = autofit_inventory(&deck, &deck.staged_package(false).unwrap()).unwrap();
+                let old =
+                    autofit_inventory(&deck, &deck.staged_package(false).unwrap(), None).unwrap();
                 let old = old
                     .iter()
                     .find(|o| o.update.shape_id == Some(2) && o.update.location.owner_part == part)
@@ -34842,7 +34916,8 @@ mod write_tests {
                 let before = painted_anchor(&old.contexts[0]);
                 let result = deck.refresh_autofit(&[]).unwrap();
                 assert!(result.changed);
-                let new = autofit_inventory(&deck, &deck.staged_package(false).unwrap()).unwrap();
+                let new =
+                    autofit_inventory(&deck, &deck.staged_package(false).unwrap(), None).unwrap();
                 let new = new
                     .iter()
                     .find(|o| o.update.shape_id == Some(2) && o.update.location.owner_part == part)
