@@ -140,7 +140,7 @@ pub struct Relationship {
 }
 
 /// A collection of relationships parsed from a `.rels` file.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Relationships {
     pub items: Vec<Relationship>,
     next_id: u32,
@@ -699,6 +699,20 @@ impl Relationships {
             }
         }
         unreachable!("the generated relationship id space is unbounded")
+    }
+
+    /// Whether these relationships still hold the items their source bytes
+    /// were read into, with the identifier counter reading them sets, so
+    /// that writing and reading them back gives them unchanged.
+    pub(crate) fn is_as_read(&self) -> bool {
+        let Some((_, items)) = &self.source else {
+            return false;
+        };
+        let mut maximum = 0;
+        for item in &self.items {
+            update_max_relationship_id(&item.id, &mut maximum);
+        }
+        items == &self.items && self.next_id == next_relationship_number(maximum)
     }
 
     pub(crate) fn validate_ids(&self) -> Result<()> {
