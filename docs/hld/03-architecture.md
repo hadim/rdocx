@@ -123,7 +123,11 @@ An admitted opaque Empty section that the paired parser cannot model remains
 protected by exact bytes and expanded namespace meaning. Only an unchanged
 instance may remain. Submitted and stored XML are not rewritten by comparison. Retained nested
 modeled namespace owners require staged identity reconciliation, even for
-benign aliases. A failed proof refuses before source publication.
+benign aliases, except for a plain paragraph removal when every retained owner
+is a `w:sdt` and their declarations replay on the body as a save serializes it.
+The removal adds or removes no `w:sdt` candidate of that replay, so it stays
+local. When the replay fails, a body insertion refuses with the save's error
+before it changes anything. A failed proof refuses before source publication.
 
 Run tab and break edits prepare accepted paragraph text from the native candidate,
 validate its current run-to-paragraph owner and publish source and fact together.

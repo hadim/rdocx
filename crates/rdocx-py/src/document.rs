@@ -13299,6 +13299,7 @@ impl PyDocument {
         style: Option<&str>,
     ) -> PyResult<Py<PyTable>> {
         let mut document = slf.borrow_mut(py);
+        document.refuse_unsavable_body_edit(py)?;
         let index = document.inner.table_count();
         // A style may add its definition, so only a plain table splices.
         if style.is_none() {
@@ -13484,6 +13485,7 @@ impl PyDocument {
             if index > document.inner.content_count() {
                 return Err(PyIndexError::new_err("content index out of range"));
             }
+            document.refuse_unsavable_body_edit(py)?;
             let style = style
                 .map(|value| style_id_of_type(&document.inner, value, rdocx::StyleType::Paragraph))
                 .transpose()?;
@@ -13574,6 +13576,7 @@ impl PyDocument {
             if index > document.inner.content_count() {
                 return Err(PyIndexError::new_err("content index out of range"));
             }
+            document.refuse_unsavable_body_edit(py)?;
             let inserted = rdocx::Document::detached_table(rows, cols);
             if let Ok((xml, snapshots)) = document.inner.detached_table_owner_snapshots(&inserted)
                 && let Some(plan) = document.plan_body_splice(BodySplice {
@@ -15284,6 +15287,15 @@ fn fx241_form_certificates_require_unique_routes_and_unchanged_source() {
 }
 
 impl PyDocument {
+    /// A body insertion that no save could write refuses before it changes
+    /// anything, with the error the save would give.
+    fn refuse_unsavable_body_edit(&self, py: Python<'_>) -> PyResult<()> {
+        match self.inner.unsavable_body_edit() {
+            Some(error) => Err(rdocx_to_pyerr(py, rdocx::Error::Other(error.to_owned()))),
+            None => Ok(()),
+        }
+    }
+
     fn append_paragraph_candidate(
         slf: Py<Self>,
         py: Python<'_>,
@@ -15292,6 +15304,7 @@ impl PyDocument {
         page_break: bool,
     ) -> PyResult<Py<PyParagraph>> {
         let mut document = slf.borrow_mut(py);
+        document.refuse_unsavable_body_edit(py)?;
         let index = document.inner.paragraph_count();
         let style = style
             .map(|value| style_id_of_type(&document.inner, value, rdocx::StyleType::Paragraph))

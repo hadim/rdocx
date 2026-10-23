@@ -3897,31 +3897,71 @@ fn unsafe_nested_namespace_prefix(owners: &[NestedNamespaceOwner]) -> Option<Str
     })
 }
 
+/// What the retained nested namespace declarations of a main document part
+/// leave to a local edit.
+#[derive(Debug, Clone, Default)]
+struct NestedNamespaceEditFacts {
+    /// A plain paragraph edit takes the checked staged path.
+    plain_local_edit_blocked: bool,
+    /// A plain paragraph may still be removed in place.
+    plain_removal_allowed: bool,
+    /// The error every save of a changed typed body gives, if any.
+    unsavable_body_edit: Option<String>,
+}
+
 /// Retained nested namespace owners need staged identity reconciliation even
-/// for benign aliases. Local edits cannot refresh their source snapshots, so
-/// a package with a shadowed serializer prefix, or with a nested owner that
-/// a plain paragraph can be or hold (`w:p` or `w:r`), keeps them on the
-/// checked staged path. A plain paragraph is never another owner and holds
-/// none, so its local edit leaves every other owner's snapshot intact. A scan
-/// error also keeps the edit on the checked staged path.
-fn plain_local_edit_is_blocked(
+/// for benign aliases, apart from the removal below. Local edits cannot
+/// refresh their source snapshots. A scan error also keeps the edit on the
+/// checked staged path.
+///
+/// One replay of the owners' declarations on `document`, serialized as a
+/// save would, tells whether any change to the typed body can be saved.
+/// Removing a plain paragraph takes away only `w:p` and `w:r` spans, never a
+/// `w:sdt` candidate of that replay, so when every owner is a `w:sdt` and the
+/// replay succeeds, it succeeds again at the next save after the removal,
+/// which may then stay local.
+fn nested_namespace_edit_facts(
     root_declarations: &[(String, String)],
     body_declarations: &[(String, String)],
     document_xml: &[u8],
-) -> bool {
-    if unsafe_serializer_namespace_prefix(root_declarations, body_declarations, Some(document_xml))
-        .is_some()
+    document: &CT_Document,
+) -> NestedNamespaceEditFacts {
+    let shadowed = |prefix: String| {
+        format!("cannot serialize a modified document with a shadowed `{prefix}` namespace")
+    };
+    if let Some(prefix) =
+        unsafe_serializer_namespace_prefix(root_declarations, body_declarations, Some(document_xml))
     {
-        return true;
+        return NestedNamespaceEditFacts {
+            plain_local_edit_blocked: true,
+            plain_removal_allowed: false,
+            unsavable_body_edit: Some(shadowed(prefix)),
+        };
     }
-    match nested_modeled_namespace_owners(document_xml) {
-        Ok(owners) => {
-            unsafe_nested_namespace_prefix(&owners).is_some()
-                || owners
-                    .iter()
-                    .any(|owner| matches!(owner.local_name.as_str(), "p" | "r"))
+    let owners = match nested_modeled_namespace_owners(document_xml) {
+        Ok(owners) if owners.is_empty() => return NestedNamespaceEditFacts::default(),
+        Ok(owners) => owners,
+        Err(_) => {
+            return NestedNamespaceEditFacts {
+                plain_local_edit_blocked: true,
+                ..NestedNamespaceEditFacts::default()
+            };
         }
-        Err(_) => true,
+    };
+    let unsavable_body_edit = match unsafe_nested_namespace_prefix(&owners) {
+        Some(prefix) => Some(shadowed(prefix)),
+        None => document
+            .to_xml()
+            .map_err(Error::from)
+            .and_then(|xml| replay_nested_namespace_declarations(&xml, &owners))
+            .err()
+            .map(|error| error.to_string()),
+    };
+    NestedNamespaceEditFacts {
+        plain_local_edit_blocked: true,
+        plain_removal_allowed: unsavable_body_edit.is_none()
+            && owners.iter().all(|owner| owner.local_name == "sdt"),
+        unsavable_body_edit,
     }
 }
 
@@ -6484,6 +6524,12 @@ pub struct Document {
     /// The opened or saved package retains a shadowed serializer prefix, so a
     /// plain child edit must use the staged transaction instead of a local write.
     plain_local_edit_blocked: bool,
+    /// Every retained nested namespace owner is a `w:sdt` whose declarations
+    /// replay on the body, so a plain paragraph removal stays local anyway.
+    plain_removal_allowed: bool,
+    /// The error a save of any change to the typed body would give, so that
+    /// a body edit refuses before it changes anything.
+    unsavable_body_edit: Option<String>,
     pub(crate) styles: CT_Styles,
     pub(crate) numbering: Option<CT_Numbering>,
     /// Boxed, because debug builds keep many copies of `Document` on deep
@@ -10418,11 +10464,15 @@ pub(crate) fn set_story_source_xml(
         declare_w14_on_part_root(&mut xml)?;
         let namespace_scopes = document_namespace_scopes(&xml)?;
         document.document = CT_Document::from_xml(&xml)?;
-        document.plain_local_edit_blocked = plain_local_edit_is_blocked(
+        let facts = nested_namespace_edit_facts(
             &namespace_scopes.root_declarations,
             &namespace_scopes.body_declarations,
             &xml,
+            &document.document,
         );
+        document.plain_local_edit_blocked = facts.plain_local_edit_blocked;
+        document.plain_removal_allowed = facts.plain_removal_allowed;
+        document.unsavable_body_edit = facts.unsavable_body_edit;
         document.package.set_part(part_name, xml);
         document.root_namespace_declarations = namespace_scopes.root_declarations;
         document.body_namespace_declarations = namespace_scopes.body_declarations;
@@ -17310,6 +17360,8 @@ impl Document {
             body_namespace_declarations: Vec::new(),
             body_namespace_bindings: Vec::new(),
             plain_local_edit_blocked: false,
+            plain_removal_allowed: false,
+            unsavable_body_edit: None,
             styles,
             numbering: None,
             core_properties,
@@ -17397,6 +17449,8 @@ impl Document {
             body_namespace_declarations: self.body_namespace_declarations.clone(),
             body_namespace_bindings: self.body_namespace_bindings.clone(),
             plain_local_edit_blocked: self.plain_local_edit_blocked,
+            plain_removal_allowed: self.plain_removal_allowed,
+            unsavable_body_edit: self.unsavable_body_edit.clone(),
             styles: self.styles.clone(),
             numbering: self.numbering.clone(),
             core_properties: self.core_properties.clone(),
@@ -18705,12 +18759,17 @@ impl Document {
             .get_part(&doc_part_name)
             .ok_or(Error::NoDocumentPart)?;
         let namespace_scopes = document_namespace_scopes(doc_xml)?;
-        let plain_local_edit_blocked = plain_local_edit_is_blocked(
+        let document = CT_Document::from_xml(doc_xml)?;
+        let NestedNamespaceEditFacts {
+            plain_local_edit_blocked,
+            plain_removal_allowed,
+            unsavable_body_edit,
+        } = nested_namespace_edit_facts(
             &namespace_scopes.root_declarations,
             &namespace_scopes.body_declarations,
             doc_xml,
+            &document,
         );
-        let document = CT_Document::from_xml(doc_xml)?;
 
         // Resolve the part a relationship of the given type points at.
         let resolve_part = |rel_type: &str| -> Option<String> {
@@ -18867,6 +18926,8 @@ impl Document {
             body_namespace_declarations: namespace_scopes.body_declarations,
             body_namespace_bindings: namespace_scopes.body_bindings,
             plain_local_edit_blocked,
+            plain_removal_allowed,
+            unsavable_body_edit,
             styles,
             numbering,
             core_properties,
@@ -19681,6 +19742,12 @@ impl Document {
         self.body_namespace_declarations = namespace_scopes.body_declarations;
         self.body_namespace_bindings = namespace_scopes.body_bindings;
         self.plain_local_edit_blocked = typed_document_is_unchanged && unsafe_prefix.is_some();
+        if !typed_document_is_unchanged {
+            // The replay above succeeded on the body as it serializes now. An
+            // unchanged body keeps the facts of its unchanged source.
+            self.plain_removal_allowed = false;
+            self.unsavable_body_edit = None;
+        }
         Ok(())
     }
 
@@ -23790,6 +23857,15 @@ impl Document {
         Ok(Some(scan_story_items(&part, &owner, None)?.len()))
     }
 
+    /// The error any save of a changed body would give: the retained nested
+    /// namespace declarations of the main part cannot be replayed on it, or a
+    /// serializer prefix is shadowed. A body edit refuses with it before it
+    /// changes anything, as the checked staged path would.
+    #[doc(hidden)]
+    pub fn unsavable_body_edit(&self) -> Option<&str> {
+        self.unsavable_body_edit.as_deref()
+    }
+
     /// The number of paragraphs [`Self::paragraphs`] counts before body child
     /// `slot`, without reading the body's XML.
     #[doc(hidden)]
@@ -23800,10 +23876,13 @@ impl Document {
     /// Whether removal takes the direct body child at `slot` alone: a plain
     /// paragraph, as [`Self::plain_direct_paragraph`] reads it, that owns no
     /// section. A plain paragraph holds no comment anchor, so a comments
-    /// part does not matter here as it does for a local replacement.
+    /// part does not matter here as it does for a local replacement. Retained
+    /// `w:sdt` namespace owners whose declarations replay on the body keep the
+    /// removal local too.
     #[doc(hidden)]
     pub fn plain_removable_paragraph(&self, slot: usize) -> bool {
-        !self.plain_local_edit_blocked
+        (!self.plain_local_edit_blocked || self.plain_removal_allowed)
+            && self.unsavable_body_edit.is_none()
             && matches!(
                 self.document.body.content.get(slot),
                 Some(BodyContent::Paragraph(paragraph))
@@ -27599,7 +27678,7 @@ impl Document {
     /// A package that retains a shadowed serializer prefix is not local.
     #[doc(hidden)]
     pub fn plain_direct_paragraph(&self, index: usize) -> bool {
-        if self.plain_local_edit_blocked {
+        if self.plain_local_edit_blocked || self.unsavable_body_edit.is_some() {
             return false;
         }
         self.comments.is_none()
@@ -57354,6 +57433,63 @@ mod tests {
         }
         // The local declaration does change some reads.
         assert!(changed > 0);
+    }
+
+    #[test]
+    fn issue407_plain_removal_stays_local_only_when_nested_owners_replay() {
+        const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        let rows = format!(
+            r#"<w:sdt xmlns:w="{W}" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w:sdtPr><w:tag w:val="rows"/><w15:repeatingSection/></w:sdtPr><w:sdtContent><w:sdt><w:sdtPr><w15:repeatingSectionItem/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>row</w:t></w:r></w:p></w:sdtContent></w:sdt></w:sdtContent></w:sdt>"#
+        );
+        let twin = r#"<w:sdt xmlns:x="urn:x"><w:sdtPr><x:meta/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>twin</w:t></w:r></w:p></w:sdtContent></w:sdt>"#;
+        let alias = format!(
+            r#"<q:sdt xmlns:q="{W}"><q:sdtPr><q:tag q:val="t"/></q:sdtPr><q:sdtContent><q:p><q:r><q:t>in q</q:t></q:r></q:p></q:sdtContent></q:sdt>"#
+        );
+        let table = r#"<w:tbl xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr w14:paraId="00000001"><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+        // (owners, removal stays local, a changed body saves)
+        for (owners, local, savable) in [
+            (rows.clone(), true, true),
+            (format!("{rows}{rows}"), false, false),
+            (format!("{twin}{twin}"), false, false),
+            (alias, false, false),
+            // Other owners keep the staged removal and its bytes.
+            (table.to_owned(), false, true),
+        ] {
+            let body = format!(
+                "<w:p><w:r><w:t>keep</w:t></w:r></w:p><w:p><w:r><w:t>drop</w:t></w:r></w:p>{owners}"
+            );
+            let mut document = issue407_document(&body, false);
+            let slot = document
+                .document
+                .body
+                .content
+                .iter()
+                .position(|content| {
+                    matches!(content, BodyContent::Paragraph(paragraph) if paragraph.accepted_text() == "drop")
+                })
+                .unwrap();
+            assert_eq!(document.plain_removable_paragraph(slot), local, "{owners}");
+            assert_eq!(
+                document.unsavable_body_edit().is_none(),
+                savable,
+                "{owners}"
+            );
+            let before = document.to_bytes().unwrap();
+            match document.try_remove_content(slot) {
+                Ok(removed) => {
+                    assert!(removed && savable, "{owners}");
+                    let saved = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+                    assert!(saved.document.body.content.iter().all(|content| {
+                        !matches!(content, BodyContent::Paragraph(paragraph) if paragraph.accepted_text() == "drop")
+                    }));
+                }
+                Err(error) => {
+                    assert!(!savable, "{owners}");
+                    assert!(error.to_string().contains("namespace owner"), "{error}");
+                    assert_eq!(document.to_bytes().unwrap(), before, "{owners}");
+                }
+            }
+        }
     }
 
     #[test]

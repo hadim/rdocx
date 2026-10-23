@@ -3405,7 +3405,15 @@ impl CT_Body {
     /// Get an iterator over only the paragraphs.
     pub fn paragraphs(&self) -> impl Iterator<Item = &CT_P> {
         let mut paragraphs = Vec::new();
-        collect_body_paragraphs(&self.content, &mut paragraphs);
+        for content in &self.content {
+            match content {
+                BodyContent::Paragraph(paragraph) => paragraphs.push(paragraph.as_ref()),
+                BodyContent::ContentControl(sdt) => {
+                    sdt.collect_paragraphs(SdtOwner::Body, &mut paragraphs)
+                }
+                BodyContent::Table(_) | BodyContent::RawXml(_) => {}
+            }
+        }
         paragraphs.into_iter()
     }
 
@@ -3413,12 +3421,19 @@ impl CT_Body {
     /// children before `index`.
     #[doc(hidden)]
     pub fn paragraph_count_before(&self, index: usize) -> usize {
-        let mut paragraphs = Vec::new();
-        collect_body_paragraphs(
-            &self.content[..index.min(self.content.len())],
-            &mut paragraphs,
-        );
-        paragraphs.len()
+        let mut nested = Vec::new();
+        self.content[..index.min(self.content.len())]
+            .iter()
+            .map(|content| match content {
+                BodyContent::Paragraph(_) => 1,
+                BodyContent::ContentControl(sdt) => {
+                    nested.clear();
+                    sdt.collect_paragraphs(SdtOwner::Body, &mut nested);
+                    nested.len()
+                }
+                _ => 0,
+            })
+            .sum()
     }
 
     /// Whether accepting every tracked change joins the body paragraph at
@@ -3759,16 +3774,6 @@ impl CT_Body {
 impl Default for CT_Body {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-fn collect_body_paragraphs<'a>(content: &'a [BodyContent], paragraphs: &mut Vec<&'a CT_P>) {
-    for content in content {
-        match content {
-            BodyContent::Paragraph(paragraph) => paragraphs.push(paragraph.as_ref()),
-            BodyContent::ContentControl(sdt) => sdt.collect_paragraphs(SdtOwner::Body, paragraphs),
-            BodyContent::Table(_) | BodyContent::RawXml(_) => {}
-        }
     }
 }
 

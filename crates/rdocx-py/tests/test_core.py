@@ -11063,6 +11063,64 @@ def test_issue407_review_shaped_edits_do_no_whole_body_work(paragraphs):
     assert len(reopened.sections) == 2 and len(reopened.tables) == len(doc.tables)
 
 
+_ISSUE407_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_ISSUE407_ROWS = (
+    f'<w:sdt xmlns:w="{_ISSUE407_W}" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w:sdtPr>'
+    '<w:tag w:val="rows"/><w15:repeatingSection/></w:sdtPr><w:sdtContent><w:sdt><w:sdtPr><w15:repeatingSectionItem/>'
+    '</w:sdtPr><w:sdtContent><w:p><w:r><w:t>row</w:t></w:r></w:p></w:sdtContent></w:sdt></w:sdtContent></w:sdt>'
+)
+_ISSUE407_TWIN = ('<w:sdt xmlns:x="urn:x"><w:sdtPr><x:meta/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>twin</w:t></w:r>'
+                  '</w:p></w:sdtContent></w:sdt>')
+_ISSUE407_ALIAS = (f'<q:sdt xmlns:q="{_ISSUE407_W}"><q:sdtPr><q:tag q:val="t"/></q:sdtPr><q:sdtContent><q:p><q:r>'
+                   '<q:t>in q</q:t></q:r></q:p></q:sdtContent></q:sdt>')
+_ISSUE407_EDITS = {
+    "remove_content": lambda doc: doc.remove_content(1),
+    "remove_content_range": lambda doc: doc.remove_content_range(0, 2),
+    "replace_xml": lambda doc: doc.paragraphs[1].replace_xml(doc.paragraphs[1].xml.replace(">drop<", ">kept<")),
+    "insert_paragraph": lambda doc: doc.insert_paragraph(1, "inserted"),
+    "insert_paragraph_before": lambda doc: doc.paragraphs[1].insert_paragraph_before("before"),
+    "add_paragraph": lambda doc: doc.add_paragraph("appended"),
+    "insert_table": lambda doc: doc.insert_table(1, 1, 2),
+    "add_table": lambda doc: doc.add_table(1, 2),
+}
+
+
+@pytest.mark.parametrize("owners", ["twin_sdt", "alias_sdt", "twin_repeating_sections", "repeating_section"])
+@pytest.mark.parametrize("edit", sorted(_ISSUE407_EDITS))
+def test_issue407_nested_owner_body_edits_never_publish_unsavable_bytes(owners, edit):
+    import rdocx
+
+    # A save replays nested declarations by owner identity: twin owners, or an
+    # owner under an alias prefix, cannot be told apart once serialized.
+    tail = {"twin_sdt": _ISSUE407_TWIN + '<w:p><w:r><w:t>mid</w:t></w:r></w:p>' + _ISSUE407_TWIN,
+            "alias_sdt": _ISSUE407_ALIAS,
+            "twin_repeating_sections": _ISSUE407_ROWS + _ISSUE407_ROWS,
+            "repeating_section": _ISSUE407_ROWS}[owners]
+    doc = _replace_document_body(
+        rdocx.Document(),
+        '<w:p><w:r><w:t>keep</w:t></w:r></w:p><w:p><w:r><w:t>drop</w:t></w:r></w:p>' + tail,
+    )
+    before = doc.to_bytes()
+    texts = [paragraph.text for paragraph in doc.paragraphs]
+    # A replacement splices the staged source, so it saves without a replay.
+    refused = owners != "repeating_section" and edit != "replace_xml"
+    try:
+        _ISSUE407_EDITS[edit](doc)
+    except rdocx.RdocxError as error:
+        assert refused, error
+        assert "namespace owner" in str(error)
+        assert doc.to_bytes() == before
+        assert [paragraph.text for paragraph in doc.paragraphs] == texts
+    else:
+        assert not refused
+        saved = [paragraph.text for paragraph in doc.paragraphs]
+        assert saved != texts or edit.endswith("table")
+        reopened = rdocx.Document.from_bytes(doc.to_bytes())
+        assert [paragraph.text for paragraph in reopened.paragraphs] == saved
+        marker = {"twin_sdt": "<x:meta/>", "alias_sdt": "in q"}.get(owners, "<w15:repeatingSectionItem/>")
+        assert marker in reopened.part_xml("/word/document.xml")
+
+
 @pytest.mark.parametrize("root_w14", [False, True])
 def test_issue407_direct_routes_do_no_whole_body_work(root_w14):
     import rdocx
