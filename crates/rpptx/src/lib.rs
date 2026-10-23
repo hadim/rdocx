@@ -1130,11 +1130,12 @@ pub struct Presentation {
     handout_master_dirty: bool,
     embedded_invalidated_signatures: HashSet<(String, String)>,
     package_signatures_invalidated: bool,
-    // Records are shared between clones and copied on write, so a candidate
-    // copy costs one pointer per part and an edit copies only its own part.
+    // Slide, layout and master records are shared between clones and copied
+    // on write, so a candidate copy costs one pointer per part and an edit
+    // copies only its own part.
     layouts: Vec<Arc<LayoutRecord>>,
     masters: Vec<Arc<MasterRecord>>,
-    themes: Vec<Arc<ThemeRecord>>,
+    themes: Vec<ThemeRecord>,
     slides: Vec<Arc<SlideRecord>>,
 }
 
@@ -4869,18 +4870,15 @@ impl Presentation {
         }
         // Stored as the run text setters store it, so it can be saved.
         let value = &oxml_drawing::text::escape_invalid_xml_characters(value);
-        let mut count = 0;
-        // A slide without a match keeps its shared record, so callers can
-        // tell the slides this call changed by pointer identity.
-        for record in &mut self.slides {
-            let mut edited = SlideRecord::clone(record);
-            let found = replace_text_in_slide_record(&mut edited, placeholder, value, true);
-            if found > 0 {
-                *record = Arc::new(edited);
-                count += found;
-            }
-        }
-        count
+        // A slide without a match keeps its record, so a shared one is not
+        // copied and callers can tell the changed slides by pointer identity.
+        self.slides
+            .iter_mut()
+            .filter(|record| slide_record_has_text(record, placeholder))
+            .map(|record| {
+                replace_text_in_slide_record(Arc::make_mut(record), placeholder, value, true)
+            })
+            .sum()
     }
 
     /// Replaces literal slide and speaker-note text on a staged candidate.
@@ -25122,6 +25120,59 @@ fn replace_text_in_slide_record(
     slide_count + notes_count
 }
 
+/// Whether `replace_text_in_slide_record` would replace anything in a slide
+/// or its notes: the same run segments, read without copying the record.
+fn slide_record_has_text(record: &SlideRecord, placeholder: &str) -> bool {
+    fn in_body(body: &CT_TextBody, placeholder: &str) -> bool {
+        body.paragraphs().iter().any(|paragraph| {
+            paragraph
+                .runs
+                .split(|run| !matches!(run, TextRun::Run(_)))
+                .any(|segment| {
+                    let text = segment
+                        .iter()
+                        .filter_map(|run| match run {
+                            TextRun::Run(run) => Some(run.text.value.as_str()),
+                            _ => None,
+                        })
+                        .collect::<String>();
+                    text.contains(placeholder)
+                })
+        })
+    }
+    fn in_children(children: &[ShapeTreeChild], placeholder: &str) -> bool {
+        children.iter().any(|child| match child {
+            ShapeTreeChild::Shape(shape) => shape
+                .text_body
+                .as_ref()
+                .is_some_and(|body| in_body(body, placeholder)),
+            ShapeTreeChild::GraphicFrame(frame) => match frame.graphic_data.payload() {
+                GraphicDataPayload::Table(table) => table
+                    .rows
+                    .iter()
+                    .flat_map(|row| &row.cells)
+                    .filter_map(|cell| cell.text_body.as_ref())
+                    .any(|body| in_body(body, placeholder)),
+                _ => false,
+            },
+            ShapeTreeChild::GroupShape(group) => in_children(&group.children, placeholder),
+            ShapeTreeChild::Picture(_)
+            | ShapeTreeChild::Connector(_)
+            | ShapeTreeChild::AlternateContent(_) => false,
+        })
+    }
+    !placeholder.is_empty()
+        && (in_children(
+            &record.slide.common_slide_data.shape_tree.children,
+            placeholder,
+        ) || record.notes.as_ref().is_some_and(|notes| {
+            in_children(
+                &notes.notes.common_slide_data.shape_tree.children,
+                placeholder,
+            )
+        }))
+}
+
 fn replace_text_in_children(
     children: &mut [ShapeTreeChild],
     placeholder: &str,
@@ -33686,6 +33737,25 @@ mod write_tests {
             candidate.unchanged_slides_since(&live),
             [Some(3), Some(0), Some(1), None]
         );
+
+        // Text replacement copies only a shared slide it changes.
+        let mut text = live.clone();
+        text.slide_mut(3)
+            .unwrap()
+            .add_textbox(Emu(0), Emu(0), Emu(100), Emu(100))
+            .unwrap()
+            .set_text("issue403 marker")
+            .unwrap();
+        let mut replaced = text.clone();
+        assert_eq!(replaced.replace_text("marker", "done"), 1);
+        assert_eq!(
+            replaced.unchanged_slides_since(&text),
+            [Some(0), Some(1), Some(2), None]
+        );
+        drop((replaced, live, candidate, layout_edit));
+        let owned = Arc::as_ptr(&text.slides[3]);
+        assert_eq!(text.replace_text("marker", "done"), 1);
+        assert_eq!(Arc::as_ptr(&text.slides[3]), owned);
     }
 
     #[cfg(feature = "render")]
