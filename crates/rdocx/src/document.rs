@@ -1247,6 +1247,16 @@ impl StoryId {
     pub fn owner_index(&self) -> usize {
         self.owner_index
     }
+
+    /// Set the owner index to `owner_index`, keeping the fingerprint.
+    ///
+    /// The caller holds the identity of an owner whose bytes did not change
+    /// while owners of the same kind were inserted before it in the same
+    /// part, and `owner_index` is the index that now reaches that owner.
+    #[doc(hidden)]
+    pub fn set_owner_index(&mut self, owner_index: usize) {
+        self.owner_index = owner_index;
+    }
 }
 
 /// A checked path to one item inside a story owner.
@@ -1611,6 +1621,18 @@ impl ContentLocation {
     pub fn index_path(&self) -> &[usize] {
         &self.index_path
     }
+
+    /// Set the first step of the path to `index`.
+    ///
+    /// The caller holds a location whose story gained or lost items before
+    /// its first step, and `index` is the step that now reaches the same
+    /// item. The story fingerprint is left as it was.
+    #[doc(hidden)]
+    pub fn set_index_path_head(&mut self, index: usize) {
+        if let Some(head) = self.index_path.first_mut() {
+            *head = index;
+        }
+    }
 }
 
 /// A borrowed view of one supported story item.
@@ -1835,6 +1857,7 @@ impl fmt::Display for StoryError {
 impl std::error::Error for StoryError {}
 
 const WORD_NAMESPACE: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const W14_NAMESPACE: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
 const XML_NAMESPACE: &str = "http://www.w3.org/XML/1998/namespace";
 
 enum UnsupportedXmlSource<'a> {
@@ -6647,6 +6670,7 @@ thread_local! {
     static FX211_PROFILE: Cell<[usize; 12]> = const { Cell::new([0; 12]) };
     static FX211_PROFILE_CONTEXT: Cell<usize> = const { Cell::new(0) };
     static FX260_BODY_VISITS: Cell<usize> = const { Cell::new(0) };
+    static STANDALONE_BODY_ITEM_BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
 fn note_fx260_body(count: usize) {
@@ -9048,6 +9072,109 @@ pub(crate) fn package_authoritative_body_fragment(
         output.extend_from_slice(b"</w:pPr></w:p>");
     }
     Ok(output)
+}
+
+/// Whether a fragment uses the `w14` prefix: in a qualified name, as the
+/// part root declaration finds it, or in a markup compatibility attribute
+/// that lists prefixes or qualified names.
+fn fragment_uses_w14(xml: &[u8]) -> Result<bool> {
+    let named = xml.windows(5).any(|window| {
+        matches!(window[0], b'<' | b'/' | b' ' | b'\t' | b'\r' | b'\n') && &window[1..] == b"w14:"
+    });
+    if named {
+        return Ok(true);
+    }
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("fragment scan failed: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element) => {
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        Error::Other(format!("fragment attribute scan failed: {error}"))
+                    })?;
+                    let compatibility = matches!(
+                        attribute.key.local_name().as_ref(),
+                        b"Requires"
+                            | b"Ignorable"
+                            | b"ProcessContent"
+                            | b"MustUnderstand"
+                            | b"PreserveElements"
+                            | b"PreserveAttributes"
+                    );
+                    if compatibility
+                        && attribute
+                            .value
+                            .split(|byte| byte.is_ascii_whitespace())
+                            .any(|token| token == b"w14" || token.starts_with(b"w14:"))
+                    {
+                        return Ok(true);
+                    }
+                }
+            }
+            Event::Eof => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+/// The body item span of a part written by
+/// `CT_Document::standalone_body_item_xml`.
+fn standalone_body_item_span(part: &[u8]) -> Result<(usize, usize)> {
+    // Attribute values escape `<`, so the first body tag follows the root.
+    let start = part
+        .windows(b"<w:body>".len())
+        .position(|window| window == b"<w:body>")
+        .map(|body| body + b"<w:body>".len())
+        .ok_or_else(|| Error::Other("standalone body item has no body".into()))?;
+    let end = part
+        .len()
+        .checked_sub(b"</w:body></w:document>".len())
+        .filter(|end| start <= *end)
+        .ok_or_else(|| Error::Other("standalone body item is incomplete".into()))?;
+    Ok((start, end))
+}
+
+/// The physical cell owner of `(row, cell)` in the table `item` of `xml`.
+fn physical_table_cell_owner(
+    xml: &[u8],
+    root_kind: StoryKind,
+    item: &StoryItemSpan,
+    row: usize,
+    cell: usize,
+) -> Result<StoryOwnerSpan> {
+    let table = Document::story_table_from_source(xml, item)?;
+    TableRef { inner: &table }
+        .cell(row, cell)
+        .ok_or_else(|| Error::Other("rich table cell index is out of range".to_owned()))?;
+    let mut owners = scan_story_owners(xml, root_kind)?
+        .into_iter()
+        .filter(|owner| {
+            owner.kind == StoryKind::TableCell
+                && item.full.start < owner.full.start
+                && owner.full.end < item.full.end
+        })
+        .collect::<Vec<_>>();
+    let (_, modeled) = physical_table_cells(&table);
+    if modeled.len() < owners.len() {
+        return Err(Error::Other(
+            "rich table cell source correspondence is incomplete".into(),
+        ));
+    }
+    if modeled.len() > owners.len() {
+        return Err(Error::Other(
+            "rich table has unqualified modeled cells".into(),
+        ));
+    }
+    let ordinal = modeled
+        .iter()
+        .position(|(table, coordinate)| *table == 0 && *coordinate == Some((row, cell)))
+        .ok_or_else(|| Error::Other("rich table cell has no unique physical owner".into()))?;
+    Ok(owners.swap_remove(ordinal))
 }
 
 pub(crate) fn close_content_fragment_namespaces(
@@ -23559,6 +23686,200 @@ impl Document {
         close_content_fragment_namespaces(&bytes, &scope)
     }
 
+    /// The main part bytes for `item` alone in this body, and the item's
+    /// namespace-complete XML there, closed as [`Self::close_direct_fragment`]
+    /// closes it.
+    fn standalone_body_item(&self, item: &BodyContent) -> Result<(Vec<u8>, Vec<u8>)> {
+        let part = self.document.standalone_body_item_xml(item)?;
+        #[cfg(test)]
+        STANDALONE_BODY_ITEM_BYTES.set(STANDALONE_BODY_ITEM_BYTES.get() + part.len());
+        let (start, end) = standalone_body_item_span(&part)?;
+        let xml = self.close_direct_fragment(&part, start..end)?;
+        Ok((part, xml))
+    }
+
+    /// Close the fragment at `span` of a standalone main part over the
+    /// declarations in scope there, as the whole part would close it, except
+    /// for `w14`.
+    ///
+    /// The whole part declares `w14` on its root when any of its bytes use it,
+    /// so a whole-part read carries that declaration whenever any body item
+    /// uses it. A direct read declares it when the original root does or the
+    /// fragment itself uses it, by name or in a markup compatibility list.
+    fn close_direct_fragment(&self, part: &[u8], span: Range<usize>) -> Result<Vec<u8>> {
+        let mut scope = story_namespace_scope_at(part, span.start)?;
+        let fragment = &part[span];
+        let root_declares = self
+            .document
+            .extra_namespaces
+            .iter()
+            .any(|(name, _)| name == "xmlns:w14");
+        if !root_declares {
+            if fragment_uses_w14(fragment)? {
+                scope
+                    .entry("w14".to_owned())
+                    .or_insert_with(|| W14_NAMESPACE.to_owned());
+            } else {
+                scope.remove("w14");
+            }
+        }
+        close_content_fragment_namespaces(fragment, &scope)
+    }
+
+    /// Namespace-complete XML for the direct body paragraph at `slot`, read
+    /// without serializing, scanning or admitting the rest of the body.
+    ///
+    /// The XML is [`Self::paragraph_element_xml`] for that paragraph up to
+    /// the `w14` declaration, which [`Self::close_direct_fragment`] decides
+    /// from the root and the paragraph alone. `None` when the child is not a
+    /// paragraph.
+    #[doc(hidden)]
+    pub fn direct_body_paragraph_xml(&self, slot: usize) -> Result<Option<Vec<u8>>> {
+        let Some(item @ BodyContent::Paragraph(_)) = self.document.body.content.get(slot) else {
+            return Ok(None);
+        };
+        let (_, xml) = self.standalone_body_item(item)?;
+        CT_P::from_xml_fragment(&xml)?;
+        Ok(Some(xml))
+    }
+
+    /// Namespace-complete XML for an accepted run of the direct body
+    /// paragraph at `slot`, the bytes [`Self::run_element_xml`] returns for
+    /// it, read without serializing or scanning the rest of the body.
+    #[doc(hidden)]
+    pub fn direct_body_run_xml(
+        &self,
+        slot: usize,
+        path: &rdocx_oxml::text::AcceptedRunPath,
+    ) -> Result<Option<Vec<u8>>> {
+        let Some(item @ BodyContent::Paragraph(_)) = self.document.body.content.get(slot) else {
+            return Ok(None);
+        };
+        // The run closes over a fixed scope, so the paragraph's own closure
+        // only has to parse.
+        let (_, xml) = self.standalone_body_item(item)?;
+        let paragraph = CT_P::from_xml_fragment(&xml)?;
+        let run = paragraph
+            .accepted_run(path)
+            .ok_or_else(|| Error::Other("element XML run owner is absent".into()))?;
+        let mut bytes = Vec::new();
+        run.to_xml(&mut Writer::new(&mut bytes))?;
+        let scope = BTreeMap::from([
+            ("w".to_owned(), WORD_NAMESPACE.to_owned()),
+            ("r".to_owned(), rdocx_oxml::namespace::R_NS.to_owned()),
+        ]);
+        close_content_fragment_namespaces(&bytes, &scope).map(Some)
+    }
+
+    /// Namespace-complete XML for the direct body table at `slot`, read as
+    /// [`Self::direct_body_paragraph_xml`] reads a paragraph, the XML of
+    /// [`Self::table_element_xml`] up to the `w14` declaration.
+    #[doc(hidden)]
+    pub fn direct_body_table_xml(&self, slot: usize) -> Result<Option<Vec<u8>>> {
+        let Some(item @ BodyContent::Table(_)) = self.document.body.content.get(slot) else {
+            return Ok(None);
+        };
+        Ok(Some(self.standalone_body_item(item)?.1))
+    }
+
+    /// Namespace-complete XML for a physical cell of the direct body table at
+    /// `slot`, read as [`Self::direct_body_table_xml`] reads its table, the
+    /// XML of [`Self::cell_element_xml`] up to the `w14` declaration, which
+    /// the root and the cell alone decide.
+    #[doc(hidden)]
+    pub fn direct_body_cell_xml(
+        &self,
+        slot: usize,
+        row: usize,
+        cell: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        let Some(item @ BodyContent::Table(_)) = self.document.body.content.get(slot) else {
+            return Ok(None);
+        };
+        let (part, _) = self.standalone_body_item(item)?;
+        let body = scan_story_owners(&part, StoryKind::Body)?
+            .into_iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .ok_or_else(|| Error::Other("standalone body item has no body owner".into()))?;
+        let table = scan_story_items(&part, &body, None)?
+            .into_iter()
+            .find(|item| item.direct_owner_child)
+            .ok_or_else(|| Error::Other("standalone body table has no item".into()))?;
+        let owner = physical_table_cell_owner(&part, StoryKind::Body, &table, row, cell)?;
+        self.close_direct_fragment(&part, owner.full).map(Some)
+    }
+
+    /// The paragraph [`Self::insert_paragraph`] and [`Self::add_paragraph`]
+    /// place for `text`, built before it is placed.
+    #[doc(hidden)]
+    pub fn detached_text_paragraph(text: &str) -> CT_P {
+        let mut p = CT_P::new();
+        if !text.is_empty() {
+            p.add_run(text);
+        }
+        p
+    }
+
+    /// The accepted text and run paths that a checked owner inventory reads
+    /// for `paragraph` placed as a direct body paragraph of this document.
+    ///
+    /// `None` unless the paragraph is plain and owns no section, so that it
+    /// is one body story item and owns no other story or route.
+    #[doc(hidden)]
+    #[allow(clippy::type_complexity)] // The two read facts of one paragraph owner.
+    pub fn direct_body_paragraph_facts(
+        &self,
+        paragraph: &CT_P,
+    ) -> Result<Option<(String, Vec<rdocx_oxml::text::AcceptedRunPath>)>> {
+        if !paragraph_is_plain(paragraph)
+            || paragraph
+                .properties
+                .as_ref()
+                .is_some_and(|properties| properties.sect_pr.is_some())
+        {
+            return Ok(None);
+        }
+        paragraph.validate_resource_limits()?;
+        // The undecided `w14` declaration names no prefix the paragraph uses.
+        let (_, xml) =
+            self.standalone_body_item(&BodyContent::Paragraph(Box::new(paragraph.clone())))?;
+        let parsed = CT_P::from_xml_fragment(&xml)?;
+        Ok(Some((parsed.accepted_text(), parsed.accepted_run_paths())))
+    }
+
+    /// The number of body story items that the direct body child at `slot`
+    /// contributes, itself included, without scanning the rest of the body.
+    #[doc(hidden)]
+    pub fn direct_body_story_item_count(&self, slot: usize) -> Result<Option<usize>> {
+        let Some(item) = self.document.body.content.get(slot) else {
+            return Ok(None);
+        };
+        let (part, _) = self.standalone_body_item(item)?;
+        let owner = scan_story_owners(&part, StoryKind::Body)?
+            .into_iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .ok_or_else(|| Error::Other("standalone body item has no body owner".into()))?;
+        Ok(Some(scan_story_items(&part, &owner, None)?.len()))
+    }
+
+    /// Whether removal takes the direct body child at `slot` alone: a plain
+    /// paragraph, as [`Self::plain_direct_paragraph`] reads it, that owns no
+    /// section. A plain paragraph holds no comment anchor, so a comments
+    /// part does not matter here as it does for a local replacement.
+    #[doc(hidden)]
+    pub fn plain_removable_paragraph(&self, slot: usize) -> bool {
+        !self.plain_local_edit_blocked
+            && matches!(
+                self.document.body.content.get(slot),
+                Some(BodyContent::Paragraph(paragraph))
+                    if paragraph_is_plain(paragraph)
+                        && paragraph
+                            .properties
+                            .as_ref()
+                            .is_none_or(|properties| properties.sect_pr.is_none())
+            )
+    }
+
     /// Namespace-complete XML for an existing physical table owner.
     #[doc(hidden)]
     pub fn table_element_xml(&self, location: &ContentLocation) -> Result<Vec<u8>> {
@@ -23981,13 +24302,54 @@ impl Document {
         Vec<(ContentLocation, Vec<u8>)>,
         Vec<(ContentLocation, LinkInfo)>,
     )> {
+        self.owner_snapshots_of(self.story_sources()?)
+    }
+
+    /// [`Self::story_owner_snapshots`] of a main part whose body holds only
+    /// `table`, placed as a direct body table of this document, with the
+    /// table's namespace-complete XML. Body routes are those of that body,
+    /// and cell story owners count from zero.
+    #[doc(hidden)]
+    #[allow(clippy::type_complexity)] // The table XML and the four owned families.
+    pub fn detached_table_owner_snapshots(
+        &self,
+        table: &CT_Tbl,
+    ) -> Result<(
+        Vec<u8>,
+        (
+            Vec<StoryItemSnapshot>,
+            Vec<(ContentLocation, usize, usize, StoryId)>,
+            Vec<(ContentLocation, Vec<u8>)>,
+            Vec<(ContentLocation, LinkInfo)>,
+        ),
+    )> {
+        let (part, xml) =
+            self.standalone_body_item(&BodyContent::Table(Box::new(table.clone())))?;
+        let snapshots = self.owner_snapshots_of(vec![StorySource {
+            root_kind: StoryKind::Body,
+            part_name: self.doc_part_name.clone(),
+            xml: Cow::Owned(part),
+        }])?;
+        Ok((xml, snapshots))
+    }
+
+    #[allow(clippy::type_complexity)] // One cross-crate projection carries four existing owned families.
+    fn owner_snapshots_of(
+        &self,
+        sources: Vec<StorySource<'_>>,
+    ) -> Result<(
+        Vec<StoryItemSnapshot>,
+        Vec<(ContentLocation, usize, usize, StoryId)>,
+        Vec<(ContentLocation, Vec<u8>)>,
+        Vec<(ContentLocation, LinkInfo)>,
+    )> {
         let mut snapshots = Vec::new();
         let mut cells = Vec::new();
         let mut paragraphs = Vec::new();
         let mut links = Vec::new();
         let mut seen = HashSet::new();
         let mut emitted_cells = HashSet::new();
-        for source in self.story_sources()? {
+        for source in sources {
             let physical_owners = scan_story_owners(&source.xml, source.root_kind)?;
             let owner_scopes = story_namespace_scopes_at(
                 &source.xml,
@@ -24468,34 +24830,7 @@ impl Document {
             ));
         }
         let (source, item) = self.story_item_source(location)?;
-        let table = Self::story_table_from_source(&source.xml, &item)?;
-        TableRef { inner: &table }
-            .cell(row, cell)
-            .ok_or_else(|| Error::Other("rich table cell index is out of range".to_owned()))?;
-        let owners = scan_story_owners(&source.xml, source.root_kind)?
-            .into_iter()
-            .filter(|owner| {
-                owner.kind == StoryKind::TableCell
-                    && item.full.start < owner.full.start
-                    && owner.full.end < item.full.end
-            })
-            .collect::<Vec<_>>();
-        let (_, modeled) = physical_table_cells(&table);
-        if modeled.len() < owners.len() {
-            return Err(Error::Other(
-                "rich table cell source correspondence is incomplete".into(),
-            ));
-        }
-        if modeled.len() > owners.len() {
-            return Err(Error::Other(
-                "rich table has unqualified modeled cells".into(),
-            ));
-        }
-        let ordinal = modeled
-            .iter()
-            .position(|(table, coordinate)| *table == 0 && *coordinate == Some((row, cell)))
-            .ok_or_else(|| Error::Other("rich table cell has no unique physical owner".into()))?;
-        let owner = &owners[ordinal];
+        let owner = physical_table_cell_owner(&source.xml, source.root_kind, &item, row, cell)?;
         let story = StoryId {
             kind: owner.kind,
             part_name: source.part_name.clone(),
@@ -26238,14 +26573,12 @@ impl Document {
     /// Add a paragraph with the given text and return a mutable reference.
     pub fn add_paragraph(&mut self, text: &str) -> Paragraph<'_> {
         self.invalidate_layout();
-        let mut p = CT_P::new();
-        if !text.is_empty() {
-            p.add_run(text);
-        }
         self.document
             .body
             .content
-            .push(BodyContent::Paragraph(Box::new(p)));
+            .push(BodyContent::Paragraph(Box::new(
+                Self::detached_text_paragraph(text),
+            )));
         match self.document.body.content.last_mut().unwrap() {
             BodyContent::Paragraph(p) => Paragraph { inner: p },
             _ => unreachable!(),
@@ -26871,39 +27204,12 @@ impl Document {
     /// Returns a mutable reference for further configuration.
     pub fn add_table(&mut self, rows: usize, cols: usize) -> Table<'_> {
         self.invalidate_layout();
-        use rdocx_oxml::table::{CT_Row, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc};
-        use rdocx_oxml::units::Twips;
-
-        // Default column width: divide 9360tw (6.5" printable at 1" margins) evenly.
-        // A zero-column table has no grid to divide; clamp so this cannot divide by zero.
-        let col_width = Twips(9360 / cols.max(1) as i32);
-
-        let grid = CT_TblGrid {
-            columns: (0..cols)
-                .map(|_| CT_TblGridCol { width: col_width })
-                .collect(),
-            ..Default::default()
-        };
-
-        let mut tbl = CT_Tbl::new();
-        tbl.properties = Some(CT_TblPr {
-            width: Some(CT_TblWidth::dxa(col_width.0 * cols as i32)),
-            ..Default::default()
-        });
-        tbl.grid = Some(grid);
-
-        for _ in 0..rows {
-            let mut row = CT_Row::new();
-            for _ in 0..cols {
-                row.cells.push(CT_Tc::new());
-            }
-            tbl.rows.push(row);
-        }
-
         self.document
             .body
             .content
-            .push(BodyContent::Table(Box::new(tbl)));
+            .push(BodyContent::Table(Box::new(Self::detached_table(
+                rows, cols,
+            ))));
         match self.document.body.content.last_mut().unwrap() {
             BodyContent::Table(t) => Table { inner: t },
             _ => unreachable!(),
@@ -26931,11 +27237,9 @@ impl Document {
     /// and [`Self::insert_toc`], which clamp an out-of-range index to the end.)
     pub fn insert_paragraph(&mut self, index: usize, text: &str) -> Paragraph<'_> {
         self.invalidate_layout();
-        let mut p = CT_P::new();
-        if !text.is_empty() {
-            p.add_run(text);
-        }
-        self.document.body.insert_paragraph(index, p);
+        self.document
+            .body
+            .insert_paragraph(index, Self::detached_text_paragraph(text));
         match &mut self.document.body.content[index] {
             BodyContent::Paragraph(p) => Paragraph { inner: p },
             _ => unreachable!(),
@@ -26953,6 +27257,19 @@ impl Document {
     /// and [`Self::insert_toc`], which clamp an out-of-range index to the end.)
     pub fn insert_table(&mut self, index: usize, rows: usize, cols: usize) -> Table<'_> {
         self.invalidate_layout();
+        self.document
+            .body
+            .insert_table(index, Self::detached_table(rows, cols));
+        match &mut self.document.body.content[index] {
+            BodyContent::Table(t) => Table { inner: t },
+            _ => unreachable!(),
+        }
+    }
+
+    /// The table [`Self::insert_table`] and [`Self::add_table`] place for
+    /// `rows` and `cols`, built before it is placed.
+    #[doc(hidden)]
+    pub fn detached_table(rows: usize, cols: usize) -> CT_Tbl {
         use rdocx_oxml::table::{CT_Row, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc};
         use rdocx_oxml::units::Twips;
 
@@ -26978,12 +27295,7 @@ impl Document {
             }
             tbl.rows.push(row);
         }
-
-        self.document.body.insert_table(index, tbl);
-        match &mut self.document.body.content[index] {
-            BodyContent::Table(t) => Table { inner: t },
-            _ => unreachable!(),
-        }
+        tbl
     }
 
     /// Find the body content index of the first paragraph containing the given text.
@@ -27438,7 +27750,7 @@ impl Document {
         if index >= self.document.body.content.len() {
             return Ok(false);
         }
-        if self.plain_direct_paragraph(index) {
+        if self.plain_direct_paragraph(index) || self.plain_removable_paragraph(index) {
             note_fx260_body(1);
             self.document.body.remove(index);
             self.invalidate_layout();
@@ -27471,6 +27783,13 @@ impl Document {
         }
         if start == end {
             return Ok(0);
+        }
+        // Plain paragraphs own no companion, as in `try_remove_content`.
+        if (start..end).all(|index| self.plain_removable_paragraph(index)) {
+            note_fx260_body(end - start);
+            self.document.body.content.drain(start..end);
+            self.invalidate_layout();
+            return Ok(end - start);
         }
         let mut candidate = self.clone_for_staging();
         let referenced_before = xml_attribute_values(&candidate.document.to_xml()?)?;
@@ -56928,6 +57247,288 @@ mod tests {
             assert_eq!(fx260_body_visits(), 1, "remove count={count}");
             assert_eq!(document.paragraph_count(), count - 1);
         }
+    }
+
+    /// A document whose body holds `body` before the final section, opened
+    /// from bytes so its part root is the one `root` gives.
+    fn issue407_document(body: &str, root_w14: bool) -> Document {
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(Document::new().to_bytes().unwrap())).unwrap();
+        let mut xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        let at = xml.find("<w:sectPr").unwrap();
+        xml.insert_str(at, body);
+        if root_w14 {
+            let root = xml.find("<w:document").unwrap() + "<w:document".len();
+            xml.insert_str(
+                root,
+                r#" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#,
+            );
+        }
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    /// Paragraphs of six runs, each with the run properties Google Docs
+    /// writes, as in the #407 report.
+    fn issue407_runs(paragraphs: usize) -> String {
+        const RPR: &str = r#"<w:rPr><w:rFonts w:ascii="Arial" w:cs="Arial" w:eastAsia="Arial" w:hAnsi="Arial"/><w:b w:val="0"/><w:i w:val="0"/><w:color w:val="000000"/><w:sz w:val="20"/><w:u w:val="none"/></w:rPr>"#;
+        (0..paragraphs)
+            .map(|paragraph| {
+                let runs = (0..6)
+                    .map(|run| {
+                        format!(
+                            r#"<w:r>{RPR}<w:t xml:space="preserve">run {run} of paragraph {paragraph:04} </w:t></w:r>"#
+                        )
+                    })
+                    .collect::<String>();
+                format!("<w:p>{runs}</w:p>")
+            })
+            .collect()
+    }
+
+    /// Paragraphs of varied content, then a table and a block control.
+    fn issue407_varied_body(other_w14: &str) -> String {
+        [
+            r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FF0000"/></w:rPr><w:t>heading</w:t></w:r></w:p>"#,
+            r#"<w:p><w:r><w:t xml:space="preserve">see </w:t></w:r><w:hyperlink w:anchor="target"><w:r><w:t>the target</w:t></w:r></w:hyperlink></w:p>"#,
+            r#"<w:p><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> DATE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>today</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+            r#"<w:p><w:bookmarkStart w:id="1" w:name="target"/><w:r><w:t>marked</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>"#,
+            r#"<w:p><w:sdt><w:sdtPr><w:alias w:val="inline"/></w:sdtPr><w:sdtContent><w:r><w:t>controlled</w:t></w:r></w:sdtContent></w:sdt></w:p>"#,
+            r#"<w:p><w:ins w:id="2" w:author="a" w:date="2026-01-01T00:00:00Z"><w:r><w:t>inserted</w:t></w:r></w:ins><w:del w:id="3" w:author="a" w:date="2026-01-01T00:00:00Z"><w:r><w:delText>deleted</w:delText></w:r></w:del></w:p>"#,
+            r#"<w:p><w:r><w:t>tab</w:t></w:r><w:r><w:tab/><w:t>bed</w:t><w:br/></w:r></w:p>"#,
+            other_w14,
+            r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><w:p><w:r><w:t>spanned</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>nested</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:tc><w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>merged</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p/></w:tc><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>"#,
+            r#"<w:sdt><w:sdtPr><w:alias w:val="block"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>block one</w:t></w:r></w:p><w:p><w:r><w:t>block two</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+            r#"<w:tbl><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="0000AAAA"><w:r><w:t>a</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>b</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+            r#"<w:p><w:r><w:t>last</w:t></w:r></w:p>"#,
+        ]
+        .concat()
+    }
+
+    #[test]
+    fn issue407_direct_body_items_read_as_their_story_source() {
+        const W14: &str = r#" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#;
+        const PARA_ID: &str = r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="388B6825"><w:r><w:t>identified</w:t></w:r></w:p>"#;
+        const TEXT: &str = r#"<w:p><w:r><w:t xml:space="preserve">a w14:literal</w:t></w:r></w:p>"#;
+        const MCE: &str = r#"<w:p><w:r><mc:AlternateContent><mc:Choice Requires="w14"><w:t>choice</w:t></mc:Choice><mc:Fallback><w:t>fallback</w:t></mc:Fallback></mc:AlternateContent></w:r></w:p>"#;
+        // A direct read is the whole-source read up to the root `w14`
+        // declaration, which it carries when the part root declares it or
+        // the read item uses the prefix, by name or in a compatibility list.
+        // The whole part declares it whenever any body item uses it by name.
+        let without_w14 = |xml: &[u8]| {
+            let xml = String::from_utf8_lossy(xml).into_owned();
+            let root = xml.find('>').unwrap();
+            format!("{}{}", xml[..root].replacen(W14, "", 1), &xml[root..])
+        };
+        let assert_contract = |actual: &[u8], expected: &[u8], root_w14: bool, case: &str| {
+            let stripped = without_w14(actual);
+            assert_eq!(stripped, without_w14(expected), "{case}");
+            let declared = stripped.as_bytes() != actual;
+            let uses = fragment_uses_w14(stripped.as_bytes()).unwrap();
+            assert_eq!(declared, root_w14 || uses, "{case}");
+        };
+        let mut changed = 0;
+        for (root_w14, other) in [
+            (true, ""),
+            (true, PARA_ID),
+            (false, ""),
+            (false, PARA_ID),
+            (false, TEXT),
+            (false, MCE),
+            (true, MCE),
+        ] {
+            let document = issue407_document(&issue407_varied_body(other), root_w14);
+            let case = format!("root_w14={root_w14} other={other:?}");
+            let mut assert_contract = |actual: &[u8], expected: &[u8], case: &str| {
+                changed += usize::from(actual != expected);
+                assert_contract(actual, expected, root_w14, case);
+            };
+            let snapshots = document.story_item_snapshots().unwrap();
+            let mut paragraphs = 0;
+            let mut cells = 0;
+            for (slot, content) in document.document.body.content.iter().enumerate() {
+                let case = format!("{case} slot={slot}");
+                // Story items count per direct body slot, nested ones included.
+                let items = snapshots
+                    .iter()
+                    .filter(|item| {
+                        item.location().story().kind() == StoryKind::Body
+                            && item.direct_body_index() == Some(slot)
+                    })
+                    .count();
+                assert_eq!(
+                    document.direct_body_story_item_count(slot).unwrap(),
+                    Some(items),
+                    "{case}"
+                );
+                match content {
+                    BodyContent::Paragraph(paragraph) => {
+                        let location = document
+                            .paragraph_story_location(paragraphs)
+                            .unwrap()
+                            .unwrap();
+                        paragraphs += 1;
+                        let expected = document.paragraph_element_xml(&location).unwrap();
+                        let actual = document.direct_body_paragraph_xml(slot).unwrap().unwrap();
+                        assert_contract(&actual, &expected, &case);
+                        let parsed = CT_P::from_xml_fragment(&expected).unwrap();
+                        for path in parsed.accepted_run_paths() {
+                            assert_eq!(
+                                document.direct_body_run_xml(slot, &path).unwrap(),
+                                Some(document.run_element_xml(&location, &path).unwrap()),
+                                "{case} run={path:?}"
+                            );
+                        }
+                        if paragraph_is_plain(paragraph) {
+                            assert_eq!(
+                                document.direct_body_paragraph_facts(paragraph).unwrap(),
+                                Some((parsed.accepted_text(), parsed.accepted_run_paths())),
+                                "{case}"
+                            );
+                        }
+                    }
+                    BodyContent::Table(table) => {
+                        let item = snapshots
+                            .iter()
+                            .find(|item| {
+                                item.location().item_kind() == StoryItemKind::Table
+                                    && item.direct_body_index() == Some(slot)
+                            })
+                            .unwrap();
+                        let expected = document.table_element_xml(item.location()).unwrap();
+                        let actual = document.direct_body_table_xml(slot).unwrap().unwrap();
+                        assert_contract(&actual, &expected, &case);
+                        for (row, cell) in table.rows.iter().enumerate().flat_map(|(row, cells)| {
+                            (0..=cells.cells.len()).map(move |cell| (row, cell))
+                        }) {
+                            let case = format!("{case} cell=({row}, {cell})");
+                            match document.cell_element_xml(item.location(), row, cell) {
+                                Ok(expected) => {
+                                    cells += 1;
+                                    let actual = document
+                                        .direct_body_cell_xml(slot, row, cell)
+                                        .unwrap()
+                                        .unwrap();
+                                    assert_contract(&actual, &expected, &case);
+                                }
+                                Err(_) => {
+                                    assert!(
+                                        document.direct_body_cell_xml(slot, row, cell).is_err(),
+                                        "{case}"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    BodyContent::ContentControl(control) => {
+                        paragraphs += control.content.len();
+                    }
+                    BodyContent::RawXml(_) => {}
+                }
+            }
+            assert!(paragraphs > 8 && cells >= 6, "{case}");
+        }
+        // The local declaration does change some reads.
+        assert!(changed > 0);
+    }
+
+    #[test]
+    fn issue407_direct_body_reads_and_plain_edits_do_not_grow_with_the_body() {
+        let mut work = Vec::new();
+        const TABLE: &str = r#"<w:tbl><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>one</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>two</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+        for count in [100usize, 400] {
+            // A root without `w14`, as rdocx writes it, reads locally too.
+            let body = issue407_runs(count).replacen("<w:p>", &format!("{TABLE}<w:p>"), 31);
+            let body = body.replacen(&format!("{TABLE}<w:p>"), "<w:p>", 30);
+            let mut document = issue407_document(&body, false);
+            let counters = || {
+                (
+                    STORY_SOURCE_BUILDS.get(),
+                    STORY_OWNER_SCANS.get(),
+                    FX237_ITEM_SCANS.get(),
+                    FX211_PROFILE.get()[1],
+                    FX237_PREFIX_NAMESPACE_BYTES.get(),
+                    STANDALONE_BODY_ITEM_BYTES.get(),
+                    fx260_body_visits(),
+                )
+            };
+            let reset = || {
+                STORY_SOURCE_BUILDS.set(0);
+                STORY_OWNER_SCANS.set(0);
+                FX237_ITEM_SCANS.set(0);
+                FX211_PROFILE.set([0; 12]);
+                FX237_PREFIX_NAMESPACE_BYTES.set(0);
+                STANDALONE_BODY_ITEM_BYTES.set(0);
+                reset_fx260_body_visits();
+            };
+            let mut sample = Vec::new();
+            reset();
+            assert!(document.direct_body_paragraph_xml(20).unwrap().is_some());
+            let path =
+                CT_P::from_xml_fragment(&document.direct_body_paragraph_xml(20).unwrap().unwrap())
+                    .unwrap()
+                    .accepted_run_paths()
+                    .remove(3);
+            assert!(document.direct_body_run_xml(20, &path).unwrap().is_some());
+            sample.push(counters());
+            reset();
+            let paragraph = Document::detached_text_paragraph("x");
+            assert!(
+                document
+                    .direct_body_paragraph_facts(&paragraph)
+                    .unwrap()
+                    .is_some()
+            );
+            document.insert_paragraph(10, "x");
+            sample.push(counters());
+            reset();
+            assert!(document.try_remove_content(10).unwrap());
+            sample.push(counters());
+            reset();
+            let last = document.content_count() - 1;
+            assert_eq!(
+                document.direct_body_story_item_count(last).unwrap(),
+                Some(1)
+            );
+            document.add_paragraph("y");
+            sample.push(counters());
+            reset();
+            assert_eq!(document.remove_content_range(10, 12).unwrap(), 2);
+            sample.push(counters());
+            reset();
+            let slot = document
+                .document
+                .body
+                .content
+                .iter()
+                .position(|content| matches!(content, BodyContent::Table(_)))
+                .unwrap();
+            assert_eq!(slot, 28);
+            assert!(document.direct_body_table_xml(slot).unwrap().is_some());
+            assert!(document.direct_body_cell_xml(slot, 0, 1).unwrap().is_some());
+            sample.push(counters());
+            reset();
+            let table = Document::detached_table(2, 3);
+            let (_, (items, cells, paragraphs, links)) =
+                document.detached_table_owner_snapshots(&table).unwrap();
+            assert_eq!(
+                (items.len(), cells.len(), paragraphs.len(), links.len()),
+                (7, 6, 6, 0)
+            );
+            document.insert_table(10, 2, 3);
+            sample.push(counters());
+            // No body serialization. The scans read only the standalone item,
+            // so they are the same in a body four times as large.
+            assert!(
+                sample.iter().all(|counts| counts.0 == 0),
+                "count={count} {sample:?}"
+            );
+            work.push(sample);
+        }
+        assert_eq!(work[0], work[1]);
     }
 }
 
