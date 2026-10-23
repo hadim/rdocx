@@ -38,6 +38,16 @@ fn reset_fx260_ppt_visits() {
 pub(crate) fn inventory_work() -> usize {
     FX260_PPT_VISITS.with(|cell| cell.replace(0))
 }
+
+/// Debug builds only: the work staging and reopening packages did since the
+/// previous call, as parts parsed, slide and notes parts serialized, media
+/// hashed and packages written as a ZIP.
+#[cfg(debug_assertions)]
+#[pyfunction]
+#[pyo3(name = "_commit_work")]
+pub(crate) fn commit_work() -> [usize; 4] {
+    rpptx::take_commit_work()
+}
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyList, PyString, PyTuple};

@@ -12217,6 +12217,55 @@ def test_issue403_shape_edits_do_the_same_inventory_work_at_n_and_4n_slides():
     assert large == small
 
 
+def test_issue403_package_edits_do_the_same_commit_work_at_n_and_4n_slides():
+    """Debug builds count the work of staging and reopening a package: the
+    parts parsed, the slide and notes parts serialized, the media hashed and
+    the packages written as a ZIP. A package-bound edit on the first slide of
+    a deck read from bytes does the same work whatever the number of later
+    slides, and writes no ZIP. Release builds do not count.
+    """
+    import io
+
+    import rpptx
+    from rpptx import _rpptx
+
+    commit_work = getattr(_rpptx, "_commit_work", None)
+    if commit_work is None:
+        pytest.skip("release build: the commit work counter is debug-only")
+
+    def work(slides):
+        built = rpptx.Presentation()
+        for index in range(slides):
+            slide = built.slides.add_slide(built.slide_layouts[6])
+            for _ in range(4):
+                slide.shapes.add_textbox(0, 0, 100, 100).text_frame.text = "before"
+            slide.shapes.add_table(2, 2, 0, 0, 900, 900)
+            slide.shapes.add_picture(io.BytesIO(_tiny_png(index, 0, 0)), 0, 0, 100, 100)
+            slide.notes_slide.notes_text_frame.text = "notes"
+        presentation = rpptx.Presentation.from_bytes(built.to_bytes())
+        slide = presentation.slides[0]
+        shapes = slide.shapes
+        counts = {}
+
+        def count(name, edit):
+            commit_work()
+            edit()
+            counts[name] = commit_work()
+
+        count("CoreProperties.title", lambda: setattr(presentation.core_properties, "title", "edited"))
+        count("NotesTextFrame.text", lambda: setattr(slide.notes_slide.notes_text_frame, "text", "edited"))
+        count("FillFormat.solid (table cell)", lambda: shapes[4].table.cell(0, 0).fill.solid())
+        count("Shape.replace_image", lambda: shapes[5].replace_image(io.BytesIO(_tiny_png(1, 2, 3))))
+        count("Shape.flip_h", lambda: setattr(shapes[0], "flip_h", True))
+        count("ShapeCollection.remove", lambda: shapes.remove(shapes[1]))
+        count("SlideCollection.remove", lambda: presentation.slides.remove(presentation.slides[1]))
+        return counts
+
+    small, large = work(3), work(12)
+    assert all(zip_writes == 0 for *_, zip_writes in small.values()), small
+    assert large == small
+
+
 @pytest.mark.parametrize("kind", ["shape", "table", "cell", "body", "paragraph", "run", "slide", "layout", "master"])
 def test_issue389_element_publication_and_refusal_for_every_kind(kind):
     import rpptx

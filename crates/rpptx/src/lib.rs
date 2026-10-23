@@ -3298,7 +3298,7 @@ impl Presentation {
         #[cfg(debug_assertions)]
         match (
             &same,
-            (|| Ok::<_, Error>(self.to_bytes()? == other.to_bytes()?))(),
+            without_commit_work(|| Ok::<_, Error>(self.to_bytes()? == other.to_bytes()?)),
         ) {
             (Ok(same), Ok(bytes)) => assert_eq!(*same, bytes, "saves_as differs from to_bytes"),
             (Err(same), Err(bytes)) => assert_eq!(same.to_string(), bytes.to_string()),
@@ -4627,13 +4627,14 @@ impl Presentation {
                 .filter(|parsed| parsed.holds_slide(record));
             let parsed_from =
                 |part: &str| parsed.is_some_and(|parsed| parsed.same_bytes(&self.package, part));
-            let slide_changed = !parsed_from(&record.part_name)
-                && self
-                    .package
+            let slide_changed = !parsed_from(&record.part_name) && {
+                note_commit_work(|work| work.parsed += 1);
+                self.package
                     .get_part(&record.part_name)
                     .and_then(|xml| CT_Slide::from_xml(xml).ok())
                     .as_ref()
-                    != Some(&record.slide);
+                    != Some(&record.slide)
+            };
             if !preserve_unchanged_modelled_parts || slide_changed {
                 note_commit_work(|work| work.serialized += 1);
                 package.set_part(
@@ -4648,13 +4649,14 @@ impl Presentation {
                 );
             }
             if let Some(notes) = &record.notes {
-                let notes_changed = !parsed_from(&notes.part_name)
-                    && self
-                        .package
+                let notes_changed = !parsed_from(&notes.part_name) && {
+                    note_commit_work(|work| work.parsed += 1);
+                    self.package
                         .get_part(&notes.part_name)
                         .and_then(|xml| CT_NotesSlide::from_xml(xml).ok())
                         .as_ref()
-                        != Some(&notes.notes);
+                        != Some(&notes.notes)
+                };
                 if !preserve_unchanged_modelled_parts || notes_changed {
                     note_commit_work(|work| work.serialized += 1);
                     package.set_part(
@@ -34230,8 +34232,8 @@ mod write_tests {
         let (small, small_work) = work(3);
         let (_, large_work) = work(12);
         assert_eq!(small_work, large_work);
-        for (name, work) in &small_work {
-            assert_eq!(work.zip_writes, 0, "{name} wrote the package as a ZIP");
+        for (name, [_, _, _, zip_writes]) in &small_work {
+            assert_eq!(*zip_writes, 0, "{name} wrote the package as a ZIP");
         }
         // Without what the opening parsed, the same edits go through the ZIP
         // and parse every slide again, and give the same deck.
@@ -34241,9 +34243,9 @@ mod write_tests {
         for (index, (_, edit)) in issue403_package_edits().into_iter().enumerate() {
             edit(&mut through_zip, picture, chart);
             if index == 0 {
-                let work = take_commit_work();
-                assert_eq!(work.zip_writes, 1);
-                assert!(work.parsed >= 3, "{work:?}");
+                let [parsed, _, _, zip_writes] = take_commit_work();
+                assert_eq!(zip_writes, 1);
+                assert!(parsed >= 3, "{parsed}");
             }
             through_zip.parsed = None;
         }
@@ -40531,10 +40533,15 @@ fn note_commit_work(count: impl FnOnce(&mut CommitWork)) {
     let _ = count;
 }
 
-/// Returns the work counted since the last call, and starts again.
-#[cfg(all(test, debug_assertions))]
-fn take_commit_work() -> CommitWork {
-    COMMIT_WORK.replace(CommitWork::default())
+/// Debug builds only: the work staging and reopening packages did on this
+/// thread since the previous call, as parts parsed, slide and notes parts
+/// serialized, media hashed and packages written as a ZIP, so that the
+/// binding tests can compare decks of N and 4N slides.
+#[doc(hidden)]
+#[cfg(debug_assertions)]
+pub fn take_commit_work() -> [usize; 4] {
+    let work = COMMIT_WORK.replace(CommitWork::default());
+    [work.parsed, work.serialized, work.hashed, work.zip_writes]
 }
 
 #[cfg(debug_assertions)]
