@@ -18,7 +18,7 @@ outcome. It is not the current whole-feature result. Final Word 16.114 A7, a
 fresh final CLI, the full workspace, full verify, the full hash suite, WASM,
 publish dry-run, strict installed mypy, and stubtest stay pending. F-289 is
 not done.
-F-290 stays pending and unclaimed.
+F-290 is claimed for parallel work, owner grok, and stays in progress. The claim is not implementation.
 F-X268 is pending, owner `-`. Its design is approved and it is not claimed.
 Codex root approved the 2026-10-24 refresh2 extension. Codex root approved
 the 2026-10-24 refresh3 extension after reading the full corrected contract
@@ -79,7 +79,7 @@ consumed local evidence is not a full gate. F-X267 remains the largest repair.
 |------|-------|------|--------|-------|
 | F-288 | Legacy form field creation | M | done | - |
 | F-289 | Modern Word form authoring | L | in-progress | grok |
-| F-290 | Mail-merge package and data-source authoring | M | pending | - |
+| F-290 | Mail-merge package and data-source authoring | M | in-progress | grok |
 | F-X264 | Repair Word defaults package inspection and comment projection | L | in-progress | grok |
 | F-X265 | Preserve fragment relationship targets and duplicate styles | M | in-progress | grok |
 | F-X266 | Bound Word body reads and structural edit cost | L | in-progress | grok |
@@ -109,7 +109,7 @@ It is not the current whole-feature result. Pass 5 does not approve completion.
 F-289 has not passed a full gate. Final Word 16.114 A7, a fresh final CLI, the
 full workspace, full verify, the full hash suite, WASM, publish dry-run, strict
 installed mypy, and stubtest stay pending. F-290
-stays pending and unclaimed. The consumed
+is claimed for parallel work, owner grok, and stays in progress. The claim is not implementation. The consumed
 local gate
 includes every named native group, A7 and the render fallback, the affected
 Python checks, a clean microscope, and that integrated ancestor. Reviewed

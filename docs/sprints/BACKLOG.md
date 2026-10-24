@@ -39,9 +39,9 @@ regenerated, never hand-edited.
 | M21, Presentation depth | 15 | 15 | 0 | 0 |
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
-| M24, Modern DOCX authoring completeness | 54 | 30 | 1 | 23 |
+| M24, Modern DOCX authoring completeness | 54 | 30 | 2 | 22 |
 | X, Cross-cutting | 282 | 268 | 4 | 6 |
-| **Total** | **613** | **548** | **5** | **56** |
+| **Total** | **613** | **548** | **6** | **55** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -520,7 +520,7 @@ regenerated, never hand-edited.
 | F-287 | Custom XML stores and data binding authoring | S95.3 | L | done |
 | F-288 | Legacy form field creation | S95.4 | M | done |
 | F-289 | Modern Word form authoring | S95.4 | L | in-progress |
-| F-290 | Mail-merge package and data-source authoring | S95.4 | M | pending |
+| F-290 | Mail-merge package and data-source authoring | S95.4 | M | in-progress |
 | F-291 | Tracked insertion and deletion authoring | S97 | L | pending |
 | F-292 | Property revisions and move ranges | S97 | L | pending |
 | F-293 | Complete comments and modern comment metadata | S97 | L | pending |
