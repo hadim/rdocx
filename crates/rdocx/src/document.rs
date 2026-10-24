@@ -4985,12 +4985,17 @@ pub(crate) struct DocumentIdentifiers {
 
 impl DocumentIdentifiers {
     fn scan(package: &OpcPackage) -> Result<Self> {
-        Self::scan_reusing(package, None)
+        Self::scan_reusing(package, None, None)
     }
 
     /// The identifiers [`DocumentIdentifiers::scan`] gives for `package`,
-    /// reading again only the parts whose bytes `earlier` did not scan.
-    fn scan_reusing(package: &OpcPackage, earlier: Option<&Self>) -> Result<Self> {
+    /// reading again only the parts whose bytes neither `earlier` nor
+    /// `scanned`, what was read in one part, scanned.
+    fn scan_reusing(
+        package: &OpcPackage,
+        earlier: Option<&Self>,
+        scanned: Option<&ScannedIdentifierPart>,
+    ) -> Result<Self> {
         let mut identifiers = Self {
             relationship_ids: HashMap::new(),
             bookmark_ids: HashSet::new(),
@@ -5061,10 +5066,7 @@ impl DocumentIdentifiers {
             identity_parts
                 .entry(part_name_identity(&main_part))
                 .or_default()
-                .extend([
-                    IdentifierXmlCategory::Bookmark,
-                    IdentifierXmlCategory::Drawing,
-                ]);
+                .extend(main_part_identifier_categories());
             if let Some(relationships) = package.get_part_rels(&main_part) {
                 for relationship in &relationships.items {
                     let categories: &[IdentifierXmlCategory] = match relationship.rel_type.as_str()
@@ -5111,12 +5113,14 @@ impl DocumentIdentifiers {
             // A part still holding the bytes an earlier scan read gives the
             // definitions read there. Applying them raises the duplicate a
             // scan of the part raises, and in the same order.
+            let read_in = |scanned: &&ScannedIdentifierPart| {
+                scanned.categories == *categories
+                    && (Arc::ptr_eq(&scanned.bytes, bytes) || scanned.bytes == *bytes)
+            };
             let earlier = earlier
                 .and_then(|earlier| earlier.scanned_parts.get(part_name))
-                .filter(|scanned| {
-                    scanned.categories == *categories
-                        && (Arc::ptr_eq(&scanned.bytes, bytes) || scanned.bytes == *bytes)
-                });
+                .filter(read_in)
+                .or(scanned.filter(read_in));
             let (definitions, unreadable) = match earlier {
                 Some(scanned) => (scanned.definitions.clone(), None),
                 None => {
@@ -5961,6 +5965,29 @@ fn identifier_xml_is_well_formed(xml: &[u8]) -> bool {
             Err(_) => return false,
         }
     }
+}
+
+/// The categories the identifier scan of a package reads in its main part.
+fn main_part_identifier_categories() -> HashSet<IdentifierXmlCategory> {
+    HashSet::from([
+        IdentifierXmlCategory::Bookmark,
+        IdentifierXmlCategory::Drawing,
+    ])
+}
+
+/// The identifiers of [`main_part_identifier_categories`] that `xml`
+/// defines, in order, or `None` when the scan skips `xml`, which is not
+/// well-formed, or fails in it.
+fn main_part_identifier_definitions(xml: &[u8]) -> Option<Vec<IdentifierDefinition>> {
+    let mut definitions = Vec::new();
+    (identifier_xml_is_well_formed(xml)
+        && DocumentIdentifiers::scan_xml_definitions(
+            xml,
+            &main_part_identifier_categories(),
+            &mut definitions,
+        )
+        .is_ok())
+    .then_some(definitions)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -7297,6 +7324,71 @@ impl MainPartBlocks {
             .as_ref()
     }
 
+    /// What [`CT_Document::from_xml`] gives for the part these blocks are,
+    /// whose body parser reads each child alone under the root and the
+    /// plain body start the frame writes: the frame, with the value of each
+    /// block whose bytes parse back alone to it, field for field, and the
+    /// parse alone of the others. `None` when the frame does not parse, a
+    /// block does not parse alone to one body child, or parsing the blocks
+    /// alone, each under the root, reads more bytes than the whole part, as
+    /// after a first serialization.
+    fn parsed_document(&self) -> Option<CT_Document> {
+        let kept = |block: &BodyBlockScan| {
+            block.parsed || block.fieldless && block.staging.parses_back.get() == Some(&true)
+        };
+        let around = self.root().len() + MAIN_PART_BODY_START.len() + MAIN_PART_BODY_END.len();
+        let read = self
+            .blocks
+            .iter()
+            .filter(|block| !kept(block))
+            .map(|block| around + block.bytes.len())
+            .sum::<usize>();
+        if read >= self.head.len() + self.content().len() + self.tail.len() {
+            return None;
+        }
+        let mut document = self.frame()?.clone();
+        for block in &self.blocks {
+            let item = match block.value.as_ref().filter(|_| kept(block)) {
+                Some(value) => value.clone(),
+                None => {
+                    let item = block.reparsed(self.root())?;
+                    let _ = block
+                        .staging
+                        .parses_back
+                        .set(block.value.as_ref() == Some(&item));
+                    item
+                }
+            };
+            document.body.content.push(item);
+        }
+        Some(document)
+    }
+
+    /// What the identifier scan of a package reads in the part these blocks
+    /// are, read block by block, or `None` when the frame or a block is not
+    /// well-formed alone or fails the scan.
+    fn identifiers(&self) -> Option<ScannedIdentifierPart> {
+        let part = self.part.as_ref()?;
+        let (head, tail) = self.frame_parts();
+        note_reopen_work(|work| work.scanned += head.len() + tail.len());
+        let mut definitions = main_part_identifier_definitions(&head)?;
+        for block in &self.blocks {
+            definitions.extend_from_slice(block.definitions(self.root())?);
+        }
+        definitions.extend(main_part_identifier_definitions(&tail)?);
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            Some(&definitions),
+            main_part_identifier_definitions(part).as_ref(),
+            "the identifiers of the blocks differ from a scan of the part"
+        );
+        Some(ScannedIdentifierPart {
+            bytes: Arc::clone(part),
+            categories: main_part_identifier_categories(),
+            definitions: Some(definitions),
+        })
+    }
+
     /// Gives `document`, which these blocks serialize, what parsing their
     /// bytes with the `edits` made gives, a drawing id value replaced at each
     /// span, sorted: the frame and the blocks parsed again where edited.
@@ -7374,8 +7466,9 @@ impl MainPartBlocks {
 
     /// These blocks for `document`, reopened from the part they are, or
     /// kept for their values alone when its main part holds other bytes.
-    /// When the parse of the reopen holds the value of each block, and each
-    /// block is one element, each block parses back alone.
+    /// When the parse of the reopen holds as many body children as there
+    /// are blocks, each one element, each block parses back alone where its
+    /// value equals the child at its place.
     fn reopened(&self, document: &Document) -> Arc<Self> {
         let current = self.part.as_deref().and_then(|part| {
             let current = document.package.get_part(&document.doc_part_name)?;
@@ -7395,18 +7488,20 @@ impl MainPartBlocks {
             });
         };
         let content = &document.document.body.content;
-        if self.blocks.len() == content.len()
-            && self
-                .blocks
-                .iter()
-                .zip(content)
-                .all(|(block, item)| block.value.as_ref() == Some(item))
+        if self
+            .blocks
+            .iter()
+            .any(|block| block.staging.parses_back.get().is_none())
+            && self.blocks.len() == content.len()
             && self.blocks.iter().all(|block| {
                 !matches!(block.value, Some(BodyContent::RawXml(_))) || single_element(&block.bytes)
             })
         {
-            for block in &self.blocks {
-                let _ = block.staging.parses_back.set(true);
+            for (block, item) in self.blocks.iter().zip(content) {
+                let _ = block
+                    .staging
+                    .parses_back
+                    .set(block.value.as_ref() == Some(item));
             }
         }
         Arc::new(Self {
@@ -7742,7 +7837,8 @@ fn masked_block(
     Some(masked)
 }
 
-/// Whether `xml` is one element and nothing else.
+/// Whether `xml` is one element and nothing else, other than section
+/// properties, which a parse of the body takes for the body's first.
 fn single_element(xml: &[u8]) -> bool {
     let mut reader = quick_xml::Reader::from_reader(xml);
     let mut buffer = Vec::new();
@@ -7755,6 +7851,11 @@ fn single_element(xml: &[u8]) -> bool {
         match event {
             Event::Eof => return closed,
             _ if closed => return false,
+            Event::Start(ref element) | Event::Empty(ref element)
+                if depth == 0 && element.local_name().as_ref() == b"sectPr" =>
+            {
+                return false;
+            }
             Event::Start(_) => depth += 1,
             Event::Empty(_) if depth == 0 => closed = true,
             Event::End(_) => {
@@ -8519,6 +8620,9 @@ struct BlockStagingReads {
     numbering: OnceLock<Option<Vec<CT_PPr>>>,
     /// The child with modeled relationships masked, for the renames made.
     masked: OnceLock<(Vec<(String, String)>, Arc<BodyBlockScan>)>,
+    /// The identifiers defined, as [`main_part_identifier_definitions`]
+    /// reads them.
+    definitions: OnceLock<Option<Vec<IdentifierDefinition>>>,
 }
 
 /// What a main part holds around its body children, read alone.
@@ -8612,6 +8716,16 @@ impl BodyBlockScan {
             || *self.staging.parses_back.get_or_init(|| {
                 self.value.is_some() && self.reparsed(root).as_ref() == self.value.as_ref()
             })
+    }
+
+    fn definitions(&self, root: &[u8]) -> Option<&[IdentifierDefinition]> {
+        self.staging
+            .definitions
+            .get_or_init(|| {
+                note_reopen_work(|work| work.scanned += self.bytes.len());
+                main_part_identifier_definitions(&self.alone(root).0)
+            })
+            .as_deref()
     }
 }
 
@@ -21690,16 +21804,18 @@ impl Document {
 
     /// Opens `package` as [`Document::from_opened_package`] does, reading
     /// again only what `staged` did not: the identifiers of the staged
-    /// document the package was reread from, and what its last opening
-    /// parsed. A main part that holds the bytes it was opened with is that
-    /// opening's parse and nested namespace owners, and an identifier part
-    /// whose bytes the scan of those identifiers read gives the definitions
-    /// read there. A reopened document keeps its main part parsed for its
-    /// next staging.
+    /// document the package was reread from, what its last opening parsed,
+    /// and the blocks its flush wrote the main part from, if it did. A main
+    /// part that holds the bytes it was opened with is that opening's parse
+    /// and nested namespace owners, one that holds the bytes of the blocks
+    /// is read block by block, parsing and scanning only the blocks no
+    /// earlier reading parsed, and an identifier part whose bytes the scan
+    /// of those identifiers read gives the definitions read there. A
+    /// reopened document keeps its main part parsed for its next staging.
     fn from_package_reusing(
         package: OpcPackage,
         read_from_bytes: bool,
-        staged: Option<(&DocumentIdentifiers, &Parsed)>,
+        staged: Option<(&DocumentIdentifiers, &Parsed, Option<&MainPartBlocks>)>,
     ) -> Result<Self> {
         let (doc_part_name, _) = validated_word_package_class(&package)?;
 
@@ -21707,12 +21823,22 @@ impl Document {
             .get_part(&doc_part_name)
             .ok_or(Error::NoDocumentPart)?;
         let namespace_scopes = document_namespace_scopes(doc_xml)?;
-        let kept = staged.map(|(_, parsed)| parsed).filter(|parsed| {
+        let kept = staged.map(|(_, parsed, _)| parsed).filter(|parsed| {
             parsed.main_part == doc_part_name
                 && parsed
                     .main_part_xml()
                     .is_some_and(|kept| std::ptr::eq(kept, doc_xml) || kept == doc_xml)
         });
+        let written = staged
+            .and_then(|(_, _, written)| written)
+            .filter(|written| {
+                kept.is_none()
+                    && written
+                        .part
+                        .as_deref()
+                        .is_some_and(|part| std::ptr::eq(part.as_slice(), doc_xml))
+            });
+        let written_document = written.and_then(MainPartBlocks::parsed_document);
         // A reopened document keeps what parsing and scanning its main part
         // gives. What canonicalizing drawing identifiers found in the main
         // part (`unchanged_main_part`) is a function of the part as its model
@@ -21741,6 +21867,12 @@ impl Document {
                 parsed.unchanged_main_part = OnceLock::from(unchanged.clone());
             }
         }
+        if let Some(owners) = written
+            .filter(|_| written_document.is_some())
+            .and_then(MainPartBlocks::nested_namespace_owners)
+        {
+            parsed.nested_namespace_owners = OnceLock::from(Some(owners.to_vec()));
+        }
         let (plain_local_edit_blocked, nested_owner_replay) = plain_local_edit_facts(
             &namespace_scopes.root_declarations,
             &namespace_scopes.body_declarations,
@@ -21753,9 +21885,10 @@ impl Document {
             }
             kept.main_document()
         });
-        let document = match kept_document {
-            Some(document) => document.clone(),
-            None => {
+        let document = match (kept_document, written_document) {
+            (Some(document), _) => document.clone(),
+            (None, Some(document)) => document,
+            (None, None) => {
                 note_reopen_work(|work| work.main_parses += 1);
                 CT_Document::from_xml(doc_xml)?
             }
@@ -21913,7 +22046,8 @@ impl Document {
             crate::embedded::known_invalid_package_signature_on_open(&package);
         let identifiers = DocumentIdentifiers::scan_reusing(
             &package,
-            staged.map(|(identifiers, _)| identifiers),
+            staged.map(|(identifiers, _, _)| identifiers),
+            written.and_then(MainPartBlocks::identifiers).as_ref(),
         )?;
         let parsed = Some(Arc::new(parsed));
         let document = Document {
@@ -22390,6 +22524,7 @@ impl Document {
         let through_zip = in_memory.then(|| {
             let mut copy = self.clone_for_staging();
             copy.parsed = None;
+            copy.main_body_scans = Arc::default();
             copy
         });
         let reopened = self.reopen_staged(in_memory, limits);
@@ -22416,11 +22551,12 @@ impl Document {
         let embedded_invalidated_signatures = self.embedded_invalidated_signatures.clone();
         let package_signatures_invalidated = self.package_signatures_invalidated;
         let opened = self.parsed.as_deref().filter(|_| in_memory);
+        let written = self.main_part_blocks();
         let mut reopened = match opened {
             Some(opened) => Self::from_package_reusing(
                 self.package.reread(&opened.package)?,
                 true,
-                Some((&provenance, opened)),
+                Some((&provenance, opened, written.as_deref())),
             )?,
             None => {
                 note_reopen_work(|work| work.zip_writes += 1);
@@ -49486,7 +49622,7 @@ mod tests {
         take_reopen_work();
         // The bytes of the parts read again.
         let scans = |package: &OpcPackage| {
-            let reused = DocumentIdentifiers::scan_reusing(package, Some(&earlier))
+            let reused = DocumentIdentifiers::scan_reusing(package, Some(&earlier), None)
                 .map_err(|error| error.to_string());
             #[cfg(debug_assertions)]
             let scans = take_reopen_work()[2];
