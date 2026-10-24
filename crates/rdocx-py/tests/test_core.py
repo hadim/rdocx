@@ -11543,7 +11543,12 @@ def test_staging_reads_the_main_part_once_while_it_keeps_its_opened_bytes(edit):
             call()
             sample.append(list(work()))
         counts.append(sample)
-    assert counts[0] == counts[1] == [[0, 0, 0, 0], [0, 0, 0, 0]], counts
+    assert counts[0] == counts[1], counts
+    if edit in ("Document.add_bullet_list_item", "Document.add_numbered_list_item"):
+        # A list item changes the model, which serializes and reads only the blocks it adds.
+        assert all(sample[:4] == [0] * 4 for sample in counts[0]), counts
+    else:
+        assert counts[0] == [[0] * 6, [0] * 6], counts
 
 
 def _reopen_work():

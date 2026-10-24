@@ -4049,6 +4049,53 @@ impl CT_Document {
         Ok(xml)
     }
 
+    /// The bytes [`Self::to_xml`] writes before the first body child, up to
+    /// the body start, and after the last one, before it declares `w14` on
+    /// the root.
+    #[doc(hidden)]
+    pub fn body_frame_xml(&self) -> Result<(Vec<u8>, Vec<u8>)> {
+        let _binding_scope = self.root_binding_scope();
+        let mut writer = Writer::new(Vec::new());
+        writer.write_event(Event::Decl(BytesDecl::new(
+            "1.0",
+            Some("UTF-8"),
+            Some("yes"),
+        )))?;
+        writer.write_event(Event::Start(self.root_start()))?;
+        if let Some(ref bg) = self.background_xml {
+            writer.get_mut().extend_from_slice(bg);
+        }
+        for raw in &self.background_extra_xml {
+            writer.get_mut().extend_from_slice(raw);
+        }
+        writer.write_event(Event::Start(BytesStart::new("w:body")))?;
+        let head = writer.into_inner();
+        let mut writer = Writer::new(Vec::new());
+        if let Some(ref sect) = self.body.sect_pr {
+            sect.to_xml(&mut writer)?;
+        }
+        writer.write_event(Event::End(BytesEnd::new("w:body")))?;
+        writer.write_event(Event::End(BytesEnd::new("w:document")))?;
+        Ok((head, writer.into_inner()))
+    }
+
+    /// The bytes [`Self::to_xml`] writes for `item` among the body children,
+    /// after the admission it makes of the item there. The item need not
+    /// belong to the body.
+    #[doc(hidden)]
+    pub fn body_item_xml(&self, item: &BodyContent) -> Result<Vec<u8>> {
+        match item {
+            BodyContent::Paragraph(p) => admit_word_model(WordOwner::Paragraph(p))?,
+            BodyContent::Table(t) => admit_word_model(WordOwner::Table(t))?,
+            BodyContent::ContentControl(s) => admit_word_model(WordOwner::Control(s))?,
+            BodyContent::RawXml(_) => {}
+        }
+        let _binding_scope = self.root_binding_scope();
+        let mut writer = Writer::new(Vec::new());
+        write_body_content(item, &mut writer)?;
+        Ok(writer.into_inner())
+    }
+
     /// Serialize `item` as the only child of this document's body, under the
     /// part root and with the bytes [`Self::to_xml`] writes for it there.
     ///

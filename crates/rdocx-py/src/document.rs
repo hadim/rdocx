@@ -100,14 +100,15 @@ pub(crate) fn word_piece_work() -> usize {
     WORD_PIECE_READS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// The whole main part work staging and comparing saves did on this thread
-/// since the previous call, in bytes of the main part parsed again, scanned
-/// for nested namespace owners, canonicalized whole and written as a ZIP.
-/// Debug builds only.
+/// The main part work staging and comparing saves did on this thread since
+/// the previous call, in bytes of the main part parsed again, scanned for
+/// nested namespace owners, canonicalized whole as a retained source and
+/// written as a ZIP, then in body children serialized and read alone as kept
+/// blocks. Debug builds only.
 #[cfg(debug_assertions)]
 #[pyfunction]
 #[pyo3(name = "_staging_work")]
-pub(crate) fn staging_work() -> [usize; 4] {
+pub(crate) fn staging_work() -> [usize; 6] {
     rdocx::take_staging_work()
 }
 
