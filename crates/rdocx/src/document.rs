@@ -62277,6 +62277,81 @@ mod tests {
         take_staging_work();
         assert_eq!(document.to_bytes().unwrap(), forgetting.to_bytes().unwrap());
     }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn staging_reads_only_the_main_part_blocks_an_edit_changes() {
+        // Edits that change the main part and commit, on bodies of N and 4N
+        // paragraphs with pictures, a nested namespace owner and a numbering
+        // part read from bytes: a table row, a section, a list item checked
+        // against the numbering graph.
+        #[allow(clippy::type_complexity)] // Each edit with its name.
+        let edits: [(&str, fn(&mut Document, usize)); 3] = [
+            ("table row", |document, _| {
+                let table = document.tables().len() - 1;
+                document.add_empty_table_row(table).unwrap();
+            }),
+            ("section", |document, _| {
+                let count = document.section_count();
+                document.insert_section(count).unwrap();
+            }),
+            ("list item", |document, k| {
+                document.add_bullet_list_item(&format!("item {k}"), 0);
+            }),
+        ];
+        for (name, edit) in edits {
+            let mut work = Vec::new();
+            let mut forgetting = Vec::new();
+            for count in [50usize, 200] {
+                let body = format!("{}{}", issue407_runs(count), issue407_varied_body(""));
+                let mut source = issue407_document(&body, false);
+                for _ in 0..count / 10 {
+                    source.add_picture(
+                        super::watermark_tests::PNG,
+                        "pixel.png",
+                        Length::pt(12.0),
+                        Length::pt(12.0),
+                    );
+                }
+                source
+                    .add_numbering_definition(&[ListLevel::decimal()])
+                    .unwrap();
+                let mut document = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+                // The first edit serializes every block once, the next one
+                // reads once what its staging reads in every block.
+                edit(&mut document, 0);
+                edit(&mut document, 1);
+                take_staging_work();
+                take_reopen_work();
+                let mut sample = Vec::new();
+                for k in 2..4 {
+                    edit(&mut document, k);
+                    sample.push((take_staging_work(), take_reopen_work()));
+                }
+                work.push(sample);
+                // A copy that keeps no blocks reads the whole part again.
+                let mut copy = document.clone_for_staging();
+                copy.main_body_scans = Arc::default();
+                copy.parsed = None;
+                edit(&mut copy, 4);
+                forgetting.push(take_staging_work());
+            }
+            // Later edits serialize and read only the blocks they change, as
+            // many in a body four times as large, and nothing whole, and the
+            // reopens of their commits parse and scan only those blocks.
+            assert_eq!(work[0], work[1], "{name}");
+            assert!(
+                work[0]
+                    .iter()
+                    .all(|(staging, reopen)| staging[..4] == [0; 4] && reopen[..2] == [0; 2]),
+                "{name} {work:?}"
+            );
+            assert!(
+                forgetting[1][4] > forgetting[0][4] && forgetting[1][0] > forgetting[0][0],
+                "{name} {forgetting:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

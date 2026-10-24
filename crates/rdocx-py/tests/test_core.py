@@ -11710,3 +11710,62 @@ def test_story_lookups_scan_only_the_body_children_an_edit_changed(call):
         counts.append(scans() - before)
     # Each call scans again the children it changed, at least one, as many at both sizes.
     assert 1 <= counts[0] == counts[1] <= 4, (call, counts)
+
+
+def _block_edits():
+    """Edits that change the main part of a document and commit it, each given the document and a fresh k and
+    returning the call that makes the edit."""
+    import rdocx
+
+    def run_text(doc, k):
+        run = [paragraph for paragraph in doc.paragraphs if paragraph.text.startswith("end")][-1].runs[0]
+        return lambda: setattr(run, "text", f"end {k}")
+
+    def footnote(doc, k):
+        paragraph = [paragraph for paragraph in doc.paragraphs if paragraph.text == "spot"][-1]
+        return lambda: doc.add_footnote(paragraph, f"note {k}")
+
+    return {
+        "Table.add_row": lambda doc, k: doc.tables[-1].add_row,
+        "Cell.text": lambda doc, k: lambda: setattr(doc.tables[-1].cell(0, 1), "text", f"cell {k}"),
+        "Run.text": run_text,
+        "Document.add_bullet_list_item": lambda doc, k: lambda: doc.add_bullet_list_item(f"item {k}"),
+        "Document.insert_section": lambda doc, k: lambda: doc.insert_section(len(doc.sections)),
+        "Document.insert_html": lambda doc, k: lambda: doc.insert_html(
+            f"<p>inserted {k}</p>", after=[paragraph for paragraph in doc.paragraphs if paragraph.text == "spot"][-1]),
+        "Document.add_footnote": footnote,
+        "SectionHandle.set_page_border": lambda doc, k: lambda: doc.section(0).set_page_border(
+            ("top", "left", "bottom", "right")[k]),
+    }
+
+
+@pytest.mark.parametrize("edit", sorted(_block_edits()))
+def test_staging_writes_and_reads_only_the_main_part_blocks_an_edit_changes(edit):
+    # Staging serializes the main part from the blocks kept for the body children an edit leaves equal, and reads in
+    # their bytes what it read once: after two edits, a later one does none of the whole main part work and serializes
+    # and reads as many blocks in a body of 20 paragraphs as in one four times as large. The reopen of its commit
+    # parses none of the main part whole and scans for identifiers only the blocks no earlier reading parsed. Debug
+    # builds check every block read against the whole work, and every reopen against a read of the ZIP.
+    work = _staging_work()
+    reopen = _reopen_work()
+    make = _block_edits()[edit]
+    counts = []
+    reopens = []
+    for paragraphs in (20, 80):
+        doc = _staging_document(paragraphs)
+        for k in (0, 1):
+            make(doc, k)()
+        sample = []
+        for k in (2, 3):
+            call = make(doc, k)
+            work()
+            reopen()
+            call()
+            sample.append(list(work()))
+            reopens.append(list(reopen()))
+        counts.append(sample)
+    assert counts[0] == counts[1], counts
+    assert all(sample[:4] == [0] * 4 for sample in counts[0]), counts
+    assert all(sample[:2] == [0, 0] for sample in reopens), reopens
+    # An identifier written into a changed block may take one more digit in the larger document.
+    assert all(abs(large[2] - small[2]) <= 16 for small, large in zip(reopens[:2], reopens[2:])), reopens
