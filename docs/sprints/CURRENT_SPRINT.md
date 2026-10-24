@@ -6,10 +6,11 @@
 Also admit the incoming Word and PowerPoint correctness and performance repairs.
 Provide public creation of legacy form fields, build modern forms on the existing
 content-control model, and author mail-merge packages with offline diagnostics.
-The seven designs are approved. F-X264, F-X265 and F-X266 are reviewed and
-integrated, and their final sprint gates are still pending. F-X267 is claimed.
-F-288, F-289 and F-290 stay pending and unclaimed. The repairs do not replace
-the original authoring contract.
+The seven designs are approved. F-X264, F-X265, F-X266 and F-X267 are reviewed
+and integrated, and their final sprint gates are still pending. F-288 is
+claimed. F-289 and F-290 stay pending and unclaimed. Reviewed repair status
+does not complete the F-288 local provider edge that F-289 requires. The
+repairs do not replace the original authoring contract.
 
 **Estimated effort**: the 12 to 17 developer-day figure applies only to the
 original three Rust and Python authoring stories, F-288, F-289 and F-290.
@@ -18,7 +19,7 @@ stories. The four repair designs add a provisional 15 to 24 developer-days.
 The expanded planning total is 27 to 41 developer-days. Those figures are
 estimates, not measurements, and they are not a capacity promise. The visible
 over-two-week scope is an approved intake. The sprint clock started with
-F-X264 `/start-feature`. F-X267 is claimed and its implementation has not
+F-X264 `/start-feature`. F-288 is claimed and its implementation has not
 started. F-X267 remains the largest repair.
 
 ## Spec references
@@ -45,7 +46,7 @@ started. F-X267 remains the largest repair.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-288 | Legacy form field creation | M | pending | - |
+| F-288 | Legacy form field creation | M | in-progress | grok |
 | F-289 | Modern Word form authoring | L | pending | - |
 | F-290 | Mail-merge package and data-source authoring | M | pending | - |
 | F-X264 | Repair Word defaults package inspection and comment projection | L | in-progress | grok |
@@ -66,9 +67,13 @@ of the F-288 to F-289 chain only when actual source and resource leases are
 distinct. Shared facade, binding or HLD files require serial ownership.
 
 All seven stories started pending and unclaimed. The seven designs are now
-approved. F-X264, F-X265 and F-X266 are reviewed and integrated, with their
-final sprint gates pending. F-X267 is claimed. F-288, F-289 and F-290 stay
-pending and unclaimed. Public APIs, supported properties, binding coverage, native
+approved. F-X264, F-X265, F-X266 and F-X267 are reviewed and integrated, with
+their final sprint gates pending. F-288 is claimed. F-289 and F-290 stay
+pending and unclaimed. F-289 still waits for the full F-288 local provider
+checkpoint: every named native group, including A7 and the render-fallback
+case, the affected Python checks, a clean microscope, and an integrated source
+ancestor. Reviewed status does not complete that edge. Final Word debt stays
+pending. Public APIs, supported properties, binding coverage, native
 comparison inputs and exact refusal behavior stay inside those approved
 contracts. S95.3's native fixtures do not automatically certify new form
 authoring.
