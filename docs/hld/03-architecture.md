@@ -100,11 +100,17 @@ parses to the model is told by children that each parse back alone, and its
 nested namespace owners are found in their spans. The reopen of that flush
 parses the part as the bytes around the children with the value of each child
 that parses back alone and the parse alone of the others, and scans for
-identifiers only the children no earlier reading scanned. Debug builds compare
-every child read with a read of the whole part, every flush and
-canonicalization with the whole work on a copy that keeps no scans, and every
-reopen with a read of the ZIP. The scans keep a copy of the body model
-besides.
+identifiers only the children no earlier reading scanned. A scoped text
+replacement proves the span it edits in the part the package holds against the
+serialization child by child: both normalize alike where their children parse
+back to the model, and only the child that holds the span, and a child that
+holds a field or does not parse back, is normalized alone on each side. The
+retained source a story picture keeps is canonicalized in the children its
+relationship renames and drawing ids reach, and in its tail. Each falls back to
+the whole work where the children do not tell. Debug builds compare every child
+read with a read of the whole part, every flush, canonicalization and scoped
+proof with the whole work, and every reopen with a read of the ZIP. The scans
+keep a copy of the body model besides.
 Namespace scans retain a frame per element and copy inherited maps only when
 the element declares a namespace. Attribute validation and scope restoration
 retain their checked source semantics.
