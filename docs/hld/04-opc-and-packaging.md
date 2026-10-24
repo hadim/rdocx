@@ -2076,6 +2076,20 @@ decoding for supported raster formats. New unsupported media facts refuse.
 Retained unsupported facts require unchanged relationship, type and target
 bytes. Arbitrary empty relationship IDs cannot bypass source ownership.
 
+The transaction preserves unrelated parts and opaque payloads. A trusted
+reread matches `write_to` followed by a read when the baseline is still the
+unmodified package that was read and the candidate was edited from it.
+`same_package_as` has that same normalized read or reread precondition.
+The trusted flag is provenance. It does not detect an arbitrary public map
+edit. A hand-built package is untrusted from construction, so its known
+fallback is that flag and not a scan of later map edits. Normalization, a
+malformed producer, an oversize entry, a missing baseline and any other
+unproved fast path use that ZIP read. `zip_entries` remains the save-equivalent
+writer. Debug builds can install one hidden note, `set_reread_zip_note`, that
+runs immediately before that fallback `write_to`, including when the write
+returns an error. The note does not run for other `write_to` callers and it
+does not run on the fast path.
+
 The transaction preserves unrelated parts and opaque payloads. Actual
 inherited namespace bindings close standalone owner XML, including opaque
 prefixes. A changed selected owner forces emission of its owning part even

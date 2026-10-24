@@ -47,7 +47,17 @@ pub fn reread(mut self, read: &OpcPackage) -> Result<Self>;
 pub fn same_package_as(&self, other: &OpcPackage) -> bool;
 ```
 
-`reread` is the hidden public cross-crate provider. The standalone public helper documents this precondition: the baseline is still unmodified and read-equivalent. A package that was read and later mutated is not a baseline. The internal `Parsed.package` is the immutable baseline, and the candidate is edited from it. No snapshot uses the full ZIP fallback. Unsafe equivalence also uses that ZIP fallback, including normalization, a malformed producer, oversize input, and any other unproved fast-equivalence case. `same_package_as` compares normalized packages that still match an unmodified read or reread. It is not an unconditional comparison of an arbitrary hand-built package. Within the proved precondition, write then read matches, including errors, producer bytes, normalized names, backslash, duplicate case, relationship collision, content-type change, and malformed raw bytes.
+`reread` is the hidden public cross-crate provider. The standalone public helper documents this precondition: the baseline is still unmodified and read-equivalent. A package that was read and later mutated is not a baseline. The internal `Parsed.package` is the immutable baseline, and the candidate is edited from it. The trusted flag records that provenance. It does not detect an arbitrary public map edit. The known hand-built fallback is the untrusted flag, not a map scan. No snapshot uses the full ZIP fallback. Unsafe equivalence also uses that ZIP fallback, including normalization, a malformed producer, oversize input, and any other unproved fast-equivalence case. `same_package_as` compares packages that are a normalized read or a reread. It is not an unconditional comparison of an arbitrary hand-built package. Within the proved precondition, write then read matches, including errors, producer bytes, normalized names, backslash, duplicate case, relationship collision, content-type change, and malformed raw bytes.
+
+Debug ZIP attribution, added after pass 1, is one hidden note and one crate-local helper. No new file, module or trait. `oxml-opc` does not depend on `rpptx`.
+
+```rust
+#[doc(hidden)]
+#[cfg(debug_assertions)]
+pub fn set_reread_zip_note(note: Option<fn()>);
+```
+
+Precondition: the note is installed by `rpptx` before `OpcPackage::reread`. It runs once immediately before the fallback `write_to`, including when that write returns an error. It does not run on the fast path and it does not run for any other `write_to` caller. `take_commit_work`, `saved_package_read_back` and `reopen` install `count_reread_zip_write`, which increments `zip_writes` through `note_commit_work`. `without_commit_work` pauses that increment, so the debug byte comparison does not count. `Presentation::note_embedded_zip_write` increments the same field once immediately before `commit_embedded_candidate`'s `write_to`, including when that write returns an error, and it does not count the following read. `to_bytes` and the parsed-`None` reopen and read-back paths keep their existing single increment and do not pass through the new notes.
 
 ```rust
 #[doc(hidden)]
@@ -141,11 +151,11 @@ F-X260 and F-X262 are done. F-X267 is pending and unclaimed. F-X264's `zip_entri
 | A2 | N 5 and 20, CALLS 3, reopen 16, early stop 0.05 s. Fresh actual targets, fastest sample | `large < 2 * small + 5` | Public mutating calls | `slide_ratio_matches_pinned_gate` | Pending release bench. No compilation |
 | A3 | Original 10, 40, 80 in-memory shapes with and without media and notes. Original package script. Raw lines retained | Printed originals unchanged. 40 and 80 each satisfy `unit_ms < 2 * 10_baseline_ms + 5`. The 600-payload 40 case has a matching 10-slide baseline | `shape_calls.py` and `package_calls.py` workloads, reimplemented in existing tests | `shape_40_and_80_meet_added_budget` | Pending. Means stay 10 and 5 |
 | A4 | Q13 untouched slide and notes bytes | Producer bytes preserved. M21 digest delta measured, not copied | Commit | `untouched_slide_bytes_stay` | Separate behaviour commit |
-| A5 | Q13 `fit_text` | Unrelated broken slide ignored. Layout, master and notes use relevant context. Global report unchanged | Fit publishers | `fit_text_ignores_unrelated_broken_slide` | Separate behaviour commit |
+| A5 | Q13 `fit_text` | Unrelated broken slide ignored. A shared master owner with two consuming slide contexts that differ in fit uses `fit_text_at` to choose a size valid in both. A notes owner fits, then refuses when that notes-master theme relationship is removed. Global report unchanged | Fit publishers | `fit_text_ignores_unrelated_broken_slide`, `fit_text_at_selects_size_valid_in_distinct_shared_contexts` | Separate behaviour commit |
 | A6 | Q13 transition and footer | Affected parts only. Structural ambiguity refuses. Unchanged owners stay | Those publishers | `footer_proof_is_part_local` | Separate behaviour commit |
-| A7 | Direct mutate, package edit, held, fresh, native, reopen, and a second in-memory presentation. Shared layout, two slides | Facts are fresh. No-op uses output bytes | The publisher list above | `parsed_baseline_tracks_real_edits` | Local regression |
-| A8 | Signed and embedded complete packages | Correctness and signature checks hold. Fallback cost is disclosed. No constant-time claim | Signature readers | `signed_package_keeps_signature_guarantees` | Local correctness. Timing is separate |
-| A9 | `reread` and `same_package_as` on an unmodified read-equivalent baseline, plus parsed `None` and one untrusted hand-built package | Proved unmodified baseline matches. No snapshot, normalization, malformed producer, oversize, and the hand-built package use the ZIP fallback. One function covers parsed `None` and the hand-built package | OPC and `saves_as` | `reread_matches_write_and_read`, `hand_built_baseline_uses_fallback` | Local regression |
+| A7 | Direct mutate, package edit, held, fresh, native, reopen, and a second in-memory presentation built with `Presentation::new`. Shared layout, two slides | The common facts are subject, slide number start 5, the collection-marker text and the default-run bold payload. Notes and handout header edits stay on the reopened fixture. Whole-package equality is not required. No-op uses output bytes | The publisher list above | `parsed_baseline_tracks_real_edits` | Local regression |
+| A8 | Signed and embedded complete packages | Correctness and signature checks hold. Fallback cost is disclosed. No constant-time claim | Signature readers | Existing `fx211b_native_opaque_root_edit_retains_invalidated_signature`. Embedded ZIP count is `embedded_replace_counts_commit_zip_write` | Local correctness. Timing is separate |
+| A9 | `reread` and `same_package_as` on an unmodified read-equivalent baseline, plus parsed `None` and one untrusted hand-built package | Proved unmodified baseline matches. No snapshot, normalization, malformed producer, oversize, and the hand-built package use the ZIP fallback. One function covers parsed `None` and the hand-built package. A trusted baseline with one unnormalized ordinary part counts a ZIP fallback in `unnormalized_opaque_part_counts_reread_zip_fallback` | OPC and `saves_as` | `reread_matches_write_and_read`, `hand_built_baseline_uses_fallback` | Local regression |
 | A10 | Historical PR413 residual of 107 | Contribution accounting only. Not a product test, not an intermediate bench, and not delivery credit. The final mechanisms are verified together on the 248 gate | Inventory note | None | Accounting only |
 | A11 | Counters for parse, serialize, hash, ZIP and owners | Bounds follow N and 4N. Zero ZIP only where promised. Metadata work is classified | `take_commit_work` | `commit_counters_follow_real_work` | Debug only |
 
@@ -180,10 +190,13 @@ Backlog test gate, verbatim: regression.
 | local scoped | regression | `reread_matches_write_and_read` | A9 proved precondition |
 | local scoped | regression | `hand_built_baseline_uses_fallback` | A9 parsed `None` and untrusted hand-built |
 | local scoped | regression | `untouched_slide_bytes_stay` | A4 |
-| local scoped | regression | `fit_text_ignores_unrelated_broken_slide` | A5 |
+| local scoped | regression | `fit_text_ignores_unrelated_broken_slide` | A5 unrelated slide, notes owner, and broken notes-master theme |
+| local scoped | regression | `fit_text_at_selects_size_valid_in_distinct_shared_contexts` | A5 shared master contexts with different fit results |
 | local scoped | regression | `footer_proof_is_part_local` | A6 |
 | local scoped | regression | `parsed_baseline_tracks_real_edits` | A7 |
-| local scoped | regression | `signed_package_keeps_signature_guarantees` | A8 |
+| local scoped | regression | `fx211b_native_opaque_root_edit_retains_invalidated_signature` | A8. Existing test name. The forwarding alias was removed |
+| local scoped | regression | `embedded_replace_counts_commit_zip_write` | A8 embedded ZIP write |
+| local scoped | regression | `unnormalized_opaque_part_counts_reread_zip_fallback` | A9 trusted baseline with one unnormalized part |
 | local scoped | regression | `commit_counters_follow_real_work` | A11 |
 | final sprint | performance | Release build. N 5 and 20. Shapes 10, 40, 80. No compilation | A1, A2, A3 pending |
 | final sprint | regression | M21 two-note digest measured against golden, harness and regression | A4 pending. No PowerPoint application oracle |
@@ -220,12 +233,12 @@ The untouched-slide commit may change the M21 deck digest. That delta is measure
 
 ## Implementation checklist
 
-- [ ] Change `parts` and `remove_part` to `Arc<Vec<u8>>`. Change `set_part` to `impl Into<Arc<Vec<u8>>>` with both instantiations.
-- [ ] Add `reread`, `same_package_as`, `saves_as`, and the unchanged-since queries.
-- [ ] Split the three Q13 behaviour commits.
-- [ ] Prove publishers against output bytes.
-- [ ] Leave the release bench and the digest measurement pending.
-- [ ] Keep Python signatures and the release version unchanged.
+- [x] Change `parts` and `remove_part` to `Arc<Vec<u8>>`. Change `set_part` to `impl Into<Arc<Vec<u8>>>` with both instantiations.
+- [x] Add `reread`, `same_package_as`, `saves_as`, and the unchanged-since queries.
+- [x] Split the three Q13 behaviour commits. Untouched producer bytes, slide fit scope, and part-local footer proofs are separate labelled commits. Independent M21 measurement stays pending.
+- [x] Prove publishers against output bytes in the local tests named above. The pass 2 repair checks a checked package commit, a real collection edit, the common in-memory facts, and distinct shared fit contexts.
+- [x] Leave the release bench and the digest measurement pending. The M21 constant is the original `411f028c4b51c6aac0a0e2ae11bc63592a6d0947ab1a5f0d15116d19bfe766bc`. The donor digest was copied and has been removed. Measurement is final only.
+- [x] Keep Python signatures and the release version unchanged.
 
 ## Open questions
 

@@ -3358,6 +3358,10 @@ builder.
 
 ## Explicit PowerPoint text fitting
 
+A slide target measures that slide with its layout and master. Notes fitting
+still uses the notes theme and notes master. An unrelated broken slide does
+not fail the slide target. The global fit report still includes every slide.
+
 The render-feature facade provides `refresh_autofit(&mut self, font_files)`,
 `fit_report(&self, font_files)` and `fit_text_at(&mut self, location,
 font_family, max_size, font_files)`. Locations come from the checked existing
@@ -3579,6 +3583,9 @@ surface adds no Python, WASM, CLI, trait, generic, builder, wrapper, feature
 flag, system codec, subprocess, or binary asset.
 
 ## Packaging
+
+Python package signatures are unchanged. Debug `_inventory_work` and
+`_commit_work` exist only on debug builds and are not stable exports.
 
 Current source prepares the exact seven-package Word Rust family, `rdocx`
 Python distribution, `rdocx-wasm` and inherited support carriers at0.16.3.
@@ -4081,6 +4088,9 @@ bindings. The error leaves the package and existing caches unchanged. Namespace
 aliases are accepted when the source projection and mutation are safe.
 
 ## PowerPoint footer, field, theme and transition authoring
+
+Footer and transition publication prove the edited parts. Structural ambiguity
+still refuses before a partial write.
 
 Presentation.set_header_footer accepts slide_number, footer, date, hide_on_title
 and date_format, with keyword-only date_cache. None disables a field, an empty

@@ -4368,6 +4368,11 @@ All 49 deterministic hash entries remain unchanged.
 
 ## PowerPoint footer and transition acceptance
 
+Part-local footer and transition proofs compare the untouched slide bytes.
+Ambiguous owner identity remains a refusal. Release timing of signed and
+embedded fallbacks is disclosed with the final bench and is not a constant-time
+claim.
+
 Public Base controls separately decide deck footer, local footer, transition,
 per-master theme, placeholder metadata, field insertion and displayed start.
 Current native and installed tests require repeat bytes, save/reopen, unique
@@ -4560,6 +4565,13 @@ Namespace aliases, default namespaces, exact-once URI decoding, declaration-time
 Ignorable grants, blank/additive scope, sibling restoration and Choice Requires
 meaning have independent controls. Safe bounded storage counters qualify shared
 namespace and route storage without large allocation or elapsed-time claims.
+
+Trusted reread tests compare a write and a read. A hand-built baseline uses
+the ZIP fallback because it is untrusted, not because a flag scanned the
+part map. Debug ZIP counters count that fallback and an embedded candidate
+write. They stay at zero on the proved fast path. The 248-call catalogue and
+the 40 and 80 slide budgets run once in the final release bench, with no
+compilation during that bench.
 
 Local story readiness uses unique in-repo RED/GREEN tests and microscope.
 Complete ordinary installed suites, strict typing/stubs, original reporter
