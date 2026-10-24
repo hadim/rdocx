@@ -4,8 +4,8 @@
 **Sprint**: S95.4
 **Size**: L
 **Depends on**: F-X266, F-X267
-**Estimate**: 10 to 17 developer-days for the combined scope. This is a provisional Root planning judgment. It is not a measurement and not a capacity promise. Do not add it to the historical seven-story figure of 27 to 41 developer-days. The earlier 7 to 12 figure stays historical for the scope approved before the 419 and 420 amendment.
-**Amendment**: Codex root approved the 2026-10-24 refresh2 extension. It extends the approved contract. No implementation is underway. No gate pass is claimed.
+**Estimate**: 10 to 17 developer-days for the combined scope. This remains the provisional Root planning judgment. Reassess it after decomposition. It is not a measurement, not a capacity promise, and not a new promise. Actual work is unknown. Do not add it to the historical seven-story figure of 27 to 41 developer-days. The earlier 7 to 12 figure stays historical for the scope approved before the 419 and 420 amendment.
+**Amendment**: Codex root approved the 2026-10-24 refresh2 extension. That approval stays. Codex root approved the 2026-10-24 refresh3 extension after reading the full corrected contract and the four-file delta. The canonical HEAD at that approval is `d6cefc239ab7de0d4dae63e13d730da558d3a3a5`, plus this working draft. This record is that Root review. It is not a self-review. The prior approved scope stays approved. No implementation is underway. No gate pass is claimed.
 
 ## Problem
 
@@ -31,7 +31,7 @@ The cache and piece facts below are copied from the pinned PR417 and PR418 trees
 
 ## Approach
 
-One story, six serial mechanisms. The first four stay as approved. The fifth and sixth are the approved 2026-10-24 refresh2 extension. The Q19 and Q21 behavior is its own labelled commit. Performance and memory steps are separate commits. No stack is reimported. The reviewed F-X266 and F-X267 source stays. F-288, F-289, and F-290 keep their approved contracts. Their fact-changing publishers are named in the consumer map.
+One story, seven serial mechanisms. The first four stay as approved. The fifth and sixth are the approved 2026-10-24 refresh2 extension. The seventh is the approved 2026-10-24 refresh3 extension. It is the same F-X268 story. It is not a ninth story. The Q19 and Q21 behavior is its own labelled commit. Performance and memory steps are separate commits. No stack is reimported. The reviewed F-X266 and F-X267 source stays. F-288, F-289, and F-290 keep their approved contracts. Their fact-changing publishers are named in the consumer map. The F-289 and F-290 publication proofs and related-owner proofs stay. They are not regressed by the seventh mechanism.
 
 Captured increment boundaries, not the stacked diffs against main:
 
@@ -43,10 +43,11 @@ Own increments only, still candidates and not accepted code:
 
 - PR419 `9916bcdc01bc4acc065ae45afa8bd8ae07a2d30c` follows PR418 `dba496fcd8b4d482995a23ab81d27ad2bfcbf5e7`. It has 3 own commits and 7 paths. The own diff SHA-256 is `0de97b8eb0df312584bb86976676eb8fc66d7be694dd96a99830b0647836cc53`.
 - PR420 `37851676af3e82a0500c4743ef86da417950d2c3` follows that PR419 head. It has 5 own commits and 11 paths. The own diff SHA-256 is `5b94cfeb7854c8d86a5f76c1d6a32424be8faa6d6af1b565af6eeb6fc28da728`.
+- PR421 `ab038a21bb88a38d46c8f640587c3a20b57f6770` follows that PR420 head. It has 7 own commits and 10 paths. The own diff SHA-256 is `50c390ff8038d69b95d19510122ab51d2fd3c37b30f5b5d79a89dc610f805e35`. The file is `/private/tmp/s95.4-refresh3/pr-421-own-increment.diff`. The stacked diff against main is not this increment. The 10 paths are `README.md`, `crates/rdocx-oxml/README.md`, `crates/rdocx-oxml/src/borders.rs`, `crates/rdocx-oxml/src/document.rs`, `crates/rdocx-oxml/src/text.rs`, `crates/rdocx-py/src/document.rs`, `crates/rdocx-py/tests/test_core.py`, `crates/rdocx/src/document.rs`, `docs/hld/03-architecture.md`, and `scripts/readme_doctests.py`. `content_control.rs`, `field.rs`, and `settings.rs` are not in those 10 paths.
 
-Actions run `40092396584` on the PR419 head is donor evidence only. Word fidelity job `120867623753` failed while downloading LibreOffice 26.2.5.2, with TLS `CERTIFICATE_VERIFY_FAILED`, before any fidelity comparison. The evidence file was absent. CI gate job `120878395382` failed because that Word job failed. The hash harness on that same donor run succeeded. No Word comparison was performed. A later green PR420 check is not a PR419 pass. Final fidelity on the own union stays mandatory. No product hash or render defect is inferred from that log.
+Actions run `40092396584` on the PR419 head is donor evidence only. Word fidelity job `120867623753` failed while downloading LibreOffice 26.2.5.2, with TLS `CERTIFICATE_VERIFY_FAILED`, before any fidelity comparison. The evidence file was absent. CI gate job `120878395382` failed because that Word job failed. The hash harness on that same donor run succeeded. No Word comparison was performed. A later green PR420 check is not a PR419 pass. The PR419 head did not move. A later Actions run `40103891571` concluded success, including Word fidelity job `120901503513` and CI gate job `120914750403`. That later run stays donor evidence. It is not local acceptance. PR421 checks were incomplete at cutoff 2026-10-24T17:02:28Z. No PR421 acceptance is inferred. Final fidelity on the own union stays mandatory. No product hash or render defect is inferred from those logs.
 
-Donor timings and the donor 68 MiB claim are unverified. README and crate README numbers in those trees are not copied. The donor figure is not accepted.
+Donor timings and the donor 68 MiB claim are unverified. Reported 57 and 18 call timings are not copied and they are not added to the fixed Q23 set of 73 flat calls and 5 linear calls. README package text, an M5 Max figure, and an allow-dirty note are not copied. README and crate README numbers in those trees are not copied. The donor figure is not accepted.
 
 ### 1. Qualified body splice and namespace replay
 
@@ -71,6 +72,18 @@ Python publication uses the prepared inventory. It allocates every result object
 ### 6. Incremental direct-body addressing
 
 `to_xml_with_body_spans` must reproduce the exact existing `to_xml` bytes, the direct-body order, and the head, tail, and final section context. A block source, owner, item, cell, or text box fact is reused only when the bytes match and the namespace, relationship, owner grammar, and context match. A root or frame change, and every changed fact, is invalidated. Duplicates match position and occurrence. There is no ordinal alias after prefix, suffix, or middle alignment, or after a reorder. Preserve the F-289 corrected accepted physical providers, per-part physical ordinals, and independent story scope for fields and controls. Preserve default, current, glyph, font, placeholder, and protection facts, and F-290 metadata. Do not overwrite `content_control.rs` from the donor. The existing direct id lookup and `collect_control_ids` may use an index while they preserve uniqueness, errors, and physical order. `direct_body_item_location` must equal the full story snapshot lookup for zero, one, and many items, nested controlled content, tables, cells, text boxes, and moved, removed, or repeated blocks, before and after both reopen routes. An unsupported independent block scan takes the checked full scan. An error is never an empty success. Whole-main hash and serialization stay separately counted and disclosed. A debug whole-path comparison is internal agreement. It is not a substitute for release regressions.
+
+### 7. Main-part body-child staging
+
+This is the approved 2026-10-24 refresh3 extension. It extends mechanisms 5 and 6. It does not replace them. The private design candidate is `MainPartBlocks` inside the existing `crates/rdocx/src/document.rs`. It is not a new file, module, or dependency. Its fields are the head bytes, the root range inside that head, the tail bytes, the kept block scans, an optional flushed part, a frame `OnceLock`, and nested namespace owners. A comment in the candidate says a child equal to a kept child that holds no field serializes to its kept bytes, and a child that holds a field is read again. That rule is the contract. `PartialEq` on a field-containing block is not reuse proof.
+
+`CT_Document::body_frame_xml` is `#[doc(hidden)]` and returns `Result<(Vec<u8>, Vec<u8>)>`. The pair is the bytes written before the first body child, through the body start, and the bytes written after the last body child. That helper runs before the full writer declares `w14` on the root. The stored head used by `MainPartBlocks` then applies the same conditional `w14` declaration the full writer applies. `CT_Document::body_item_xml(&self, item: &BodyContent) -> Result<Vec<u8>>` is `#[doc(hidden)]`. `BodyContent::RawXml` is a passthrough without model admission, and the helper does not reject raw XML. The helper matches the whole writer on admission, bytes, error, and binding context. The item need not belong to the body. It writes the item under `root_binding_scope`. Parent binding context is exact. Inherited body bindings, unknown source bytes, root bindings, and frame bindings stay. A changed root invalidates the kept frame and the kept blocks. An alternate Word prefix on the document root is such a change. A fragment spliced into that part uses the checked whole-part read.
+
+`BodyItemOwners` gains `holds_field: bool` as its 10th field on the final callable contract. The detector is a conservative byte-word scan for `fldSimple` and `fldChar`. It covers prefixed aliases and the default namespace because it matches those words and does not require one prefix. False positives are allowed. False negatives are not allowed. A positive result refuses reuse of that child by value. The implementation serializes or reads the changed child, or the field-bearing child, anew. Other proved blocks may still be reused. The checked whole-part fallback runs only when the child proof, the frame proof, or the context proof is unavailable. A positive field result does not by itself require that whole-part fallback for every field-bearing block. Field source, run span, nested cache, tab occurrence, and bookmark prefix publishers already named in the consumer map still invalidate the facts they change. Physical duplicates keep occurrence, order, and context. There is no ordinal alias.
+
+Every fast path has a checked fallback. The fallback returns the same bytes and the same errors in the same order as the full writer and the full reopen. Release proof of that equality is mandatory. A debug whole-path comparison is internal agreement. It is not that release proof. An unproved child, an unproved frame, an unproved context, a failed parse, unknown source that the block path cannot prove, or a binding mismatch uses the whole-part fallback before publication. A field-bearing block whose child, frame, and context are proved is serialized or read anew, and the other proved blocks stay reusable. That case does not require the whole-part fallback. An error is never an empty success.
+
+`take_staging_work` changes from the retired `[usize; 4]` counter to `[usize; 6]` under `debug_assertions` and `#[doc(hidden)]`. The four-slot array is not the callable counter. Python `_staging_work` returns the same six-slot array. It is not a stable export. The order is parsed bytes, scanned bytes, canonicalized bytes, ZIP bytes written, serialized children, then children read. The first four slots are byte counts. The last two slots are child counts. A child count is not a byte count. Setup calls sit outside the counter window. Cold work on the first changed edits is measured separately and is not amortized into the warm window. The warm window starts after two changed edits and then records two distinct edits.
 
 ### Public Rust contract
 
@@ -100,7 +113,7 @@ Adopt a donor helper only where the Python binding or `Document` is an actual co
 
 Optional eligibility `None` chooses the checked full path. A helper `Err` may take that full path only where the full path returns the same checked result, error, and error order the old path would have returned before publication. A full-path `Err` propagates through the existing native and Python mapping. Invalid ownership or invalid XML never becomes empty facts or success. `unsavable_body_edit` returning `None` is not a general proof that the document is savable.
 
-Captured from PR417 `crates/rdocx/src/document.rs`. The structs are public doc(hidden) cross-crate Rust types. The functions are methods:
+Captured from PR417 `crates/rdocx/src/document.rs` as nine fields. That nine-field capture stays historical. The struct below is the final refined callable contract. It keeps those nine fields and adds `pub holds_field: bool` as the tenth field. The structs are public doc(hidden) cross-crate Rust types. The functions are methods:
 
 ```rust
 #[doc(hidden)]
@@ -115,6 +128,7 @@ pub struct BodyItemOwners {
     pub paragraph_routes: Vec<Option<Vec<usize>>>,
     pub tables: usize,
     pub cell_paragraphs: Option<(HashMap<(usize, usize, usize), Vec<ContentLocation>>, bool)>,
+    pub holds_field: bool,
 }
 
 #[doc(hidden)]
@@ -198,6 +212,25 @@ impl Document {
 pub fn take_reopen_work() -> [usize; 3];
 ```
 
+The approved refresh3 extension adds these hidden contracts. They are not stable Python, WASM, or CLI exports. `MainPartBlocks` stays private to `document.rs`. No new trait, generic, module, file, or dependency is added.
+
+```rust
+impl CT_Document {
+    #[doc(hidden)]
+    pub fn body_frame_xml(&self) -> Result<(Vec<u8>, Vec<u8>)>;
+    #[doc(hidden)]
+    pub fn body_item_xml(&self, item: &BodyContent) -> Result<Vec<u8>>;
+}
+
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn take_staging_work() -> [usize; 6];
+```
+
+`holds_field` is the tenth field of the final `BodyItemOwners` declaration above. It is not a free-standing field.
+
+`body_frame_xml` and `body_item_xml` are consumed by the actual native staging and reopen callers in `Document`. `holds_field` is read by the piece inventory and by block reuse. `take_staging_work` feeds Python `_staging_work`. The array order is fixed above.
+
 `to_xml_with_body_spans` is consumed by the actual native `Document` story-source and direct-slot callers. `direct_body_item_location` is consumed by the actual Python document and table callers. `None` means absence only. Failed fast eligibility uses the checked full lookup. A genuine `Err` is preserved. `take_reopen_work` is a free function, exported from the native `lib.rs` for the Python `_reopen_work` counter. The array order, taken from the assessed counter body before any local test, is ZIP package writes, then main document part parses, then identifier-part bytes scanned. The implementation counts those actual sites. `main_body_block_scans` is the debug count of main-part body children scanned rather than reused, and it feeds Python `_main_body_block_scans`. Debug hooks are not stable exports and are not release exports. A release installed full test may guard a helper only for a counter case. Mandatory debug proof stays. There is no broad skip.
 
 ## Consumer map
@@ -210,6 +243,7 @@ pub fn take_reopen_work() -> [usize; 3];
 | Staging | `saves_as` and the opened baseline shared with a staged clone | OPC `trusted_baseline` stays. Related parts stay checked | Save, error order, reopen, drop |
 | In-memory reopen | `reopen_prepared_staged_with_limits` and `take_reopen_work` | UNBOUNDED opened-from-bytes trusted provenance only. Every other context keeps the ZIP path. Identifier replay keeps duplicate order and errors | ZIP path, in-memory path, limited reopen, both routes after mechanism 6 |
 | Direct-body address | `to_xml_with_body_spans`, `direct_body_item_location`, `main_body_block_scans` | Exact `to_xml` bytes. `None` is absence. Fast-path failure uses the full lookup. `Err` stays `Err` | Full snapshot, both reopen routes, cache off, invalidated context |
+| Main-part body blocks | `body_frame_xml`, `body_item_xml`, private `MainPartBlocks`, `BodyItemOwners.holds_field`, `take_staging_work` | Checked fallback matches full bytes and error order. No field-block reuse by `PartialEq`. Changed root invalidates. F-289 and F-290 publishers stay | Warm N and 4N counts, cold work separate, cache off, alternate root, save and reopen |
 | Form and settings facts | Direct `cached_result`, `set_cached_runs`, annotation cache, `cached_field_mut`, refresh, attachment, and `set_legacy_form_field_value`. F-289 `validate_form`, `fill_form`, `reset_form`, `protect_form`, `set_document_protection`, `remove_document_protection`, and `add_story_permission_range`. F-290 `set_mail_merge_package`, `remove_mail_merge_package`, and `prepare_mail_merge_data` | Approved callables only. No second form model. Property callbacks and direct candidate assignment invalidate changed facts even when the generation is unchanged. Private field source form and equality that ignores serialization facts use proved invalidation or the full fallback. They must not publish a different truth. Dead owners stay dead | Held value, fresh value, native value, save, and reopen |
 
 Imported metadata and an absent cache fact stay absent. A missing fact is not filled with a default by the cache.
@@ -226,6 +260,7 @@ Imported metadata and an absent cache fact stay absent. A missing fact is not fi
 | Package bytes | Unchanged except the requested edit. No redundant saved xmlns delta | Integrated F-X266 fragment rule | `word_owner_piece_sources_match_the_full_physical_inventory` |
 | `saves_as` | Exact bytes and exact error order, or ZIP fallback | `OpcPackage::reread` trusted baseline | `unchanged_main_staging_preserves_save_bytes_and_error_order` |
 | Work counters | Real walk, parse, and serialization counts. Not a constant entry counter | F-X266 linear owner bound retained | `unchanged_main_staging_reuse_counts_actual_work` |
+| Body-child staging | Same bytes and same error order as the full path. `holds_field` blocks value reuse. Alternate root reads the part whole | PR421 candidate only. Not accepted code | `staging_reads_only_the_main_part_blocks_an_edit_changes`, `test_staging_writes_and_reads_only_the_main_part_blocks_an_edit_changes`, `test_a_fragment_imports_into_a_main_part_whose_root_has_another_word_prefix` |
 
 ## Dependency readiness
 
@@ -241,7 +276,7 @@ F-X267 test plan, all 13 local scoped rows: `remove_part_returns_shared_bytes`, 
 
 The prefix also consumes the actual scoped checks, clean Root reviews, and the current applicable artifact proof. An old artifact is not reused as a fresh qualifier. Rerun only the inputs a later change invalidates, including a checked build and import where binding evidence is affected. No full oracle rider runs at the prefix. Word, the full suite, the hash harness, the final release 73-call and 252-call runs, the F-X267 248-call run, and the memory rider stay pending. Before any F-X268 claim, verify that the F-X266 and F-X267 source heads above are actual ancestors, that this prefix is actually done, and that binding source proof exists where the binding is affected. `AS_BUILT.md` and `SPRINT_TRACKER.md` are written once, after the full union. A formal consumer claim waits for the actual done checkpoint.
 
-The F-289 native checkpoint is clean. The whole feature stays in progress. The worker is uncommitted and not integrated. Python methods, the HLD updates, and the final riders stay pending. That checkpoint is not delivery credit and it is not a formal dependency change. F-X268 stays unclaimed. F-X268 does not start while the shared leases are held by F-289 and then F-290.
+The active F-289 local checkpoint, tested on Python extension `8bcf0c076bf93eaf5f48f7c5b3ec69bd5eeff15b15d217a4abc5ace037bb00e2` before the latest repair, is native 87 and Python 13. Five HLD drafts exist. The whole-feature review recorded 3 defects and 0 smells at the worker file `.claude/reviews/F-289-whole-feature-pass-1.md`. Separate remediation is underway. F-289 is not integrated and is not done. The earlier native pass 5, with 86 affected native tests and a bounded clean native review, stays a historical outcome of that pass. It is not the current whole-feature result and it is not a clean final claim. That checkpoint is not delivery credit and it is not a formal dependency change. F-X268 stays unclaimed. F-X268 does not start while the shared leases are held by F-289 and then F-290.
 
 ## Acceptance criteria
 
@@ -256,6 +291,7 @@ The F-289 native checkpoint is clean. The whole feature stays in progress. The w
 | A7 | Q18 and Q22 memory workload | Actual per-layer and combined RSS samples at the named points. No summed RSS fabrication. No 68 MiB pass line and no hard cap | Fresh release process | Named in the memory section | Final union |
 | A8 | Installed Python, strict mypy, stubtest, rustdoc, publish archive, WASM, hash, and the prior seven stories | Prior Word, SSIM, risk, and hash gates stay mandatory and stay unrun here. Q19 compares the previous save failure, model, and handles. Two failing `to_bytes` calls are not atomicity proof. Final own-union fidelity is mandatory. The PR419 donor log is not that pass | Final union | None in the worker | Final union |
 | A9 | Q23 linear calls at 250 and 1000 paragraphs | Each call meets `large <= 5 * small + 5 ms`. Each relevant pass count meets `large <= 5 * small`, with additive allowance 0. Setup counts stay outside that pass. Whole-main hash and serialization are reported separately | Installed Python 3.12 | `body_lookup_work_is_linear_at_250_and_1000` for counts. Timings only in the final union | Final union |
+| A10 | Nine public calls at 20 and 80 paragraphs, and native table row, section, and list edits at 50 and 200 paragraphs. Setup outside the counter window. Warm samples are two distinct edits after two changed edits. Cold work is a separate measurement | All six staging slots are compared as one `[usize; 6]` counter. The retired four-slot counter is not this contract. The first four slots are byte counts and are zero, except `Document.import_fragment`, whose bounded source-document byte work stays and is equal at both sizes. The last two slots are child counts, serialized children then children read. Those child counts are equal across the two sizes. They are not byte counts and they are not required to be zero. Reopen ZIP writes are 0. Main-part parses are 0, except the fragment call, where that slot is 1. Identifier-byte absolute delta is at most 16. Native warm staging has the first four byte slots at zero and the first two reopen slots at zero, with the same warm counts at both sizes. A cache-off mutant does actual work that scales. These are counted-work obligations. They are not new timing gates | Python document and native `Document` | `test_staging_writes_and_reads_only_the_main_part_blocks_an_edit_changes`, `staging_reads_only_the_main_part_blocks_an_edit_changes`, `test_a_fragment_imports_into_a_main_part_whose_root_has_another_word_prefix` | Local counted-work regression. Not a timing promise |
 
 The original 65 targeted calls are 62 catalogue keys plus `Run.xml`, `Table.xml`, and `Cell.xml`. The pinned 252 does not cover those three reads. The refresh2 amendment adds 8 calls. The combined flat set is 73 unique calls, which is 70 catalogue keys plus the same 3 XML reads.
 
@@ -283,6 +319,10 @@ The 8 added flat calls, none of them in the original 65, are:
 
 All 73 use the Q20 bound. The 100-paragraph time is at most 1.5 times the 25-paragraph time plus 5 ms, under the existing sample rules. The four extra keys in the PR419 test map are `FootnoteEndnote.add_paragraph`, `FootnoteEndnote.add_table`, `Document.add_custom_xml_store`, and `Document.set_chart_legend`. They are not added to the 73 and they are not silently gated. `Run.add_picture`, `Cell.add_picture`, and `Cell.merge` stay 252 residuals. They are not a new flat promise.
 
+### A10 counted work
+
+The nine calls, named in the PR421 own diff and not added to the 73 or to the five linear calls, are `Table.add_row`, `Cell.text`, `Run.text`, `Document.add_bullet_list_item`, `Document.insert_section`, `Document.insert_html`, `Document.add_footnote`, `Document.import_fragment`, and `SectionHandle.set_page_border`. Python sizes are 20 and 80 paragraphs. Native sizes for table row, section, and list item are 50 and 200 paragraphs. Q20 and Q23 timing bounds do not gain a tenth promise. Donor 57 and 18 timings are not accepted.
+
 ### A9 linear calls
 
 The five Q23 calls are `Cell.replace_text`, `Document.set_picture_size`, `Document.add_picture`, `Document.move_content_control`, and `Document.move_comment`. Use the same pinned builder, adapted to 250 and 1000 paragraphs, with the same six formatted runs and the same target geometry between sizes. Fresh target, call setup, and open stay outside the clock. The full public lookup, validation, and publication are inside the clock. Alternate 3 fresh changed targets at the small size and the large size. Retain every raw sample. The minimum follows `costs_ms`. The cold first sample stays visible. Warm statistics stay separate. There is no compilation concurrency. For each call, the large time is at most 5 times the small time plus 5 ms. Count the actual visited nodes, blocks, identifier operations, and lookup operations at 250 and at 1000. Pin that counted work before measurement. For each relevant pass, the large count is at most 5 times the small count, and the additive allowance is 0. Count setup separately, outside the measured pass. Retain the raw counts for each phase. A constant entry counter is not proof. Report whole-main hash and serialization separately. If the first cold scan is itself linear, disclose that. A semantic mutant or a cache-off build must expose the count regression. Absence of a new helper is a compile failure, not that RED.
@@ -299,7 +339,7 @@ Local counters sit at the real walk, parse, and serialization sites. Separate th
 
 Memory, final Q18 and Q22 rider only. The workload is 20000 paragraphs, six runs each, with fixed text and run formatting. Measure and report the actual main XML length. The donor 6 MiB claim is unverified. Use 3 paired alternating fresh processes. Record the median current RSS and report each peak, with the raw samples and the aggregation named, after open, after the first font edit, after 100 distinct warm edits, after clone and drop, after reopen and drop, and after the document drop. Pair a pre-cache commit baseline with the final release, sharing the inventory and otherwise equal. Record the baseline source, build, artifact, allocator, and process boundary. The shared cache may retain the opened baseline, one parsed model, and one serialized copy, and the current changed parts, plus bounded projection facts for each live piece. It does not retain a history per edit. N edits and 4N edits must not retain one baseline per edit. Clone ownership and reopen release stay safe. There is no 68 MiB pass claim and no hard budget the user did not choose. The donor 68 MiB figure is not accepted. Measure authored and new-document fallback, and the unsavable namespace, duplicate part, signed, and embedded fallback times, separately. Correctness is mandatory on those paths.
 
-Q22 measures each cache layer on otherwise equal release builds, and it measures the combined footprint the same way. The layers are the PR418 parsed model and serialized copy, the PR419 reopen and identifier caches, and the PR420 body bytes and scans. Use true equivalent pre-layer and final variants. Retain the original fixture, statistics, raw RSS, peaks, clone, reopen, drop, and the N versus 4N history test. Do not add RSS deltas together and call that sum the combined footprint.
+Q22 measures each cache layer on otherwise equal release builds, and it measures the combined footprint the same way. The layers are the PR418 parsed model and serialized copy, the PR419 reopen and identifier caches, the PR420 body bytes and scans, and the refresh3 `MainPartBlocks`, `BodyBlockScan`, frame, parsed, namespace, relationship, drawing, numbering, and identifier caches. Each of those added layers is measured independently and in the combined footprint. The points stay current state, N versus 4N, clone, reopen, and drop. There is no per-edit history. Use true equivalent pre-layer and final variants. Retain the original fixture, statistics, raw RSS, peaks, clone, reopen, drop, and the N versus 4N history test. Do not add RSS deltas together and call that sum the combined footprint. Q22 already covers this caching. The approved refresh3 extension opens no new question.
 
 ## Test matrix
 
@@ -311,8 +351,9 @@ Q22 measures each cache layer on otherwise equal release builds, and it measures
 | C4 | No-op, refusal, and conservative splice | Handles and retired scopes match the old publication | A refusal that mutates, or a dead owner that returns, fails |
 | C5 | Opened UNBOUNDED package, new document, limited reopen, and both reopen routes | In-memory reuse matches ZIP bytes, errors, and identifier order only on the eligible path | A limited reopen or a changed relationship context that skips the ZIP path fails |
 | C6 | Direct slot zero, one, and many, nested controls, tables, cells, text boxes, and moved or repeated blocks | Span bytes match `to_xml`. Slot lookup matches the full snapshot before and after both reopen routes | An ordinal alias, an empty success, or a donor overwrite of form providers fails |
+| C7 | Field-bearing and field-free blocks. Default namespace and an aliased root. Duplicate occurrence order. Cache on and cache off | Kept bytes match the full writer. A field block is not reused by `PartialEq`. Counts match A10. F-289 and F-290 owners stay | A false-negative field reuse, a changed-root hit, or a fallback that drops an error fails |
 
-Omitted permutations are the full cross product of those axes. Each axis above has one discriminating case. Same-consumer round trip does not replace the native, Python, stored, layout, and reopen comparison named in A3 and A5.
+Omitted permutations are the full cross product of those axes. Each axis above, including C7, has one discriminating case. Same-consumer round trip does not replace the native, Python, stored, layout, and reopen comparison named in A3 and A5.
 
 Native groups go in the existing `crates/rdocx/tests/integration_test.rs`:
 
@@ -325,6 +366,7 @@ Native groups go in the existing `crates/rdocx/tests/integration_test.rs`:
 - `body_span_serialization_matches_existing_xml`
 - `main_body_block_reuse_preserves_physical_owners_and_publication`
 - `body_lookup_work_is_linear_at_250_and_1000`
+- `staging_reads_only_the_main_part_blocks_an_edit_changes`
 
 Python groups go in the existing `crates/rdocx-py/tests/test_core.py`:
 
@@ -334,6 +376,8 @@ Python groups go in the existing `crates/rdocx-py/tests/test_core.py`:
 - `test_unchanged_main_staging_counts_actual_work`
 - `test_in_memory_reopen_keeps_related_parts_and_read_limits`
 - `test_body_block_reuse_preserves_forms_settings_and_live_owners`
+- `test_staging_writes_and_reads_only_the_main_part_blocks_an_edit_changes`
+- `test_a_fragment_imports_into_a_main_part_whose_root_has_another_word_prefix`
 
 The original five native groups and four Python groups stay. A9 timings run only in the final union. The new named tests cover a forced fallback, a cache-off build, an invalidated context, and an actual RED on the old provenance. Inline unit helpers already in `document.rs` stay allowed.
 
@@ -343,11 +387,13 @@ The Q19 RED captures the model, the bytes, and the live handles at the point whe
 
 ## Rejected alternatives
 
-- Importing PR415, PR417, PR418, PR419, or PR420 as a wholesale merge.
+- Importing PR415, PR417, PR418, PR419, PR420, or PR421 as a wholesale merge.
 - Trusting semantic `PartialEq` as the only cache proof.
 - Dropping the full-rebuild fallback in order to keep a fast path.
 - Making the old infallible Rust methods panic or return `Result`. Q21 rejects both.
 - Claiming the whole 252-call catalogue is constant, or copying a donor benchmark as credit.
+- Treating the nine A10 calls, or a donor 57 or 18 timing, as a new Q20 or Q23 gate.
+- Reusing a field-bearing block because `PartialEq` returned true.
 - Persisting a second shadow form model beside the integrated F-288, F-289, and F-290 facts.
 
 ## Test plan
@@ -356,6 +402,7 @@ The Q19 RED captures the model, the bytes, and the live handles at the point whe
 |---|---|---|---|
 | local scoped | regression | The original five native groups and four Python groups | Old-source semantic RED on the unsavable mutation. Fixed-source GREEN. Negative control on cache-off or a skipped invalidation |
 | local scoped | regression | The four added native groups and two added Python groups | Forced fallback, cache off, invalidated context, and actual RED provenance. A9 timings stay out of this row |
+| local scoped | regression | A10 native group and the two A10 Python groups | Equal six-slot counts. The first four slots are byte counts and are zero, with the fragment byte exception. The last two slots are child counts and stay equal. They are not byte counts. Reopen bounds, cache-off scaling, and alternate-root whole read stay. No new timing promise |
 | local scoped | regression | Four `try_` methods | Index, text, zero-column, and namespace results. Old four methods unchanged |
 | final sprint | performance | Release Python 3.12, the 73 calls, the five A9 calls, the 252 catalogue, and the original 407 gate | A6 and A9 bounds and an individual residual report |
 | final sprint | memory | The 20000-paragraph RSS rider | A7 samples. No invented cap |
@@ -396,8 +443,8 @@ Matched rows of `.claude/skills/risk-routing.md`, each added to the existing fin
 - Performance budget or bounded-edit optimization. A6, A9, and the local counters.
 - Shared semantic behavior with multiple consumers. Native, Python, stored package, layout invalidation, and reopen.
 - Public API accepting raw XML bytes. Opaque bytes stay. The new refusal is only the namespace-owner save failure, not a general XML validator.
-- Grammar, scope, compatibility mode or empty collection. The C1 through C6 matrix.
-- Contributed PR or new issue acceptance. The PR415, PR417, PR418, PR419, and PR420 heads are pinned and are not accepted code. The PR419 Actions log is donor evidence only.
+- Grammar, scope, compatibility mode or empty collection. The C1 through C7 matrix.
+- Contributed PR or new issue acceptance. The PR415, PR417, PR418, PR419, PR420, and PR421 heads are pinned and are not accepted code. The PR419 Actions logs are donor evidence only. PR421 CI was incomplete at the refresh3 cutoff.
 - Compatibility, numeric conversion or collection ordering. Owner order, error order, and the retained 407 gate.
 
 Rustdoc warnings are denied. Installed stub tests run in the union. F-288 A6 stays the native Word gate in that plan: Word-created originals and library-created files for all three kinds, with stored-property equality separated from Word-open formatting and calculation effects. It is unchanged and it is not an SSIM gate. F-289 A7 stays equal page count, exact text and checkbox semantics, per-page SSIM at least 0.95 at 144 DPI, matched fonts, deterministic drawing, and documented margin alignment. It is unrun. Other original story riders stay unchanged. No new Word oracle and no performance comparison against Word is invented. F-X267 M21 behavior stays on that story and is not attributed to F-X268.
@@ -417,6 +464,7 @@ Expected unchanged for existing fixtures touched by F-X268. Do not re-record a b
 - [ ] Leave the 73-call, A9, 252-call, memory, Word, and hash riders for the final union.
 - [ ] Add the eligible in-memory reopen and the direct-body span helpers with the captured signatures.
 - [ ] Keep `content_control.rs` to the indexed lookup and `collect_control_ids`, composed with the final F-289 provider.
+- [ ] Add the hidden frame and item helpers, `holds_field`, and the six-slot staging counter.
 
 ## Open questions
 
@@ -429,10 +477,12 @@ Expected unchanged for existing fixtures touched by F-X268. Do not re-record a b
 | Q22 | F-X268 A7 | Apply the measured-memory policy to the PR419 and PR420 caches. Measure each layer and the combined footprint. Do not invent a cap and do not accept the donor 68 MiB figure. | Answered 2026-10-24 by the user. "Apply the measured-memory policy (Recommended)". Root approved the extension the same day. |
 | Q23 | F-X268 A6 and A9 | Add the 8 flat calls to the Q20 bound and add the five linear calls at 250 and 1000 paragraphs. Residuals and the 407 gate stay. | Answered 2026-10-24 by the user. "Use the added flat and linear gates (Recommended)". Root approved the extension the same day. |
 
-No open question remains. Q18, Q19, Q20, and Q21 belong to the earlier approved contract. Q22 and Q23 belong to the approved refresh2 extension.
+No open question remains. Q18, Q19, Q20, and Q21 belong to the earlier approved contract. Q22 and Q23 belong to the approved refresh2 extension. Q1 through Q23 stay answered and are not rewritten. The approved refresh3 extension opens no question. Q22 already measures the added cache layers and the combined footprint.
 
 ## Contract closure
 
 Codex root approved the contract that preceded this amendment on 2026-10-24 after reading the full draft and the revision delta. The canonical HEAD at that approval is `c0b58c7fa8e4e919b9bfe5c02932f74827cea36b`, plus the working draft of that day. Q18, Q19, Q20, and Q21 stay answered. That approval left the original 65 targeted calls, the split of 62 catalogue keys plus 3 reads, the 252-call catalogue, the cache error rule, the counter split, the memory rule, and the public APIs as then written. The 7 to 12 developer-day figure stays the historical estimate for that approved scope.
 
 Codex root approved the refresh2 extension on 2026-10-24 after reading the full revised contract and the four-file delta. The canonical HEAD at that approval is `0d8dfb68396e33ddfcaa0d9400c30c006e12d2b7`, plus this working draft. The extension revises the combined-scope estimate to 10 to 17 developer-days and adds mechanisms 5 and 6, the 8 flat calls, and A9. No implementation has started. No gate pass is claimed.
+
+Codex root approved the refresh3 extension on 2026-10-24 after reading the full corrected contract and the four-file delta. The canonical HEAD at that approval is `d6cefc239ab7de0d4dae63e13d730da558d3a3a5`, plus this working draft. Fact cutoff is 2026-10-24T17:02:28Z. The extension is the same F-X268 story and its seventh mechanism. It adds A10 and C7. The new helpers stay the captured signatures. The staging counter stays six units. The 73 flat calls, the 5 linear calls, and the 252-call catalogue stay the same. Q22 covers the added cache layers. No new question is opened and no timing promise is added. The 10 to 17 developer-day figure stays the provisional Root judgment. It is not a measurement and not a capacity promise. PR421 stays an unmerged candidate and is not accepted code. No implementation has started. No gate pass is claimed. This paragraph records that Root review. It is not a self-review.

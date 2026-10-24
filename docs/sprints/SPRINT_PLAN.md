@@ -2855,7 +2855,8 @@ seven stories. That figure stays historical. The 2026-10-24 refresh adds
 F-X268. Codex root approved that design on 2026-10-24. The estimate recorded
 at that approval is a provisional 7 to 12 developer-days and stays historical.
 The later refresh2 amendment revises the combined scope to a provisional
-10 to 17 developer-days. Codex root approved that extension. That figure is not a measurement.
+10 to 17 developer-days. Codex root approved that extension. The approved
+refresh3 extension keeps that figure and adds no promise. That figure is not a measurement.
 Those figures are estimates, not measurements, and they are not a capacity
 promise. The visible over-two-week scope is approved intake. The clock has
 not started. F-X267 is the largest repair. No timing is invented here.
@@ -3115,6 +3116,22 @@ User answers on 2026-10-24, with the recorded choice text:
 - Q23 is "Use the added flat and linear gates (Recommended)". The flat set becomes 73 calls under the existing 25 and 100 paragraph bound. Five named calls gain a separate 250 and 1000 paragraph linear bound.
 
 Formal dependencies stay F-X266 and F-X267. F-X268 stays serial after F-289 and F-290. The eight-story inventory is unchanged. The combined-scope estimate is a provisional 10 to 17 developer-days. The 7 to 12 figure and the seven-story 27 to 41 figure stay historical. Codex root approved the refresh2 extension on 2026-10-24 after reading the full revised contract and the four-file delta. The earlier approval stays historical. No story is marked done. Implementation of F-X268 has not started. No gate pass is claimed.
+
+##### S95.4 issue and PR refresh, 2026-10-24T17:02:28Z
+
+Receipt cutoff 2026-10-24T17:02:28Z. The refresh lists 11 open issues and 13 open pull requests. No issue changed. Nothing closed or merged. The 2026-10-23 intake, the 2026-10-24T11:33:08Z refresh, and the 2026-10-24T13:49:35Z refresh stay the historical record, including every pin for PR409 through PR420 and the answered text of Q1 through Q23. This section does not replace them and it does not add a tracker or an F-ID.
+
+Heads 409 through 418 and 420 are unchanged. The PR419 head stays `9916bcdc01bc4acc065ae45afa8bd8ae07a2d30c`. Its `updated_at` of 2026-10-24T14:45:03Z is a later Actions run, not a moved commit. Run `40103891571` concluded success, including Word fidelity job `120901503513` and CI gate job `120914750403`. The earlier failed run `40092396584` stays historical donor evidence. Comments and reviews stay 0. That later success is not acceptance of the candidate and it is not local proof.
+
+New pull request, still an unmerged candidate and not accepted code. F-X268 takes the own increment, not the stack against main:
+
+| PR | Story | Head SHA | What changed |
+|---|---|---|---|
+| [421](https://github.com/tensorbee/rdocx/pull/421) | F-X268 | `ab038a21bb88a38d46c8f640587c3a20b57f6770` | 7 own commits and 10 paths after PR420 `37851676af3e82a0500c4743ef86da417950d2c3`. Own diff SHA-256 `50c390ff8038d69b95d19510122ab51d2fd3c37b30f5b5d79a89dc610f805e35`. |
+
+PR421 checks were incomplete at this cutoff. No acceptance is inferred. Donor 57 and 18 timings, README package text, an M5 Max figure, and an allow-dirty note are not copied. The source is `/private/tmp/s95.4-refresh3-summary.txt`, `/private/tmp/s95.4-refresh3-intake.json`, and `/private/tmp/s95.4-refresh3/pr-421-own-increment.diff`.
+
+Codex root approved the refresh3 extension on 2026-10-24 after reading the full corrected contract and the four-file delta. The canonical HEAD is `d6cefc239ab7de0d4dae63e13d730da558d3a3a5`, plus the working draft. The extension is the seventh mechanism on the same F-X268 story. It adds A10 and C7. The new helpers stay the captured signatures. The staging counter stays six units. The 73 flat calls, the 5 linear calls, and the 252-call catalogue stay the same. Nine named calls are counted-work obligations and are not a new timing gate. Q22 covers the added cache layers. No new question is opened and no timing promise is added. The prior approved scope stays approved. PR421 stays an unmerged candidate and is not accepted code. This record is that Root review. It is not a self-review. The combined-scope estimate stays a provisional 10 to 17 developer-days. Reassess it after decomposition. It is not a new promise and actual work is unknown. Eight stories stay. Formal dependencies stay F-X266 and F-X267. F-X268 stays serial after F-289 and F-290. No story is marked done. Implementation of F-X268 has not started. No gate pass is claimed.
 
 #### Sprint S96, Fillable PDF forms
 
