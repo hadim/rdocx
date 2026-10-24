@@ -6577,6 +6577,10 @@ pub struct Document {
     /// when known and otherwise taken on first use, since the replay costs a
     /// serialization of the body.
     nested_owner_replay: OnceLock<NestedOwnerReplayFacts>,
+    /// What the last opening parsed, which staging and comparing saves reuse
+    /// while the main part keeps the bytes it was opened with. `None` for a
+    /// document built in memory.
+    parsed: Option<Arc<Parsed>>,
     pub(crate) styles: CT_Styles,
     pub(crate) numbering: Option<CT_Numbering>,
     /// Boxed, because debug builds keep many copies of `Document` on deep
@@ -6665,6 +6669,128 @@ pub struct Document {
     deterministic_layout_cache: Mutex<Option<Arc<rdocx_layout::WordLayoutResult>>>,
     /// Reusable bundled-font engine with caller faces at highest priority.
     bundled_fallback_layout_engine: Mutex<Option<rdocx_layout::engine::Engine>>,
+}
+
+/// What the last opening of a document parsed: the package as opened and,
+/// each found once when first needed, what staging reads in its main part.
+/// A document reuses them while its main part holds the bytes it was opened
+/// with, compared by value, and a staged copy shares them.
+///
+/// The record lives until the document is reopened, which in the binding is
+/// as long as the Python document lives, and keeps memory meanwhile: the
+/// main part parsed, about ten times the part's bytes, and the opened bytes
+/// of every part an edit has replaced since.
+struct Parsed {
+    /// The package as opened. Its parts share their bytes with the
+    /// document's package until an edit replaces one, whose opened bytes
+    /// then stay here.
+    package: OpcPackage,
+    /// Whether `package` was read from bytes, which [`OpcPackage::reread`]
+    /// requires. A Flat OPC package is built in memory.
+    read_from_bytes: bool,
+    /// The main part name.
+    main_part: String,
+    /// The main part parsed, or `None` when it does not parse.
+    main_document: OnceLock<Option<CT_Document>>,
+    /// The nested namespace owners of the main part, or `None` when the scan
+    /// fails.
+    nested_namespace_owners: OnceLock<Option<Vec<NestedNamespaceOwner>>>,
+}
+
+impl Parsed {
+    fn of(package: &OpcPackage, main_part: &str, read_from_bytes: bool) -> Self {
+        Self {
+            package: package.clone(),
+            read_from_bytes,
+            main_part: main_part.to_owned(),
+            main_document: OnceLock::new(),
+            nested_namespace_owners: OnceLock::new(),
+        }
+    }
+
+    /// The main part bytes as opened.
+    fn main_part_xml(&self) -> Option<&[u8]> {
+        self.package.get_part(&self.main_part)
+    }
+
+    /// The main part as opened, parsed once.
+    fn main_document(&self) -> Option<&CT_Document> {
+        self.main_document
+            .get_or_init(|| {
+                let xml = self.main_part_xml()?;
+                note_staging_work(|work| work.parsed += xml.len());
+                CT_Document::from_xml(xml).ok()
+            })
+            .as_ref()
+    }
+
+    /// The nested namespace owners of the main part as opened, found once.
+    fn nested_namespace_owners(&self) -> Option<&[NestedNamespaceOwner]> {
+        self.nested_namespace_owners
+            .get_or_init(|| {
+                let xml = self.main_part_xml()?;
+                note_staging_work(|work| work.scanned += xml.len());
+                nested_modeled_namespace_owners(xml).ok()
+            })
+            .as_deref()
+    }
+}
+
+/// Whole main part work that staging and comparing saves did on this thread,
+/// in bytes of the main part: parsed again, scanned for nested namespace
+/// owners, canonicalized whole, and written as a ZIP to compare saves. Debug
+/// builds count it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+struct StagingWork {
+    parsed: usize,
+    scanned: usize,
+    canonicalized: usize,
+    zip_written: usize,
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    static STAGING_WORK: std::cell::Cell<StagingWork> = const {
+        std::cell::Cell::new(StagingWork { parsed: 0, scanned: 0, canonicalized: 0, zip_written: 0 })
+    };
+    static STAGING_WORK_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn note_staging_work(count: impl FnOnce(&mut StagingWork)) {
+    #[cfg(debug_assertions)]
+    if !STAGING_WORK_PAUSED.get() {
+        let mut work = STAGING_WORK.get();
+        count(&mut work);
+        STAGING_WORK.set(work);
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = count;
+}
+
+/// Debug builds only: the whole main part work staging and comparing saves
+/// did on this thread since the previous call, in bytes of the main part
+/// parsed again, scanned for nested namespace owners, canonicalized whole and
+/// written as a ZIP, so that tests can compare documents of N and 4N
+/// paragraphs.
+#[doc(hidden)]
+#[cfg(debug_assertions)]
+pub fn take_staging_work() -> [usize; 4] {
+    let work = STAGING_WORK.replace(StagingWork::default());
+    [
+        work.parsed,
+        work.scanned,
+        work.canonicalized,
+        work.zip_written,
+    ]
+}
+
+#[cfg(debug_assertions)]
+fn without_staging_work<T>(run: impl FnOnce() -> T) -> T {
+    let paused = STAGING_WORK_PAUSED.replace(true);
+    let result = run();
+    STAGING_WORK_PAUSED.set(paused);
+    result
 }
 
 enum ChartPackageSource<'a> {
@@ -17559,6 +17685,7 @@ impl Document {
             body_namespace_bindings: Vec::new(),
             plain_local_edit_blocked: false,
             nested_owner_replay: OnceLock::from(NestedOwnerReplayFacts::default()),
+            parsed: None,
             styles,
             numbering: None,
             core_properties,
@@ -17647,6 +17774,7 @@ impl Document {
             body_namespace_bindings: self.body_namespace_bindings.clone(),
             plain_local_edit_blocked: self.plain_local_edit_blocked,
             nested_owner_replay: self.nested_owner_replay.clone(),
+            parsed: self.parsed.clone(),
             styles: self.styles.clone(),
             numbering: self.numbering.clone(),
             core_properties: self.core_properties.clone(),
@@ -17899,28 +18027,44 @@ impl Document {
         // typed story can inventory its exact retained source, including opaque
         // property-root attributes that canonical serialization cannot replay.
         // Dirty stories and modeled relationships still need the checked mask.
+        // A main part that holds the bytes it was opened with is compared
+        // with, and scanned as, what that opening parsed.
+        let kept = self.kept_main_part();
         if modeled_relationships.is_empty()
             && let Some(source) = self.package.get_part(&self.doc_part_name)
-            && {
-                #[cfg(test)]
-                eprintln!("FX211_DRAWING_STAGE opaque-reparse-before");
-                let matches = CT_Document::from_xml(source).ok().as_ref() == Some(&self.document);
-                #[cfg(test)]
-                eprintln!("FX211_DRAWING_STAGE opaque-reparse-after");
-                matches
+            && match kept.as_deref() {
+                Some(kept) => kept.main_document() == Some(&self.document),
+                None => {
+                    #[cfg(test)]
+                    eprintln!("FX211_DRAWING_STAGE opaque-reparse-before");
+                    note_staging_work(|work| work.parsed += source.len());
+                    let matches =
+                        CT_Document::from_xml(source).ok().as_ref() == Some(&self.document);
+                    #[cfg(test)]
+                    eprintln!("FX211_DRAWING_STAGE opaque-reparse-after");
+                    matches
+                }
             }
         {
             return xml_relationship_ids_in_order(source);
         }
-        let nested_namespace_owners = self
-            .package
-            .get_part(&self.doc_part_name)
-            .map(nested_modeled_namespace_owners)
-            .transpose()?
-            .unwrap_or_default();
+        let scanned;
+        let nested_namespace_owners =
+            match kept.as_deref().and_then(Parsed::nested_namespace_owners) {
+                Some(owners) => owners,
+                None => {
+                    let source = self.package.get_part(&self.doc_part_name);
+                    note_staging_work(|work| work.scanned += source.map_or(0, <[u8]>::len));
+                    scanned = source
+                        .map(nested_modeled_namespace_owners)
+                        .transpose()?
+                        .unwrap_or_default();
+                    &scanned
+                }
+            };
         let serialize = |document: &CT_Document| -> Result<Vec<u8>> {
             let xml = document.to_xml()?;
-            replay_nested_namespace_declarations(&xml, &nested_namespace_owners)
+            replay_nested_namespace_declarations(&xml, nested_namespace_owners)
         };
 
         let current_xml = serialize(&self.document)?;
@@ -18002,6 +18146,9 @@ impl Document {
     fn canonicalize_drawing_ids(&mut self) -> Result<()> {
         let owner = self.doc_part_name.clone();
         let owner_identity = relationship_owner_identity(&owner);
+        note_staging_work(|work| {
+            work.canonicalized += self.package.get_part(&owner).map_or(0, <[u8]>::len);
+        });
         // Story picture insertion keeps current producer XML. Patch its
         // canonical relationship and drawing IDs into that retained source.
         let retained_main_xml = self
@@ -18828,7 +18975,7 @@ impl Document {
     /// Open a document from a file path.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let package = OpcPackage::open(path)?;
-        Self::from_package(package)
+        Self::from_opened_package(package, true)
     }
 
     /// Open a password-protected agile-encrypted document from a file path.
@@ -18836,7 +18983,7 @@ impl Document {
     pub fn open_encrypted<P: AsRef<Path>>(path: P, password: &str) -> Result<Self> {
         let file = std::fs::File::open(path)?;
         let package = OpcPackage::from_encrypted_reader(file, password)?;
-        Self::from_package(package)
+        Self::from_opened_package(package, true)
     }
 
     /// Open a document from bytes.
@@ -18859,14 +19006,14 @@ impl Document {
     ) -> Result<Self> {
         let cursor = std::io::Cursor::new(bytes);
         let package = OpcPackage::from_encrypted_reader_with_limits(cursor, password, limits)?;
-        Self::from_package(package)
+        Self::from_opened_package(package, true)
     }
 
     /// Open a document from bytes while bounding OPC archive expansion.
     pub fn from_bytes_with_limits(bytes: &[u8], limits: PackageReadLimits) -> Result<Self> {
         let cursor = std::io::Cursor::new(bytes);
         let package = OpcPackage::from_reader_with_limits(cursor, limits)?;
-        Self::from_package(package)
+        Self::from_opened_package(package, true)
     }
 
     /// Return the exact Word package class declared for the main document part.
@@ -18949,6 +19096,12 @@ impl Document {
     }
 
     pub(crate) fn from_package(package: OpcPackage) -> Result<Self> {
+        Self::from_opened_package(package, false)
+    }
+
+    /// Open a document from `package`, read from bytes when
+    /// `read_from_bytes`, which [`OpcPackage::reread`] requires.
+    fn from_opened_package(package: OpcPackage, read_from_bytes: bool) -> Result<Self> {
         let (doc_part_name, _) = validated_word_package_class(&package)?;
 
         let doc_xml = package
@@ -19110,6 +19263,11 @@ impl Document {
         let package_signatures_invalidated =
             crate::embedded::known_invalid_package_signature_on_open(&package);
         let identifiers = DocumentIdentifiers::scan(&package)?;
+        let parsed = Some(Arc::new(Parsed::of(
+            &package,
+            &doc_part_name,
+            read_from_bytes,
+        )));
         Ok(Document {
             package,
             document,
@@ -19118,6 +19276,7 @@ impl Document {
             body_namespace_bindings: namespace_scopes.body_bindings,
             plain_local_edit_blocked,
             nested_owner_replay,
+            parsed,
             styles,
             numbering,
             core_properties,
@@ -19326,6 +19485,65 @@ impl Document {
 
     /// Save the document to a byte vector.
     pub fn to_bytes(&mut self) -> Result<Vec<u8>> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        self.saved_package()?.write_to(&mut buf)?;
+        Ok(buf.into_inner())
+    }
+
+    /// Whether this document and `other` save to the same bytes: what
+    /// comparing their [`Document::to_bytes`], this one's first, gives. When
+    /// both were opened from bytes, the packages they save are read back in
+    /// memory with [`OpcPackage::reread`] instead of being written as ZIPs:
+    /// packages read back are the same exactly when the bytes written are.
+    #[doc(hidden)]
+    pub fn saves_as(&self, other: &Document) -> Result<bool> {
+        let same: Result<bool> = (|| match (self.read_package(), other.read_package()) {
+            (Some(read), Some(other_read)) => Ok(self
+                .saved_package()?
+                .reread(read)?
+                .same_package_as(&other.saved_package()?.reread(other_read)?)),
+            _ => {
+                let mut bytes = std::io::Cursor::new(Vec::new());
+                self.saved_package()?.write_to(&mut bytes)?;
+                let mut other_bytes = std::io::Cursor::new(Vec::new());
+                other.saved_package()?.write_to(&mut other_bytes)?;
+                note_staging_work(|work| {
+                    work.zip_written += bytes.get_ref().len() + other_bytes.get_ref().len();
+                });
+                Ok(bytes.into_inner() == other_bytes.into_inner())
+            }
+        })();
+        // Debug builds, which run the binding tests, compare the bytes the
+        // two documents save once they forget their opening.
+        #[cfg(debug_assertions)]
+        {
+            let forgetting = |document: &Document| {
+                let mut copy = document.clone_for_staging();
+                copy.parsed = None;
+                copy
+            };
+            let bytes = without_staging_work(|| -> Result<bool> {
+                Ok(forgetting(self).to_bytes()? == forgetting(other).to_bytes()?)
+            });
+            match (&same, bytes) {
+                (Ok(same), Ok(bytes)) => assert_eq!(*same, bytes, "saves_as differs from to_bytes"),
+                (Err(same), Err(bytes)) => assert_eq!(same.to_string(), bytes.to_string()),
+                (same, bytes) => panic!("saves_as gives {same:?} where to_bytes gives {bytes:?}"),
+            }
+        }
+        same
+    }
+
+    /// The package as last opened, when it was read from bytes.
+    fn read_package(&self) -> Option<&OpcPackage> {
+        self.parsed
+            .as_deref()
+            .filter(|parsed| parsed.read_from_bytes)
+            .map(|parsed| &parsed.package)
+    }
+
+    /// The package [`Document::to_bytes`] writes.
+    fn saved_package(&self) -> Result<OpcPackage> {
         #[cfg(test)]
         eprintln!("FX211_SAVE_STAGE resource-before");
         self.validate_model_resource_limits()?;
@@ -19345,9 +19563,7 @@ impl Document {
             &mut candidate.package,
             candidate.package_signatures_invalidated,
         )?;
-        let mut buf = std::io::Cursor::new(Vec::new());
-        candidate.package.write_to(&mut buf)?;
-        Ok(buf.into_inner())
+        Ok(candidate.package)
     }
 
     /// Serialize the bytes that [`Document::save`] writes to `path`.
@@ -19876,31 +20092,80 @@ impl Document {
         // producer's complete scopes and every retained raw subtree byte for
         // byte. A modified document fails closed when canonical serialization
         // could change the meaning or bytes of retained content.
+        //
+        // A main part that holds the bytes it was opened with is compared
+        // with, and scanned as, what that opening parsed, found once.
+        let kept = self.kept_main_part();
         let existing_document_xml = self.package.get_part(&self.doc_part_name);
-        #[cfg(test)]
-        let typed_document_is_unchanged = {
-            eprintln!("FX211_FLUSH_STAGE reparse-before");
-            let parsed = existing_document_xml.and_then(|xml| CT_Document::from_xml(xml).ok());
-            eprintln!("FX211_FLUSH_STAGE reparse-after");
-            eprintln!("FX211_FLUSH_STAGE equality-before");
-            let unchanged = parsed.as_ref() == Some(&self.document);
-            eprintln!("FX211_FLUSH_STAGE equality-after");
-            eprintln!("FX211_FLUSH_STAGE temporary-drop-before");
-            drop(parsed);
-            eprintln!("FX211_FLUSH_STAGE temporary-drop-after");
-            unchanged
+        let typed_document_is_unchanged = match kept.as_deref() {
+            Some(kept) => kept.main_document() == Some(&self.document),
+            None => {
+                #[cfg(test)]
+                eprintln!("FX211_FLUSH_STAGE reparse-before");
+                note_staging_work(|work| {
+                    work.parsed += existing_document_xml.map_or(0, <[u8]>::len);
+                });
+                let parsed = existing_document_xml.and_then(|xml| CT_Document::from_xml(xml).ok());
+                #[cfg(test)]
+                eprintln!("FX211_FLUSH_STAGE reparse-after");
+                #[cfg(test)]
+                eprintln!("FX211_FLUSH_STAGE equality-before");
+                let unchanged = parsed.as_ref() == Some(&self.document);
+                #[cfg(test)]
+                eprintln!("FX211_FLUSH_STAGE equality-after");
+                #[cfg(test)]
+                eprintln!("FX211_FLUSH_STAGE temporary-drop-before");
+                drop(parsed);
+                #[cfg(test)]
+                eprintln!("FX211_FLUSH_STAGE temporary-drop-after");
+                unchanged
+            }
         };
-        #[cfg(not(test))]
-        let typed_document_is_unchanged = existing_document_xml
-            .and_then(|xml| CT_Document::from_xml(xml).ok())
-            .as_ref()
-            == Some(&self.document);
+        // Debug builds, which run the binding tests, parse the part again.
+        #[cfg(debug_assertions)]
+        if kept.is_some() {
+            assert_eq!(
+                typed_document_is_unchanged,
+                existing_document_xml
+                    .and_then(|xml| CT_Document::from_xml(xml).ok())
+                    .as_ref()
+                    == Some(&self.document),
+                "the kept main part parse decides another change than a parse"
+            );
+        }
         #[cfg(test)]
         eprintln!("FX211_FLUSH_STAGE nested-scopes-before");
-        let nested_namespace_owners = existing_document_xml
-            .map(nested_modeled_namespace_owners)
-            .transpose()?
-            .unwrap_or_default();
+        let scanned;
+        let nested_namespace_owners =
+            match kept.as_deref().and_then(Parsed::nested_namespace_owners) {
+                Some(owners) => {
+                    #[cfg(debug_assertions)]
+                    assert_eq!(
+                        format!("{owners:?}"),
+                        format!(
+                            "{:?}",
+                            existing_document_xml
+                                .map(nested_modeled_namespace_owners)
+                                .transpose()
+                                .ok()
+                                .flatten()
+                                .unwrap_or_default()
+                        ),
+                        "the kept nested namespace owners differ from a scan"
+                    );
+                    owners
+                }
+                None => {
+                    note_staging_work(|work| {
+                        work.scanned += existing_document_xml.map_or(0, <[u8]>::len);
+                    });
+                    scanned = existing_document_xml
+                        .map(nested_modeled_namespace_owners)
+                        .transpose()?
+                        .unwrap_or_default();
+                    &scanned
+                }
+            };
         #[cfg(test)]
         eprintln!("FX211_FLUSH_STAGE nested-scopes-after");
         let unsafe_prefix = unsafe_serializer_namespace_prefix(
@@ -19908,11 +20173,10 @@ impl Document {
             &self.body_namespace_declarations,
             existing_document_xml,
         )
-        .or_else(|| unsafe_nested_namespace_prefix(&nested_namespace_owners));
+        .or_else(|| unsafe_nested_namespace_prefix(nested_namespace_owners));
+        // An unchanged part keeps its bytes.
         let doc_xml = if typed_document_is_unchanged {
-            existing_document_xml
-                .expect("compared existing document XML")
-                .to_vec()
+            None
         } else {
             if let Some(prefix) = unsafe_prefix {
                 return Err(Error::Other(format!(
@@ -19924,10 +20188,20 @@ impl Document {
             let serialized = self.document.to_xml()?;
             #[cfg(test)]
             eprintln!("FX211_FLUSH_STAGE serialize-after");
-            replay_nested_namespace_declarations(&serialized, &nested_namespace_owners)?
+            Some(replay_nested_namespace_declarations(
+                &serialized,
+                nested_namespace_owners,
+            )?)
         };
-        let namespace_scopes = document_namespace_scopes(&doc_xml)?;
-        self.package.set_part(&self.doc_part_name, doc_xml);
+        let namespace_scopes = document_namespace_scopes(
+            doc_xml
+                .as_deref()
+                .or(existing_document_xml)
+                .expect("compared existing document XML"),
+        )?;
+        if let Some(doc_xml) = doc_xml {
+            self.package.set_part(&self.doc_part_name, doc_xml);
+        }
         self.root_namespace_declarations = namespace_scopes.root_declarations;
         self.body_namespace_declarations = namespace_scopes.body_declarations;
         self.body_namespace_bindings = namespace_scopes.body_bindings;
@@ -19938,6 +20212,16 @@ impl Document {
             self.nested_owner_replay = OnceLock::from(NestedOwnerReplayFacts::default());
         }
         Ok(())
+    }
+
+    /// What the last opening parsed, while the main part holds the bytes it
+    /// was opened with.
+    fn kept_main_part(&self) -> Option<Arc<Parsed>> {
+        let parsed = self.parsed.as_ref()?;
+        let kept = parsed.main_part_xml()?;
+        let current = self.package.get_part(&self.doc_part_name)?;
+        (parsed.main_part == self.doc_part_name && (std::ptr::eq(kept, current) || kept == current))
+            .then(|| Arc::clone(parsed))
     }
 
     fn refresh_related_story_caches(&mut self) -> Result<()> {
