@@ -4538,6 +4538,10 @@ fn remap_fragment_style_collisions(
     for style in &mut fragment.styles.styles {
         if let Some(replacement) = replacements.get(&style.style_id) {
             style.style_id = replacement.clone();
+            // A renamed copy is not the destination default. The destination
+            // keeps its own default. A second default is still refused when
+            // the source default id does not collide and is not renamed.
+            style.is_default = false;
         }
         if let Some(replacement) = style
             .based_on
