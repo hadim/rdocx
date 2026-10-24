@@ -5298,6 +5298,72 @@ fn link_relationships(links: &[(rdocx::ContentLocation, rdocx::LinkInfo)]) -> Ve
     relationships
 }
 
+/// The owners of a plain paragraph read as the only body child, from its
+/// accepted text and run paths: one paragraph story item, and the body
+/// story `body`, which a placed route replaces.
+fn plain_paragraph_owners(
+    body: &rdocx::StoryId,
+    text: &str,
+    runs: &[rdocx_oxml::text::AcceptedRunPath],
+) -> WordBlockOwners {
+    let location =
+        rdocx::ContentLocation::new(body.clone(), rdocx::StoryItemKind::Paragraph, vec![0]);
+    WordBlockOwners {
+        facts: WordOwnerFacts {
+            items: vec![(location.clone(), Some(0), WordReadFacts::None)],
+            cells: Vec::new(),
+            paragraphs: vec![(location, text.to_owned(), runs.to_vec())],
+            links: Vec::new(),
+        },
+        relationships: Vec::new(),
+        body_items: 1,
+        cell_stories: 0,
+        text_boxes: 0,
+        paragraphs: vec![Some(vec![0])],
+        tables: 0,
+        cell_paragraphs: Some((HashMap::new(), true)),
+    }
+}
+
+/// The owners of a detached table with `cells` cells, no nested table and
+/// no link, read as the only body child, from its owner facts. Each cell's
+/// paragraphs route when they are as many as its read facts count, as
+/// `Document::cell_paragraph_story_locations` routes them.
+fn table_owners(facts: WordOwnerFacts, cells: usize) -> Option<WordBlockOwners> {
+    let Some((_, _, WordReadFacts::Table(rows))) = facts.items.first() else {
+        return None;
+    };
+    let mut stories = HashMap::new();
+    let mut routes = CellParagraphRoutes::new();
+    for (_, row, cell, story) in &facts.cells {
+        stories.insert(story.owner_index(), (*row, *cell));
+        routes.insert((0, *row, *cell), Vec::new());
+    }
+    for (location, _, _) in &facts.paragraphs {
+        if location.story().kind() == rdocx::StoryKind::TableCell
+            && let Some((row, cell)) = stories.get(&location.story().owner_index())
+        {
+            routes
+                .entry((0, *row, *cell))
+                .or_default()
+                .push(location.clone());
+        }
+    }
+    routes.retain(|(_, row, cell), locations| {
+        rows.get(*row).and_then(|row| row.get(*cell)) == Some(&locations.len())
+    });
+    Some(WordBlockOwners {
+        relationships: Vec::new(),
+        body_items: 1,
+        cell_stories: cells,
+        text_boxes: 0,
+        paragraphs: Vec::new(),
+        tables: 1,
+        cell_paragraphs: Some((routes, true)),
+        facts,
+    })
+}
+
 /// A route of a block's owners placed among the main part's blocks: body
 /// story item paths move by `items` into `body`, and table cell and text
 /// box stories by `stories`, the counts of each before the block.
@@ -5457,6 +5523,34 @@ impl WordPieces {
         }
         let inventory = pieces.inventory(document);
         (pieces, inventory)
+    }
+
+    /// Keep the pieces in step with a body splice made in place in
+    /// `document`: the pieces of the `removed` blocks at `slot` go, and the
+    /// owners `inserted` of the block now at `slot` take their place. Pieces
+    /// that did not count the body's blocks before the splice stay as they
+    /// were. The next inventory compares every piece with its block by value
+    /// anyway.
+    fn splice(
+        &mut self,
+        document: &rdocx::Document,
+        slot: usize,
+        removed: usize,
+        inserted: Option<WordBlockOwners>,
+    ) {
+        let blocks = document.body_children();
+        let added = usize::from(inserted.is_some());
+        if self.blocks.len() + added != blocks.len() + removed || slot + removed > self.blocks.len()
+        {
+            return;
+        }
+        let piece = inserted.map(|owners| {
+            std::sync::Arc::new(WordBlockPiece {
+                block: blocks[slot].clone(),
+                owners: Some(owners),
+            })
+        });
+        self.blocks.splice(slot..slot + removed, piece);
     }
 
     /// The inventory and index projections of these pieces, which are those
@@ -5650,6 +5744,8 @@ pub(crate) struct BodySplicePlan {
     pub(crate) table: usize,
     // The inserted table's route and the routes of its cell paragraphs.
     table_entry: Option<(rdocx::ContentLocation, Vec<CellParagraphs>)>,
+    // The owners of the inserted item alone, for the inventory by block.
+    piece: Option<WordBlockOwners>,
 }
 
 /// The facade coordinates of a cell and the routes of its paragraphs.
@@ -6055,10 +6151,12 @@ impl PyDocument {
             paragraph,
             table,
             table_entry: None,
+            piece: None,
         };
         match splice.inserted {
             None => {}
             Some(SplicedBodyItem::Paragraph(text, runs)) => {
+                plan.piece = Some(plain_paragraph_owners(&story, &text, &runs));
                 let at = paragraph_at.unwrap_or(current);
                 let location = rdocx::ContentLocation::new(
                     story,
@@ -6085,7 +6183,7 @@ impl PyDocument {
             Some(SplicedBodyItem::Table(xml, snapshots)) => {
                 let table_at = table_at.unwrap_or(current);
                 let cells_at = cells_at.unwrap_or(current);
-                let Some((blocks, cells, entry)) = spliced_table_blocks(
+                let Some((blocks, cells, entry, piece)) = spliced_table_blocks(
                     xml,
                     snapshots,
                     &story,
@@ -6098,6 +6196,7 @@ impl PyDocument {
                 plan.cells = (cells_before, cells);
                 plan.inserted_table = true;
                 plan.table_entry = Some(entry);
+                plan.piece = piece;
             }
         }
         Ok(Some(plan))
@@ -6333,7 +6432,7 @@ impl PyDocument {
         let _ = publication;
         let PreparedBodySplice {
             revision,
-            plan,
+            mut plan,
             states,
             snapshot_scope,
             ..
@@ -6493,6 +6592,9 @@ impl PyDocument {
             self.indexes.cell_paragraphs = shifted;
         }
         self.snapshot_scope = snapshot_scope;
+        let inserted = plan.piece.take();
+        self.pieces
+            .splice(&self.inner, plan.slot, plan.removed, inserted);
         #[cfg(debug_assertions)]
         self.assert_word_inventory_rebuilds();
         Ok(())
@@ -6616,9 +6718,11 @@ impl PyDocument {
 /// The inserted blocks of a detached table placed at body story item
 /// `first` of slot `slot`: the table and its cells before current owner
 /// `table_at`, its cell paragraphs and runs before `cells_at`, with cell
-/// story owners counted from `cells_before`. Also the number of cells, and
-/// the table route with the routes of each cell's paragraphs.
-#[allow(clippy::type_complexity)] // The blocks, the cell count and the index entry of one table.
+/// story owners counted from `cells_before`. Also the number of cells, the
+/// table route with the routes of each cell's paragraphs, and the table's
+/// owners as the inventory by block reads them, when its read facts give
+/// them.
+#[allow(clippy::type_complexity)] // The blocks, the cell count, the index entry and the owners of one table.
 fn spliced_table_blocks(
     xml: Vec<u8>,
     snapshots: WordOwnerSnapshots,
@@ -6629,6 +6733,7 @@ fn spliced_table_blocks(
     Vec<(usize, Vec<WordOwnerAddress>)>,
     usize,
     (rdocx::ContentLocation, Vec<CellParagraphs>),
+    Option<WordBlockOwners>,
 )> {
     // The detached body holds this table as its only item.
     let mut items = snapshots
@@ -6651,6 +6756,7 @@ fn spliced_table_blocks(
         }
     })
     .ok()?;
+    let piece = facts.clone();
     let addresses = word_owner_addresses(facts, 0);
     let cells = addresses
         .iter()
@@ -6759,7 +6865,7 @@ fn spliced_table_blocks(
     if !tail.is_empty() {
         blocks.push((cells_at, tail));
     }
-    Some((blocks, cells, (table, entries)))
+    Some((blocks, cells, (table, entries), table_owners(piece, cells)))
 }
 
 #[derive(Clone)]
@@ -8587,6 +8693,7 @@ impl PyDocument {
         self.indexes.direct_body_paragraphs.remove(&slot);
         self.removal_scope = removal_scope;
         self.snapshot_scope = snapshot_scope;
+        self.pieces.splice(&self.inner, slot, 1, None);
         Ok(())
     }
 

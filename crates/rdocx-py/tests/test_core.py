@@ -11399,3 +11399,58 @@ def test_word_owner_inventory_reads_no_piece_for_a_part_read_twice():
     assert pieces() == before[1]
     assert work()[0] >= before[0][0] + 3
     assert rdocx.Document.from_bytes(doc.to_bytes()).paragraphs[3].text == "edited"
+
+
+_WORD_PIECE_SPLICES = {
+    "remove_content": lambda doc: doc.remove_content(0),
+    "remove_content_range": lambda doc: doc.remove_content_range(0, 2),
+    "insert_paragraph": lambda doc: doc.insert_paragraph(5, "inserted"),
+    "insert_paragraph_before": lambda doc: doc.paragraphs[3].insert_paragraph_before("before"),
+    "add_paragraph": lambda doc: doc.add_paragraph("appended"),
+    "insert_table": lambda doc: doc.insert_table(5, 2, 2),
+    "add_table": lambda doc: doc.add_table(1, 2),
+}
+
+
+@pytest.mark.parametrize("splice", sorted(_WORD_PIECE_SPLICES))
+def test_word_owner_pieces_follow_a_body_splice(splice):
+    import rdocx
+
+    # A body splice reads no piece and keeps the pieces in step with the body, so an edit of the last paragraph
+    # after it reads that paragraph's block alone. Debug builds check the inventory of that edit, which reuses the
+    # pieces the splice placed, against the rebuild.
+    work = _issue407_work()
+    pieces = _word_piece_work()
+    reads = []
+    for paragraphs in (20, 80):
+        doc = _word_piece_document(paragraphs)
+        before = (work(), pieces())
+        _WORD_PIECE_SPLICES[splice](doc)
+        assert (work(), pieces()) == before, splice
+        list(doc.paragraphs)[-1].text = "edited"
+        assert work() == before[0], splice
+        reads.append(pieces() - before[1])
+        reopened = rdocx.Document.from_bytes(doc.to_bytes())
+        assert [p.text for p in reopened.paragraphs] == [p.text for p in doc.paragraphs]
+    assert reads == [1, 1], (splice, reads)
+
+
+def test_word_owner_pieces_follow_a_tail_removal():
+    import rdocx
+
+    work = _issue407_work()
+    pieces = _word_piece_work()
+    for paragraphs in (20, 80):
+        doc = rdocx.Document()
+        for i in range(paragraphs):
+            doc.add_paragraph(f"paragraph {i}")
+            if i % 10 == 9:
+                doc.add_table(2, 2)
+        doc.add_paragraph("tail")
+        doc = rdocx.Document.from_bytes(doc.to_bytes())
+        before = (work(), pieces())
+        # The last body child is a plain paragraph, which the tail removal takes in place.
+        assert doc.remove_content(doc.find_content_index(list(doc.paragraphs)[-1]))
+        assert (work(), pieces()) == before
+        list(doc.paragraphs)[-1].text = "edited"
+        assert work() == before[0] and pieces() - before[1] == 1, paragraphs
