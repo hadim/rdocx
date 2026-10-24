@@ -25,8 +25,8 @@ use quick_xml::reader::NsReader;
 use rdocx_oxml::MathProperties;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent, StorySdtOwner};
 use rdocx_oxml::document::{
-    BodyContent, CT_Column, CT_Columns, CT_DocGrid, CT_Document, CT_LineNumber, CT_NoteProperties,
-    CT_PageBorders, CT_PaperSource, CT_SectPr,
+    BodyContent, CT_Body, CT_Column, CT_Columns, CT_DocGrid, CT_Document, CT_LineNumber,
+    CT_NoteProperties, CT_PageBorders, CT_PaperSource, CT_SectPr,
 };
 use rdocx_oxml::drawing::{
     AnchorAlignH, AnchorAlignV, CT_Anchor, CT_Drawing, CT_Inline, ST_RelativeFromH,
@@ -1694,6 +1694,49 @@ impl StoryItemSnapshot {
     /// Return the exact or namespace-complete XML captured for this item.
     pub fn xml(&self) -> &[u8] {
         &self.xml
+    }
+}
+
+/// The checked Word owners of one body item, which
+/// [`Document::body_item_owners`] reads from a main part whose body holds
+/// only that item.
+#[doc(hidden)]
+#[allow(clippy::type_complexity)] // The four owned families and the item's index projections.
+pub struct BodyItemOwners {
+    /// The four families of [`Document::story_owner_snapshots`].
+    pub snapshots: Vec<StoryItemSnapshot>,
+    pub cells: Vec<(ContentLocation, usize, usize, StoryId)>,
+    pub paragraphs: Vec<(ContentLocation, Vec<u8>)>,
+    pub links: Vec<(ContentLocation, LinkInfo)>,
+    /// The table cell story owners of the item.
+    pub cell_stories: usize,
+    /// The text box story owners of the item.
+    pub text_boxes: usize,
+    /// The body story path that [`Document::paragraph_story_locations`]
+    /// gives each paragraph of the item, in [`Document::paragraphs`] order.
+    pub paragraph_routes: Vec<Option<Vec<usize>>>,
+    /// The tables of the item that [`Document::tables`] counts.
+    pub tables: usize,
+    /// [`Document::cell_paragraph_story_locations`] for those tables, keyed
+    /// by table within the item, and whether it routed every table cell
+    /// owner of the item, or `None` where it fails.
+    pub cell_paragraphs: Option<(HashMap<(usize, usize, usize), Vec<ContentLocation>>, bool)>,
+}
+
+/// What [`Document::body_item_owners`] reads besides the item, as
+/// [`Document::body_item_context`] gives it.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BodyItemContext {
+    part_name: String,
+    root: [Vec<(String, String)>; 5],
+    plain_local_edit_blocked: bool,
+}
+
+impl BodyItemContext {
+    /// The main part, which holds the body story.
+    pub fn part_name(&self) -> &str {
+        &self.part_name
     }
 }
 
@@ -15714,6 +15757,158 @@ fn modeled_main_cell_route(xml: &[u8], target: &StoryOwnerSpan) -> Result<(usize
     Ok((content_index, cell_index))
 }
 
+/// The body story path of each paragraph of `body`, in
+/// [`CT_Body::paragraphs`] order, as [`Document::paragraph_story_location`]
+/// resolves it from the body story items `items`, or `None` where it gives
+/// no location.
+fn body_paragraph_routes(body: &CT_Body, items: &[StoryItemSpan]) -> Vec<Option<Vec<usize>>> {
+    let mut targets = HashMap::new();
+    for (slot, child) in body.content.iter().enumerate() {
+        match child {
+            BodyContent::Paragraph(paragraph) => {
+                targets
+                    .entry(paragraph.as_ref() as *const CT_P)
+                    .or_insert((slot, None));
+            }
+            BodyContent::ContentControl(control) => {
+                for (ordinal, paragraph) in control
+                    .content
+                    .iter()
+                    .filter_map(|child| match child {
+                        SdtContent::Paragraph(paragraph) => Some(paragraph),
+                        _ => None,
+                    })
+                    .enumerate()
+                {
+                    targets
+                        .entry(paragraph as *const CT_P)
+                        .or_insert((slot, Some(ordinal)));
+                }
+            }
+            _ => {}
+        }
+    }
+    let direct = items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.direct_owner_child)
+        .collect::<Vec<_>>();
+    body.paragraphs()
+        .map(|paragraph| {
+            let (slot, ordinal) = *targets.get(&(paragraph as *const CT_P))?;
+            let (item_index, item) = direct.get(slot)?;
+            let expected_kind = if ordinal.is_some() {
+                StoryItemKind::ContentControl
+            } else {
+                StoryItemKind::Paragraph
+            };
+            (item.kind == expected_kind)
+                .then(|| std::iter::once(*item_index).chain(ordinal).collect())
+        })
+        .collect()
+}
+
+/// [`Document::cell_paragraph_story_locations`] of `body`, serialized as
+/// `xml` with the story owners `owners` in the main part `part_name`, and
+/// whether it routed every table cell owner. Like the single lookup, which
+/// fails on the first owner it cannot route, the inventory stops there.
+#[allow(clippy::type_complexity)] // The located paragraphs of each cell and one fact.
+fn cell_paragraph_routes(
+    body: &mut CT_Body,
+    xml: &[u8],
+    owners: &[StoryOwnerSpan],
+    part_name: &str,
+) -> Result<(HashMap<(usize, usize, usize), Vec<ContentLocation>>, bool)> {
+    let mut addresses = HashMap::<*const CT_Tc, (usize, usize, usize)>::new();
+    for (table_index, table) in body.tables().enumerate() {
+        for (row_index, row) in table.rows.iter().enumerate() {
+            for (cell_index, cell) in row.cells.iter().enumerate() {
+                addresses.entry(cell as *const CT_Tc).or_insert((
+                    table_index,
+                    row_index,
+                    cell_index,
+                ));
+            }
+        }
+    }
+    let body_owner = owners
+        .iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
+    let direct_items = direct_story_content_items(xml, body_owner)?;
+    let mut ordinals = HashMap::<usize, usize>::new();
+    let mut selected = Vec::new();
+    let mut seen = HashSet::new();
+    let mut complete = true;
+    for owner in owners
+        .iter()
+        .filter(|owner| owner.kind == StoryKind::TableCell)
+    {
+        // The single lookup fails on the first owner it cannot route,
+        // whatever its target, so the inventory stops there too.
+        let Some((content, direct_item)) = direct_items.iter().enumerate().find(|(_, item)| {
+            item.full.start <= owner.full.start && owner.full.end <= item.full.end
+        }) else {
+            complete = false;
+            break;
+        };
+        if !matches!(
+            direct_item.kind,
+            StoryItemKind::Table | StoryItemKind::ContentControl
+        ) {
+            complete = false;
+            break;
+        }
+        let counter = ordinals.entry(content).or_insert(0);
+        let mut ordinal = *counter;
+        *counter += 1;
+        let modeled = match body.content.get_mut(content) {
+            Some(BodyContent::Table(table)) => nth_cell_in_table(table, &mut ordinal),
+            Some(BodyContent::ContentControl(control)) => {
+                nth_cell_in_control(control, &mut ordinal)
+            }
+            _ => None,
+        };
+        let Some((pointer, count)) =
+            modeled.map(|cell| (&*cell as *const CT_Tc, cell.paragraphs().len()))
+        else {
+            continue;
+        };
+        let Some(address) = addresses.get(&pointer) else {
+            continue;
+        };
+        if !seen.insert(*address) {
+            continue;
+        }
+        let story = StoryId {
+            kind: owner.kind,
+            part_name: part_name.to_owned(),
+            owner_index: owner.owner_index,
+            fingerprint: owner.fingerprint,
+        };
+        selected.push((*address, count, (story, owner.clone())));
+    }
+    let pairs = selected
+        .iter()
+        .map(|(_, _, pair)| pair.clone())
+        .collect::<Vec<_>>();
+    let spans = story_range_paragraph_spans(xml, &pairs)?;
+    let mut result = HashMap::with_capacity(selected.len());
+    for ((address, count, _), mut paragraphs) in selected.into_iter().zip(spans) {
+        paragraphs.sort_by_key(|(_, span)| span.start);
+        if paragraphs.len() == count {
+            result.insert(
+                address,
+                paragraphs
+                    .into_iter()
+                    .map(|(location, _)| location)
+                    .collect(),
+            );
+        }
+    }
+    Ok((result, complete))
+}
+
 fn nth_cell_in_control<'a>(control: &'a mut CT_Sdt, index: &mut usize) -> Option<&'a mut CT_Tc> {
     for child in &mut control.content {
         let cell = match child {
@@ -20352,6 +20547,14 @@ impl Document {
             part_name: self.doc_part_name.clone(),
             xml: Cow::Owned(self.document.to_xml()?),
         }];
+        sources.extend(self.related_story_sources()?);
+        Ok(sources)
+    }
+
+    /// The story sources after the main part, in [`Self::story_sources`]
+    /// order, read from the package without serializing the main part.
+    fn related_story_sources(&self) -> Result<Vec<StorySource<'_>>> {
+        let mut sources = Vec::new();
         let mut seen = HashSet::new();
         seen.insert((StoryKind::Body, self.doc_part_name.clone()));
 
@@ -24399,7 +24602,7 @@ impl Document {
         Vec<(ContentLocation, Vec<u8>)>,
         Vec<(ContentLocation, LinkInfo)>,
     )> {
-        self.owner_snapshots_of(self.story_sources()?)
+        self.owner_snapshots_of(self.story_sources()?, false)
     }
 
     /// [`Self::story_owner_snapshots`] of a main part whose body holds only
@@ -24422,18 +24625,155 @@ impl Document {
     )> {
         let (part, xml) =
             self.standalone_body_item(&BodyContent::Table(Box::new(table.clone())))?;
-        let snapshots = self.owner_snapshots_of(vec![StorySource {
-            root_kind: StoryKind::Body,
-            part_name: self.doc_part_name.clone(),
-            xml: Cow::Owned(part),
-        }])?;
+        let snapshots = self.owner_snapshots_of(
+            vec![StorySource {
+                root_kind: StoryKind::Body,
+                part_name: self.doc_part_name.clone(),
+                xml: Cow::Owned(part),
+            }],
+            false,
+        )?;
         Ok((xml, snapshots))
+    }
+
+    /// The checked Word owners of a main part whose body holds only `item`,
+    /// placed as a direct body child of this document.
+    ///
+    /// Body story items count from the item, and table cell and text box
+    /// stories from its first of each, and each snapshot's XML is
+    /// namespace-complete. Equal items
+    /// give equal owners while [`Self::body_item_context`] is equal, up to
+    /// the hyperlink relationships, which they do not check again.
+    #[doc(hidden)]
+    pub fn body_item_owners(&self, item: &BodyContent) -> Result<BodyItemOwners> {
+        // The whole body admits each of its children alone.
+        let mut alone = CT_Body {
+            content: vec![item.clone()],
+            sect_pr: None,
+        };
+        alone.validate_resource_limits()?;
+        let part = self.document.standalone_body_item_xml(item)?;
+        #[cfg(test)]
+        STANDALONE_BODY_ITEM_BYTES.set(STANDALONE_BODY_ITEM_BYTES.get() + part.len());
+        let (snapshots, cells, paragraphs, links) = self.owner_snapshots_of(
+            vec![StorySource {
+                root_kind: StoryKind::Body,
+                part_name: self.doc_part_name.clone(),
+                xml: Cow::Borrowed(&part),
+            }],
+            true,
+        )?;
+        let owners = scan_story_owners(&part, StoryKind::Body)?;
+        let body = owners
+            .iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .ok_or_else(|| Error::Other("standalone body item has no body owner".into()))?;
+        let items = scan_story_items(&part, body, None)?;
+        let count = |kind| owners.iter().filter(|owner| owner.kind == kind).count();
+        Ok(BodyItemOwners {
+            snapshots,
+            cells,
+            paragraphs,
+            links,
+            cell_stories: count(StoryKind::TableCell),
+            text_boxes: count(StoryKind::TextBox),
+            paragraph_routes: body_paragraph_routes(&alone, &items),
+            tables: alone.tables().count(),
+            cell_paragraphs: cell_paragraph_routes(&mut alone, &part, &owners, &self.doc_part_name)
+                .ok(),
+        })
+    }
+
+    /// What [`Self::body_item_owners`] reads besides the item: the main
+    /// part's name and root, and the namespace facts of the opened package.
+    #[doc(hidden)]
+    pub fn body_item_context(&self) -> BodyItemContext {
+        BodyItemContext {
+            part_name: self.doc_part_name.clone(),
+            root: [
+                self.document.extra_namespaces.clone(),
+                self.document.root_attributes.clone(),
+                self.root_namespace_declarations.clone(),
+                self.body_namespace_declarations.clone(),
+                self.body_namespace_bindings.clone(),
+            ],
+            plain_local_edit_blocked: self.plain_local_edit_blocked,
+        }
+    }
+
+    /// The direct body children, as [`Self::body_item_owners`] takes them.
+    #[doc(hidden)]
+    pub fn body_children(&self) -> &[BodyContent] {
+        &self.document.body.content
+    }
+
+    /// The story parts after the main part, in the order of
+    /// [`Self::story_owner_snapshots`]: the root story kind, the part name
+    /// and the bytes of each, read without serializing the main part.
+    #[doc(hidden)]
+    #[allow(clippy::type_complexity)] // The kind, name and bytes of each part.
+    pub fn story_part_sources(&self) -> Result<Vec<(StoryKind, String, Cow<'_, [u8]>)>> {
+        Ok(self
+            .related_story_sources()?
+            .into_iter()
+            .map(|source| (source.root_kind, source.part_name, source.xml))
+            .collect())
+    }
+
+    /// [`Self::story_owner_snapshots`] of one part that
+    /// [`Self::story_part_sources`] lists, each snapshot's XML
+    /// namespace-complete.
+    #[doc(hidden)]
+    #[allow(clippy::type_complexity)] // The four owned families of one part.
+    pub fn story_part_owner_snapshots(
+        &self,
+        kind: StoryKind,
+        part_name: &str,
+        xml: &[u8],
+    ) -> Result<(
+        Vec<StoryItemSnapshot>,
+        Vec<(ContentLocation, usize, usize, StoryId)>,
+        Vec<(ContentLocation, Vec<u8>)>,
+        Vec<(ContentLocation, LinkInfo)>,
+    )> {
+        self.owner_snapshots_of(
+            vec![StorySource {
+                root_kind: kind,
+                part_name: part_name.to_owned(),
+                xml: Cow::Borrowed(xml),
+            }],
+            true,
+        )
+    }
+
+    /// The relationship IDs of `part_name` that a hyperlink of a story in
+    /// that part may name: the first relationship of each ID, when it is an
+    /// external hyperlink, as the owner snapshots check a link's
+    /// relationship.
+    #[doc(hidden)]
+    pub fn story_hyperlink_relationships(&self, part_name: &str) -> HashSet<&str> {
+        let mut seen = HashSet::new();
+        let mut valid = HashSet::new();
+        for relationship in self
+            .package
+            .get_part_rels(part_name)
+            .map_or(&[][..], |relationships| relationships.items.as_slice())
+        {
+            if seen.insert(relationship.id.as_str())
+                && relationship.rel_type == rel_types::HYPERLINK
+                && relationship.target_mode.as_deref() == Some("External")
+            {
+                valid.insert(relationship.id.as_str());
+            }
+        }
+        valid
     }
 
     #[allow(clippy::type_complexity)] // One cross-crate projection carries four existing owned families.
     fn owner_snapshots_of(
         &self,
         sources: Vec<StorySource<'_>>,
+        standalone: bool,
     ) -> Result<(
         Vec<StoryItemSnapshot>,
         Vec<(ContentLocation, usize, usize, StoryId)>,
@@ -24547,6 +24887,11 @@ impl Document {
                     let text = story_item_text_with_scope(&source.xml, item, scope, items)?;
                     let xml = if item.complex_field {
                         complex_story_field_xml(&source.xml, item)?
+                    } else if standalone {
+                        let scope = scopes.get(&item.full.start).ok_or_else(|| {
+                            Error::Other("story item namespace scope was not inventoried".into())
+                        })?;
+                        close_content_fragment_namespaces(&source.xml[item.full.clone()], scope)?
                     } else {
                         source.xml[item.full.clone()].to_vec()
                     };
@@ -27580,32 +27925,6 @@ impl Document {
     /// scan of the body, where a single lookup costs one scan per paragraph.
     #[doc(hidden)]
     pub fn paragraph_story_locations(&self) -> Result<Vec<Option<ContentLocation>>> {
-        let mut targets = HashMap::new();
-        for (slot, child) in self.document.body.content.iter().enumerate() {
-            match child {
-                BodyContent::Paragraph(paragraph) => {
-                    targets
-                        .entry(paragraph.as_ref() as *const CT_P)
-                        .or_insert((slot, None));
-                }
-                BodyContent::ContentControl(control) => {
-                    for (ordinal, paragraph) in control
-                        .content
-                        .iter()
-                        .filter_map(|child| match child {
-                            SdtContent::Paragraph(paragraph) => Some(paragraph),
-                            _ => None,
-                        })
-                        .enumerate()
-                    {
-                        targets
-                            .entry(paragraph as *const CT_P)
-                            .or_insert((slot, Some(ordinal)));
-                    }
-                }
-                _ => {}
-            }
-        }
         let story = self
             .stories()?
             .into_iter()
@@ -27613,30 +27932,10 @@ impl Document {
             .ok_or_else(|| Error::Other("document body story is missing".to_owned()))?;
         let (source, owner) = self.story_source_and_owner(&story)?;
         let items = scan_story_items(source.xml.as_ref(), &owner, None)?;
-        let direct = items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| item.direct_owner_child)
-            .collect::<Vec<_>>();
-        Ok(self
-            .document
-            .body
-            .paragraphs()
-            .map(|paragraph| {
-                let (slot, ordinal) = *targets.get(&(paragraph as *const CT_P))?;
-                let (item_index, item) = direct.get(slot)?;
-                let expected_kind = if ordinal.is_some() {
-                    StoryItemKind::ContentControl
-                } else {
-                    StoryItemKind::Paragraph
-                };
-                (item.kind == expected_kind).then(|| {
-                    ContentLocation::new(
-                        story.clone(),
-                        StoryItemKind::Paragraph,
-                        std::iter::once(*item_index).chain(ordinal).collect(),
-                    )
-                })
+        Ok(body_paragraph_routes(&self.document.body, &items)
+            .into_iter()
+            .map(|path| {
+                path.map(|path| ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path))
             })
             .collect())
     }
@@ -27657,92 +27956,14 @@ impl Document {
         &self,
     ) -> Result<HashMap<(usize, usize, usize), Vec<ContentLocation>>> {
         let mut candidate = self.clone_for_staging();
-        let mut addresses = HashMap::<*const CT_Tc, (usize, usize, usize)>::new();
-        for (table_index, table) in candidate.tables().into_iter().enumerate() {
-            for (row_index, row) in table.inner.rows.iter().enumerate() {
-                for (cell_index, cell) in row.cells.iter().enumerate() {
-                    addresses.entry(cell as *const CT_Tc).or_insert((
-                        table_index,
-                        row_index,
-                        cell_index,
-                    ));
-                }
-            }
-        }
         let xml = candidate.document.to_xml()?;
         let owners = scan_story_owners(&xml, StoryKind::Body)?;
-        let body = owners
-            .iter()
-            .find(|owner| owner.kind == StoryKind::Body)
-            .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
-        let direct_items = direct_story_content_items(&xml, body)?;
-        let mut ordinals = HashMap::<usize, usize>::new();
-        let mut selected = Vec::new();
-        let mut seen = HashSet::new();
-        for owner in owners
-            .iter()
-            .filter(|owner| owner.kind == StoryKind::TableCell)
-        {
-            // The single lookup fails on the first owner it cannot route,
-            // whatever its target, so the inventory stops there too.
-            let Some((content, direct_item)) = direct_items.iter().enumerate().find(|(_, item)| {
-                item.full.start <= owner.full.start && owner.full.end <= item.full.end
-            }) else {
-                break;
-            };
-            if !matches!(
-                direct_item.kind,
-                StoryItemKind::Table | StoryItemKind::ContentControl
-            ) {
-                break;
-            }
-            let counter = ordinals.entry(content).or_insert(0);
-            let mut ordinal = *counter;
-            *counter += 1;
-            let modeled = match candidate.document.body.content.get_mut(content) {
-                Some(BodyContent::Table(table)) => nth_cell_in_table(table, &mut ordinal),
-                Some(BodyContent::ContentControl(control)) => {
-                    nth_cell_in_control(control, &mut ordinal)
-                }
-                _ => None,
-            };
-            let Some((pointer, count)) =
-                modeled.map(|cell| (&*cell as *const CT_Tc, cell.paragraphs().len()))
-            else {
-                continue;
-            };
-            let Some(address) = addresses.get(&pointer) else {
-                continue;
-            };
-            if !seen.insert(*address) {
-                continue;
-            }
-            let story = StoryId {
-                kind: owner.kind,
-                part_name: candidate.doc_part_name.clone(),
-                owner_index: owner.owner_index,
-                fingerprint: owner.fingerprint,
-            };
-            selected.push((*address, count, (story, owner.clone())));
-        }
-        let pairs = selected
-            .iter()
-            .map(|(_, _, pair)| pair.clone())
-            .collect::<Vec<_>>();
-        let spans = story_range_paragraph_spans(&xml, &pairs)?;
-        let mut result = HashMap::with_capacity(selected.len());
-        for ((address, count, _), mut paragraphs) in selected.into_iter().zip(spans) {
-            paragraphs.sort_by_key(|(_, span)| span.start);
-            if paragraphs.len() == count {
-                result.insert(
-                    address,
-                    paragraphs
-                        .into_iter()
-                        .map(|(location, _)| location)
-                        .collect(),
-                );
-            }
-        }
+        let (result, _) = cell_paragraph_routes(
+            &mut candidate.document.body,
+            &xml,
+            &owners,
+            &candidate.doc_part_name,
+        )?;
         Ok(result)
     }
 
@@ -57714,6 +57935,107 @@ mod tests {
         }
         assert_eq!(work[0], work[1]);
         assert_eq!(work[2], work[3]);
+    }
+
+    #[test]
+    fn body_item_owners_read_each_item_as_the_whole_body_does() {
+        let mut work = Vec::new();
+        for count in [100usize, 400] {
+            let body = format!("{}{}", issue407_runs(count), issue407_varied_body(""));
+            let document = issue407_document(&body, false);
+            // Each item's routes, placed after the items, cell stories and
+            // tables before it, are those the whole body gives.
+            let (mut items, mut cells, mut tables) = (0, 0, 0);
+            let mut paragraphs = Vec::new();
+            let mut cell_paragraphs = HashMap::new();
+            let mut sample = Vec::new();
+            for (slot, item) in document.document.body.content.iter().enumerate() {
+                STORY_SOURCE_BUILDS.set(0);
+                STORY_OWNER_SCANS.set(0);
+                FX237_ITEM_SCANS.set(0);
+                let owners = document.body_item_owners(item).unwrap();
+                let counts = (
+                    STORY_SOURCE_BUILDS.get(),
+                    STORY_OWNER_SCANS.get(),
+                    FX237_ITEM_SCANS.get(),
+                );
+                // One item reads only itself: no body serialization, and the
+                // same scans in a body four times as large.
+                assert_eq!(counts.0, 0, "slot={slot}");
+                if slot == 50 || slot + 3 >= document.document.body.content.len() {
+                    sample.push(counts);
+                }
+                let direct = owners
+                    .snapshots
+                    .iter()
+                    .filter(|item| item.location().story().kind() == StoryKind::Body)
+                    .filter(|item| item.is_direct_child())
+                    .map(StoryItemSnapshot::direct_body_index)
+                    .collect::<Vec<_>>();
+                assert_eq!(direct, [Some(0)], "slot={slot}");
+                assert_eq!(owners.text_boxes, 0);
+                paragraphs.extend(owners.paragraph_routes.iter().map(|route| {
+                    route.clone().map(|mut path| {
+                        path[0] += items;
+                        path
+                    })
+                }));
+                let (routes, complete) = owners.cell_paragraphs.unwrap();
+                assert!(complete, "slot={slot}");
+                for ((table, row, cell), locations) in routes {
+                    // A cell story's fingerprint covers its own bytes, which
+                    // are those of the whole part.
+                    let locations = locations
+                        .iter()
+                        .map(|location| {
+                            let mut story = location.story().clone();
+                            story.set_owner_index(story.owner_index + cells);
+                            (story, location.index_path().to_vec())
+                        })
+                        .collect::<Vec<_>>();
+                    cell_paragraphs.insert((table + tables, row, cell), locations);
+                }
+                // The body story's covers the whole body, which one item
+                // cannot give.
+                if let Some(Some(path)) = owners.paragraph_routes.first() {
+                    let body = owners.snapshots[path[0]].location().story();
+                    let whole = document.stories().unwrap().remove(0);
+                    assert_eq!(body.kind, whole.kind);
+                    assert_ne!(body.fingerprint, whole.fingerprint);
+                }
+                items += owners
+                    .snapshots
+                    .iter()
+                    .filter(|item| item.location().story().kind() == StoryKind::Body)
+                    .count();
+                cells += owners.cell_stories;
+                tables += owners.tables;
+            }
+            let expected = document
+                .paragraph_story_locations()
+                .unwrap()
+                .into_iter()
+                .map(|location| location.map(|location| location.index_path().to_vec()))
+                .collect::<Vec<_>>();
+            assert_eq!(paragraphs, expected);
+            let expected = document
+                .cell_paragraph_story_locations()
+                .unwrap()
+                .into_iter()
+                .map(|(key, locations)| {
+                    let locations = locations
+                        .iter()
+                        .map(|location| (location.story().clone(), location.index_path().to_vec()))
+                        .collect::<Vec<_>>();
+                    (key, locations)
+                })
+                .collect::<HashMap<_, _>>();
+            assert_eq!(expected.len(), 7);
+            assert_eq!(cell_paragraphs, expected);
+            assert_eq!(tables, document.table_count());
+            work.push(sample);
+        }
+        assert_eq!(work[0], work[1]);
     }
 }
 

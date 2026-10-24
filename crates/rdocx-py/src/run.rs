@@ -102,8 +102,8 @@ impl PyRun {
             || paragraph_location(&self.path),
             |location| Ok(ParagraphLocation::Related(location.clone())),
         )?;
-        let location = paragraph
-            .native(candidate)
+        let location = document
+            .paragraph_route(&paragraph, Some((prepared, candidate)))
             .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         let (path, owner) = document.capture_prepared_owner(
             prepared,
