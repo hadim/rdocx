@@ -915,8 +915,16 @@ complex hyperlinks are not reported as `Document::links()` until the update
 policy defines how to handle them. The `rdocx` facade correlates bookmark ids
 and owns mutation across typed body paragraphs, including supported table and
 content-control traversal. Its story-qualified range inventory also pairs
-bookmarks, comment endpoints, permission ranges and proofing ranges within one
-physical owner. Checked add, move and remove operations stage a candidate,
+bookmarks, comment endpoints, permission ranges and proofing ranges. Validation
+walks every admitted marker in physical source order first. Only after that
+walk does the inventory omit a bookmark, comment, or permission pair that has
+exactly one begin and one end, is unique, stays in one part, and crosses
+owners. The omitted name or id stays occupied. A proofing pair that crosses
+owners is refused. Duplicate, unmatched, reversed, crossing, and cross-part
+pairs still error. Returned ranges keep the legacy order. Owner-local ordinals
+stay on those ranges. Destination placement still requires one owner. The name
+uniqueness filter still applies when marker scan or pairing fails, if paragraph
+projection succeeded. Checked add, move and remove operations stage a candidate,
 validate accepted-view order and reopen the result before publication.
 Proofing pairs carry their spelling or grammar type without an invented id.
 Removing a comment range leaves its reference run and definition as a point
@@ -2214,8 +2222,15 @@ three anchors together, then invalidates layout once. `CommentRef` is a
 read-only view over the typed comment and its comments-extended thread entry.
 Its checked `anchor()` and `anchor_text()` accessors share the document's
 qualified comment ownership proof. `Document::comment_anchor` returns an
-accepted-view `StoryRunRange`, and `comment_anchor_text` returns exactly the
-selected accepted display, with one newline between paragraphs. A known
+accepted-view `StoryRunRange`, and `comment_anchor_text` returns the accepted
+display of one enclosing non-cell physical flow. Table cells in that flow are
+included. Paragraphs are joined by one newline. An independent nested text box
+is a separate flow and is excluded. `comment_anchor_snapshot_results` returns
+one result per comment. An unrepresentable projection or endpoint is that
+comment's error, and the other comments stay listed. `comment_anchor_snapshots`
+is the strict collect wrapper over the same body, so one such error fails the
+whole map. Document-wide inventory and ownership failures still fail both
+calls. A known
 orphan returns no range or text, and a reference-only point returns no paired
 range with empty text. Replies do not inherit a fabricated parent range.
 Unknown identities and malformed, ambiguous or unprojectable selected sources
