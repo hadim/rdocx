@@ -14487,6 +14487,130 @@ mod legacy_forms_and_building_blocks {
     }
 
     #[test]
+    fn legacy_cache_publishers_follow_current_presence_and_parent_policy() {
+        let mut field = rdocx::Field::from_legacy_form(
+            rdocx::LegacyFormFieldOptions::default(),
+            rdocx::LegacyFormFieldDefinition::TextInput {
+                input_type: rdocx::LegacyTextInputType::Regular,
+                default: Some("Keep".into()),
+                value: "Old".into(),
+                max_length: None,
+                format: None,
+            },
+        )
+        .unwrap();
+        field.cached_result = "New".into();
+        assert_eq!(
+            field.legacy_form_value().unwrap(),
+            Some(LegacyFormFieldValue::Text("New".into()))
+        );
+        field
+            .set_cached_runs(vec![rdocx_oxml::text::CT_R::new("")])
+            .unwrap();
+        assert_eq!(
+            field.legacy_form_value().unwrap(),
+            Some(LegacyFormFieldValue::Text(String::new()))
+        );
+        assert_eq!(field.effective_display().as_ref(), "");
+        assert_eq!(
+            field.legacy_form_default_value().unwrap(),
+            Some(LegacyFormFieldValue::Text("Keep".into()))
+        );
+        field
+            .set_cached_runs_with_comment_ranges(
+                vec![rdocx_oxml::text::CT_R::new("Ann")],
+                Vec::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            field.legacy_form_value().unwrap(),
+            Some(LegacyFormFieldValue::Text("Ann".into()))
+        );
+
+        let mut check = rdocx::Field::from_legacy_form(
+            rdocx::LegacyFormFieldOptions::default(),
+            rdocx::LegacyFormFieldDefinition::CheckBox {
+                size: rdocx::LegacyCheckBoxSize::Auto,
+                default: false,
+                checked: true,
+            },
+        )
+        .unwrap();
+        check.cached_result = "glyph".into();
+        check
+            .set_cached_runs(vec![rdocx_oxml::text::CT_R::new("")])
+            .unwrap();
+        assert_eq!(
+            check.legacy_form_value().unwrap(),
+            Some(LegacyFormFieldValue::Checked(true))
+        );
+        assert_eq!(
+            check.legacy_form_default_value().unwrap(),
+            Some(LegacyFormFieldValue::Checked(false))
+        );
+
+        let mut styled = rdocx_oxml::text::CT_R::new("Styled");
+        styled.properties = Some(rdocx_oxml::CT_RPr {
+            bold: Some(true),
+            ..rdocx_oxml::CT_RPr::default()
+        });
+        field.set_cached_runs(vec![styled]).unwrap();
+        let segments = field.effective_display_field_segments();
+        assert_eq!(segments[0].0.as_ref(), "Styled");
+        assert_eq!(
+            segments[0].1.and_then(|properties| properties.bold),
+            Some(true)
+        );
+
+        let nested = rdocx::Field::from_legacy_form(
+            rdocx::LegacyFormFieldOptions::default(),
+            rdocx::LegacyFormFieldDefinition::TextInput {
+                input_type: rdocx::LegacyTextInputType::Regular,
+                default: Some("Inner".into()),
+                value: "Child".into(),
+                max_length: None,
+                format: None,
+            },
+        )
+        .unwrap();
+        let mut parent = rdocx::Field::from_instruction(
+            rdocx_oxml::text::FieldInstruction::new("QUOTE", Vec::new(), Vec::new()).unwrap(),
+            rdocx_oxml::text::FieldForm::Complex,
+            vec![rdocx_oxml::text::CT_R::new("Child")],
+        )
+        .unwrap();
+        let mut carrier = rdocx_oxml::text::CT_R::new("");
+        carrier.properties = Some(rdocx_oxml::CT_RPr {
+            italic: Some(true),
+            ..rdocx_oxml::CT_RPr::default()
+        });
+        carrier.content = vec![
+            rdocx_oxml::text::RunContent::Text(rdocx_oxml::text::CT_Text::new("Lit")),
+            rdocx_oxml::text::RunContent::Break(rdocx_oxml::text::BreakType::Page),
+            rdocx_oxml::text::RunContent::Field(nested),
+        ];
+        parent.set_cached_runs(vec![carrier]).unwrap();
+        let shown = parent.effective_display_field_segments();
+        assert!(shown.iter().any(|(text, properties, _)| {
+            text.as_ref() == "Lit" && properties.and_then(|item| item.italic) == Some(true)
+        }));
+        assert!(shown.iter().any(|(text, _, _)| text.as_ref() == "\u{000c}"));
+        assert!(shown.iter().any(|(text, _, owner)| {
+            text.as_ref() == "Child" && !std::ptr::eq(*owner, &parent)
+        }));
+        parent.cached_field_mut(0).unwrap().cached_result = "Next".into();
+        assert_eq!(parent.effective_display().as_ref(), "Lit\u{000c}Next");
+        parent.refresh_cached_field_projection();
+        assert_eq!(parent.effective_display().as_ref(), "Lit\u{000c}Next");
+        parent.cached_result = "Override".into();
+        assert_eq!(parent.effective_display().as_ref(), "Override");
+        parent.cached_result.clear();
+        assert_eq!(parent.effective_display().as_ref(), "");
+        parent.refresh_cached_field_projection();
+        assert_eq!(parent.effective_display().as_ref(), "Lit\u{000c}Next");
+    }
+
+    #[test]
     fn parsed_parent_shows_absent_result_child_default_without_a_parent_cache() {
         let mut package = base_package();
         let xml = format!(
@@ -14544,6 +14668,270 @@ mod legacy_forms_and_building_blocks {
             });
         }
         assert!(found, "expected a positioned bold field result");
+    }
+
+    #[test]
+    fn public_legacy_fields_keep_properties_and_typed_values_on_reopen() {
+        let mut document = Document::new();
+        let text = rdocx::Field::from_legacy_form(
+            rdocx::LegacyFormFieldOptions {
+                name: Some("Name".into()),
+                calculate_on_exit: true,
+                ..rdocx::LegacyFormFieldOptions::default()
+            },
+            rdocx::LegacyFormFieldDefinition::TextInput {
+                input_type: rdocx::LegacyTextInputType::Date,
+                default: Some("keep".into()),
+                value: "now".into(),
+                max_length: Some(8),
+                format: Some("yyyy".into()),
+            },
+        )
+        .unwrap();
+        let check = rdocx::Field::from_legacy_form(
+            rdocx::LegacyFormFieldOptions::default(),
+            rdocx::LegacyFormFieldDefinition::CheckBox {
+                size: rdocx::LegacyCheckBoxSize::HalfPoints(25),
+                default: false,
+                checked: true,
+            },
+        )
+        .unwrap();
+        let list = rdocx::Field::from_legacy_form(
+            rdocx::LegacyFormFieldOptions::default(),
+            rdocx::LegacyFormFieldDefinition::DropDownList {
+                choices: vec!["one".into(), "two".into()],
+                default_index: 0,
+                selected_index: 1,
+            },
+        )
+        .unwrap();
+        {
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run("");
+            run.add_field_value(text).unwrap();
+            run.add_field_value(check).unwrap();
+            run.add_field_value(list).unwrap();
+        }
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let fields = reopened.legacy_form_fields().unwrap();
+        assert_eq!(fields[0].name.as_deref(), Some("Name"));
+        assert!(fields[0].calculate_on_exit);
+        assert_eq!(fields[0].value, LegacyFormFieldValue::Text("now".into()));
+        assert_eq!(fields[1].value, LegacyFormFieldValue::Checked(true));
+        assert_eq!(fields[2].value, LegacyFormFieldValue::SelectedIndex(1));
+        let pairs = reopened.legacy_form_fields_with_defaults().unwrap();
+        assert_eq!(pairs[0].1, Some(LegacyFormFieldValue::Text("keep".into())));
+        assert_eq!(pairs[1].1, Some(LegacyFormFieldValue::Checked(false)));
+        assert_eq!(pairs[2].1, Some(LegacyFormFieldValue::SelectedIndex(0)));
+        let package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(xml.contains(r#"w:type w:val="date""#), "{xml}");
+        assert!(xml.contains(r#"w:default w:val="keep""#), "{xml}");
+        assert!(xml.contains(r#"w:size w:val="25""#), "{xml}");
+        assert!(
+            xml.contains("FORMTEXT")
+                && xml.contains("FORMCHECKBOX")
+                && xml.contains("FORMDROPDOWN"),
+            "{xml}"
+        );
+    }
+
+    #[test]
+    fn generic_field_updates_preserve_legacy_form_state() {
+        let mut document = Document::new();
+        let form = rdocx::Field::from_legacy_form(
+            rdocx::LegacyFormFieldOptions {
+                name: Some("Imported".into()),
+                ..rdocx::LegacyFormFieldOptions::default()
+            },
+            rdocx::LegacyFormFieldDefinition::TextInput {
+                input_type: rdocx::LegacyTextInputType::Regular,
+                default: Some("Foo".into()),
+                value: "Bar".into(),
+                max_length: None,
+                format: None,
+            },
+        )
+        .unwrap();
+        {
+            let mut paragraph = document.add_paragraph("");
+            paragraph.add_run("").add_field_value(form).unwrap();
+            paragraph.add_run("").add_field(" DATE ", "old").unwrap();
+        }
+        let before = document.to_bytes().unwrap();
+        document
+            .update_fields(&rdocx::FieldEvaluationContext {
+                now: Some(rdocx::FieldDateTime {
+                    year: 2026,
+                    month: 10,
+                    day: 24,
+                    hour: 0,
+                    minute: 0,
+                    second: 0,
+                }),
+                ..rdocx::FieldEvaluationContext::default()
+            })
+            .unwrap();
+        let fields = document.legacy_form_fields_with_defaults().unwrap();
+        assert_eq!(fields[0].0.value, LegacyFormFieldValue::Text("Bar".into()));
+        assert_eq!(fields[0].1, Some(LegacyFormFieldValue::Text("Foo".into())));
+        let saved = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(xml.contains(r#"w:default w:val="Foo""#), "{xml}");
+        assert!(xml.contains(">Bar<"), "{xml}");
+        let _ = before;
+    }
+
+    #[test]
+    fn invalid_legacy_field_creation_cannot_change_destination() {
+        let mut document = Document::new();
+        document.add_paragraph("stay");
+        let before = document.to_bytes().unwrap();
+        let invalid = rdocx::Field::from_legacy_form(
+            rdocx::LegacyFormFieldOptions::default(),
+            rdocx::LegacyFormFieldDefinition::DropDownList {
+                choices: Vec::new(),
+                default_index: 0,
+                selected_index: 0,
+            },
+        );
+        assert!(invalid.is_err());
+        let too_long = rdocx::Field::from_legacy_form(
+            rdocx::LegacyFormFieldOptions {
+                name: Some("abcdefghijklmnopqrstu".into()),
+                ..rdocx::LegacyFormFieldOptions::default()
+            },
+            rdocx::LegacyFormFieldDefinition::TextInput {
+                input_type: rdocx::LegacyTextInputType::Regular,
+                default: None,
+                value: String::new(),
+                max_length: None,
+                format: None,
+            },
+        );
+        assert!(too_long.is_err());
+        let mut contradictory = rdocx::Field::from_legacy_form(
+            rdocx::LegacyFormFieldOptions::default(),
+            rdocx::LegacyFormFieldDefinition::CheckBox {
+                size: rdocx::LegacyCheckBoxSize::Auto,
+                default: false,
+                checked: false,
+            },
+        )
+        .unwrap();
+        contradictory.instruction.name = "FORMTEXT".into();
+        let revisions = document.revisions().len();
+        let held = document.paragraph(0).unwrap().text();
+        {
+            let mut paragraph = document.paragraph_mut(0).unwrap();
+            let mut run = paragraph.run_mut(0).unwrap();
+            assert!(run.add_field_value(contradictory.clone()).is_err());
+        }
+        assert!(
+            document
+                .insert_field(
+                    &rdocx::StoryRunPosition {
+                        location: document.paragraph_story_location(0).unwrap().unwrap(),
+                        run_index: 1,
+                    },
+                    contradictory,
+                )
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert_eq!(document.revisions().len(), revisions);
+        assert_eq!(document.paragraph(0).unwrap().text(), held);
+    }
+
+    #[test]
+    fn legacy_authoring_respects_nested_story_owners_and_opaque_xml() {
+        let mut package = base_package();
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{WORD_NS}" xmlns:x="urn:producer"><w:body><w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><x:keep/></w:body></w:document>"#
+        );
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut document = Document::from_bytes(&package_bytes(package)).unwrap();
+        document.add_paragraph("body");
+        let field = rdocx::Field::from_legacy_form(
+            rdocx::LegacyFormFieldOptions::default(),
+            rdocx::LegacyFormFieldDefinition::TextInput {
+                input_type: rdocx::LegacyTextInputType::Regular,
+                default: Some("d".into()),
+                value: "v".into(),
+                max_length: None,
+                format: None,
+            },
+        )
+        .unwrap();
+        {
+            let mut table = document.add_table(1, 1);
+            let mut cell = table.cell(0, 0).unwrap();
+            let mut nested = cell.add_table(1, 1);
+            nested
+                .cell(0, 0)
+                .unwrap()
+                .add_paragraph("")
+                .add_run("")
+                .add_field_value(field.clone())
+                .unwrap();
+        }
+        document.set_header("related");
+        let header = document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|story| story.kind() == rdocx::StoryKind::Header)
+            .unwrap();
+        let location = document
+            .story_items(&header)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.kind() == rdocx::StoryItemKind::Paragraph)
+            .unwrap()
+            .location()
+            .clone();
+        document
+            .insert_field(
+                &rdocx::StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+                field,
+            )
+            .unwrap();
+        let saved = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(
+            xml.contains("<x:keep/>") || xml.contains("<x:keep />"),
+            "{xml}"
+        );
+        assert!(xml.contains("FORMTEXT"), "{xml}");
+        let mut reopened = Document::from_bytes(&saved).unwrap();
+        let fields = reopened.legacy_form_fields().unwrap();
+        assert!(fields.len() >= 2, "{}", fields.len());
+        assert!(fields.iter().any(
+            |field| field.value == LegacyFormFieldValue::Text("v".into())
+                && field.source_part.contains("header")
+        ));
+        assert!(fields.iter().any(|field| {
+            field.value == LegacyFormFieldValue::Text("v".into())
+                && field.source_part == "/word/document.xml"
+        }));
+        reopened
+            .set_legacy_form_field_value(
+                "/word/document.xml",
+                0,
+                LegacyFormFieldValue::Text("filled".into()),
+            )
+            .unwrap();
+        assert_eq!(
+            reopened.legacy_form_fields().unwrap()[0].value,
+            LegacyFormFieldValue::Text("filled".into())
+        );
     }
 
     #[test]

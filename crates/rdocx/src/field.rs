@@ -28,11 +28,13 @@ use rdocx_oxml::styles::{CT_Styles, StyleType};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::CommentRangeMarker;
 use rdocx_oxml::text::{
-    CT_P, CT_R, CT_Text, Field, FieldArgument, FieldInstruction, RunContent,
-    hyperlink_revision_index,
+    CT_P, CT_R, CT_Text, FieldArgument, FieldInstruction, RunContent, hyperlink_revision_index,
 };
 
-pub use rdocx_oxml::text::{LegacyFormFieldKind, LegacyFormFieldValue};
+pub use rdocx_oxml::text::{
+    Field, LegacyCheckBoxSize, LegacyFormFieldDefinition, LegacyFormFieldKind,
+    LegacyFormFieldOptions, LegacyFormFieldValue, LegacyFormInfoText, LegacyTextInputType,
+};
 
 use crate::document::{
     DocumentIdentifiers, FragmentConflictPolicy, StoryKind, prepare_physical_story_projection,
@@ -633,6 +635,9 @@ impl Document {
 
     /// Insert a field at one checked physical run boundary without replacing its owner.
     pub fn insert_field(&mut self, position: &crate::StoryRunPosition, field: Field) -> Result<()> {
+        field
+            .validate_for_attachment()
+            .map_err(|error| Error::Other(error.to_string()))?;
         let mut run = CT_R::new("");
         run.content = vec![RunContent::Field(field)];
         let mut candidate = self.clone_for_staging();

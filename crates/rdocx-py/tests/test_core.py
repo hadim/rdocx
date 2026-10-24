@@ -9184,6 +9184,152 @@ def test_fx249_individual_errors_noops_and_bulk_contracts():
     assert owner.to_bytes() == before
 
 
+def test_legacy_form_attachment_uses_conservative_lifetime():
+    import rdocx
+    definition = rdocx.LegacyFormFieldDefinition.text_input(value="field")
+
+    def alive(fn):
+        try:
+            fn()
+        except rdocx.StaleElementError:
+            return False
+        return True
+
+    document = rdocx.Document()
+    document.add_paragraph("held")
+    document.add_paragraph("target")
+    held = document.paragraphs[0]
+    heldrun = held.runs[0]
+    held_item = next(item for item in document.story_items if item.kind == "paragraph" and item.story.kind == "body")
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        document.insert_legacy_form_field(
+            rdocx.StoryRunPosition(item=next(item for item in document.story_items if item.kind == "paragraph" and item.story.kind == "body" and item.index_path != held_item.index_path), run_index=9),
+            definition,
+        )
+    assert document.to_bytes() == before
+    assert alive(lambda: held.text) and held.text == "held"
+    assert alive(lambda: heldrun.text)
+    assert alive(lambda: held_item.text)
+
+    second = next(item for item in document.story_items if item.kind == "paragraph" and item.story.kind == "body" and item.index_path != held_item.index_path)
+    document.insert_legacy_form_field(rdocx.StoryRunPosition(item=second, run_index=1), definition)
+    assert not alive(lambda: held.text)
+    assert not alive(lambda: heldrun.text)
+    fresh = document.paragraphs[0]
+    fresh_item = next(item for item in document.story_items if item.kind == "paragraph" and item.story.kind == "body")
+    assert fresh.text == "held"
+    assert fresh_item.text == "held"
+    assert document.legacy_form_fields()[0].value == "field"
+
+    document = rdocx.Document()
+    document.add_paragraph("held")
+    document.add_paragraph("target")
+    held = document.paragraphs[0]
+    heldrun = held.runs[0]
+    held_item = next(item for item in document.story_items if item.kind == "paragraph" and item.story.kind == "body")
+    document.paragraphs[1].runs[0].add_legacy_form_field(rdocx.LegacyFormFieldDefinition.text_input(value="field"))
+    assert not alive(lambda: held.text)
+    assert not alive(lambda: heldrun.text)
+    fresh_item = next(item for item in document.story_items if item.kind == "paragraph" and item.story.kind == "body")
+    assert document.paragraphs[0].text == "held"
+    assert fresh_item.text == "held"
+    assert document.legacy_form_fields()[0].value == "field"
+
+
+def test_authored_legacy_form_fields_keep_defaults_and_current_values():
+    import rdocx
+    text = rdocx.LegacyFormFieldDefinition.text_input(value="now", default="keep", calculate_on_exit=False)
+    check = rdocx.LegacyFormFieldDefinition.checkbox(checked=True, default=False, size_half_points=None)
+    choices = ["one", "two"]
+    listed = rdocx.LegacyFormFieldDefinition.drop_down_list(choices, selected_index=1, default_index=0)
+    choices.append("three")
+    document = rdocx.Document()
+    document.add_paragraph("").add_run("")
+    document.paragraphs[-1].runs[0].add_legacy_form_field(text)
+    document.paragraphs[-1].runs[0].add_legacy_form_field(check)
+    document.paragraphs[-1].runs[0].add_legacy_form_field(listed)
+    table = document.add_table(1, 1)
+    table.cell(0, 0).paragraphs[0].add_run("").add_legacy_form_field(text)
+    document.set_header("related")
+    header = next(item for item in document.story_items if item.story.kind == "header" and item.kind == "paragraph")
+    document.insert_legacy_form_field(rdocx.StoryRunPosition(item=header, run_index=0), text)
+    fields = document.legacy_form_fields()
+    texts = [field for field in fields if field.type == "text"]
+    assert len(texts) >= 3
+    assert all(field.value == "now" and field.default_value == "keep" for field in texts)
+    assert any(field.type == "checkbox" and field.value is True and field.default_value is False for field in fields)
+    assert any(field.type == "dropdown" and field.value == 1 and field.default_value == 0 and field.choices == ("one", "two") for field in fields)
+    assert any(field.source_part != "/word/document.xml" and field.value == "now" for field in texts)
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.legacy_form_fields()[0].default_value == "keep"
+    assert reopened.legacy_form_fields()[0].value == "now"
+
+
+def test_legacy_field_factories_and_attachment_refuse_atomically():
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph("stay")
+    paragraph = document.paragraphs[-1]
+    before = document.to_bytes()
+    revision = document.revisions
+    with pytest.raises(TypeError):
+        rdocx.LegacyFormFieldDefinition.checkbox(checked=1)
+    with pytest.raises(TypeError):
+        rdocx.LegacyFormFieldDefinition.drop_down_list("one", selected_index=0)
+    with pytest.raises(rdocx.XmlError):
+        rdocx.LegacyFormFieldDefinition.drop_down_list([], selected_index=0)
+    with pytest.raises(ValueError):
+        rdocx.LegacyFormFieldDefinition.text_input(help_text=("autotext", "gone"))
+    with pytest.raises(ValueError):
+        rdocx.LegacyFormFieldDefinition.checkbox(size_half_points=-(2**200))
+    with pytest.raises(ValueError):
+        rdocx.LegacyFormFieldDefinition.text_input(max_length=-(2**200))
+    with pytest.raises(ValueError):
+        rdocx.LegacyFormFieldDefinition.drop_down_list(["one"], selected_index=-(2**200))
+    with pytest.raises(OverflowError):
+        rdocx.LegacyFormFieldDefinition.checkbox(size_half_points=2**200)
+    with pytest.raises(OverflowError):
+        rdocx.LegacyFormFieldDefinition.text_input(max_length=2**200)
+    with pytest.raises(OverflowError):
+        rdocx.LegacyFormFieldDefinition.drop_down_list(["one"], selected_index=2**200)
+    with pytest.raises(TypeError):
+        rdocx.LegacyFormFieldDefinition.checkbox(size_half_points=True)
+    with pytest.raises(TypeError):
+        rdocx.LegacyFormFieldDefinition.text_input(max_length=True)
+    with pytest.raises(TypeError):
+        rdocx.LegacyFormFieldDefinition.drop_down_list(["one"], selected_index=True)
+    with pytest.raises(rdocx.XmlError):
+        rdocx.LegacyFormFieldDefinition.drop_down_list(["only"], selected_index=4)
+    assert document.to_bytes() == before
+    assert document.revisions == revision
+    assert paragraph.text == "stay"
+    document.paragraphs[-1].runs[0].add_legacy_form_field(
+        rdocx.LegacyFormFieldDefinition.text_input(value="ok")
+    )
+
+
+def test_legacy_field_definition_public_factories_are_typed():
+    import inspect
+    import rdocx
+    assert rdocx.LegacyFormFieldDefinition.__name__ == "LegacyFormFieldDefinition"
+    text = inspect.signature(rdocx.LegacyFormFieldDefinition.text_input)
+    assert list(text.parameters)[0] == "value"
+    assert text.parameters["value"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert text.parameters["value"].default == ""
+    assert text.parameters["calculate_on_exit"].default is False
+    check = inspect.signature(rdocx.LegacyFormFieldDefinition.checkbox)
+    assert "size_half_points" in check.parameters
+    assert "size" not in check.parameters
+    assert check.parameters["checked"].default is False
+    listed = inspect.signature(rdocx.LegacyFormFieldDefinition.drop_down_list)
+    assert listed.parameters["choices"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert listed.parameters["selected_index"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert listed.parameters["selected_index"].default == 0
+    made = rdocx.LegacyFormFieldDefinition.text_input()
+    assert type(made).__name__ == "LegacyFormFieldDefinition"
+
+
 def test_fx241_python_fill_all_five_reported_form_kinds():
     import rdocx
     document = _fx241_five_kind_document()
@@ -9222,7 +9368,7 @@ def _fx241_assert_five_kind_source(raw):
     assert root.find('.//w:dropDownList', ns).get(w+'lastValue') == 'one'
     assert [x.get(w+'value') for x in root.findall('.//w:dropDownList/w:listItem', ns)] == ['one', 'two']
     legacy = root.find('.//w:ffData/w:textInput/w:default', ns)
-    assert legacy.get(w+'val') == 'filled'
+    assert legacy.get(w+'val') == 'old'
     field_paragraph = next(p for p in root.iter(w+'p') if p.find('.//w:ffData', ns) is not None)
     assert ''.join(x.text or '' for x in field_paragraph.iter(w+'t')) == 'filled'
 

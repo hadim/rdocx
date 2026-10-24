@@ -919,6 +919,8 @@ pub struct Field {
     /// Last parent cache derived from children or from the imported source.
     /// A later direct parent assignment diverges from this baseline.
     derived_parent_cache: String,
+    /// Authoring facts written on a new begin `w:ffData` only.
+    legacy_author: Option<LegacyFormAuthor>,
     nested_order: Vec<NestedFieldPosition>,
     cached_fields: Vec<(std::ops::Range<usize>, Field)>,
     simple_cached_runs: Option<Vec<CT_R>>,
@@ -974,6 +976,104 @@ pub struct LegacyFormFieldData {
     pub max_length: Option<usize>,
 }
 
+/// Help or status text stored on a legacy form field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LegacyFormInfoText {
+    /// Literal help or status text. An empty string is stored.
+    Text(String),
+    /// An AutoText entry name.
+    AutoText(String),
+}
+
+/// The six stored text-input kinds. This crate does not evaluate them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegacyTextInputType {
+    Regular,
+    Number,
+    Date,
+    CurrentTime,
+    CurrentDate,
+    Calculated,
+}
+
+impl LegacyTextInputType {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Regular => "regular",
+            Self::Number => "number",
+            Self::Date => "date",
+            Self::CurrentTime => "currentTime",
+            Self::CurrentDate => "currentDate",
+            Self::Calculated => "calculated",
+        }
+    }
+}
+
+/// Checkbox size for a newly authored legacy field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegacyCheckBoxSize {
+    /// `w:sizeAuto`.
+    Auto,
+    /// Exact half-points from 0 through `u64::MAX`.
+    HalfPoints(u64),
+}
+
+/// Shared legacy form options. Omitted help and status stay absent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyFormFieldOptions {
+    pub name: Option<String>,
+    pub enabled: bool,
+    pub calculate_on_exit: bool,
+    pub help_text: Option<LegacyFormInfoText>,
+    pub status_text: Option<LegacyFormInfoText>,
+}
+
+impl Default for LegacyFormFieldOptions {
+    fn default() -> Self {
+        Self {
+            name: None,
+            enabled: true,
+            calculate_on_exit: false,
+            help_text: None,
+            status_text: None,
+        }
+    }
+}
+
+/// One complete legacy form definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LegacyFormFieldDefinition {
+    TextInput {
+        input_type: LegacyTextInputType,
+        default: Option<String>,
+        value: String,
+        max_length: Option<usize>,
+        format: Option<String>,
+    },
+    CheckBox {
+        size: LegacyCheckBoxSize,
+        default: bool,
+        checked: bool,
+    },
+    DropDownList {
+        choices: Vec<String>,
+        default_index: usize,
+        selected_index: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LegacyFormAuthor {
+    help_text: Option<LegacyFormInfoText>,
+    status_text: Option<LegacyFormInfoText>,
+    text_type: Option<LegacyTextInputType>,
+    text_default: Option<String>,
+    format: Option<String>,
+    checkbox_size: Option<LegacyCheckBoxSize>,
+    checkbox_default: Option<bool>,
+    list_default: Option<usize>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NestedFieldPosition {
     Argument(usize),
@@ -1002,6 +1102,7 @@ impl Field {
             legacy_text_default: None,
             legacy_result_published: false,
             derived_parent_cache: cached_result.to_owned(),
+            legacy_author: None,
             nested_order: Vec::new(),
             cached_fields: Vec::new(),
             simple_cached_runs: None,
@@ -1068,6 +1169,26 @@ impl Field {
             original_cached_result: cached_result,
             cached_segments,
         };
+        Ok(field)
+    }
+
+    /// Author one complex legacy form field with a result region.
+    pub fn from_legacy_form(
+        options: LegacyFormFieldOptions,
+        definition: LegacyFormFieldDefinition,
+    ) -> Result<Self> {
+        validate_legacy_form_authoring(&options, &definition)?;
+        let (instruction_name, display, data, author, reset_default, text_default) =
+            legacy_form_author_parts(&options, &definition)?;
+        let instruction = FieldInstruction::new(instruction_name, Vec::new(), Vec::new())?;
+        let mut field =
+            Self::from_instruction(instruction, FieldForm::Complex, vec![CT_R::new(&display)])?;
+        field.legacy_form = Some(data);
+        field.legacy_reset_default = reset_default;
+        field.legacy_text_default = text_default;
+        field.legacy_result_published = true;
+        field.legacy_author = Some(author);
+        field.validate_for_attachment()?;
         Ok(field)
     }
 
@@ -1318,6 +1439,7 @@ impl Field {
             legacy_text_default,
             legacy_result_published: result_published,
             derived_parent_cache,
+            legacy_author: None,
             nested_order: Vec::new(),
             cached_fields: Vec::new(),
             simple_cached_runs: None,
@@ -4681,6 +4803,14 @@ struct LegacyFormProjection {
 type NestedEffectiveSegment<'a> = (std::borrow::Cow<'a, str>, Option<&'a CT_RPr>, &'a Field);
 type ParsedLegacyForm = (
     LegacyFormFieldData,
+    Option<LegacyFormFieldValue>,
+    Option<String>,
+);
+type LegacyAuthorParts = (
+    &'static str,
+    String,
+    LegacyFormFieldData,
+    LegacyFormAuthor,
     Option<LegacyFormFieldValue>,
     Option<String>,
 );
@@ -11087,6 +11217,295 @@ fn legacy_form_canonical_display(
     }
 }
 
+fn bounded_legacy_text(label: &str, value: &str, max_characters: usize) -> Result<()> {
+    oxml_core::xml::reject_non_xml_characters(label, value)?;
+    if value.chars().count() > max_characters {
+        return Err(OxmlError::InvalidValue(format!(
+            "{label} exceeds {max_characters} characters"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_legacy_info(
+    label: &str,
+    text: &LegacyFormInfoText,
+    max_characters: usize,
+) -> Result<()> {
+    let value = match text {
+        LegacyFormInfoText::Text(value) | LegacyFormInfoText::AutoText(value) => value,
+    };
+    bounded_legacy_text(label, value, max_characters)
+}
+
+fn validate_legacy_form_authoring(
+    options: &LegacyFormFieldOptions,
+    definition: &LegacyFormFieldDefinition,
+) -> Result<()> {
+    if let Some(name) = &options.name {
+        bounded_legacy_text("legacy form name", name, 20)?;
+    }
+    if let Some(help) = &options.help_text {
+        validate_legacy_info("legacy form help", help, 255)?;
+    }
+    if let Some(status) = &options.status_text {
+        validate_legacy_info("legacy form status", status, 140)?;
+    }
+    match definition {
+        LegacyFormFieldDefinition::TextInput {
+            default,
+            value,
+            max_length,
+            format,
+            ..
+        } => {
+            if let Some(default) = default {
+                bounded_legacy_text("legacy form default", default, 255)?;
+            }
+            bounded_legacy_text("legacy form text", value, 255)?;
+            if let Some(format) = format {
+                bounded_legacy_text("legacy form format", format, 64)?;
+            }
+            if let Some(max_length) = max_length
+                && !(1..=32_767).contains(max_length)
+            {
+                return Err(OxmlError::InvalidValue(
+                    "w:textInput/w:maxLength must be between 1 and 32767".to_owned(),
+                ));
+            }
+            if max_length.is_some_and(|maximum| value.chars().count() > maximum) {
+                return Err(OxmlError::InvalidValue(
+                    "legacy text form value exceeds w:maxLength".to_owned(),
+                ));
+            }
+        }
+        LegacyFormFieldDefinition::CheckBox { .. } => {}
+        LegacyFormFieldDefinition::DropDownList {
+            choices,
+            default_index,
+            selected_index,
+        } => {
+            if !(1..=25).contains(&choices.len()) {
+                return Err(OxmlError::InvalidValue(
+                    "w:ddList must contain between 1 and 25 list entries".to_owned(),
+                ));
+            }
+            for choice in choices {
+                bounded_legacy_text("legacy form list entry", choice, 255)?;
+            }
+            if *default_index >= choices.len() || *selected_index >= choices.len() {
+                return Err(OxmlError::InvalidValue(
+                    "legacy drop-down selection is out of range".to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn legacy_form_author_parts(
+    options: &LegacyFormFieldOptions,
+    definition: &LegacyFormFieldDefinition,
+) -> Result<LegacyAuthorParts> {
+    let mut author = LegacyFormAuthor {
+        help_text: options.help_text.clone(),
+        status_text: options.status_text.clone(),
+        text_type: None,
+        text_default: None,
+        format: None,
+        checkbox_size: None,
+        checkbox_default: None,
+        list_default: None,
+    };
+    let (name, kind, value, choices, max_length, display, reset_default, text_default) =
+        match definition {
+            LegacyFormFieldDefinition::TextInput {
+                input_type,
+                default,
+                value,
+                max_length,
+                format,
+            } => {
+                author.text_type = Some(*input_type);
+                author.text_default = default.clone();
+                author.format = format.clone();
+                (
+                    "FORMTEXT",
+                    LegacyFormFieldKind::TextInput,
+                    LegacyFormFieldValue::Text(value.clone()),
+                    Vec::new(),
+                    *max_length,
+                    value.clone(),
+                    default.clone().map(LegacyFormFieldValue::Text),
+                    default.clone(),
+                )
+            }
+            LegacyFormFieldDefinition::CheckBox {
+                size,
+                default,
+                checked,
+            } => {
+                author.checkbox_size = Some(*size);
+                author.checkbox_default = Some(*default);
+                (
+                    "FORMCHECKBOX",
+                    LegacyFormFieldKind::CheckBox,
+                    LegacyFormFieldValue::Checked(*checked),
+                    Vec::new(),
+                    None,
+                    if *checked { "☒" } else { "☐" }.to_owned(),
+                    Some(LegacyFormFieldValue::Checked(*default)),
+                    None,
+                )
+            }
+            LegacyFormFieldDefinition::DropDownList {
+                choices,
+                default_index,
+                selected_index,
+            } => {
+                author.list_default = Some(*default_index);
+                (
+                    "FORMDROPDOWN",
+                    LegacyFormFieldKind::DropDownList,
+                    LegacyFormFieldValue::SelectedIndex(*selected_index),
+                    choices.clone(),
+                    None,
+                    choices[*selected_index].clone(),
+                    Some(LegacyFormFieldValue::SelectedIndex(*default_index)),
+                    None,
+                )
+            }
+        };
+    let data = LegacyFormFieldData {
+        name: options.name.clone(),
+        enabled: options.enabled,
+        calculate_on_exit: options.calculate_on_exit,
+        kind,
+        value,
+        choices,
+        max_length,
+    };
+    Ok((name, display, data, author, reset_default, text_default))
+}
+
+fn write_legacy_word_empty<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    name: &str,
+    value: Option<&str>,
+) -> Result<()> {
+    let mut element = BytesStart::new(format!("w:{name}"));
+    if let Some(value) = value {
+        element.push_attribute(("w:val", value));
+    }
+    writer.write_event(Event::Empty(element))?;
+    Ok(())
+}
+
+fn write_legacy_info<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    name: &str,
+    text: &LegacyFormInfoText,
+) -> Result<()> {
+    let (kind, value) = match text {
+        LegacyFormInfoText::Text(value) => ("text", value.as_str()),
+        LegacyFormInfoText::AutoText(value) => ("autoText", value.as_str()),
+    };
+    let mut element = BytesStart::new(format!("w:{name}"));
+    element.push_attribute(("w:type", kind));
+    element.push_attribute(("w:val", value));
+    writer.write_event(Event::Empty(element))?;
+    Ok(())
+}
+
+fn write_legacy_form_ff_data<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    field: &Field,
+) -> Result<()> {
+    let Some(form) = &field.legacy_form else {
+        return Ok(());
+    };
+    let author = field.legacy_author.clone().unwrap_or(LegacyFormAuthor {
+        help_text: None,
+        status_text: None,
+        text_type: None,
+        text_default: field.legacy_text_default.clone(),
+        format: None,
+        checkbox_size: None,
+        checkbox_default: None,
+        list_default: None,
+    });
+    writer.write_event(Event::Start(BytesStart::new("w:ffData")))?;
+    if let Some(name) = &form.name {
+        write_legacy_word_empty(writer, "name", Some(name))?;
+    }
+    write_legacy_word_empty(
+        writer,
+        "enabled",
+        Some(if form.enabled { "1" } else { "0" }),
+    )?;
+    write_legacy_word_empty(
+        writer,
+        "calcOnExit",
+        Some(if form.calculate_on_exit { "1" } else { "0" }),
+    )?;
+    if let Some(help) = &author.help_text {
+        write_legacy_info(writer, "helpText", help)?;
+    }
+    if let Some(status) = &author.status_text {
+        write_legacy_info(writer, "statusText", status)?;
+    }
+    match form.kind {
+        LegacyFormFieldKind::TextInput => {
+            writer.write_event(Event::Start(BytesStart::new("w:textInput")))?;
+            let text_type = author
+                .text_type
+                .unwrap_or(LegacyTextInputType::Regular)
+                .as_str();
+            write_legacy_word_empty(writer, "type", Some(text_type))?;
+            if let Some(default) = &author.text_default {
+                write_legacy_word_empty(writer, "default", Some(default))?;
+            }
+            if let Some(max_length) = form.max_length {
+                write_legacy_word_empty(writer, "maxLength", Some(&max_length.to_string()))?;
+            }
+            if let Some(format) = &author.format {
+                write_legacy_word_empty(writer, "format", Some(format))?;
+            }
+            writer.write_event(Event::End(BytesEnd::new("w:textInput")))?;
+        }
+        LegacyFormFieldKind::CheckBox => {
+            writer.write_event(Event::Start(BytesStart::new("w:checkBox")))?;
+            match author.checkbox_size.unwrap_or(LegacyCheckBoxSize::Auto) {
+                LegacyCheckBoxSize::Auto => write_legacy_word_empty(writer, "sizeAuto", None)?,
+                LegacyCheckBoxSize::HalfPoints(size) => {
+                    write_legacy_word_empty(writer, "size", Some(&size.to_string()))?
+                }
+            }
+            let default = author.checkbox_default.unwrap_or(false);
+            write_legacy_word_empty(writer, "default", Some(if default { "1" } else { "0" }))?;
+            let checked = matches!(form.value, LegacyFormFieldValue::Checked(true));
+            write_legacy_word_empty(writer, "checked", Some(if checked { "1" } else { "0" }))?;
+            writer.write_event(Event::End(BytesEnd::new("w:checkBox")))?;
+        }
+        LegacyFormFieldKind::DropDownList => {
+            writer.write_event(Event::Start(BytesStart::new("w:ddList")))?;
+            let selected = match form.value {
+                LegacyFormFieldValue::SelectedIndex(index) => index,
+                _ => 0,
+            };
+            write_legacy_word_empty(writer, "result", Some(&selected.to_string()))?;
+            if let Some(default) = author.list_default {
+                write_legacy_word_empty(writer, "default", Some(&default.to_string()))?;
+            }
+            for choice in &form.choices {
+                write_legacy_word_empty(writer, "listEntry", Some(choice))?;
+            }
+            writer.write_event(Event::End(BytesEnd::new("w:ddList")))?;
+        }
+    }
+    writer.write_event(Event::End(BytesEnd::new("w:ffData")))?;
+    Ok(())
+}
 
 fn write_missing_legacy_result_region<W: std::io::Write>(
     writer: &mut Writer<W>,
@@ -13185,7 +13604,14 @@ fn write_complex_field<W: std::io::Write>(
     foreign_word_namespace: Option<&str>,
     result_properties: Option<&CT_RPr>,
 ) -> Result<()> {
-    write_field_char_run(writer, "begin", field.dirty, field.locked, foreign_word_namespace)?;
+    write_field_char_run(
+        writer,
+        "begin",
+        field.dirty,
+        field.locked,
+        foreign_word_namespace,
+        Some(field),
+    )?;
     let mut text = format!(" {}", field.instruction.name);
     for argument in &field.instruction.arguments {
         match argument {
@@ -13222,9 +13648,9 @@ fn write_complex_field<W: std::io::Write>(
     if !text.trim().is_empty() {
         write_instruction_run(writer, &text, foreign_word_namespace)?;
     }
-    write_field_char_run(writer, "separate", None, None, foreign_word_namespace)?;
+    write_field_char_run(writer, "separate", None, None, foreign_word_namespace, None)?;
     write_field_result_run(writer, field, foreign_word_namespace, result_properties)?;
-    write_field_char_run(writer, "end", None, None, foreign_word_namespace)?;
+    write_field_char_run(writer, "end", None, None, foreign_word_namespace, None)?;
     Ok(())
 }
 
@@ -13280,13 +13706,20 @@ fn write_field_char_run<W: std::io::Write>(
     dirty: Option<bool>,
     locked: Option<bool>,
     foreign_word_namespace: Option<&str>,
+    legacy_field: Option<&Field>,
 ) -> Result<()> {
     write_word_run_start(writer, foreign_word_namespace)?;
     let mut element = BytesStart::new("w:fldChar");
     element.push_attribute(("w:fldCharType", kind));
     push_dirty_attribute(&mut element, dirty);
     push_lock_attribute(&mut element, locked);
-    writer.write_event(Event::Empty(element))?;
+    if kind == "begin" && legacy_field.is_some_and(|field| field.legacy_form.is_some()) {
+        writer.write_event(Event::Start(element))?;
+        write_legacy_form_ff_data(writer, legacy_field.expect("legacy field"))?;
+        writer.write_event(Event::End(BytesEnd::new("w:fldChar")))?;
+    } else {
+        writer.write_event(Event::Empty(element))?;
+    }
     writer.write_event(Event::End(BytesEnd::new("w:r")))?;
     Ok(())
 }
