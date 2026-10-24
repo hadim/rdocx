@@ -6,7 +6,9 @@
 Also admit the incoming Word and PowerPoint correctness and performance repairs.
 Provide public creation of legacy form fields, build modern forms on the existing
 content-control model, and author mail-merge packages with offline diagnostics.
-The four repair stories stay pending a full design. They do not replace the
+The seven designs are approved. F-X264 is reviewed and integrated, and its
+final sprint gate is still pending. F-X265 is claimed. F-X266, F-X267, F-288,
+F-289 and F-290 stay pending and unclaimed. The repairs do not replace the
 original authoring contract.
 
 **Estimated effort**: the 12 to 17 developer-day figure applies only to the
@@ -15,8 +17,9 @@ The earlier 8 to 11 figure is the pre-Python native basis for those same three
 stories. The four repair designs add a provisional 15 to 24 developer-days.
 The expanded planning total is 27 to 41 developer-days. Those figures are
 estimates, not measurements, and they are not a capacity promise. The visible
-over-two-week scope is an approved intake. The sprint clock has not started.
-It starts with the first `/start-feature`. F-X267 remains the largest repair.
+over-two-week scope is an approved intake. The sprint clock started with
+F-X264 `/start-feature`. F-X265 is claimed and its implementation has not
+started. F-X267 remains the largest repair.
 
 ## Spec references
 
@@ -24,7 +27,7 @@ It starts with the first `/start-feature`. F-X267 remains the largest repair.
   supported authoring behavior, dependencies and each story's acceptance gate.
   Sections F-X264, F-X265, F-X266 and F-X267 define the admitted repair scope.
   The durable issue and PR mapping is the S95.4 issue and PR intake, 2026-10-23 section in `docs/sprints/SPRINT_PLAN.md`.
-  Each repair still needs its own design before approval or claim.
+  The seven designs are approved.
 - `docs/hld/03-architecture.md`, the existing legacy form, field, content-control,
   protection and mail-merge ownership contracts settle reuse of the document
   model, staging and publication boundaries.
@@ -46,7 +49,7 @@ It starts with the first `/start-feature`. F-X267 remains the largest repair.
 | F-289 | Modern Word form authoring | L | pending | - |
 | F-290 | Mail-merge package and data-source authoring | M | pending | - |
 | F-X264 | Repair Word defaults package inspection and comment projection | L | in-progress | grok |
-| F-X265 | Preserve fragment relationship targets and duplicate styles | M | pending | - |
+| F-X265 | Preserve fragment relationship targets and duplicate styles | M | in-progress | grok |
 | F-X266 | Bound Word body reads and structural edit cost | L | pending | - |
 | F-X267 | Bound PowerPoint mutation cost across public publishers | L | pending | - |
 
@@ -62,16 +65,18 @@ F-290 depends on completed F-233, F-270 and F-278. It may proceed independently
 of the F-288 to F-289 chain only when actual source and resource leases are
 distinct. Shared facade, binding or HLD files require serial ownership.
 
-All seven stories start pending and unclaimed. The original three remain in
-the design phase on their existing drafts. Public APIs, supported properties,
-binding coverage, native comparison inputs and exact refusal behavior require
-explicit design contracts before implementation. S95.3's native fixtures do
-not automatically certify new form authoring.
+All seven stories started pending and unclaimed. The seven designs are now
+approved. F-X264 is reviewed and integrated, with its final sprint gate pending.
+F-X265 is claimed. F-X266, F-X267, F-288, F-289 and F-290 stay pending and
+unclaimed. Public APIs, supported properties, binding coverage, native
+comparison inputs and exact refusal behavior stay inside those approved
+contracts. S95.3's native fixtures do not automatically certify new form
+authoring.
 
-F-X264, F-X265, F-X266 and F-X267 are provisional sizes. Draft plans exist and
-stay unapproved. They have no formal dependency on each other. Each depends
-only on the completed S95.3 providers named in HLD14: F-X260 and F-X261 for
-F-X264, F-X261 for F-X265, F-X260 for F-X266, and F-X260 and F-X262 for F-X267.
+F-X264, F-X265, F-X266 and F-X267 are provisional sizes. They have no formal
+dependency on each other. Each depends only on the completed S95.3 providers
+named in HLD14: F-X260 and F-X261 for F-X264, F-X261 for F-X265, F-X260 for
+F-X266, and F-X260 and F-X262 for F-X267.
 
 Proposed serial integration, because leases overlap, is F-X264, F-X265,
 F-X266, F-X267, then F-288, then its verified local provider prefix, then
