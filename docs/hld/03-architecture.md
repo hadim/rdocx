@@ -79,8 +79,32 @@ same. Staging copies and the document a staged edit reopens share these scans,
 so a lookup after an edit scans only the children the edit changed, each alone,
 or all of them by one scan of the whole part when that reads fewer bytes, as on
 the first lookup. The scans keep a copy of each child's bytes for the life of
-the document. The part is still serialized whole, for the body story's
-fingerprint and for the edits that splice its source.
+the document. They also keep each child's value, the body child the model
+serialized the bytes from or the bytes parse to alone, and, found once when
+first needed, what staging reads in the child: the modeled owner spans, the
+relationship and drawing identifiers, the drawings, the paragraph numbering
+properties and the bookmark and drawing identifiers it defines. A body child
+equal to a kept child that holds no field serializes to the kept bytes, since
+a field compares equal to one whose bytes differ. Serialization, the replay of
+nested namespace owners, identifier canonicalization, the numbering references
+and a story source written back read and write only the children that differ,
+between the bytes the model writes around them. A story source spliced into the
+main part as the package holds it, as an import does, is read against the
+children that part was written from, or against the children of the opened
+part, read once with their values in the opening's parse, when its root is a
+`w:document` start tag, its body starts with a plain `<w:body>` and it holds
+section properties only as the body's last child.
+While the main part holds the
+bytes a flush wrote from the children, they are its provenance: whether it
+parses to the model is told by children that each parse back alone, and its
+nested namespace owners are found in their spans. The reopen of that flush
+parses the part as the bytes around the children with the value of each child
+that parses back alone and the parse alone of the others, and scans for
+identifiers only the children no earlier reading scanned. Debug builds compare
+every child read with a read of the whole part, every flush and
+canonicalization with the whole work on a copy that keeps no scans, and every
+reopen with a read of the ZIP. The scans keep a copy of the body model
+besides.
 Namespace scans retain a frame per element and copy inherited maps only when
 the element declares a namespace. Attribute validation and scope restoration
 retain their checked source semantics.
