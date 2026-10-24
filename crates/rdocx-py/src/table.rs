@@ -78,15 +78,8 @@ impl TableLocation {
                     rdocx::Error::Other("table has no checked direct physical owner".into())
                 })?;
                 document
-                    .story_item_snapshots()?
-                    .into_iter()
-                    .find(|snapshot| {
-                        snapshot.location().story().kind() == rdocx::StoryKind::Body
-                            && snapshot.location().item_kind() == rdocx::StoryItemKind::Table
-                            && snapshot.is_direct_child()
-                            && snapshot.direct_body_index() == Some(slot)
-                    })
-                    .map(|snapshot| snapshot.location().clone())
+                    .direct_body_item_location(slot)?
+                    .filter(|location| location.item_kind() == rdocx::StoryItemKind::Table)
                     .ok_or_else(|| {
                         rdocx::Error::Other("table has no checked physical source owner".into())
                     })

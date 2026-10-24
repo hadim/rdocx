@@ -144,6 +144,8 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(document::staging_work, module)?)?;
     #[cfg(debug_assertions)]
     module.add_function(wrap_pyfunction!(document::reopen_work, module)?)?;
+    #[cfg(debug_assertions)]
+    module.add_function(wrap_pyfunction!(document::main_body_block_scans, module)?)?;
     module.add_class::<document::PyFontEmbeddingLicense>()?;
     module.add_class::<document::PyEmbeddedFont>()?;
     module.add_class::<document::PyFontDefinition>()?;

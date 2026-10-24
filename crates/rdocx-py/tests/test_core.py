@@ -11628,3 +11628,80 @@ def test_a_commit_that_keeps_the_main_part_reopens_without_reading_it(edit):
     # An identifier written into a changed part may take one more digit in the larger document. Scanning the main
     # part again would add the tens of kilobytes its 60 more paragraphs hold.
     assert abs(large[2] - scanned) <= 16, (edit, counts)
+
+
+def _main_body_block_scans():
+    from rdocx import _rdocx
+
+    scans = getattr(_rdocx, "_main_body_block_scans", None)
+    if scans is None:
+        pytest.skip("the body child scan counter exists in debug builds only")
+    return scans
+
+
+def _story_lookup_calls():
+    """Calls that address one item of the main part's stories, each given the document and returning the call."""
+    import rdocx
+
+    def paragraph(doc):
+        return next(p for p in reversed(list(doc.paragraphs)) if p.text.startswith("run 0 of paragraph"))
+
+    def item(doc, pick):
+        found = next(it for it in doc.story_items if it.story.kind == "body" and pick(it))
+        return rdocx.ContentLocation(found.story, found.kind, found.index_path)
+
+    def cell(doc):
+        return doc.tables[-1].cell(0, 0)
+
+    def move_comment(doc):
+        at = doc.find_content_index(paragraph(doc))
+        found = next(it for it in doc.story_items if it.story.kind == "body" and it.kind == "paragraph"
+                     and it.direct_body_index == at)
+        target = rdocx.StoryRunRange(start=rdocx.StoryRunPosition(item=found, run_index=0),
+                                     end=rdocx.StoryRunPosition(item=found, run_index=1))
+        comment = next(c.id for c in doc.comments if c.text == "comment 0")
+        return lambda: doc.move_comment(comment, target)
+
+    def picture_size(doc):
+        picture = doc.pictures()[-1]
+        return lambda: doc.set_picture_size(picture, rdocx.Inches(2), rdocx.Inches(2))
+
+    def control(doc):
+        location = item(doc, lambda it: it.kind == "content_control" and b'w:val="probe0"' in it.xml)
+        return lambda: doc.set_content_control_tag(location, "renamed")
+
+    def made(target, name, *args):
+        def make(doc):
+            obj = target(doc)
+            return lambda: getattr(obj, name)(*args)
+        return make
+
+    return {
+        "Cell.replace_text": made(cell, "replace_text", "cell", "omega"),
+        "Cell.add_table": made(cell, "add_table", 1, 1),
+        "Cell.add_picture": made(cell, "add_picture", _one_pixel_png(), "pixel.png"),
+        "Document.add_picture": lambda doc: lambda: doc.add_picture(_one_pixel_png(), "pixel.png"),
+        "Document.set_picture_size": picture_size,
+        "Document.move_comment": move_comment,
+        "Document.set_content_control_tag": control,
+        "Document.add_footnote": lambda doc: (lambda p: lambda: doc.add_footnote(p, "note"))(paragraph(doc)),
+    }
+
+
+@pytest.mark.parametrize("call", sorted(_story_lookup_calls()))
+def test_story_lookups_scan_only_the_body_children_an_edit_changed(call):
+    # Each story lookup of the main part reads its owners and items from the scans of the body children it keeps,
+    # and scans again only a child whose bytes changed: as many in a body four times as large. Debug builds check
+    # each lookup against the scans of the whole part.
+    scans = _main_body_block_scans()
+    counts = []
+    for paragraphs in (20, 80):
+        doc = _word_piece_document(paragraphs)
+        # The first lookups read every child once, for its owners and then its items.
+        assert doc.stories and doc.pictures()
+        make = _story_lookup_calls()[call](doc)
+        before = scans()
+        make()
+        counts.append(scans() - before)
+    # Each call scans again the children it changed, at least one, as many at both sizes.
+    assert 1 <= counts[0] == counts[1] <= 4, (call, counts)
