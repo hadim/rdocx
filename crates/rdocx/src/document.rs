@@ -63014,6 +63014,108 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
+    fn scoped_replacements_and_story_pictures_read_only_the_children_they_change() {
+        // On a main part another producer wrote, with a line break after the
+        // body start, of N and 4N paragraphs: a scoped replacement in a
+        // paragraph and in a table cell, back and forth, and a picture added
+        // to the body story, which keeps the part's bytes.
+        #[allow(clippy::type_complexity)] // Each edit with its name.
+        let edits: [(&str, fn(&mut Document, usize)); 3] = [
+            ("paragraph replacement", |document, k| {
+                let (from, to) = if k % 2 == 0 {
+                    ("alpha", "omega")
+                } else {
+                    ("omega", "alpha")
+                };
+                let index = document
+                    .paragraphs()
+                    .iter()
+                    .position(|paragraph| paragraph.text() == from)
+                    .unwrap();
+                let location = document.paragraph_story_location(index).unwrap().unwrap();
+                let replaced = document.try_replace_text_at(&location, from, to, Some(1));
+                assert_eq!(replaced.unwrap().unwrap(), 1);
+            }),
+            ("cell replacement", |document, k| {
+                let (from, to) = if k % 2 == 0 {
+                    ("alpha", "omega")
+                } else {
+                    ("omega", "alpha")
+                };
+                let table = document.tables().len() - 1;
+                let replaced =
+                    document.try_replace_text_in_cell((table, 0, 0), None, from, to, Some(1));
+                assert_eq!(replaced.unwrap().unwrap(), 1);
+            }),
+            ("story picture", |document, _| {
+                let body = document
+                    .stories()
+                    .unwrap()
+                    .into_iter()
+                    .find(|story| story.kind == StoryKind::Body)
+                    .unwrap();
+                document
+                    .insert_picture_to_story_with_options(
+                        &body,
+                        None,
+                        super::watermark_tests::PNG,
+                        "pixel.png",
+                        Some(Length::pt(12.0)),
+                        Some(Length::pt(12.0)),
+                        None,
+                    )
+                    .unwrap();
+            }),
+        ];
+        for (name, edit) in edits {
+            let mut work = Vec::new();
+            for count in [50usize, 200] {
+                let body = format!("{}{}", issue407_runs(count), issue407_varied_body(""));
+                let mut source = issue407_document(&body, false);
+                source.add_paragraph("alpha");
+                let table = source.tables().len() - 1;
+                source.try_set_cell_text(table, 0, 0, "alpha").unwrap();
+                let mut opened = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+                let part = opened.doc_part_name.clone();
+                let xml = opened.package.get_part(&part).unwrap().to_vec();
+                let at = xml
+                    .windows(8)
+                    .position(|bytes| bytes == b"<w:body>")
+                    .unwrap()
+                    + 8;
+                let mut produced = xml[..at].to_vec();
+                produced.push(b'\n');
+                produced.extend_from_slice(&xml[at..]);
+                opened.package.set_part(&part, produced);
+                let mut written = std::io::Cursor::new(Vec::new());
+                opened.package.write_to(&mut written).unwrap();
+                let mut document = Document::from_bytes(written.get_ref()).unwrap();
+                edit(&mut document, 0);
+                edit(&mut document, 1);
+                take_staging_work();
+                take_reopen_work();
+                let mut sample = Vec::new();
+                for k in 2..4 {
+                    edit(&mut document, k);
+                    sample.push((take_staging_work(), take_reopen_work()));
+                }
+                work.push(sample);
+            }
+            // The proof, the canonicalization and the reopen read only the
+            // children the edits change, as many in a body four times as
+            // large, and nothing whole.
+            assert_eq!(work[0], work[1], "{name}");
+            assert!(
+                work[0]
+                    .iter()
+                    .all(|(staging, reopen)| staging[..4] == [0; 4] && reopen[..2] == [0; 2]),
+                "{name} {work:?}"
+            );
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
     fn staging_reads_only_the_main_part_blocks_an_edit_changes() {
         // Edits that change the main part and commit, on bodies of N and 4N
         // paragraphs with pictures, a nested namespace owner and a numbering
