@@ -15269,6 +15269,11 @@ fn legacy_story_paragraphs(
     let mut paragraphs = Vec::new();
     let mut root_seen = false;
     let mut root_closed = false;
+    let general_context = |depth: usize| match story_kind {
+        PackageStoryKind::Header | PackageStoryKind::Footer => depth == 1,
+        PackageStoryKind::Footnotes | PackageStoryKind::Endnotes => depth == 2,
+        PackageStoryKind::Comments => false,
+    };
     loop {
         let before = reader.buffer_position() as usize;
         let (namespace, event) = reader
@@ -15319,13 +15324,7 @@ fn legacy_story_paragraphs(
                     paragraphs.push(LegacyStoryParagraph {
                         start: before,
                         end,
-                        general_context: match story_kind {
-                            PackageStoryKind::Header | PackageStoryKind::Footer => stack.len() == 1,
-                            PackageStoryKind::Footnotes | PackageStoryKind::Endnotes => {
-                                stack.len() == 2
-                            }
-                            PackageStoryKind::Comments => false,
-                        },
+                        general_context: general_context(stack.len()),
                         original: paragraph.clone(),
                         paragraph,
                     });
@@ -15345,6 +15344,40 @@ fn legacy_story_paragraphs(
                 bindings = binding_scopes.pop().unwrap_or_default();
                 if stack.is_empty() {
                     root_closed = true;
+                }
+            }
+            // A self-closing paragraph is a story paragraph too, as the
+            // layout source inventory counts it.
+            Event::Empty(element) if !stack.is_empty() => {
+                let word = namespace_is_word(&namespace);
+                let name = element.name();
+                let local = local_name(name.as_ref());
+                if word
+                    && local == b"p"
+                    && legacy_story_element_kind(
+                        story_kind,
+                        &stack,
+                        word,
+                        local,
+                        &element,
+                        reader.resolver(),
+                    )
+                    .is_none()
+                {
+                    let end = reader.buffer_position() as usize;
+                    let fragment = paragraph_fragment_with_bindings(
+                        &xml[before..end],
+                        end - before,
+                        &bindings,
+                    )?;
+                    let paragraph = parsed_physical_field_paragraph(&fragment)?;
+                    paragraphs.push(LegacyStoryParagraph {
+                        start: before,
+                        end,
+                        general_context: general_context(stack.len()),
+                        original: paragraph.clone(),
+                        paragraph,
+                    });
                 }
             }
             Event::Empty(element) if stack.is_empty() => {
@@ -15637,8 +15670,15 @@ fn paragraph_fragment_with_bindings(
     start_len: usize,
     bindings: &BTreeMap<String, Vec<u8>>,
 ) -> Result<Vec<u8>> {
+    // Declarations go before the `>` of a start tag, or the `/>` of an
+    // empty paragraph.
+    let close = if raw[..start_len].ends_with(b"/>") {
+        2
+    } else {
+        1
+    };
     let insert_at = start_len
-        .checked_sub(1)
+        .checked_sub(close)
         .ok_or_else(|| Error::Other("package story paragraph start tag is missing".to_owned()))?;
     let mut output = raw[..insert_at].to_vec();
     for (key, value) in bindings {
