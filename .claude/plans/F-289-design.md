@@ -174,7 +174,7 @@ class DocumentProtection:  # frozen, public constructor
         hash: str | None = None,
         salt: str | None = None,
     ) -> None: ...
-    # same 11 readonly properties. Integers are 0 through u32::MAX and exclude bool. No password API.
+    # same 10 readonly properties. Integers are 0 through u32::MAX and exclude bool. No password API.
 
 class Document:
     def validate_form(self, rules: Sequence[FormFieldRule]) -> tuple[FormValidationIssue, ...]: ...
@@ -322,7 +322,13 @@ Expected unchanged for existing fixtures. New tests use new inputs. No baseline 
 
 ## Current readiness and private provider lease
 
-This section does not change the public contract. The current native increment is 3 files, with 5 named groups and a passing native check. Sixty-four existing regressions pass. One CLI path fails with NotFound and stays pending. Codex root native interim microscope pass 1 is `work/f-289-grok` file `.claude/reviews/F-289-native-pass-1.md`. The verdict is 8 defects, 0 smells, and 0 nitpicks. It is not clean. Python, HLD, and the full gate stay pending. This is not completion.
+This section does not change the public contract. Root corrected the `DocumentProtection` readonly count from 11 to 10. The ten named fields stay `mode`, `enforcement`, `formatting`, `provider_type`, `algorithm_class`, `algorithm_type`, `algorithm_sid`, `spin_count`, `hash`, and `salt`. No field was added.
+
+The native checkpoint is clean. Codex root pass 5 is the worker file `.claude/reviews/F-289-native-pass-5.md`. The verdict is 0 defects, 0 smells, and 0 nitpicks. The frozen full native working diff SHA-256 is `065d077b22f7375ffe4714b769c4ccda945d8dff67d6ddcb51b7f73cb5447b6f`. The affected native batch passed 86 tests. The render-fallback CLI SHA-256 is `98b6a389c8c3f887816ffeff934398f7c5a8862f994bc093833be270b3a49dea`. The worker is still uncommitted and not integrated. F-289 stays running, owner grok. Final riders are unrun.
+
+The Python carrier stage is partial. The ready record is `/private/tmp/s95.4-f289-python-carriers-ready.txt`. It covers 7 classes. The current debug Python 3.12.13 extension SHA-256 is `3720373252cfe7643db03fcbdd088fea200c3393fb7cff3f32065928f1f901bb`. Two focused tests passed and the local typed mypy smoke passed. One form test covers carriers only and does not exercise the four operations. There is no whole-feature clean review. `validate_form`, `fill_form`, `reset_form`, `protect_form`, `document_protection`, `set_document_protection`, `remove_document_protection`, `add_story_permission_range`, the related owner proof, the other two Python groups, and the five HLD updates stay implementation pending. No HLD completion, final Word pass, hash pass, or full gate is claimed. This is not completion.
+
+The earlier native pass 1 record of 8 defects stays historical.
 
 If D1 cannot be fixed without a second grammar, do not add one. The exclusive implementation lease may include the existing `crates/rdocx/src/document.rs` accepted story-owner and span provider, and the existing `crates/rdocx/src/field.rs` accepted F-288 legacy inventory span provider, only as needed for that fix. Any helper stays a native private internal interface. No public API change, no new source file, module, trait, generic, or dependency. The existing five HLD impact files and the body-only old APIs stay unchanged.
 

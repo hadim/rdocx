@@ -241,7 +241,7 @@ F-X267 test plan, all 13 local scoped rows: `remove_part_returns_shared_bytes`, 
 
 The prefix also consumes the actual scoped checks, clean Root reviews, and the current applicable artifact proof. An old artifact is not reused as a fresh qualifier. Rerun only the inputs a later change invalidates, including a checked build and import where binding evidence is affected. No full oracle rider runs at the prefix. Word, the full suite, the hash harness, the final release 73-call and 252-call runs, the F-X267 248-call run, and the memory rider stay pending. Before any F-X268 claim, verify that the F-X266 and F-X267 source heads above are actual ancestors, that this prefix is actually done, and that binding source proof exists where the binding is affected. `AS_BUILT.md` and `SPRINT_TRACKER.md` are written once, after the full union. A formal consumer claim waits for the actual done checkpoint.
 
-F-289 may finish its own native checkpoint on its unchanged contract. Native interim pass 1 recorded 8 defects. Native interim pass 2 records 4 defects, D1, D3, D5, and D9. Repair 2 is still running. Its new tests are not all verified and there is no clean review. Those reviews are not delivery credit. F-X268 does not start while the shared leases are held by F-289 and then F-290.
+The F-289 native checkpoint is clean. The whole feature stays in progress. The worker is uncommitted and not integrated. Python methods, the HLD updates, and the final riders stay pending. That checkpoint is not delivery credit and it is not a formal dependency change. F-X268 stays unclaimed. F-X268 does not start while the shared leases are held by F-289 and then F-290.
 
 ## Acceptance criteria
 

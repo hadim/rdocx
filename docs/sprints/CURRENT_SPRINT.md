@@ -9,10 +9,14 @@ content-control model, and author mail-merge packages with offline diagnostics.
 Eight designs are approved. F-X264, F-X265, F-X266 and F-X267 are reviewed
 and integrated, and their final sprint gates are still pending. F-288 has its
 approved local provider prefix. Its final Word and sprint gates stay pending.
-F-289 is claimed. Native interim microscope pass 2 records 4 defects, D1,
-D3, D5, and D9, 0 smells, and 0 nitpicks. Repair 2 is still running. Its new
-tests are not all verified. There is no clean review. Python and the HLD
-updates stay pending. F-289 is not complete and has not passed a full gate.
+F-289 is claimed and running, owner grok. Native pass 5 is clean: 0 defects,
+0 smells, and 0 nitpicks, with 86 affected native tests passing. The worker
+is uncommitted and not integrated. The Python carrier stage is partial: 7
+classes, two focused checks, and a local typed mypy pass. One form test
+covers carriers only. The four form methods, protection get, set, and remove,
+the permission API, the related owner proof, the other two Python groups, and
+the five HLD updates stay pending. F-289 is not complete and has not passed a
+full gate. Final Word and the hash harness are unrun.
 F-290 stays pending and unclaimed.
 F-X268 is pending, owner `-`. Its design is approved and it is not claimed.
 Codex root approved the 2026-10-24 refresh2 extension. No implementation
@@ -90,12 +94,14 @@ distinct. Shared facade, binding or HLD files require serial ownership.
 All seven stories started pending and unclaimed. The seven designs are now
 approved. F-X264, F-X265, F-X266 and F-X267 are reviewed and integrated, with
 their final sprint gates pending. F-288 local prefix is recorded at
-`96718dadf6840fe6ff73663dff3cd2b286418844`. F-289 is claimed. Native interim
-microscope pass 2 records 4 defects, D1, D3, D5, and D9, 0 smells, and 0
-nitpicks. Repair 2 is still running. Its new tests are not all verified.
-There is no clean review. Python and the HLD updates stay pending. Pass 2
-does not approve completion. F-289 is not complete and has not passed a full
-gate. F-290 stays pending and unclaimed. The consumed
+`96718dadf6840fe6ff73663dff3cd2b286418844`. F-289 is claimed and running,
+owner grok. Native pass 5 is clean: 0 defects, 0 smells, and 0 nitpicks, with
+86 affected native tests passing. The worker is uncommitted and not
+integrated. The Python carrier stage is partial: two focused checks and a
+local typed mypy pass. The four form methods, protection access, the
+permission API, the remaining Python groups, and the five HLD updates stay
+pending. Pass 5 does not approve completion. F-289 is not complete and has
+not passed a full gate. F-290 stays pending and unclaimed. The consumed
 local gate
 includes every named native group, A7 and the render fallback, the affected
 Python checks, a clean microscope, and that integrated ancestor. Reviewed
