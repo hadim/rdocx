@@ -4822,12 +4822,91 @@ impl PyPresentation {
     /// ID or two `mc:AlternateContent` shapes, no longer refuses the edit as
     /// ambiguous. Debug builds check both against matching every part.
     pub(crate) fn footer_owners(&self, candidate: &rpptx::Presentation) -> PyResult<OwnerProofs> {
+        let carried = self.carried_parts(candidate, &OwnerProofs::edit(PartEdit::Unchanged));
+        let kept = carried.kept_live_slides(self.owners.parts.slides.len());
+        let changed = self
+            .prefix_parts(&[])
+            .into_iter()
+            .filter(|part| match part {
+                OwnerPart::Slide(index) => !kept[*index],
+                OwnerPart::Masters => !carried.masters,
+            })
+            .collect::<Vec<_>>();
         let mut next = Vec::new();
-        for at in 0..candidate.len() {
-            slide_owner_addresses(candidate, at, &mut next)?;
+        for (at, origin) in carried.slides.iter().enumerate() {
+            if origin.is_none() {
+                slide_owner_addresses(candidate, at, &mut next)?;
+            }
         }
-        master_owner_addresses(candidate, &mut next)?;
-        self.matched_footer_owners(candidate, self.prefix_parts(&[]), &next)
+        if !carried.masters {
+            master_owner_addresses(candidate, &mut next)?;
+        }
+        let proofs = self.matched_footer_owners(candidate, changed.clone(), &next);
+        #[cfg(debug_assertions)]
+        without_work_count(|| self.assert_footer_owners(candidate, &carried, &changed, &proofs))?;
+        proofs
+    }
+
+    /// Debug builds check footer proofs against matching every part: when
+    /// that succeeds the proofs are the same, those of a kept part being its
+    /// unchanged ones, and when it refuses, matching the kept parts alone
+    /// refuses too, the one difference footer_owners states.
+    #[cfg(debug_assertions)]
+    fn assert_footer_owners(
+        &self,
+        candidate: &rpptx::Presentation,
+        carried: &CarriedParts,
+        changed: &[OwnerPart],
+        proofs: &PyResult<OwnerProofs>,
+    ) -> PyResult<()> {
+        let mut every = Vec::new();
+        let mut kept_next = Vec::new();
+        for (at, origin) in carried.slides.iter().enumerate() {
+            slide_owner_addresses(candidate, at, &mut every)?;
+            if origin.is_some() {
+                slide_owner_addresses(candidate, at, &mut kept_next)?;
+            }
+        }
+        master_owner_addresses(candidate, &mut every)?;
+        if carried.masters {
+            master_owner_addresses(candidate, &mut kept_next)?;
+        }
+        let whole = self.matched_footer_owners(candidate, self.prefix_parts(&[]), &every);
+        match (whole, proofs) {
+            (Ok(whole), Ok(proofs)) => {
+                for (part, list) in &whole.parts {
+                    match proofs.parts.iter().find(|(listed, _)| listed == part) {
+                        Some((_, listed)) => assert_eq!(listed, list, "footer proofs of {part:?}"),
+                        None => {
+                            let owners = self.owners.parts.part(*part).expect("live part");
+                            let unchanged = owners
+                                .owners
+                                .iter()
+                                .filter_map(|owner| PartEdit::Unchanged.proof(owner))
+                                .collect::<Vec<_>>();
+                            assert_eq!(&unchanged, list, "footer proofs of kept {part:?}");
+                        }
+                    }
+                }
+            }
+            (Err(whole), Ok(_)) => {
+                let kept_parts = self
+                    .prefix_parts(&[])
+                    .into_iter()
+                    .filter(|part| !changed.contains(part))
+                    .collect();
+                assert!(
+                    self.matched_footer_owners(candidate, kept_parts, &kept_next)
+                        .is_err(),
+                    "footer proofs accept what matching every part refuses: {whole}"
+                );
+            }
+            (Ok(_), Err(error)) => {
+                panic!("footer proofs refuse what matching every part accepts: {error}")
+            }
+            (Err(whole), Err(error)) => assert_eq!(whole.to_string(), error.to_string()),
+        }
+        Ok(())
     }
 
     /// Survival proofs for the owners of `parts`, each matched by physical
