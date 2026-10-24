@@ -1757,23 +1757,24 @@ impl<'a> StoryItemRef<'a> {
         if self.location.story.kind != StoryKind::Body {
             return Ok(None);
         }
-        let (source, owner) = self.document.story_source_and_owner(&self.location.story)?;
+        let (source, owner, layout) = self
+            .document
+            .story_source_owner_and_layout(&self.location.story, true)?;
         let [index] = self.location.index_path.as_slice() else {
             return Err(StoryError::InvalidPath {
                 path: self.location.index_path.clone(),
             }
             .into());
         };
-        let items = scan_story_items(source.xml.as_ref(), &owner, None)?;
-        let item = items.get(*index).ok_or(StoryError::OutOfBounds {
-            index: *index,
-            len: items.len(),
-        })?;
-        Ok(direct_story_content_items(source.xml.as_ref(), &owner)?
-            .iter()
-            .position(|candidate| {
-                candidate.full.start <= item.full.start && item.full.end <= candidate.full.end
-            }))
+        let (item, len) = story_owner_item(source.xml.as_ref(), &owner, layout.as_ref(), *index)?;
+        let item = item.ok_or(StoryError::OutOfBounds { index: *index, len })?;
+        let direct_items = match &layout {
+            Some(layout) => layout.direct_content_items(source.xml.as_ref())?,
+            None => direct_story_content_items(source.xml.as_ref(), &owner)?,
+        };
+        Ok(direct_items.iter().position(|candidate| {
+            candidate.full.start <= item.full.start && item.full.end <= candidate.full.end
+        }))
     }
 
     pub fn text(&self) -> Result<Option<String>> {
@@ -6669,6 +6670,10 @@ pub struct Document {
     /// while the main part keeps the bytes it was opened with. `None` for a
     /// document built in memory.
     parsed: Option<Arc<Parsed>>,
+    /// The scans of the main part's body children that story lookups reuse
+    /// while the children's bytes stay the same. Staging copies and the
+    /// document a staged edit reopens share them.
+    main_body_scans: Arc<Mutex<MainBodyScans>>,
     pub(crate) styles: CT_Styles,
     pub(crate) numbering: Option<CT_Numbering>,
     /// Boxed, because debug builds keep many copies of `Document` on deep
@@ -7010,6 +7015,13 @@ fn bundle_relationship_precedes_story(rel_type: &str) -> bool {
     matches!(rel_type, rel_types::STYLES | rel_types::SETTINGS)
 }
 
+#[cfg(any(test, debug_assertions))]
+thread_local! {
+    /// The main-part body children that story lookups scanned on this
+    /// thread, alone or by one scan of the whole part.
+    static MAIN_BODY_BLOCK_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[cfg(test)]
 thread_local! {
     static LAYOUT_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
@@ -7030,6 +7042,7 @@ thread_local! {
     static FX211_PROFILE_CONTEXT: Cell<usize> = const { Cell::new(0) };
     static FX260_BODY_VISITS: Cell<usize> = const { Cell::new(0) };
     static STANDALONE_BODY_ITEM_BYTES: Cell<usize> = const { Cell::new(0) };
+    static CONTROL_PARAGRAPH_SCAN_BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Work that reopening a staged document did on this thread, whose amount
@@ -7455,6 +7468,519 @@ struct StoryItemSpan {
     complex_field: bool,
     complex_ancestors: Vec<usize>,
     sdt_context: Option<StorySdtContext>,
+}
+
+impl StoryItemSpan {
+    /// This span with each offset `at` moved to `to(at, is_end)`.
+    fn moved(&self, to: impl Fn(usize, bool) -> usize) -> Self {
+        Self {
+            full: to(self.full.start, false)..to(self.full.end, true),
+            scan: to(self.scan.start, false)..to(self.scan.end, true),
+            complex_ancestors: self
+                .complex_ancestors
+                .iter()
+                .map(|at| to(*at, false))
+                .collect(),
+            ..self.clone()
+        }
+    }
+}
+
+/// The scans of the main part's direct body children that
+/// [`Document::main_story_layout`] reuses while a child's bytes, and the
+/// bytes of the part before and after the children, stay the same. They
+/// keep a copy of each child's bytes, so they hold about the part's size.
+#[derive(Default)]
+struct MainBodyScans {
+    head: Vec<u8>,
+    tail: Vec<u8>,
+    frame: Option<Arc<BodyBlockScan>>,
+    blocks: Vec<Arc<BodyBlockScan>>,
+    /// The body owner's fingerprint, when a scan of the whole part with
+    /// these children gave it.
+    fingerprint: Option<u64>,
+}
+
+/// The story owners and body story items of one direct body child, read
+/// as the whole part's scans give them, with offsets from the child's first
+/// byte. The frame, scanned without any child, holds the body owner and the
+/// items after the children, with offsets in head and tail joined.
+struct BodyBlockScan {
+    bytes: Vec<u8>,
+    owners: Vec<StoryOwnerSpan>,
+    /// The body story items, once a lookup that reads items asked for them.
+    items: Option<Vec<StoryItemSpan>>,
+}
+
+impl BodyBlockScan {
+    /// The body story items, which every child holds in a layout built for
+    /// a lookup that reads items.
+    fn items(&self) -> &[StoryItemSpan] {
+        self.items
+            .as_deref()
+            .expect("a layout built to read items holds them")
+    }
+}
+
+/// The owners and body story items of one serialization of the main part,
+/// put together from the scans of its body children: [`scan_story_owners`]
+/// and [`scan_story_items`] of the body owner, read block by block.
+struct MainStoryLayout {
+    /// Where the children start and end in the part.
+    content: Range<usize>,
+    frame: Arc<BodyBlockScan>,
+    /// Each child's scan, with where the child starts in the part.
+    blocks: Vec<(usize, Arc<BodyBlockScan>)>,
+    /// The body owner's fingerprint, when known without hashing the body.
+    fingerprint: Option<u64>,
+}
+
+/// Whether the child scanned as `block`, at `start` in the part, holds
+/// `range`: an empty range at a child's end belongs to the next child.
+fn holds(start: usize, block: &BodyBlockScan, range: &Range<usize>) -> bool {
+    let end = start + block.bytes.len();
+    start <= range.start && range.start < end && range.end <= end
+}
+
+impl MainStoryLayout {
+    /// An offset of the frame in the part: an offset at the joint belongs
+    /// to the tail, unless it ends a span.
+    fn frame_offset(&self, at: usize, is_end: bool) -> usize {
+        let head = self.content.start;
+        if at > head || (at == head && !is_end) {
+            at - head + self.content.end
+        } else {
+            at
+        }
+    }
+
+    /// The frame's owners before the children and after them, in the part.
+    fn frame_owners(&self) -> (Vec<StoryOwnerSpan>, Vec<StoryOwnerSpan>) {
+        self.frame
+            .owners
+            .iter()
+            .map(|owner| StoryOwnerSpan {
+                full: self.frame_offset(owner.full.start, false)
+                    ..self.frame_offset(owner.full.end, true),
+                ..owner.clone()
+            })
+            .partition(|owner| owner.full.start < self.content.start)
+    }
+
+    /// [`scan_story_owners`] of the part `xml` as the body story's root.
+    fn owners(&self, xml: &[u8]) -> Result<Vec<StoryOwnerSpan>> {
+        let (head, tail) = self.frame_owners();
+        let mut owners = head;
+        for (start, block) in &self.blocks {
+            owners.extend(block.owners.iter().map(|owner| StoryOwnerSpan {
+                full: owner.full.start + start..owner.full.end + start,
+                ..owner.clone()
+            }));
+        }
+        owners.extend(tail);
+        let mut counts = HashMap::new();
+        for owner in &mut owners {
+            let count = counts.entry(owner.kind).or_insert(0usize);
+            owner.owner_index = *count;
+            *count += 1;
+            if owner.kind == StoryKind::Body {
+                owner.fingerprint = self.body_fingerprint(xml, &owner.full)?;
+            }
+        }
+        Ok(owners)
+    }
+
+    /// The fingerprint of the body owner at `full` in `xml`.
+    fn body_fingerprint(&self, xml: &[u8], full: &Range<usize>) -> Result<u64> {
+        match self.fingerprint {
+            Some(fingerprint) => Ok(fingerprint),
+            None => structural_fingerprint(&xml[full.clone()]),
+        }
+    }
+
+    /// The owner of `kind` numbered `index` in [`Self::owners`], without
+    /// putting the others together.
+    fn owner(&self, xml: &[u8], kind: StoryKind, index: usize) -> Result<Option<StoryOwnerSpan>> {
+        let (head, tail) = self.frame_owners();
+        let blocks = self.blocks.iter().flat_map(|(start, block)| {
+            block.owners.iter().map(move |owner| StoryOwnerSpan {
+                full: owner.full.start + start..owner.full.end + start,
+                ..owner.clone()
+            })
+        });
+        let Some(mut owner) = head
+            .into_iter()
+            .chain(blocks)
+            .chain(tail)
+            .filter(|owner| owner.kind == kind)
+            .nth(index)
+        else {
+            return Ok(None);
+        };
+        owner.owner_index = index;
+        if kind == StoryKind::Body {
+            owner.fingerprint = self.body_fingerprint(xml, &owner.full)?;
+        }
+        // The owners, checked whole when the layout was built, hold it.
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            owner_facts(std::slice::from_ref(&owner)),
+            owner_facts(
+                &self
+                    .owners(xml)?
+                    .into_iter()
+                    .filter(|other| other.kind == kind)
+                    .skip(index)
+                    .take(1)
+                    .collect::<Vec<_>>()
+            ),
+            "main story owner {kind:?} {index}"
+        );
+        Ok(Some(owner))
+    }
+
+    /// The owners of [`Self::owners`], but the body owner, that start after
+    /// `range` starts and end before it ends, read from the children that
+    /// overlap it.
+    fn owners_inside(&self, xml: &[u8], range: &Range<usize>) -> Vec<StoryOwnerSpan> {
+        let (head, tail) = self.frame_owners();
+        let mut counts = HashMap::new();
+        let mut inside = Vec::new();
+        // Each owner takes the next index of its kind, and only owners of
+        // children that overlap `range` are moved into the part.
+        let mut visit = |owner: &StoryOwnerSpan, start: Option<usize>| {
+            let next = counts.entry(owner.kind).or_insert(0usize);
+            let index = *next;
+            *next += 1;
+            let Some(start) = start else {
+                return;
+            };
+            let full = owner.full.start + start..owner.full.end + start;
+            if owner.kind != StoryKind::Body && range.start < full.start && full.end < range.end {
+                inside.push(StoryOwnerSpan {
+                    owner_index: index,
+                    full,
+                    ..owner.clone()
+                });
+            }
+        };
+        for owner in &head {
+            visit(owner, Some(0));
+        }
+        for (start, block) in &self.blocks {
+            let overlaps = *start < range.end && range.start < start + block.bytes.len();
+            for owner in &block.owners {
+                visit(owner, overlaps.then_some(*start));
+            }
+        }
+        for owner in &tail {
+            visit(owner, Some(0));
+        }
+        #[cfg(debug_assertions)]
+        uncounted_scan(|| {
+            let whole = scan_story_owners(xml, StoryKind::Body)
+                .expect("the main part scans whole")
+                .into_iter()
+                .filter(|owner| {
+                    owner.kind != StoryKind::Body
+                        && range.start < owner.full.start
+                        && owner.full.end < range.end
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(owner_facts(&inside), owner_facts(&whole), "owners inside");
+        });
+        #[cfg(not(debug_assertions))]
+        let _ = xml;
+        inside
+    }
+
+    /// The frame's items, all after the children, in the part.
+    fn frame_items(&self) -> impl Iterator<Item = StoryItemSpan> + '_ {
+        self.frame
+            .items()
+            .iter()
+            .map(|item| item.moved(|at, is_end| self.frame_offset(at, is_end)))
+    }
+
+    /// [`scan_story_items`] of the body owner.
+    fn body_items(&self) -> Vec<StoryItemSpan> {
+        let mut items = Vec::new();
+        for (start, block) in &self.blocks {
+            items.extend(
+                block
+                    .items()
+                    .iter()
+                    .map(|item| item.moved(|at, _| at + start)),
+            );
+        }
+        items.extend(self.frame_items());
+        items
+    }
+
+    /// The body story item `index` of [`Self::body_items`], and how many
+    /// there are, without putting the others together.
+    fn body_item(&self, index: usize) -> (Option<StoryItemSpan>, usize) {
+        let mut before = 0;
+        let mut found = None;
+        for (start, block) in &self.blocks {
+            if found.is_none()
+                && let Some(item) = index
+                    .checked_sub(before)
+                    .and_then(|local| block.items().get(local))
+            {
+                found = Some(item.moved(|at, _| at + start));
+            }
+            before += block.items().len();
+        }
+        if found.is_none() {
+            found = index
+                .checked_sub(before)
+                .and_then(|local| self.frame_items().nth(local));
+        }
+        // The items, checked whole when the layout was built, hold it.
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            item_facts(found.as_slice()),
+            item_facts(
+                &self
+                    .body_items()
+                    .into_iter()
+                    .skip(index)
+                    .take(1)
+                    .collect::<Vec<_>>()
+            ),
+            "body story item {index}"
+        );
+        (found, before + self.frame.items().len())
+    }
+
+    /// The body story items of the child holding `range`, numbered as in
+    /// [`Self::body_items`], or every item when no one child holds it.
+    fn body_items_holding(&self, range: &Range<usize>) -> Vec<(usize, StoryItemSpan)> {
+        let mut before = 0;
+        for (start, block) in &self.blocks {
+            if holds(*start, block, range) {
+                let items = block
+                    .items()
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| (before + index, item.moved(|at, _| at + start)))
+                    .collect::<Vec<_>>();
+                #[cfg(debug_assertions)]
+                {
+                    let all = self.body_items();
+                    for (index, item) in &items {
+                        assert_eq!(
+                            item_facts(std::slice::from_ref(item)),
+                            item_facts(&all[*index..=*index]),
+                            "body item {index} of its child"
+                        );
+                    }
+                }
+                return items;
+            }
+            before += block.items().len();
+        }
+        self.body_items().into_iter().enumerate().collect()
+    }
+
+    /// Whether the body story item `item` holds the section properties,
+    /// which [`direct_story_content_items`] leaves out.
+    fn is_section_properties(&self, xml: &[u8], item: &StoryItemSpan) -> Result<bool> {
+        if item.kind != StoryItemKind::PreservedNode {
+            return Ok(false);
+        }
+        match self.block_source(xml, &item.full) {
+            Some((source, shift)) => content_fragment_root_is_section_properties(
+                &source,
+                &item.moved(|at, _| at - shift),
+            ),
+            None => content_fragment_root_is_section_properties(xml, item),
+        }
+    }
+
+    /// The `slot`-th direct child of the body owner, with its number in
+    /// [`Self::body_items`], counting the section properties unless
+    /// `content` counts [`direct_story_content_items`] only.
+    fn direct_body_item(
+        &self,
+        xml: &[u8],
+        slot: usize,
+        content: bool,
+    ) -> Result<Option<(usize, StoryItemSpan)>> {
+        let blocks = self.blocks.iter().flat_map(|(start, block)| {
+            block
+                .items()
+                .iter()
+                .map(move |item| item.moved(|at, _| at + start))
+        });
+        let mut direct = 0;
+        let mut found = None;
+        for (index, item) in blocks.chain(self.frame_items()).enumerate() {
+            if !item.direct_owner_child || (content && self.is_section_properties(xml, &item)?) {
+                continue;
+            }
+            if direct == slot {
+                found = Some((index, item));
+                break;
+            }
+            direct += 1;
+        }
+        #[cfg(debug_assertions)]
+        {
+            let mut whole = Vec::new();
+            for (index, item) in self.body_items().into_iter().enumerate() {
+                if item.direct_owner_child
+                    && !(content && self.is_section_properties(xml, &item)?)
+                {
+                    whole.push((index, item));
+                }
+            }
+            let whole = whole.into_iter().nth(slot);
+            assert_eq!(
+                found
+                    .as_ref()
+                    .map(|(index, item)| (*index, item_facts(std::slice::from_ref(item)))),
+                whole.map(|(index, item)| (index, item_facts(&[item]))),
+                "direct body item {slot}"
+            );
+        }
+        Ok(found)
+    }
+
+    /// [`direct_story_content_items`] of the body owner.
+    fn direct_content_items(&self, xml: &[u8]) -> Result<Vec<StoryItemSpan>> {
+        let mut items = Vec::new();
+        for item in self.body_items() {
+            if !item.direct_owner_child || self.is_section_properties(xml, &item)? {
+                continue;
+            }
+            items.push(item);
+        }
+        #[cfg(debug_assertions)]
+        uncounted_scan(|| {
+            let owners =
+                scan_story_owners(xml, StoryKind::Body).expect("the main part scans whole");
+            let body = owners
+                .iter()
+                .find(|owner| owner.kind == StoryKind::Body)
+                .expect("the main part has a body owner");
+            let whole = direct_story_content_items(xml, body).expect("the body scans whole");
+            assert_eq!(
+                item_facts(&items),
+                item_facts(&whole),
+                "direct content items"
+            );
+        });
+        Ok(items)
+    }
+
+    /// The index of the child that holds `range`.
+    fn child_holding(&self, range: &Range<usize>) -> Option<usize> {
+        // Children follow each other, so only the last one starting at or
+        // before `range` can hold it.
+        let index = self
+            .blocks
+            .partition_point(|(start, _)| *start <= range.start)
+            .checked_sub(1)?;
+        let (start, block) = &self.blocks[index];
+        holds(*start, block, range).then_some(index)
+    }
+
+    /// The children that hold `ranges`, each with the indexes of its ranges,
+    /// when reading those children alone, each between the part's head and
+    /// tail, reads fewer bytes than the whole part `xml`. `None` when it
+    /// does not, or when no one child holds one of the ranges.
+    fn children_holding(
+        &self,
+        xml: &[u8],
+        ranges: &[Range<usize>],
+    ) -> Option<BTreeMap<usize, Vec<usize>>> {
+        let mut children = BTreeMap::<usize, Vec<usize>>::new();
+        for (index, range) in ranges.iter().enumerate() {
+            children
+                .entry(self.child_holding(range)?)
+                .or_default()
+                .push(index);
+        }
+        let around = xml.len() - self.content.len();
+        let read = children
+            .keys()
+            .map(|child| around + self.blocks[*child].1.bytes.len())
+            .sum::<usize>();
+        (read < xml.len()).then_some(children)
+    }
+
+    /// The part's bytes before the children, the child `index` and the
+    /// bytes after the children, joined, and how far the child's bytes
+    /// moved: an offset `at` there is `at + shift` in the part.
+    fn child_source(&self, xml: &[u8], index: usize) -> (Vec<u8>, usize) {
+        let (start, block) = &self.blocks[index];
+        self.joined_source(xml, *start, &block.bytes)
+    }
+
+    /// The part's bytes before the children, `bytes`, which start at
+    /// `start` in the part, and the bytes after the children, joined, and
+    /// how far `bytes` moved.
+    fn joined_source(&self, xml: &[u8], start: usize, bytes: &[u8]) -> (Vec<u8>, usize) {
+        let mut source = Vec::with_capacity(xml.len() - self.content.len() + bytes.len());
+        source.extend_from_slice(&xml[..self.content.start]);
+        source.extend_from_slice(bytes);
+        source.extend_from_slice(&xml[self.content.end..]);
+        (source, start - self.content.start)
+    }
+
+    /// [`Self::child_source`] of the child holding `range`, or of none for
+    /// a range after the children. `None` when no one child holds `range`.
+    fn block_source(&self, xml: &[u8], range: &Range<usize>) -> Option<(Vec<u8>, usize)> {
+        if self.content.end <= range.start {
+            return Some(self.joined_source(xml, self.content.end, &[]));
+        }
+        Some(self.child_source(xml, self.child_holding(range)?))
+    }
+
+    /// [`scan_story_items`] of `owner`, an owner of [`Self::owners`]: the
+    /// body owner's from the scans, another owner's read in its child only.
+    fn owner_items(&self, xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemSpan>> {
+        if owner.kind == StoryKind::Body {
+            return Ok(self.body_items());
+        }
+        let Some((source, shift)) = self.block_source(xml, &owner.full) else {
+            return scan_story_items(xml, owner, None);
+        };
+        let local = StoryOwnerSpan {
+            full: owner.full.start - shift..owner.full.end - shift,
+            ..owner.clone()
+        };
+        let items = scan_story_items(&source, &local, None)?
+            .iter()
+            .map(|item| item.moved(|at, _| at + shift))
+            .collect::<Vec<_>>();
+        #[cfg(debug_assertions)]
+        uncounted_scan(|| {
+            let whole = scan_story_items(xml, owner, None).expect("the owner scans whole");
+            assert_eq!(item_facts(&items), item_facts(&whole), "owner items");
+        });
+        Ok(items)
+    }
+
+    /// [`story_namespace_scope_at`] the element starting at `offset`, read
+    /// in its child only.
+    fn scope_at(&self, xml: &[u8], offset: usize) -> Result<BTreeMap<String, String>> {
+        let scope = match self.block_source(xml, &(offset..offset)) {
+            Some((source, shift)) => story_namespace_scope_at(&source, offset - shift)?,
+            None => return story_namespace_scope_at(xml, offset),
+        };
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            Some(&scope),
+            uncounted_scan(|| story_namespace_scope_at(xml, offset))
+                .ok()
+                .as_ref(),
+            "namespace scope"
+        );
+        Ok(scope)
+    }
 }
 
 // Paired source events prove physical correspondence while permitting only
@@ -9657,18 +10183,22 @@ fn physical_table_cell_owner(
     item: &StoryItemSpan,
     row: usize,
     cell: usize,
+    layout: Option<&MainStoryLayout>,
 ) -> Result<StoryOwnerSpan> {
-    let table = Document::story_table_from_source(xml, item)?;
+    let table = Document::story_table_from_source(xml, item, layout)?;
     TableRef { inner: &table }
         .cell(row, cell)
         .ok_or_else(|| Error::Other("rich table cell index is out of range".to_owned()))?;
-    let mut owners = scan_story_owners(xml, root_kind)?
+    let owners = match layout {
+        Some(layout) => layout.owners_inside(xml, &item.full),
+        None => scan_story_owners(xml, root_kind)?
+            .into_iter()
+            .filter(|owner| item.full.start < owner.full.start && owner.full.end < item.full.end)
+            .collect(),
+    };
+    let mut owners = owners
         .into_iter()
-        .filter(|owner| {
-            owner.kind == StoryKind::TableCell
-                && item.full.start < owner.full.start
-                && owner.full.end < item.full.end
-        })
+        .filter(|owner| owner.kind == StoryKind::TableCell)
         .collect::<Vec<_>>();
     let (_, modeled) = physical_table_cells(&table);
     if modeled.len() < owners.len() {
@@ -12725,6 +13255,393 @@ fn accepted_story_text_visible(stack: &[XmlElementFrame]) -> bool {
     })
 }
 
+/// Scan the main part's body child `block` alone, between the part's bytes
+/// `head` before its children and `tail` after them, for its owners, and
+/// its body story items when `items` asks, or the frame without a child.
+/// See [`BodyBlockScan`].
+fn scan_body_block(
+    head: &[u8],
+    block: Option<&[u8]>,
+    tail: &[u8],
+    items: bool,
+) -> Result<BodyBlockScan> {
+    let xml = [head, block.unwrap_or_default(), tail].concat();
+    let owners = scan_story_owners(&xml, StoryKind::Body)?;
+    let body = owners
+        .iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
+    let body_items = items
+        .then(|| scan_story_items(&xml, body, None))
+        .transpose()?;
+    let Some(block) = block else {
+        return Ok(BodyBlockScan {
+            bytes: Vec::new(),
+            owners,
+            items: body_items,
+        });
+    };
+    let range = head.len()..head.len() + block.len();
+    Ok(child_scan(&range, block, &owners, body_items.as_deref()))
+}
+
+/// The scan of the body child at `range` of a scanned main part, holding
+/// `bytes`, from the part's sorted owners `owners` and, when given, its body
+/// story items `items`: those inside the child, moved to its first byte.
+fn child_scan(
+    range: &Range<usize>,
+    bytes: &[u8],
+    owners: &[StoryOwnerSpan],
+    items: Option<&[StoryItemSpan]>,
+) -> BodyBlockScan {
+    let within = |span: &Range<usize>| range.start <= span.start && span.end <= range.end;
+    let first = owners.partition_point(|owner| owner.full.start < range.start);
+    BodyBlockScan {
+        bytes: bytes.to_vec(),
+        owners: owners[first..]
+            .iter()
+            .take_while(|owner| owner.full.start < range.end)
+            .filter(|owner| owner.kind != StoryKind::Body && within(&owner.full))
+            .map(|owner| StoryOwnerSpan {
+                full: owner.full.start - range.start..owner.full.end - range.start,
+                ..owner.clone()
+            })
+            .collect(),
+        items: items.map(|items| {
+            let first = items.partition_point(|item| item.full.start < range.start);
+            items[first..]
+                .iter()
+                .take_while(|item| item.full.start < range.end)
+                .filter(|item| within(&item.full))
+                .map(|item| item.moved(|at, _| at - range.start))
+                .collect()
+        }),
+    }
+}
+
+/// The scans of the main part's body children `todo`, read from one scan of
+/// the whole part `xml`, whose children lie at `children`: their owners, and
+/// their body story items when `items` asks, with the body owner's
+/// fingerprint.
+fn scan_body_children(
+    xml: &[u8],
+    children: &[Range<usize>],
+    todo: &[usize],
+    items: bool,
+) -> Result<(Vec<BodyBlockScan>, u64)> {
+    let owners = scan_story_owners(xml, StoryKind::Body)?;
+    let body = owners
+        .iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
+    let body_items = items
+        .then(|| scan_story_items(xml, body, None))
+        .transpose()?;
+    let scans = todo
+        .iter()
+        .map(|index| {
+            let range = &children[*index];
+            child_scan(range, &xml[range.clone()], &owners, body_items.as_deref())
+        })
+        .collect();
+    Ok((scans, body.fingerprint))
+}
+
+/// [`story_namespace_scopes_at`] the starts of `ranges` in the story source
+/// `xml`, in one pass over the main part's children that hold them, each
+/// between the part's head and tail, when `layout` holds them all and that
+/// reads fewer bytes than the whole part, and otherwise in one pass over
+/// `xml`.
+fn story_scopes_at(
+    xml: &[u8],
+    layout: Option<&MainStoryLayout>,
+    ranges: &[Range<usize>],
+) -> Result<HashMap<usize, BTreeMap<String, String>>> {
+    let Some((layout, children)) =
+        layout.and_then(|layout| Some((layout, layout.children_holding(xml, ranges)?)))
+    else {
+        return story_namespace_scopes_at(xml, ranges.iter().map(|range| range.start));
+    };
+    let mut scopes = HashMap::with_capacity(ranges.len());
+    for (child, members) in children {
+        let (source, shift) = layout.child_source(xml, child);
+        let local = story_namespace_scopes_at(
+            &source,
+            members.iter().map(|index| ranges[*index].start - shift),
+        )?;
+        scopes.extend(local.into_iter().map(|(at, scope)| (at + shift, scope)));
+    }
+    #[cfg(debug_assertions)]
+    assert!(
+        uncounted_scan(|| story_namespace_scopes_at(xml, ranges.iter().map(|range| range.start)))
+            .is_ok_and(|whole| whole == scopes),
+        "namespace scopes"
+    );
+    Ok(scopes)
+}
+
+/// [`scan_story_items`] of `owner` in the story source `xml`, read from the
+/// main part's `layout` when it is given.
+fn story_owner_items(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    layout: Option<&MainStoryLayout>,
+) -> Result<Vec<StoryItemSpan>> {
+    match layout {
+        Some(layout) => layout.owner_items(xml, owner),
+        None => scan_story_items(xml, owner, None),
+    }
+}
+
+/// The item `index` of [`story_owner_items`], and how many items there are.
+fn story_owner_item(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    layout: Option<&MainStoryLayout>,
+    index: usize,
+) -> Result<(Option<StoryItemSpan>, usize)> {
+    if let Some(layout) = layout
+        && owner.kind == StoryKind::Body
+    {
+        return Ok(layout.body_item(index));
+    }
+    let items = story_owner_items(xml, owner, layout)?;
+    Ok((items.get(index).cloned(), items.len()))
+}
+
+/// [`scan_story_control_paragraphs`] of `control` in the story source
+/// `xml`, read in the control's body child when the main part's `layout` is
+/// given.
+fn story_control_paragraphs(
+    xml: &[u8],
+    control: &StoryItemSpan,
+    layout: Option<&MainStoryLayout>,
+) -> Result<Vec<Range<usize>>> {
+    let Some((source, shift)) = layout.and_then(|layout| layout.block_source(xml, &control.full))
+    else {
+        return scan_story_control_paragraphs(xml, control);
+    };
+    let local = control.moved(|at, _| at - shift);
+    let paragraphs = scan_story_control_paragraphs(&source, &local)?
+        .into_iter()
+        .map(|paragraph| paragraph.start + shift..paragraph.end + shift)
+        .collect::<Vec<_>>();
+    #[cfg(debug_assertions)]
+    assert_eq!(
+        Some(&paragraphs),
+        uncounted_scan(|| scan_story_control_paragraphs(xml, control))
+            .ok()
+            .as_ref(),
+        "control paragraphs"
+    );
+    Ok(paragraphs)
+}
+
+/// [`story_range_paragraph_spans`] of `owners` in the story source `xml`,
+/// the body owner's items read from the main part's `layout` when given,
+/// and the other owners and the content controls each from its own excerpt.
+#[allow(clippy::type_complexity)] // One located span list per owner, as story_range_paragraph_spans.
+fn story_range_paragraph_spans_in(
+    xml: &[u8],
+    owners: &[(StoryId, StoryOwnerSpan)],
+    layout: Option<&MainStoryLayout>,
+) -> Result<Vec<Vec<(ContentLocation, Range<usize>)>>> {
+    let Some(layout) = layout else {
+        return story_range_paragraph_spans(xml, owners);
+    };
+    let nested = owners
+        .iter()
+        .filter(|(_, owner)| owner.kind != StoryKind::Body)
+        .map(|(_, owner)| owner)
+        .collect::<Vec<_>>();
+    // Each other owner and each control reads its own excerpt, with the
+    // scopes of all of them found in one pass.
+    let scopes = story_scopes_at(
+        xml,
+        Some(layout),
+        &nested
+            .iter()
+            .map(|owner| owner.full.clone())
+            .collect::<Vec<_>>(),
+    )?;
+    let scope_at = |scopes: &HashMap<usize, BTreeMap<String, String>>, at: usize| {
+        scopes.get(&at).cloned().ok_or_else(|| {
+            Error::Other("story excerpt namespace scope was not inventoried".to_owned())
+        })
+    };
+    let mut nested_items = nested
+        .iter()
+        .map(|owner| {
+            scan_story_items_with_scope(xml, owner, &scope_at(&scopes, owner.full.start)?, None)
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter();
+    let inventories = owners
+        .iter()
+        .map(|(_, owner)| match owner.kind {
+            StoryKind::Body => layout.body_items(),
+            _ => nested_items.next().unwrap_or_default(),
+        })
+        .collect::<Vec<_>>();
+    let controls = inventories
+        .iter()
+        .flatten()
+        .filter(|item| item.kind == StoryItemKind::ContentControl)
+        .collect::<Vec<_>>();
+    let scopes = story_scopes_at(
+        xml,
+        Some(layout),
+        &controls
+            .iter()
+            .map(|item| item.full.clone())
+            .collect::<Vec<_>>(),
+    )?;
+    let control_paragraphs = controls
+        .iter()
+        .map(|item| {
+            scan_story_control_paragraphs_with_scope(
+                xml,
+                item,
+                &scope_at(&scopes, item.full.start)?,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut control_paragraphs = controls
+        .iter()
+        .map(|item| item.full.start)
+        .zip(control_paragraphs)
+        .collect::<HashMap<_, _>>();
+    let mut spans = Vec::with_capacity(owners.len());
+    for ((story, _), items) in owners.iter().zip(&inventories) {
+        let mut paragraphs = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            let item_spans = match item.kind {
+                StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
+                StoryItemKind::ContentControl => control_paragraphs
+                    .remove(&item.full.start)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(paragraph, span)| (vec![index, paragraph], span))
+                    .collect(),
+                _ => continue,
+            };
+            for (path, span) in item_spans {
+                paragraphs.push((
+                    ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path),
+                    span,
+                ));
+            }
+        }
+        spans.push(paragraphs);
+    }
+    #[cfg(debug_assertions)]
+    uncounted_scan(|| {
+        let whole = story_range_paragraph_spans(xml, owners).expect("the owners scan whole");
+        assert!(spans == whole, "range paragraph spans");
+    });
+    Ok(spans)
+}
+
+/// Run `scan` without adding to the tests' counters of whole story scans:
+/// a body child's scan and the debug oracle are not lookups of a story.
+fn uncounted_scan<T>(scan: impl FnOnce() -> T) -> T {
+    #[cfg(test)]
+    let counts = (
+        STORY_OWNER_SCANS.get(),
+        FX237_ITEM_SCANS.get(),
+        FX211_PROFILE.get(),
+        STORY_NAMESPACE_SCANS.get(),
+        FX237_PREFIX_NAMESPACE_BYTES.get(),
+    );
+    let result = scan();
+    #[cfg(test)]
+    {
+        STORY_OWNER_SCANS.set(counts.0);
+        FX237_ITEM_SCANS.set(counts.1);
+        FX211_PROFILE.set(counts.2);
+        STORY_NAMESPACE_SCANS.set(counts.3);
+        FX237_PREFIX_NAMESPACE_BYTES.set(counts.4);
+    }
+    result
+}
+
+/// What the debug oracles compare of owners.
+#[cfg(debug_assertions)]
+#[allow(clippy::type_complexity)] // The four facts of each owner.
+fn owner_facts(owners: &[StoryOwnerSpan]) -> Vec<(StoryKind, usize, Range<usize>, u64)> {
+    owners
+        .iter()
+        .map(|owner| {
+            (
+                owner.kind,
+                owner.owner_index,
+                owner.full.clone(),
+                owner.fingerprint,
+            )
+        })
+        .collect()
+}
+
+/// What the debug oracles compare of items.
+#[cfg(debug_assertions)]
+#[allow(clippy::type_complexity)] // The seven facts of each item.
+fn item_facts(
+    items: &[StoryItemSpan],
+) -> Vec<(
+    StoryItemKind,
+    Range<usize>,
+    Range<usize>,
+    bool,
+    bool,
+    Vec<usize>,
+    Option<u8>,
+)> {
+    items
+        .iter()
+        .map(|item| {
+            (
+                item.kind,
+                item.full.clone(),
+                item.scan.clone(),
+                item.direct_owner_child,
+                item.complex_field,
+                item.complex_ancestors.clone(),
+                item.sdt_context.map(|context| context as u8),
+            )
+        })
+        .collect()
+}
+
+/// The debug oracle of [`Document::main_story_layout`]: the layout gives
+/// the owners, and the body story items when it read them, that the whole
+/// part's scans give.
+#[cfg(debug_assertions)]
+fn assert_main_story_layout(xml: &[u8], layout: &MainStoryLayout, items: bool) {
+    let whole = scan_story_owners(xml, StoryKind::Body).expect("the main part scans whole");
+    let owners = layout
+        .owners(xml)
+        .expect("the main story layout gives its owners");
+    assert_eq!(
+        owner_facts(&owners),
+        owner_facts(&whole),
+        "main story owners"
+    );
+    if !items {
+        return;
+    }
+    let body = whole
+        .iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .expect("the main part has a body owner");
+    let whole = scan_story_items(xml, body, None).expect("the body story scans whole");
+    assert_eq!(
+        item_facts(&layout.body_items()),
+        item_facts(&whole),
+        "body story items"
+    );
+}
+
 fn scan_story_owners(xml: &[u8], root_kind: StoryKind) -> Result<Vec<StoryOwnerSpan>> {
     scan_story_owners_with_special(xml, root_kind, false)
 }
@@ -13460,6 +14377,8 @@ fn typed_complex_field_candidate_is_admitted(
 }
 
 fn scan_story_control_paragraphs(xml: &[u8], control: &StoryItemSpan) -> Result<Vec<Range<usize>>> {
+    #[cfg(test)]
+    CONTROL_PARAGRAPH_SCAN_BYTES.set(CONTROL_PARAGRAPH_SCAN_BYTES.get() + control.full.end);
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut stack = Vec::<XmlElementFrame>::new();
@@ -16137,16 +17056,54 @@ fn nth_table_in_cell<'a>(cell: &'a mut CT_Tc, index: &mut usize) -> Option<&'a m
 }
 
 fn modeled_main_cell_route(xml: &[u8], target: &StoryOwnerSpan) -> Result<(usize, usize)> {
-    let body = scan_story_owners(xml, StoryKind::Body)?
-        .into_iter()
+    let (cells, direct_items) = main_cells_and_direct_items(xml, None)?;
+    modeled_cell_route_in(&cells, &direct_items, target)
+}
+
+/// The table-cell owners and the [`direct_story_content_items`] of the body
+/// owner of the main part `xml`, read from its `layout` when given.
+fn main_cells_and_direct_items(
+    xml: &[u8],
+    layout: Option<&MainStoryLayout>,
+) -> Result<(Vec<StoryOwnerSpan>, Vec<StoryItemSpan>)> {
+    if let Some(layout) = layout {
+        let cells = layout
+            .owners(xml)?
+            .into_iter()
+            .filter(|owner| owner.kind == StoryKind::TableCell)
+            .collect();
+        return Ok((cells, layout.direct_content_items(xml)?));
+    }
+    let owners = scan_story_owners(xml, StoryKind::Body)?;
+    let body = owners
+        .iter()
         .find(|owner| owner.kind == StoryKind::Body)
         .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
-    let direct_items = direct_story_content_items(xml, &body)?;
-    let (content_index, direct_item) = direct_items
-        .iter()
-        .enumerate()
-        .find(|(_, item)| item.full.start <= target.full.start && target.full.end <= item.full.end)
+    let direct_items = direct_story_content_items(xml, body)?;
+    let cells = owners
+        .into_iter()
+        .filter(|owner| owner.kind == StoryKind::TableCell)
+        .collect();
+    Ok((cells, direct_items))
+}
+
+/// [`modeled_main_cell_route`] of `target` among the main part's table-cell
+/// owners `cells` and direct content items `direct_items`, both in source
+/// order: the direct item holding the cell, and the cell's position among
+/// the cells of that item.
+fn modeled_cell_route_in(
+    cells: &[StoryOwnerSpan],
+    direct_items: &[StoryItemSpan],
+    target: &StoryOwnerSpan,
+) -> Result<(usize, usize)> {
+    // Direct items do not overlap, so only the last one starting at or
+    // before the cell can hold it.
+    let content_index = direct_items
+        .partition_point(|item| item.full.start <= target.full.start)
+        .checked_sub(1)
+        .filter(|index| target.full.end <= direct_items[*index].full.end)
         .ok_or_else(|| Error::Other("table-cell owner has no direct body container".to_owned()))?;
+    let direct_item = &direct_items[content_index];
     if !matches!(
         direct_item.kind,
         StoryItemKind::Table | StoryItemKind::ContentControl
@@ -16155,13 +17112,10 @@ fn modeled_main_cell_route(xml: &[u8], target: &StoryOwnerSpan) -> Result<(usize
             "HTML fragments require a modeled main-document table-cell owner".to_owned(),
         ));
     }
-    let cell_index = scan_story_owners(xml, StoryKind::Body)?
-        .into_iter()
-        .filter(|owner| {
-            owner.kind == StoryKind::TableCell
-                && direct_item.full.start <= owner.full.start
-                && owner.full.end <= direct_item.full.end
-        })
+    let first = cells.partition_point(|owner| owner.full.start < direct_item.full.start);
+    let cell_index = cells[first..]
+        .iter()
+        .take_while(|owner| owner.full.end <= direct_item.full.end)
         .position(|owner| owner.full == target.full)
         .ok_or_else(|| Error::Other("modeled table-cell owner was not found".to_owned()))?;
     Ok((content_index, cell_index))
@@ -17979,6 +18933,7 @@ impl Document {
             plain_local_edit_blocked: false,
             nested_owner_replay: OnceLock::from(NestedOwnerReplayFacts::default()),
             parsed: None,
+            main_body_scans: Arc::default(),
             styles,
             numbering: None,
             core_properties,
@@ -18068,6 +19023,7 @@ impl Document {
             plain_local_edit_blocked: self.plain_local_edit_blocked,
             nested_owner_replay: self.nested_owner_replay.clone(),
             parsed: self.parsed.clone(),
+            main_body_scans: Arc::clone(&self.main_body_scans),
             styles: self.styles.clone(),
             numbering: self.numbering.clone(),
             core_properties: self.core_properties.clone(),
@@ -19827,6 +20783,7 @@ impl Document {
             plain_local_edit_blocked,
             nested_owner_replay,
             parsed,
+            main_body_scans: Arc::default(),
             styles,
             numbering,
             core_properties,
@@ -20333,6 +21290,9 @@ impl Document {
                 Self::from_bytes_with_limits(output.get_ref(), limits)?
             }
         };
+        // The scans of the body children stay valid by their bytes, on
+        // either route.
+        reopened.main_body_scans = Arc::clone(&self.main_body_scans);
         reopened
             .identifiers
             .reject_new_repeated_drawing_ids(&provenance)?;
@@ -21393,15 +22353,41 @@ impl Document {
     }
 
     fn story_sources(&self) -> Result<Vec<StorySource<'_>>> {
+        Ok(self.spanned_story_sources()?.0)
+    }
+
+    /// [`Self::story_sources`], with where the body children lie in the
+    /// main part, the first source, as [`CT_Document::to_xml_with_body_spans`]
+    /// gives them.
+    #[allow(clippy::type_complexity)] // The sources and the children's ranges in the first.
+    fn spanned_story_sources(
+        &self,
+    ) -> Result<(Vec<StorySource<'_>>, Range<usize>, Vec<Range<usize>>)> {
         #[cfg(test)]
         STORY_SOURCE_BUILDS.set(STORY_SOURCE_BUILDS.get() + 1);
+        let (main, content, children) = self.document.to_xml_with_body_spans()?;
         let mut sources = vec![StorySource {
             root_kind: StoryKind::Body,
             part_name: self.doc_part_name.clone(),
-            xml: Cow::Owned(self.document.to_xml()?),
+            xml: Cow::Owned(main),
         }];
         sources.extend(self.related_story_sources()?);
-        Ok(sources)
+        Ok((sources, content, children))
+    }
+
+    /// [`Self::story_sources`], with the main part's [`MainStoryLayout`],
+    /// read for its body story items when `items` asks, or `None` when a
+    /// body child fails to scan, which leaves the main part to a whole scan.
+    #[allow(clippy::type_complexity)] // The sources and the main part's layout.
+    fn story_sources_and_main_layout(
+        &self,
+        items: bool,
+    ) -> Result<(Vec<StorySource<'_>>, Option<MainStoryLayout>)> {
+        let (sources, content, children) = self.spanned_story_sources()?;
+        let layout = self
+            .main_story_layout(&sources[0].xml, &content, &children, items)
+            .ok();
+        Ok((sources, layout))
     }
 
     /// The story sources after the main part, in [`Self::story_sources`]
@@ -21477,8 +22463,13 @@ impl Document {
     pub fn stories(&self) -> Result<Vec<StoryId>> {
         let mut stories = Vec::new();
         let mut seen = HashSet::new();
-        for source in self.story_sources()? {
-            for owner in scan_story_owners(&source.xml, source.root_kind)? {
+        let (sources, main) = self.story_sources_and_main_layout(false)?;
+        for (index, source) in sources.into_iter().enumerate() {
+            let owners = match main.as_ref().filter(|_| index == 0) {
+                Some(layout) => layout.owners(&source.xml)?,
+                None => scan_story_owners(&source.xml, source.root_kind)?,
+            };
+            for owner in owners {
                 let identity = (owner.kind, source.part_name.clone(), owner.owner_index);
                 if seen.insert(identity) {
                     stories.push(StoryId {
@@ -21497,14 +22488,39 @@ impl Document {
         &'a self,
         story: &StoryId,
     ) -> Result<(StorySource<'a>, StoryOwnerSpan)> {
-        let mut sources = self.story_sources()?;
+        let (source, owner, _) = self.story_source_owner_and_layout(story, false)?;
+        Ok((source, owner))
+    }
+
+    /// [`Self::story_source_and_owner`], with the main part's
+    /// [`MainStoryLayout`] when the story is there, read for its body story
+    /// items when `items` asks, so that the owner and items are read from
+    /// the body children that hold them.
+    #[allow(clippy::type_complexity)] // The source, its owner and the layout found with them.
+    fn story_source_owner_and_layout<'a>(
+        &'a self,
+        story: &StoryId,
+        items: bool,
+    ) -> Result<(StorySource<'a>, StoryOwnerSpan, Option<MainStoryLayout>)> {
+        let (mut sources, content, children) = self.spanned_story_sources()?;
         let source = sources.iter().position(|source| {
             source.part_name == story.part_name
                 && (source.root_kind == story.kind
                     || matches!(story.kind, StoryKind::TableCell | StoryKind::TextBox))
         });
-        let source = match source {
-            Some(index) => sources.swap_remove(index),
+        let (source, layout) = match source {
+            Some(index) => {
+                let source = sources.swap_remove(index);
+                // A child that fails to scan leaves the lookup to the whole
+                // part, which behaves as it always did.
+                let layout = (index == 0)
+                    .then(|| {
+                        self.main_story_layout(&source.xml, &content, &children, items)
+                            .ok()
+                    })
+                    .flatten();
+                (source, layout)
+            }
             None => {
                 if let Some(actual) = sources
                     .iter()
@@ -21523,19 +22539,146 @@ impl Document {
                 .into());
             }
         };
-        let owner = scan_story_owners(&source.xml, source.root_kind)?
-            .into_iter()
-            .find(|owner| owner.kind == story.kind && owner.owner_index == story.owner_index)
-            .ok_or_else(|| StoryError::OwnerNotFound {
-                story: story.clone(),
-            })?;
+        let owner = match &layout {
+            Some(layout) => layout.owner(&source.xml, story.kind, story.owner_index)?,
+            None => scan_story_owners(&source.xml, source.root_kind)?
+                .into_iter()
+                .find(|owner| owner.kind == story.kind && owner.owner_index == story.owner_index),
+        }
+        .ok_or_else(|| StoryError::OwnerNotFound {
+            story: story.clone(),
+        })?;
         if story.fingerprint != owner.fingerprint {
             return Err(StoryError::Stale {
                 story: story.clone(),
             }
             .into());
         }
-        Ok((source, owner))
+        Ok((source, owner, layout))
+    }
+
+    /// The owners of the main part `xml`, and its body story items when
+    /// `items` asks, serialized with its body children at `children` within
+    /// `content`, read from the scans of the children: only the children
+    /// whose bytes changed since the last lookup, or all of them when the
+    /// part around them changed, are scanned again. They are scanned alone,
+    /// each between the part's bytes before and after the children, unless
+    /// that reads more bytes than one scan of the whole part, which then
+    /// gives them all. See [`MainStoryLayout`].
+    fn main_story_layout(
+        &self,
+        xml: &[u8],
+        content: &Range<usize>,
+        children: &[Range<usize>],
+        items: bool,
+    ) -> Result<MainStoryLayout> {
+        let (head, tail) = (&xml[..content.start], &xml[content.end..]);
+        let mut scans = self
+            .main_body_scans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let frame = match &scans.frame {
+            Some(frame) if scans.head == head && scans.tail == tail => Arc::clone(frame),
+            _ => {
+                *scans = MainBodyScans::default();
+                let frame = Arc::new(uncounted_scan(|| scan_body_block(head, None, tail, true))?);
+                *scans = MainBodyScans {
+                    head: head.to_vec(),
+                    tail: tail.to_vec(),
+                    frame: Some(Arc::clone(&frame)),
+                    blocks: Vec::new(),
+                    fingerprint: None,
+                };
+                frame
+            }
+        };
+        // Children keep their scans by position at both ends, and by bytes
+        // between, where an edit inserted, removed or moved some.
+        let old = std::mem::take(&mut scans.blocks);
+        let same =
+            |scan: &Arc<BodyBlockScan>, range: &Range<usize>| scan.bytes == xml[range.clone()];
+        let prefix = old
+            .iter()
+            .zip(children)
+            .take_while(|(scan, range)| same(scan, range))
+            .count();
+        let suffix = old[prefix..]
+            .iter()
+            .rev()
+            .zip(children[prefix..].iter().rev())
+            .take_while(|(scan, range)| same(scan, range))
+            .count();
+        let moved = old[prefix..old.len() - suffix]
+            .iter()
+            .map(|scan| (scan.bytes.as_slice(), scan))
+            .collect::<HashMap<_, _>>();
+        let mut blocks = children
+            .iter()
+            .enumerate()
+            .map(|(index, range)| {
+                let kept = if index < prefix {
+                    Some(&old[index])
+                } else if index >= children.len() - suffix {
+                    Some(&old[old.len() - (children.len() - index)])
+                } else {
+                    moved.get(&xml[range.clone()]).copied()
+                };
+                // A kept child read without items reads them now if asked.
+                kept.filter(|scan| !items || scan.items.is_some())
+                    .map(Arc::clone)
+            })
+            .collect::<Vec<_>>();
+        drop(moved);
+        let todo = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, scan)| scan.is_none())
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        #[cfg(any(test, debug_assertions))]
+        MAIN_BODY_BLOCK_SCANS.set(MAIN_BODY_BLOCK_SCANS.get() + todo.len());
+        let alone = todo
+            .iter()
+            .map(|index| head.len() + children[*index].len() + tail.len())
+            .sum::<usize>();
+        // The body's fingerprint stays known while its bytes stay the same.
+        if prefix != children.len() || prefix != old.len() {
+            scans.fingerprint = None;
+        }
+        // A child scanned alone reads its items too, which costs little.
+        let scanned = if alone < xml.len() {
+            todo.iter()
+                .map(|index| {
+                    let bytes = &xml[children[*index].clone()];
+                    uncounted_scan(|| scan_body_block(head, Some(bytes), tail, true))
+                })
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            let (scanned, fingerprint) =
+                uncounted_scan(|| scan_body_children(xml, children, &todo, items))?;
+            scans.fingerprint = Some(fingerprint);
+            scanned
+        };
+        for (index, scan) in todo.into_iter().zip(scanned) {
+            blocks[index] = Some(Arc::new(scan));
+        }
+        let blocks = blocks.into_iter().flatten().collect::<Vec<_>>();
+        scans.blocks = blocks.clone();
+        let fingerprint = scans.fingerprint;
+        drop(scans);
+        let layout = MainStoryLayout {
+            content: content.clone(),
+            frame,
+            blocks: children
+                .iter()
+                .map(|range| range.start)
+                .zip(blocks)
+                .collect(),
+            fingerprint,
+        };
+        #[cfg(debug_assertions)]
+        uncounted_scan(|| assert_main_story_layout(xml, &layout, items));
+        Ok(layout)
     }
 
     /// Bind an existing control to a snapshot-checked placeholder entry.
@@ -21989,17 +23132,15 @@ impl Document {
         let (part_name, xml, selected) = self.story_range_marker_spans(entry, true)?;
         let (edits, reference, reference_span) = comment_move_source_edits(&xml, &selected)?;
         let mut reference_axis = None;
-        for (location, _) in self.story_range_paragraphs()? {
-            if location.story != entry.range().start.location.story {
-                continue;
-            }
-            let (source, paragraph) = self.story_range_paragraph_source(&location)?;
-            if !paragraph.full.contains(&reference_span.start) {
-                continue;
-            }
-            let scope = story_namespace_scope_at(source.xml.as_ref(), paragraph.full.start)?;
-            let raw =
-                close_content_fragment_namespaces(&source.xml[paragraph.full.clone()], &scope)?;
+        // The range paragraphs of one story do not overlap, so at most one
+        // holds the reference.
+        let (source, holding) = self.story_range_paragraph_holding(
+            &entry.range().start.location.story,
+            reference_span.start,
+        )?;
+        if let Some((_, paragraph)) = holding {
+            let scope = story_namespace_scope_at(source.xml.as_ref(), paragraph.start)?;
+            let raw = close_content_fragment_namespaces(&source.xml[paragraph.clone()], &scope)?;
             let paragraph_model = CT_P::from_xml_fragment(&raw)?;
             let indices = paragraph_model
                 .accepted_run_paths()
@@ -22017,12 +23158,12 @@ impl Document {
                         .map(|_| index)
                 })
                 .collect::<Vec<_>>();
-            if indices.len() != 1 || reference_axis.is_some() {
+            if indices.len() != 1 {
                 return Err(Error::Other(
                     "comment reference has no unique accepted run boundary".into(),
                 ));
             }
-            reference_axis = Some((paragraph.full.start, indices[0]));
+            reference_axis = Some((paragraph.start, indices[0]));
         }
         let (reference_paragraph, reference_index) = reference_axis.ok_or_else(|| {
             Error::Other("comment reference is outside the supported accepted run axis".into())
@@ -22064,35 +23205,15 @@ impl Document {
             } else {
                 endpoint.1
             };
-            let (source, owner) = self.story_source_and_owner(story)?;
-            let mut found = None;
-            for (index, item) in scan_story_items(source.xml.as_ref(), &owner, None)?
-                .iter()
-                .enumerate()
-            {
-                let paths = match item.kind {
-                    StoryItemKind::Paragraph => vec![(vec![index], item.full.start)],
-                    StoryItemKind::ContentControl => {
-                        scan_story_control_paragraphs(source.xml.as_ref(), item)?
-                            .iter()
-                            .enumerate()
-                            .map(|(child, span)| (vec![index, child], span.start))
-                            .collect()
-                    }
-                    _ => Vec::new(),
-                };
-                for (path, offset) in paths {
-                    if offset == expected {
-                        if found.is_some() {
-                            return Err(Error::Other("ambiguous comment move destination".into()));
-                        }
-                        found = Some(path);
-                    }
-                }
-            }
-            let path = found.ok_or_else(|| {
-                Error::Other("comment move destination paragraph disappeared".into())
-            })?;
+            // The range paragraphs of one story do not overlap, so only the
+            // one holding the expected start can start there.
+            let (_, holding) = self.story_range_paragraph_holding(story, expected)?;
+            let path = holding
+                .filter(|(_, span)| span.start == expected)
+                .map(|(location, _)| location.index_path)
+                .ok_or_else(|| {
+                    Error::Other("comment move destination paragraph disappeared".into())
+                })?;
             let removed_before_boundary = endpoint.0 == part_name
                 && endpoint.1 == reference_paragraph
                 && position.run_index > reference_index
@@ -22462,19 +23583,27 @@ impl Document {
         &'a self,
         location: &ContentLocation,
     ) -> Result<(StorySource<'a>, StoryItemSpan)> {
-        let (source, owner) = self.story_source_and_owner(&location.story)?;
+        let (source, item, _) = self.story_item_source_and_layout(location)?;
+        Ok((source, item))
+    }
+
+    /// [`Self::story_item_source`], with the main part's [`MainStoryLayout`]
+    /// when the item is there.
+    #[allow(clippy::type_complexity)] // The source, the item and the layout found with them.
+    fn story_item_source_and_layout<'a>(
+        &'a self,
+        location: &ContentLocation,
+    ) -> Result<(StorySource<'a>, StoryItemSpan, Option<MainStoryLayout>)> {
+        let (source, owner, layout) = self.story_source_owner_and_layout(&location.story, true)?;
         if location.index_path.len() != 1 {
             return Err(StoryError::InvalidPath {
                 path: location.index_path.clone(),
             }
             .into());
         }
-        let items = scan_story_items(source.xml.as_ref(), &owner, None)?;
         let index = location.index_path[0];
-        let item = items.get(index).cloned().ok_or(StoryError::OutOfBounds {
-            index,
-            len: items.len(),
-        })?;
+        let (item, len) = story_owner_item(source.xml.as_ref(), &owner, layout.as_ref(), index)?;
+        let item = item.ok_or(StoryError::OutOfBounds { index, len })?;
         if item.kind != location.item_kind {
             return Err(StoryError::KindMismatch {
                 expected: location.item_kind,
@@ -22482,7 +23611,7 @@ impl Document {
             }
             .into());
         }
-        Ok((source, item))
+        Ok((source, item, layout))
     }
 
     pub(crate) fn location_is_end(location: &ContentLocation) -> bool {
@@ -22530,12 +23659,63 @@ impl Document {
         Ok((source.xml.into_owned(), owner.full))
     }
 
+    /// The range paragraph of `story`, one [`Self::story_range_paragraphs`]
+    /// lists, whose span in the story's source holds `offset`, with that
+    /// span, read in the main part's body child that holds `offset`.
+    #[allow(clippy::type_complexity)] // The source, and the paragraph found in it.
+    fn story_range_paragraph_holding<'a>(
+        &'a self,
+        story: &StoryId,
+        offset: usize,
+    ) -> Result<(StorySource<'a>, Option<(ContentLocation, Range<usize>)>)> {
+        let (source, owner, layout) = self.story_source_owner_and_layout(story, true)?;
+        let xml = source.xml.as_ref();
+        let items = match &layout {
+            Some(layout) if owner.kind == StoryKind::Body => {
+                layout.body_items_holding(&(offset..offset))
+            }
+            _ => story_owner_items(xml, &owner, layout.as_ref())?
+                .into_iter()
+                .enumerate()
+                .collect(),
+        };
+        for (index, item) in items {
+            let paths = match item.kind {
+                StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
+                StoryItemKind::ContentControl if item.full.contains(&offset) => {
+                    story_control_paragraphs(xml, &item, layout.as_ref())?
+                        .into_iter()
+                        .enumerate()
+                        .map(|(paragraph, span)| (vec![index, paragraph], span))
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
+            if let Some((path, span)) = paths.into_iter().find(|(_, span)| span.contains(&offset)) {
+                let location = ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path);
+                return Ok((source, Some((location, span))));
+            }
+        }
+        Ok((source, None))
+    }
+
     fn story_range_paragraph_source<'a>(
         &'a self,
         location: &ContentLocation,
     ) -> Result<(StorySource<'a>, StoryItemSpan)> {
+        let (source, item, _) = self.story_range_paragraph_source_and_layout(location)?;
+        Ok((source, item))
+    }
+
+    /// [`Self::story_range_paragraph_source`], with the main part's
+    /// [`MainStoryLayout`] when the paragraph is there.
+    #[allow(clippy::type_complexity)] // The source, the paragraph and the layout found with them.
+    fn story_range_paragraph_source_and_layout<'a>(
+        &'a self,
+        location: &ContentLocation,
+    ) -> Result<(StorySource<'a>, StoryItemSpan, Option<MainStoryLayout>)> {
         if location.index_path.len() == 1 {
-            return self.story_item_source(location);
+            return self.story_item_source_and_layout(location);
         }
         if location.index_path.len() != 2 || location.item_kind != StoryItemKind::Paragraph {
             return Err(StoryError::InvalidPath {
@@ -22543,12 +23723,13 @@ impl Document {
             }
             .into());
         }
-        let (source, owner) = self.story_source_and_owner(&location.story)?;
-        let items = scan_story_items(source.xml.as_ref(), &owner, None)?;
+        let (source, owner, layout) = self.story_source_owner_and_layout(&location.story, true)?;
         let control_index = location.index_path[0];
-        let control = items.get(control_index).ok_or(StoryError::OutOfBounds {
+        let (control, len) =
+            story_owner_item(source.xml.as_ref(), &owner, layout.as_ref(), control_index)?;
+        let control = control.ok_or(StoryError::OutOfBounds {
             index: control_index,
-            len: items.len(),
+            len,
         })?;
         if control.kind != StoryItemKind::ContentControl {
             return Err(StoryError::KindMismatch {
@@ -22557,7 +23738,7 @@ impl Document {
             }
             .into());
         }
-        let paragraphs = scan_story_control_paragraphs(source.xml.as_ref(), control)?;
+        let paragraphs = story_control_paragraphs(source.xml.as_ref(), &control, layout.as_ref())?;
         let paragraph_index = location.index_path[1];
         let full = paragraphs
             .get(paragraph_index)
@@ -22577,14 +23758,15 @@ impl Document {
                 complex_ancestors: Vec::new(),
                 sdt_context: None,
             },
+            layout,
         ))
     }
 
     /// Traverse one story's supported content without constructing a second
     /// document tree.
     pub fn story_items<'a>(&'a self, story: &StoryId) -> Result<Vec<StoryItemRef<'a>>> {
-        let (source, owner) = self.story_source_and_owner(story)?;
-        let spans = scan_story_items(&source.xml, &owner, None)?;
+        let (source, owner, layout) = self.story_source_owner_and_layout(story, true)?;
+        let spans = story_owner_items(&source.xml, &owner, layout.as_ref())?;
         Ok(spans
             .into_iter()
             .enumerate()
@@ -22721,8 +23903,11 @@ impl Document {
         &self,
         location: &ContentLocation,
     ) -> Result<StoryItemSnapshot> {
-        let (source, item) = self.story_range_paragraph_source(location)?;
-        let scope = story_namespace_scope_at(source.xml.as_ref(), item.full.start)?;
+        let (source, item, layout) = self.story_range_paragraph_source_and_layout(location)?;
+        let scope = match &layout {
+            Some(layout) => layout.scope_at(source.xml.as_ref(), item.full.start)?,
+            None => story_namespace_scope_at(source.xml.as_ref(), item.full.start)?,
+        };
         let xml = close_content_fragment_namespaces(&source.xml.as_ref()[item.full], &scope)?;
         let text = CT_P::from_xml_fragment(&xml)?.accepted_text();
         let containing = if let [control, _] = location.index_path() {
@@ -22925,14 +24110,19 @@ impl Document {
         Vec<StorySource<'_>>,
         Vec<(usize, Range<usize>, ContentLocation, Vec<u8>)>,
     )> {
-        let sources = self.story_sources()?;
+        let (sources, main) = self.story_sources_and_main_layout(true)?;
         let mut paragraphs = Vec::new();
         let mut seen = HashSet::new();
         let mut story_index = 0usize;
         for (source_index, source) in sources.iter().enumerate() {
             let source_xml = source.xml.as_ref();
+            let layout = main.as_ref().filter(|_| source_index == 0);
             let mut owners = Vec::new();
-            for owner in scan_story_owners(source_xml, source.root_kind)? {
+            let source_owners = match layout {
+                Some(layout) => layout.owners(source_xml)?,
+                None => scan_story_owners(source_xml, source.root_kind)?,
+            };
+            for owner in source_owners {
                 let identity = (owner.kind, source.part_name.clone(), owner.owner_index);
                 if !seen.insert(identity) {
                     continue;
@@ -22945,7 +24135,9 @@ impl Document {
                 };
                 owners.push((story, owner));
             }
-            let spans = story_range_paragraph_spans(source_xml, &owners)?;
+            // The main part's body story reads its paragraphs from the
+            // scans of its body children.
+            let spans = story_range_paragraph_spans_in(source_xml, &owners, layout)?;
             let scopes = story_namespace_scopes_at(
                 source_xml,
                 spans.iter().flatten().map(|(_, span)| span.start),
@@ -23945,6 +25137,17 @@ impl Document {
         expected_type: &str,
     ) -> Result<String> {
         self.story_source_and_owner(story)?;
+        self.story_relationship_target(story, relationship_id, expected_type)
+    }
+
+    /// [`Self::validate_internal_relationship_for_story`] of a story read
+    /// from the current sources, which needs no lookup of the story.
+    fn story_relationship_target(
+        &self,
+        story: &StoryId,
+        relationship_id: &str,
+        expected_type: &str,
+    ) -> Result<String> {
         let relationships = self
             .package
             .get_part_rels(&story.part_name)
@@ -23986,21 +25189,77 @@ impl Document {
     pub fn pictures(&self) -> Result<Vec<PictureOccurrence>> {
         let mut result = Vec::new();
         let mut seen = HashSet::new();
-        for source in self.story_sources()? {
-            let owners = scan_story_owners(&source.xml, source.root_kind)?;
-            for owner in owners {
+        // The main part's owners and their paragraphs are read from the
+        // scans of its body children.
+        let (sources, main) = self.story_sources_and_main_layout(true)?;
+        for (index, source) in sources.iter().enumerate() {
+            let layout = main.as_ref().filter(|_| index == 0);
+            let owners = match layout {
+                Some(layout) => layout.owners(&source.xml)?,
+                None => scan_story_owners(&source.xml, source.root_kind)?,
+            }
+            .into_iter()
+            .map(|owner| {
                 let story = StoryId {
                     kind: owner.kind,
                     part_name: source.part_name.clone(),
                     owner_index: owner.owner_index,
                     fingerprint: owner.fingerprint,
                 };
-                for (location, span) in
-                    story_range_paragraph_spans(&source.xml, &[(story.clone(), owner.clone())])?
+                (story, owner)
+            })
+            .collect::<Vec<_>>();
+            // The main part's paragraphs are read in one pass, and only those
+            // that write a drawing element, which alone can hold a picture:
+            // they are serialized from parsed ones, so the others need no
+            // projection.
+            let main_spans = layout
+                .map(|layout| -> Result<_> {
+                    let spans = story_range_paragraph_spans_in(&source.xml, &owners, Some(layout))?
                         .into_iter()
-                        .flatten()
-                {
-                    let scope = story_namespace_scope_at(&source.xml, span.start)?;
+                        .map(|spans| {
+                            spans
+                                .into_iter()
+                                .filter(|(_, span)| {
+                                    source.xml[span.clone()]
+                                        .windows(b"drawing".len())
+                                        .any(|window| window == b"drawing")
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>();
+                    let scopes = story_scopes_at(
+                        &source.xml,
+                        Some(layout),
+                        &spans
+                            .iter()
+                            .flatten()
+                            .map(|(_, span)| span.clone())
+                            .collect::<Vec<_>>(),
+                    )?;
+                    Ok((spans, scopes))
+                })
+                .transpose()?;
+            for (position, (story, owner)) in owners.iter().enumerate() {
+                let story = story.clone();
+                let spans = match &main_spans {
+                    Some((spans, _)) => spans[position].clone(),
+                    None => {
+                        story_range_paragraph_spans(&source.xml, &[(story.clone(), owner.clone())])?
+                            .into_iter()
+                            .flatten()
+                            .collect()
+                    }
+                };
+                for (location, span) in spans {
+                    let scope = match &main_spans {
+                        Some((_, scopes)) => scopes.get(&span.start).cloned().ok_or_else(|| {
+                            Error::Other(
+                                "picture paragraph namespace scope was not inventoried".into(),
+                            )
+                        })?,
+                        None => story_namespace_scope_at(&source.xml, span.start)?,
+                    };
                     let closed =
                         close_content_fragment_namespaces(&source.xml[span.clone()], &scope)?;
                     let paragraph = CT_P::from_xml_fragment(&closed)?;
@@ -24139,11 +25398,8 @@ impl Document {
                                 String::new(),
                             )
                         } else {
-                            let target = self.validate_internal_relationship_for_story(
-                                &story,
-                                embed,
-                                rel_types::IMAGE,
-                            )?;
+                            let target =
+                                self.story_relationship_target(&story, embed, rel_types::IMAGE)?;
                             let target = self
                                 .package
                                 .parts
@@ -24888,7 +26144,7 @@ impl Document {
             .into_iter()
             .find(|item| item.direct_owner_child)
             .ok_or_else(|| Error::Other("standalone body table has no item".into()))?;
-        let owner = physical_table_cell_owner(&part, StoryKind::Body, &table, row, cell)?;
+        let owner = physical_table_cell_owner(&part, StoryKind::Body, &table, row, cell, None)?;
         self.close_direct_fragment(&part, owner.full).map(Some)
     }
 
@@ -25348,12 +26604,21 @@ impl Document {
                 "rich table needs an existing table location".to_owned(),
             ));
         }
-        let (source, item) = self.story_item_source(location)?;
-        Self::story_table_from_source(&source.xml, &item)
+        let (source, item, layout) = self.story_item_source_and_layout(location)?;
+        Self::story_table_from_source(&source.xml, &item, layout.as_ref())
     }
 
-    fn story_table_from_source(xml: &[u8], item: &StoryItemSpan) -> Result<CT_Tbl> {
-        let scope = story_namespace_scope_at(xml, item.full.start)?;
+    /// The table `item` of the story source `xml`, read in its body child
+    /// when the main part's `layout` is given.
+    fn story_table_from_source(
+        xml: &[u8],
+        item: &StoryItemSpan,
+        layout: Option<&MainStoryLayout>,
+    ) -> Result<CT_Tbl> {
+        let scope = match layout {
+            Some(layout) => layout.scope_at(xml, item.full.start)?,
+            None => story_namespace_scope_at(xml, item.full.start)?,
+        };
         let closed = close_content_fragment_namespaces(&xml[item.full.clone()], &scope)?;
         let mut wrapped =
             format!(r#"<w:document xmlns:w="{WORD_NAMESPACE}"><w:body>"#).into_bytes();
@@ -26081,8 +27346,15 @@ impl Document {
                 "rich table needs an existing table location".to_owned(),
             ));
         }
-        let (source, item) = self.story_item_source(location)?;
-        let owner = physical_table_cell_owner(&source.xml, source.root_kind, &item, row, cell)?;
+        let (source, item, layout) = self.story_item_source_and_layout(location)?;
+        let owner = physical_table_cell_owner(
+            &source.xml,
+            source.root_kind,
+            &item,
+            row,
+            cell,
+            layout.as_ref(),
+        )?;
         let story = StoryId {
             kind: owner.kind,
             part_name: source.part_name.clone(),
@@ -28615,12 +29887,13 @@ impl Document {
             .table(table)
             .and_then(|table| table.cell(row, cell).map(|cell| cell.inner as *const CT_Tc))
             .ok_or_else(|| Error::Other("cell index is out of range".to_owned()))?;
-        let xml = candidate.document.to_xml()?;
-        for owner in scan_story_owners(&xml, StoryKind::Body)?
-            .into_iter()
-            .filter(|owner| owner.kind == StoryKind::TableCell)
-        {
-            let (content, mut ordinal) = modeled_main_cell_route(&xml, &owner)?;
+        let (xml, content, children) = candidate.document.to_xml_with_body_spans()?;
+        let layout = candidate
+            .main_story_layout(&xml, &content, &children, true)
+            .ok();
+        let (cells, direct_items) = main_cells_and_direct_items(&xml, layout.as_ref())?;
+        for owner in &cells {
+            let (content, mut ordinal) = modeled_cell_route_in(&cells, &direct_items, owner)?;
             let modeled = match candidate.document.body.content.get_mut(content) {
                 Some(BodyContent::Table(table)) => nth_cell_in_table(table, &mut ordinal),
                 Some(BodyContent::ContentControl(control)) => {
@@ -28636,10 +29909,14 @@ impl Document {
                     owner_index: owner.owner_index,
                     fingerprint: owner.fingerprint,
                 };
-                let mut paragraphs = story_range_paragraph_spans(&xml, &[(story, owner)])?
-                    .into_iter()
-                    .next()
-                    .expect("one checked cell inventory");
+                let mut paragraphs = story_range_paragraph_spans_in(
+                    &xml,
+                    &[(story, owner.clone())],
+                    layout.as_ref(),
+                )?
+                .into_iter()
+                .next()
+                .expect("one checked cell inventory");
                 // Controls contribute their direct paragraphs separately. Restore
                 // physical source order before applying the facade paragraph axis.
                 paragraphs.sort_by_key(|(_, span)| span.start);
@@ -28659,6 +29936,62 @@ impl Document {
         Err(Error::Other(
             "cell has no checked physical story owner".to_owned(),
         ))
+    }
+
+    /// How many main-part body children this thread scanned for story
+    /// lookups, rather than reused from the scans kept by bytes. Debug builds
+    /// only.
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn main_body_block_scans() -> usize {
+        MAIN_BODY_BLOCK_SCANS.get()
+    }
+
+    /// The body story location of the direct body child at `slot`, as
+    /// [`Self::story_item_snapshots`] gives it to the snapshot whose
+    /// [`StoryItemSnapshot::direct_body_index`] is `slot` and which is a
+    /// direct child, read from the body child that holds it.
+    #[doc(hidden)]
+    pub fn direct_body_item_location(&self, slot: usize) -> Result<Option<ContentLocation>> {
+        let (xml, content, children) = self.document.to_xml_with_body_spans()?;
+        let Ok(layout) = self.main_story_layout(&xml, &content, &children, true) else {
+            return Ok(self
+                .story_item_snapshots()?
+                .into_iter()
+                .find(|snapshot| {
+                    snapshot.location().story().kind() == StoryKind::Body
+                        && snapshot.is_direct_child()
+                        && snapshot.direct_body_index() == Some(slot)
+                })
+                .map(|snapshot| snapshot.location().clone()));
+        };
+        let owner = layout
+            .owner(&xml, StoryKind::Body, 0)?
+            .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
+        let story = StoryId {
+            kind: StoryKind::Body,
+            part_name: self.doc_part_name.clone(),
+            owner_index: 0,
+            fingerprint: owner.fingerprint,
+        };
+        let location = layout
+            .direct_body_item(&xml, slot, true)?
+            .map(|(index, item)| ContentLocation::new(story, item.kind, vec![index]));
+        // The snapshots of every story also fail on a story that cannot be
+        // read, which the body's own location does not depend on.
+        #[cfg(debug_assertions)]
+        if let Ok(snapshots) = uncounted_scan(|| self.story_item_snapshots()) {
+            let whole = snapshots
+                .into_iter()
+                .find(|snapshot| {
+                    snapshot.location().story().kind() == StoryKind::Body
+                        && snapshot.is_direct_child()
+                        && snapshot.direct_body_index() == Some(slot)
+                })
+                .map(|snapshot| snapshot.location().clone());
+            assert_eq!(location, whole, "direct body item location {slot}");
+        }
+        Ok(location)
     }
 
     /// nested control or table beyond this two-segment path.
@@ -28701,16 +30034,19 @@ impl Document {
             .into_iter()
             .find(|story| story.kind == StoryKind::Body)
             .ok_or_else(|| Error::Other("document body story is missing".to_owned()))?;
-        let (source, owner) = self.story_source_and_owner(&story)?;
+        let (source, owner, layout) = self.story_source_owner_and_layout(&story, true)?;
         // The body section properties come last, so the n-th direct item is
         // the direct body child at slot n.
-        let items = scan_story_items(source.xml.as_ref(), &owner, None)?;
-        let (item_index, item) = items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| item.direct_owner_child)
-            .nth(slot)
-            .ok_or_else(|| Error::Other("body paragraph has no story item".to_owned()))?;
+        let direct = match &layout {
+            Some(layout) => layout.direct_body_item(source.xml.as_ref(), slot, false)?,
+            None => scan_story_items(source.xml.as_ref(), &owner, None)?
+                .into_iter()
+                .enumerate()
+                .filter(|(_, item)| item.direct_owner_child)
+                .nth(slot),
+        };
+        let (item_index, item) =
+            direct.ok_or_else(|| Error::Other("body paragraph has no story item".to_owned()))?;
         let expected_kind = if ordinal.is_some() {
             StoryItemKind::ContentControl
         } else {
@@ -37367,14 +38703,15 @@ impl Document {
                     .ok_or_else(|| {
                         Error::Other(format!("cell {table}:{row}:{cell} is out of range"))
                     })?;
-                let xml = candidate.document.to_xml()?;
-                let owners = scan_story_owners(&xml, StoryKind::Body)?;
+                let (xml, content, children) = candidate.document.to_xml_with_body_spans()?;
+                let layout = candidate
+                    .main_story_layout(&xml, &content, &children, true)
+                    .ok();
+                let (cells, direct_items) = main_cells_and_direct_items(&xml, layout.as_ref())?;
                 let mut found = None;
-                for owner in owners
-                    .iter()
-                    .filter(|owner| owner.kind == StoryKind::TableCell)
-                {
-                    let (content, mut ordinal) = modeled_main_cell_route(&xml, owner)?;
+                for owner in &cells {
+                    let (content, mut ordinal) =
+                        modeled_cell_route_in(&cells, &direct_items, owner)?;
                     let modeled = match candidate.document.body.content.get_mut(content) {
                         Some(BodyContent::Table(t)) => nth_cell_in_table(t, &mut ordinal),
                         Some(BodyContent::ContentControl(c)) => {
@@ -42969,6 +44306,7 @@ mod tests {
             FX237_LEGACY_CELL_STEPS.set(0);
             FX237_CELL_VISITS.set(0);
             FX237_TABLE_VISITS.set(0);
+            MAIN_BODY_BLOCK_SCANS.set(0);
             document
                 .story_table_cell(&routes[0].0, cells / 6 - 1, 5)
                 .unwrap();
@@ -42982,12 +44320,15 @@ mod tests {
                 1,
                 "scalar source must be materialized once"
             );
+            // Qualification and physical correspondence read the scans of
+            // the body's children, here the one table, and no whole story.
+            assert_eq!(MAIN_BODY_BLOCK_SCANS.get(), 1);
             assert_eq!(
                 STORY_OWNER_SCANS.get(),
-                2,
+                0,
                 "scalar qualification and physical correspondence scans"
             );
-            assert_eq!(FX237_ITEM_SCANS.get(), 1);
+            assert_eq!(FX237_ITEM_SCANS.get(), 0);
             assert!(FX237_PREFIX_NAMESPACE_BYTES.get() <= source_bytes);
             assert_eq!(FX237_TABLE_VISITS.get(), 1);
             assert!(
@@ -43014,6 +44355,7 @@ mod tests {
             let source_count = document.story_sources().unwrap().len();
             STORY_OWNER_SCANS.set(0);
             STORY_NAMESPACE_SCANS.set(0);
+            MAIN_BODY_BLOCK_SCANS.set(0);
             let paragraphs = document.story_range_paragraphs().unwrap();
             assert_eq!(
                 paragraphs
@@ -43022,7 +44364,11 @@ mod tests {
                     .count(),
                 rows * 8
             );
-            assert_eq!(STORY_OWNER_SCANS.get(), source_count);
+            // The main part's owners and body items come from the scans of
+            // its body children, each child read once, here by one scan of
+            // the whole part.
+            assert_eq!(MAIN_BODY_BLOCK_SCANS.get(), document.content_count());
+            assert_eq!(STORY_OWNER_SCANS.get(), source_count - 1);
             assert_eq!(STORY_NAMESPACE_SCANS.get(), source_count * 2);
         }
     }
@@ -58810,6 +60156,168 @@ mod tests {
         }
         assert_eq!(work[0], work[1]);
         assert_eq!(work[2], work[3]);
+    }
+
+    #[test]
+    fn range_paragraphs_read_each_control_of_one_child_once() {
+        let mut samples = Vec::new();
+        for controls in [40usize, 160] {
+            // One table whose cells each hold a block content control.
+            let rows = (0..controls)
+                .map(|row| {
+                    format!(
+                        r#"<w:tr><w:tc><w:sdt><w:sdtPr><w:tag w:val="c{row:04}"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>control {row:04}</w:t></w:r></w:p></w:sdtContent></w:sdt></w:tc></w:tr>"#
+                    )
+                })
+                .collect::<String>();
+            let body = format!(
+                r#"<w:p><w:r><w:t>before</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>{rows}</w:tbl>"#
+            );
+            let document = issue407_document(&body, false);
+            document.story_range_paragraphs().unwrap();
+            CONTROL_PARAGRAPH_SCAN_BYTES.set(0);
+            STORY_NAMESPACE_SCANS.set(0);
+            MAIN_BODY_BLOCK_SCANS.set(0);
+            let paragraphs = document.story_range_paragraphs().unwrap();
+            assert_eq!(
+                paragraphs
+                    .iter()
+                    .filter(|(location, _)| location.index_path().len() == 2)
+                    .count(),
+                controls
+            );
+            samples.push((
+                CONTROL_PARAGRAPH_SCAN_BYTES.get(),
+                STORY_NAMESPACE_SCANS.get(),
+                MAIN_BODY_BLOCK_SCANS.get(),
+            ));
+        }
+        // Each control reads its own excerpt, with the scopes of all of them
+        // found in one pass, so four times the controls read four times the
+        // bytes, in as many passes.
+        assert!(samples[1].0 <= 4 * samples[0].0 + 64, "{samples:?}");
+        assert_eq!(samples[0].1, samples[1].1, "{samples:?}");
+        assert_eq!((samples[0].2, samples[1].2), (0, 0), "{samples:?}");
+    }
+
+    #[test]
+    fn story_lookups_read_only_the_body_children_an_edit_changed() {
+        const TABLE: &str = r#"<w:tbl><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>one</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>two</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+        const CONTROL: &str = r#"<w:sdt><w:sdtPr><w:tag w:val="probe"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p></w:sdtContent></w:sdt>"#;
+        let mut samples = Vec::new();
+        for count in [100usize, 400] {
+            // A table after every tenth paragraph, then a block control, a
+            // last table and a picture.
+            let mut body = String::new();
+            for (index, paragraph) in issue407_runs(count).split_inclusive("</w:p>").enumerate() {
+                body.push_str(paragraph);
+                if index % 10 == 9 {
+                    body.push_str(TABLE);
+                }
+            }
+            body.push_str(CONTROL);
+            body.push_str(TABLE);
+            let mut document = issue407_document(&body, false);
+            document.add_picture(b"image", "image.png", Length::pt(1.0), Length::pt(1.0));
+            // The first lookup scans every child once, by one scan of the
+            // whole part, for its owners, and the first that reads items
+            // reads them for every child the same way.
+            MAIN_BODY_BLOCK_SCANS.set(0);
+            let body_story = document.stories().unwrap().remove(0);
+            assert_eq!(MAIN_BODY_BLOCK_SCANS.get(), document.content_count());
+            document.story_items(&body_story).unwrap();
+            assert_eq!(MAIN_BODY_BLOCK_SCANS.get(), 2 * document.content_count());
+            document.insert_paragraph(10, "x");
+            let counters = || {
+                (
+                    MAIN_BODY_BLOCK_SCANS.get(),
+                    STORY_OWNER_SCANS.get(),
+                    FX237_ITEM_SCANS.get(),
+                    FX211_PROFILE.get()[1],
+                    FX237_PREFIX_NAMESPACE_BYTES.get(),
+                )
+            };
+            let reset = || {
+                MAIN_BODY_BLOCK_SCANS.set(0);
+                STORY_OWNER_SCANS.set(0);
+                FX237_ITEM_SCANS.set(0);
+                FX211_PROFILE.set([0; 12]);
+                FX237_PREFIX_NAMESPACE_BYTES.set(0);
+            };
+            let mut sample = Vec::new();
+            reset();
+            let body_story = document
+                .stories()
+                .unwrap()
+                .into_iter()
+                .find(|story| story.kind == body_story.kind)
+                .unwrap();
+            sample.push(counters());
+            reset();
+            let tables = document.table_count();
+            let slot = document.content_index_of_table(tables - 1).unwrap();
+            let table = document.direct_body_item_location(slot).unwrap().unwrap();
+            assert_eq!(table.item_kind(), StoryItemKind::Table);
+            sample.push(counters());
+            reset();
+            let cell = document.story_table_cell(&table, 0, 1).unwrap();
+            assert_eq!(cell.kind, StoryKind::TableCell);
+            sample.push(counters());
+            reset();
+            let located = document
+                .cell_paragraph_story_location(tables - 1, 0, 1, 0)
+                .unwrap();
+            assert_eq!(located.story(), &cell);
+            sample.push(counters());
+            reset();
+            let last = document.paragraph_count() - 1;
+            let picture = document.paragraph_story_location(last).unwrap().unwrap();
+            sample.push(counters());
+            reset();
+            let control = document
+                .story_items(&body_story)
+                .unwrap()
+                .into_iter()
+                .rev()
+                .find(|item| item.location().item_kind() == StoryItemKind::ContentControl)
+                .unwrap()
+                .location()
+                .clone();
+            let paragraph = ContentLocation::new(
+                body_story.clone(),
+                StoryItemKind::Paragraph,
+                vec![control.index_path()[0], 0],
+            );
+            let snapshot = document.story_range_paragraph_snapshot(&paragraph).unwrap();
+            assert_eq!(snapshot.text(), Some("control"));
+            sample.push(counters());
+            // Only the inserted paragraph is scanned again, and no lookup
+            // scans the whole body story: a cell's items come from its own
+            // excerpt.
+            assert_eq!(sample[0].0, 1, "{count}: {sample:?}");
+            assert!(
+                sample.iter().all(|counts| counts.1 == 0),
+                "{count}: {sample:?}"
+            );
+            assert!(
+                sample[1..].iter().all(|counts| counts.0 == 0),
+                "{count}: {sample:?}"
+            );
+            // The pictures read every story, but no child again and no
+            // whole body story either.
+            reset();
+            let pictures = document.pictures().unwrap();
+            assert_eq!(pictures.len(), 1);
+            assert_eq!(pictures[0].location, picture);
+            assert_eq!((counters().0, counters().1), (0, 0));
+            // Without the scans of its children, a lookup scans them all.
+            *document.main_body_scans.lock().unwrap() = MainBodyScans::default();
+            reset();
+            document.story_table_cell(&table, 0, 1).unwrap();
+            assert_eq!(MAIN_BODY_BLOCK_SCANS.get(), document.content_count());
+            samples.push(sample);
+        }
+        assert_eq!(samples[0], samples[1]);
     }
 
     #[test]
