@@ -3755,11 +3755,23 @@ impl CT_Body {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        self.write_marked(writer, &mut |_| {})
+    }
+
+    /// [`Self::to_xml`], showing `mark` the writer after the body's start
+    /// tag and after each child.
+    fn write_marked<W: std::io::Write>(
+        &self,
+        writer: &mut Writer<W>,
+        mark: &mut dyn FnMut(&Writer<W>),
+    ) -> Result<()> {
         admit_word_model(WordOwner::Body(self))?;
         writer.write_event(Event::Start(BytesStart::new("w:body")))?;
+        mark(writer);
 
         for item in &self.content {
             write_body_content(item, writer)?;
+            mark(writer);
         }
 
         if let Some(ref sect) = self.sect_pr {
@@ -3973,6 +3985,34 @@ impl CT_Document {
 
     /// Serialize to XML bytes.
     pub fn to_xml(&self) -> Result<Vec<u8>> {
+        self.write_part(None)
+    }
+
+    /// [`Self::to_xml`], and where the body's children are in its bytes:
+    /// the range between the body's start tag and its section properties or
+    /// end tag, and the range of each child there, one after the other.
+    #[doc(hidden)]
+    #[allow(clippy::type_complexity)] // The bytes, the children's range and each child's range.
+    pub fn to_xml_with_body_spans(
+        &self,
+    ) -> Result<(Vec<u8>, std::ops::Range<usize>, Vec<std::ops::Range<usize>>)> {
+        let mut marks = Vec::with_capacity(self.body.content.len() + 2);
+        let xml = self.write_part(Some(&mut marks))?;
+        // A `w14` declaration added to the root moves everything after it.
+        let shift = xml.len() - marks.pop().unwrap_or(xml.len());
+        let marks = marks
+            .into_iter()
+            .map(|mark| mark + shift)
+            .collect::<Vec<_>>();
+        let content = marks[0]..marks[marks.len() - 1];
+        let children = marks.windows(2).map(|pair| pair[0]..pair[1]).collect();
+        Ok((xml, content, children))
+    }
+
+    /// The part's bytes, with `marks`, when given, holding the offset after
+    /// the body's start tag and after each child, and then the length before
+    /// any `w14` declaration is added.
+    fn write_part(&self, mut marks: Option<&mut Vec<usize>>) -> Result<Vec<u8>> {
         self.validate_resource_limits()?;
         let _binding_scope = self.root_binding_scope();
         let mut writer = Writer::new(Vec::new());
@@ -3993,9 +4033,16 @@ impl CT_Document {
             writer.get_mut().extend_from_slice(raw);
         }
 
-        self.body.to_xml(&mut writer)?;
-
+        match marks.as_deref_mut() {
+            Some(marks) => self.body.write_marked(&mut writer, &mut |writer| {
+                marks.push(writer.get_ref().len())
+            })?,
+            None => self.body.to_xml(&mut writer)?,
+        }
         writer.write_event(Event::End(BytesEnd::new("w:document")))?;
+        if let Some(marks) = marks {
+            marks.push(writer.get_ref().len());
+        }
 
         let mut xml = writer.into_inner();
         declare_w14_on_part_root(&mut xml)?;
