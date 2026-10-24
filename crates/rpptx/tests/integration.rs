@@ -12635,7 +12635,7 @@ fn m21_assert_signature_surrogate(unsigned_bytes: &[u8], signed_bytes: &[u8]) {
         .collect::<Vec<_>>();
     signed_only_parts.sort_unstable();
     assert_eq!(signed_only_parts, signature_parts);
-    assert_eq!(signed.parts[signature_parts[0]], []);
+    assert!(signed.parts[signature_parts[0]].is_empty());
     assert!(!signed.parts[signature_parts[1]].is_empty());
     assert_eq!(
         unsigned.parts.len() + signature_parts.len(),
@@ -15435,7 +15435,7 @@ fn removing_shared_and_last_image_users_prunes_only_new_orphans() {
         shared
             .parts
             .iter()
-            .filter(|(part, bytes)| part.starts_with("/ppt/media/") && *bytes == &png)
+            .filter(|(part, bytes)| part.starts_with("/ppt/media/") && bytes.as_slice() == png)
             .count(),
         1
     );
@@ -15448,7 +15448,7 @@ fn removing_shared_and_last_image_users_prunes_only_new_orphans() {
         pruned
             .parts
             .iter()
-            .filter(|(part, bytes)| part.starts_with("/ppt/media/") && *bytes == &png)
+            .filter(|(part, bytes)| part.starts_with("/ppt/media/") && bytes.as_slice() == png)
             .count(),
         0
     );
@@ -19166,7 +19166,9 @@ fn duplicate_picture_bytes_share_one_media_part_across_slides() {
     let media = package
         .parts
         .iter()
-        .filter(|(part_name, bytes)| part_name.starts_with("/ppt/media/") && *bytes == &png)
+        .filter(|(part_name, bytes)| {
+            part_name.starts_with("/ppt/media/") && bytes.as_slice() == png
+        })
         .map(|(part_name, _)| part_name.clone())
         .collect::<Vec<_>>();
     assert_eq!(media.len(), 1);
@@ -19748,7 +19750,7 @@ fn picture_sniffs_bytes_when_extension_is_misleading() {
     let part = package
         .parts
         .iter()
-        .find(|(part_name, bytes)| part_name.starts_with("/ppt/media/") && *bytes == &png)
+        .find(|(part_name, bytes)| part_name.starts_with("/ppt/media/") && bytes.as_slice() == png)
         .map(|(part_name, _)| part_name)
         .unwrap();
     assert!(part.ends_with(".png"));
@@ -32286,6 +32288,42 @@ fn fx211b_native_opaque_root_edit_retains_invalidated_signature() {
     );
 }
 
+/// `replace_embedded_content` publishes through `commit_embedded_candidate`.
+/// Setup is outside the counter epoch. The replacement write is ZIP work,
+/// and the reopened payload is the replacement.
+#[cfg(debug_assertions)]
+#[test]
+fn embedded_replace_counts_commit_zip_write() {
+    let bytes = package_bytes(embedded_fixture_package(false));
+    let mut presentation = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        presentation
+            .extract_embedded_content(PRESENTATION_PART, "vba-rel")
+            .unwrap(),
+        b"vba-executable"
+    );
+    rpptx::take_commit_work();
+    presentation
+        .replace_embedded_content(
+            PRESENTATION_PART,
+            "vba-rel",
+            b"counted-embed",
+            EmbeddedMutationPolicy::PreserveInvalidatedSignatures,
+        )
+        .unwrap();
+    let [_, _, _, zip_writes] = rpptx::take_commit_work();
+    assert_eq!(
+        presentation
+            .extract_embedded_content(PRESENTATION_PART, "vba-rel")
+            .unwrap(),
+        b"counted-embed"
+    );
+    assert!(
+        zip_writes > 0,
+        "embedded candidate ZIP write counted {zip_writes}"
+    );
+}
+
 #[test]
 fn fx211b_native_actual_part_inherited_opaque_closure_and_siblings() {
     use rpptx::{Emu, Presentation, ShapeOwner};
@@ -34977,7 +35015,7 @@ fn fx216_batch_jumps_map_existing_self_and_drop_only_unmapped_targets() {
         assert_eq!(destination.slide(2).unwrap().shapes().len(), 7);
         let saved = destination.to_bytes().unwrap();
         let package = open_opc(&saved, "mapped jumps and new image");
-        assert!(package.parts.values().any(|bytes| bytes == &new_image));
+        assert!(package.parts.values().any(|bytes| **bytes == new_image));
         let reopened = Presentation::from_bytes(&saved).unwrap();
         assert!(reopened.validate().is_empty());
     }

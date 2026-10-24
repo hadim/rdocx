@@ -2404,6 +2404,17 @@ address current owners, never prove that removed children survived. Actual
 owner, text-body and XML-property child generations establish alias identity.
 Shared revision primitives remain owned by oxml-py-support.
 
+Part bytes are `Arc<Vec<u8>>`. `set_part` accepts `impl Into<Arc<Vec<u8>>>`.
+`get_part` still returns borrowed bytes. A parsed presentation keeps the
+package it read as an immutable baseline. The candidate is edited from
+that baseline. The trusted flag records a read or a reread. It does not
+detect a later public part-map edit. A commit reuses unchanged part
+allocations and reparses only changed owners. A missing or untrusted baseline,
+or a name a write would normalize, writes the ZIP and reads it back.
+`saves_as` compares exact saved bytes,
+including pending direct edits. Unchanged-since queries report shared
+allocations and may treat equal new allocations as changed.
+
 ## Embedded font ownership
 
 Word owns its relationship-resolved font table and ODTTF parts. PowerPoint

@@ -75,6 +75,11 @@ current presentation, and signs PKCS#8 private-key DER with X.509 certificate
 DER. Signing commits only a candidate that verifies as cryptographically valid
 with complete declared coverage.
 
+Opened presentations share slide, layout and master records until an edit
+copies the record it changes. Media bytes share the package part allocation.
+Debug counters report parse, serialize, hash and ZIP work. They are not a
+stable Python export.
+
 The presentation and slide property surface is concrete and borrowed:
 
 ```rust
@@ -1274,7 +1279,12 @@ and Office 2015 morph metadata. Expanded-name readers select supported
 `mc:AlternateContent` choices or their fallback. The complete captured subtree
 remains the serialization source. Supported transition settings edit their
 owned attributes and selected effect while retaining sound, extensions and
-inactive compatibility branches. Removing a transition leaves timing intact.
+inactive compatibility branches. Removing a transition leaves timing intact. An edit of one slide keeps the
+producer bytes of an untouched slide and its notes. Slide `fit_text` measures
+that slide with its layout and master. It does not fail because another slide
+is broken. The global fit report still walks every slide. Notes measurement
+keeps the notes theme and notes master. Transition and footer edits prove
+only the parts they change. Ambiguous shape identity still refuses.
 Unsupported siblings, owner attributes, namespace
 bindings, and relationship-bearing content therefore remain byte-identical.
 
