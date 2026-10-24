@@ -79,7 +79,7 @@ pub use document::{
     StoryItemSnapshot, StoryKind, StoryText, StoryTextItem, TextBoxDirection, TextBoxOptions,
     TextDiagnostic, TextReport, TextWatermarkOptions, UnsupportedXmlRef, ValidationFinding,
     ValidationReport, ValidationSeverity, WordCreationProfile, WordPackageClass, derive_font_key,
-    validate_document_bytes, validate_document_file,
+    take_direct_fragment_bytes, validate_document_bytes, validate_document_file,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,
