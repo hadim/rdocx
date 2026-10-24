@@ -10838,6 +10838,283 @@ def test_issue389_retained_paragraph_alias_never_publishes_unsavable_text():
         assert rdocx.Document.from_bytes(doc.to_bytes()).paragraphs[0].text == 'new'
 
 
+def _issue407_document(root_w14):
+    import rdocx
+
+    w14 = "http://schemas.microsoft.com/office/word/2010/wordml"
+    body = "".join([
+        '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>heading</w:t></w:r></w:p>',
+        '<w:p><w:r><w:t xml:space="preserve">see </w:t></w:r><w:hyperlink w:anchor="target"><w:r><w:t>target</w:t></w:r></w:hyperlink></w:p>',
+        '<w:p><w:bookmarkStart w:id="1" w:name="target"/><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="1"/></w:p>',
+        '<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p>'
+        '<w:tbl><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>nested</w:t></w:r></w:p></w:tc></w:tr></w:tbl>'
+        '<w:p/></w:tc></w:tr></w:tbl>',
+        '<w:sdt><w:sdtPr><w:alias w:val="block"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>block one</w:t></w:r></w:p><w:p><w:r><w:t>block two</w:t></w:r></w:p></w:sdtContent></w:sdt>',
+        *(f'<w:p><w:r><w:rPr><w:i/></w:rPr><w:t>{text}</w:t></w:r><w:r><w:tab/><w:t>tail</w:t></w:r></w:p>' for text in "abc"),
+        f'<w:p xmlns:w14="{w14}" w14:paraId="388B6825"><w:r><w:t>identified</w:t></w:r></w:p>',
+        '<w:p><w:r><w:t>last</w:t></w:r></w:p>',
+    ])
+    document = rdocx.Document()
+    document.add_paragraph("first")
+    document.section(0).header.add_paragraph("header text")
+    source = io.BytesIO(document.to_bytes())
+    output = io.BytesIO()
+    with zipfile.ZipFile(source) as source_zip, zipfile.ZipFile(output, "w") as result_zip:
+        for info in source_zip.infolist():
+            data = source_zip.read(info.filename)
+            if info.filename == "word/document.xml":
+                text = data.decode()
+                at = text.index("<w:sectPr")
+                text = text[:at] + body + text[at:]
+                if root_w14:
+                    text = text.replace("<w:document ", f'<w:document xmlns:w14="{w14}" ', 1)
+                data = text.encode()
+            result_zip.writestr(info, data)
+    return rdocx.Document.from_bytes(output.getvalue())
+
+
+def test_fragment_omits_unused_w14():
+    """A5. Standalone paragraph XML omits a redundant unrelated root w14 binding.
+
+    Another paragraph uses w14, so the saved part root declares it. Paragraph 0
+    does not use the prefix. Its public XML keeps an explicit original root
+    binding and drops the declaration that exists only because a sibling uses it.
+    """
+    import rdocx
+
+    unrelated = _issue407_document(False)
+    part = zipfile.ZipFile(io.BytesIO(unrelated.to_bytes())).read("word/document.xml").decode()
+    assert 'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"' in part
+    first = unrelated.paragraphs[0].xml
+    assert first.startswith("<w:p")
+    assert "xmlns:w14" not in first
+    assert "w14:" not in first
+    identified = unrelated.paragraphs[9].xml
+    assert "xmlns:w14" in identified
+    assert "w14:paraId" in identified
+    explicit = _issue407_document(True)
+    kept = explicit.paragraphs[0].xml
+    assert 'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"' in kept
+    saved = unrelated.to_bytes()
+    _ = unrelated.paragraphs[0].xml
+    assert unrelated.to_bytes() == saved
+    reopened = rdocx.Document.from_bytes(saved)
+    assert "xmlns:w14" not in reopened.paragraphs[0].xml
+    assert "xmlns:w14" in reopened.paragraphs[9].xml
+
+
+def _fx266_texts(doc):
+    return [paragraph.text for paragraph in doc.paragraphs]
+
+
+def test_direct_routes_match_full_body_bytes():
+    import rdocx
+
+    doc = _issue407_document(False)
+    doc.add_comment(
+        rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=1, run_index=0),
+            end=rdocx.RunPosition(body_index=1, run_index=1),
+        ),
+        author="Ada",
+        text="review",
+    )
+    expected = _fx266_texts(doc)
+    for paragraph in doc.paragraphs:
+        assert paragraph.xml.startswith("<w:p")
+        for run in paragraph.runs:
+            assert run.xml.startswith("<w:r")
+    for table in doc.tables:
+        assert table.xml.startswith("<w:tbl")
+        for row in table.rows:
+            for cell in row.cells:
+                assert cell.xml.startswith("<w:tc")
+                assert "nested" in cell.text or "cell" in cell.text or cell.text == ""
+    assert "heading" in expected and "block one" in expected
+    saved = doc.to_bytes()
+    reopened = rdocx.Document.from_bytes(saved)
+    assert _fx266_texts(reopened) == expected
+    assert reopened.tables[0].cell(0, 0).paragraphs[0].text == "cell"
+
+
+def test_append_keeps_eligible_owners():
+    import rdocx
+
+    doc = _issue407_document(False)
+    held = doc.paragraphs[0]
+    held_table = doc.tables[0]
+    appended = doc.add_paragraph("appended")
+    assert appended.text == "appended"
+    assert held.text == "first"
+    assert held.runs[0].xml.startswith("<w:r")
+    assert held_table.xml.startswith("<w:tbl")
+    assert _fx266_texts(doc)[-1] == "appended"
+
+
+def test_conservative_retires_all_scopes():
+    import rdocx
+
+    doc = _issue407_document(False)
+    held = doc.paragraphs[0]
+    held_run = held.runs[0]
+    held_table = doc.tables[0]
+    inserted = doc.insert_paragraph(2, "inserted")
+    assert inserted.text == "inserted"
+    for stale in (lambda: held.text, lambda: held_run.text, lambda: held_table.xml):
+        with pytest.raises(rdocx.StaleElementError, match="Document.insert_paragraph"):
+            stale()
+    fresh = doc.paragraphs[3]
+    removed = doc.remove_content(2)
+    assert removed is True
+    with pytest.raises(rdocx.StaleElementError, match="Document.remove_content"):
+        _ = fresh.text
+
+
+def test_failed_splice_publishes_nothing():
+    import rdocx
+
+    doc = _issue407_document(False)
+    before = doc.to_bytes()
+    held = doc.paragraphs[0]
+    assert doc.remove_content(10**6) is False
+    assert doc.to_bytes() == before
+    assert held.text == "first"
+    with pytest.raises(IndexError):
+        doc.insert_paragraph(10**6, "nope")
+    assert doc.to_bytes() == before
+    assert _fx266_texts(doc)[0] == "first"
+
+
+def test_owner_scope_precedence_unchanged():
+    import rdocx
+
+    doc = _issue407_document(False)
+    held = doc.paragraphs[1]
+    doc.insert_paragraph(0, "zero")
+    with pytest.raises(rdocx.StaleElementError):
+        _ = held.text
+    doc.add_paragraph("later")
+    with pytest.raises(rdocx.StaleElementError):
+        _ = held.text
+    assert doc.paragraphs[0].text == "zero"
+
+
+def test_held_fresh_reopen_match_old_semantics():
+    import rdocx
+
+    doc = _issue407_document(True)
+    held = doc.paragraphs[3]
+    doc.add_paragraph("tail")
+    assert held.text == _fx266_texts(doc)[3]
+    native = held.xml
+    fresh = doc.paragraphs[3].xml
+    assert fresh == native
+    reopened = rdocx.Document.from_bytes(doc.to_bytes())
+    assert reopened.paragraphs[3].text == held.text
+    assert reopened.paragraphs[-1].text == "tail"
+    assert "xmlns:w14" in reopened.paragraphs[0].xml
+
+
+def test_body_work_counts_owner_lookup_without_xml():
+    """Owner lookup and capture count without reading paragraph XML."""
+    from rdocx import _rdocx
+
+    whole = _rdocx._word_whole_body_work
+    splice = _rdocx._word_splice_work
+    doc = _issue407_document(False)
+    whole()
+    splice()
+    paragraph = doc.paragraphs[0]
+    visits, xml_bytes = splice()
+    rebuilds, reads = whole()
+    print("lookup_without_xml", visits, xml_bytes, rebuilds, reads)
+    assert visits > 0
+    assert xml_bytes == 0
+    assert (rebuilds, reads) == (0, 0)
+    assert paragraph.xml.startswith("<w:p")
+
+
+def test_body_work_counters_follow_owners():
+    from rdocx import _rdocx
+
+    whole = _rdocx._word_whole_body_work
+    splice = _rdocx._word_splice_work
+    doc = _issue407_document(False)
+    sample = list(doc.paragraphs[:4])
+    whole()
+    splice()
+    for paragraph in sample:
+        assert paragraph.xml.startswith("<w:p")
+    visits, xml_bytes = splice()
+    rebuilds, reads = whole()
+    print("direct_n", visits, xml_bytes, rebuilds, reads)
+    assert visits == 4
+    assert xml_bytes > 0
+    assert (rebuilds, reads) == (0, 0)
+    assert xml_bytes > 0
+    whole()
+    splice()
+    for _ in range(4):
+        for paragraph in sample:
+            _ = paragraph.xml
+    visits4, xml4 = splice()
+    print("direct_4n", visits4, xml4)
+    assert visits4 == 16
+    assert xml4 == xml_bytes * 4
+    assert whole() == (0, 0)
+    # Touched XML for one owner stays the same on a larger body.
+    wide = _issue407_document(False)
+    for _ in range(20):
+        wide.add_paragraph("more")
+    wide_first = wide.paragraphs[0]
+    whole()
+    splice()
+    _ = wide_first.xml
+    _, wide_bytes = splice()
+    print("wide_bytes", wide_bytes)
+    assert wide_bytes == len(doc.paragraphs[0].xml.encode())
+    assert whole() == (0, 0)
+    # Lower bound taken before the splice. Body paragraphs, runs, tables and
+    # cells are distinct owners, and the header paragraph plus its run are
+    # further owners outside doc.paragraphs. Sections and hyperlink wrappers
+    # are omitted, and so is the run the insert creates. added_owner stays 1.
+    pre_owners = 0
+    stories = (doc.paragraphs, doc.section(0).header.paragraphs)
+    for paragraphs in stories:
+        for paragraph in paragraphs:
+            pre_owners += 1 + len(paragraph.runs)
+    for table in doc.tables:
+        pre_owners += 1
+        for row in table.rows:
+            pre_owners += len(row.cells)
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    pre_owners += 1 + len(paragraph.runs)
+    splice()
+    whole()
+    doc.insert_paragraph(2, "x")
+    mutation_visits, mutation_bytes = splice()
+    print("mutation", pre_owners, mutation_visits, mutation_bytes)
+    assert mutation_visits > 0
+    assert mutation_bytes > 0
+    assert whole() == (0, 0)
+    budget = 16 * max(pre_owners, 1) + 16 * 1 + 16
+    assert mutation_visits <= budget, (pre_owners, mutation_visits, mutation_bytes, budget)
+
+
+def test_missing_run_path_refuses():
+    import rdocx
+
+    doc = _issue407_document(False)
+    before = doc.to_bytes()
+    paragraph = doc.paragraphs[0]
+    assert paragraph.runs[0].xml.startswith("<w:r")
+    with pytest.raises(IndexError):
+        _ = paragraph.runs[5]
+    assert doc.to_bytes() == before
+    assert paragraph.text == "first"
+
+
 def _fx264_with_comment_markers(document, edit, ids):
     import rdocx
 
