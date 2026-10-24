@@ -14648,6 +14648,694 @@ mod legacy_forms_and_building_blocks {
     }
 
     #[test]
+    fn text_box_fill_patches_the_retained_drawing_and_keeps_other_owners() {
+        let mut package = base_package();
+        let drawing = |name: &str, value: &str, id: &str, extra: &str| {
+            format!(
+                r#"<w:r><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="100" cy="100"/><wp:wrapNone/><wp:docPr id="{id}" name="{name}"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:txbx><w:txbxContent><w:p>{}</w:p>{extra}<x:opaque x:flag="keep-{name}"/></w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>"#,
+                text_form_runs(name, value)
+            )
+        };
+        let nested = format!(
+            r#"<w:tbl><w:tr><w:tc><w:p>{}</w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtContent><w:p>{}</w:p></w:sdtContent></w:sdt>"#,
+            text_form_runs("nested", "nested-old"),
+            text_form_runs("inline", "inline-old"),
+        );
+        let document_xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{WORD_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x="urn:producer"><w:body><w:p>{}</w:p>{}<w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="rIdHdr"/></w:sectPr></w:pPr></w:p><w:sectPr><w:headerReference w:type="default" r:id="rIdHdr"/></w:sectPr></w:body></w:document>"#,
+            drawing("box", "box-old", "1", &nested),
+            text_form("body", "body-old"),
+        );
+        package.set_part("/word/document.xml", document_xml.into_bytes());
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id("rIdHdr", rel_types::HEADER, "header.xml");
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(rel_types::COMMENTS, "comments.xml");
+        add_story_content_type(&mut package, "/word/header.xml", rel_types::HEADER);
+        package.content_types.add_override(
+            "/word/comments.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+        );
+        package.set_part(
+            "/word/header.xml",
+            format!(
+                r#"<?xml version="1.0"?><w:hdr xmlns:w="{WORD_NS}"><w:p>{}</w:p></w:hdr>"#,
+                drawing("related", "related-old", "2", "")
+            )
+            .into_bytes(),
+        );
+        package.set_part(
+            "/word/comments.xml",
+            format!(
+                r#"<?xml version="1.0"?><w:comments xmlns:w="{WORD_NS}"><w:comment w:id="1" w:author="Ada">{}</w:comment></w:comments>"#,
+                text_form("note", "note-old")
+            )
+            .into_bytes(),
+        );
+        let mut document = Document::from_bytes(&package_bytes(package)).unwrap();
+        let fields = document.legacy_form_fields().unwrap();
+        let body = fields
+            .iter()
+            .find(|field| field.name.as_deref() == Some("body"))
+            .unwrap();
+        let box_field = fields
+            .iter()
+            .find(|field| field.name.as_deref() == Some("box"))
+            .unwrap();
+        assert!(box_field.ordinal > body.ordinal);
+        assert_eq!(
+            fields
+                .iter()
+                .filter(|field| field.name.as_deref() == Some("related"))
+                .count(),
+            1
+        );
+        assert!(
+            fields
+                .iter()
+                .any(|field| field.name.as_deref() == Some("note"))
+        );
+        assert!(
+            fields
+                .iter()
+                .any(|field| field.name.as_deref() == Some("nested"))
+        );
+        assert!(
+            fields
+                .iter()
+                .any(|field| field.name.as_deref() == Some("inline"))
+        );
+        document
+            .set_legacy_form_field_value(
+                &box_field.source_part,
+                box_field.ordinal,
+                LegacyFormFieldValue::Text("box-new".into()),
+            )
+            .unwrap();
+        let saved = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(xml.contains(r#"w:default w:val="box-old""#), "{xml}");
+        assert!(xml.contains("box-new"), "{xml}");
+        assert!(xml.contains("keep-box"), "{xml}");
+        assert!(xml.contains("body-old"), "{xml}");
+        let reopened = Document::from_bytes(&saved).unwrap();
+        let filled = reopened
+            .legacy_form_fields()
+            .unwrap()
+            .into_iter()
+            .find(|field| field.name.as_deref() == Some("box"))
+            .unwrap();
+        assert_eq!(filled.value, LegacyFormFieldValue::Text("box-new".into()));
+        let defaults = reopened.legacy_form_fields_with_defaults().unwrap();
+        assert_eq!(
+            defaults
+                .iter()
+                .find(|(field, _)| field.name.as_deref() == Some("box"))
+                .unwrap()
+                .1,
+            Some(LegacyFormFieldValue::Text("box-old".into()))
+        );
+        assert_eq!(
+            reopened
+                .legacy_form_fields()
+                .unwrap()
+                .into_iter()
+                .filter(|field| field.name.as_deref() == Some("related"))
+                .count(),
+            1
+        );
+        let nested = reopened
+            .legacy_form_fields()
+            .unwrap()
+            .into_iter()
+            .find(|field| field.name.as_deref() == Some("nested"))
+            .unwrap();
+        let mut reopened = reopened;
+        reopened
+            .set_legacy_form_field_value(
+                &nested.source_part,
+                nested.ordinal,
+                LegacyFormFieldValue::Text("nested-new".into()),
+            )
+            .unwrap();
+        let related = reopened
+            .legacy_form_fields()
+            .unwrap()
+            .into_iter()
+            .find(|field| field.name.as_deref() == Some("related"))
+            .unwrap();
+        reopened
+            .set_legacy_form_field_value(
+                &related.source_part,
+                related.ordinal,
+                LegacyFormFieldValue::Text("related-new".into()),
+            )
+            .unwrap();
+        let note = reopened
+            .legacy_form_fields()
+            .unwrap()
+            .into_iter()
+            .find(|field| field.name.as_deref() == Some("note"))
+            .unwrap();
+        reopened
+            .set_legacy_form_field_value(
+                &note.source_part,
+                note.ordinal,
+                LegacyFormFieldValue::Text("note-new".into()),
+            )
+            .unwrap();
+        let saved = reopened.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let header = std::str::from_utf8(package.get_part("/word/header.xml").unwrap()).unwrap();
+        let comments =
+            std::str::from_utf8(package.get_part("/word/comments.xml").unwrap()).unwrap();
+        let document_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(header.contains("related-new"), "{header}");
+        assert!(
+            header.contains(r#"w:default w:val="related-old""#),
+            "{header}"
+        );
+        assert!(header.contains("keep-related"), "{header}");
+        assert!(comments.contains("note-new"), "{comments}");
+        assert!(document_xml.contains("nested-new"), "{document_xml}");
+        assert!(document_xml.contains("inline-old"), "{document_xml}");
+        assert!(document_xml.contains("body-old"), "{document_xml}");
+        let fields = Document::from_bytes(&saved)
+            .unwrap()
+            .legacy_form_fields()
+            .unwrap();
+        assert_eq!(
+            fields
+                .iter()
+                .find(|field| field.name.as_deref() == Some("nested"))
+                .unwrap()
+                .value,
+            LegacyFormFieldValue::Text("nested-new".into())
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .find(|field| field.name.as_deref() == Some("inline"))
+                .unwrap()
+                .value,
+            LegacyFormFieldValue::Text("inline-old".into())
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .find(|field| field.name.as_deref() == Some("related"))
+                .unwrap()
+                .value,
+            LegacyFormFieldValue::Text("related-new".into())
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .find(|field| field.name.as_deref() == Some("note"))
+                .unwrap()
+                .value,
+            LegacyFormFieldValue::Text("note-new".into())
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .filter(|field| field.name.as_deref() == Some("related"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn text_box_inside_inline_control_appends_after_body_fields() {
+        let mut package = base_package();
+        let drawing = |name: &str, value: &str, id: &str| {
+            format!(
+                r#"<w:r><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="100" cy="100"/><wp:wrapNone/><wp:docPr id="{id}" name="{name}"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:txbx><w:txbxContent><w:p>{}</w:p><x:opaque x:flag="keep-{name}"/></w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>"#,
+                text_form_runs(name, value)
+            )
+        };
+        let inline = |name: &str, value: &str, id: &str| {
+            format!(
+                r#"<w:sdt><w:sdtPr><w:id w:val="{id}"/><w:tag w:val="keep-sdt-{name}"/></w:sdtPr><w:sdtContent>{}</w:sdtContent></w:sdt>"#,
+                drawing(name, value, id)
+            )
+        };
+        let document_xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{WORD_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x="urn:producer"><w:body><w:p>{}</w:p><w:p><w:hyperlink w:anchor="top">{}</w:hyperlink></w:p><w:p><w:ins w:id="7" w:author="Ada">{}</w:ins></w:p><w:p><w:del w:id="8" w:author="Ada">{}</w:del></w:p>{}<w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="rIdHdr"/></w:sectPr></w:pPr></w:p><w:sectPr><w:headerReference w:type="default" r:id="rIdHdr"/></w:sectPr></w:body></w:document>"#,
+            inline("control", "control-old", "11"),
+            drawing("linked", "linked-old", "12"),
+            drawing("inserted", "inserted-old", "13"),
+            drawing("deleted", "deleted-old", "14"),
+            text_form("body", "body-old"),
+        );
+        package.set_part("/word/document.xml", document_xml.into_bytes());
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id("rIdHdr", rel_types::HEADER, "header.xml");
+        add_story_content_type(&mut package, "/word/header.xml", rel_types::HEADER);
+        package.set_part(
+            "/word/header.xml",
+            format!(
+                r#"<?xml version="1.0"?><w:hdr xmlns:w="{WORD_NS}" xmlns:x="urn:producer"><w:p>{}</w:p><w:p>{}</w:p></w:hdr>"#,
+                inline("related-control", "related-control-old", "15"),
+                text_form_runs("related-body", "related-body-old"),
+            )
+            .into_bytes(),
+        );
+        let mut document = Document::from_bytes(&package_bytes(package)).unwrap();
+        let fields = document.legacy_form_fields().unwrap();
+        let body = fields
+            .iter()
+            .find(|field| field.name.as_deref() == Some("body"))
+            .unwrap();
+        let control = fields
+            .iter()
+            .find(|field| field.name.as_deref() == Some("control"))
+            .unwrap();
+        assert!(control.ordinal > body.ordinal);
+        assert!(
+            fields
+                .iter()
+                .any(|field| field.name.as_deref() == Some("linked"))
+        );
+        assert!(
+            fields
+                .iter()
+                .any(|field| field.name.as_deref() == Some("inserted"))
+        );
+        assert!(
+            fields
+                .iter()
+                .all(|field| field.name.as_deref() != Some("deleted"))
+        );
+        let related_body = fields
+            .iter()
+            .find(|field| field.name.as_deref() == Some("related-body"))
+            .unwrap();
+        let related = fields
+            .iter()
+            .find(|field| field.name.as_deref() == Some("related-control"))
+            .unwrap();
+        assert!(related.ordinal > related_body.ordinal);
+        document
+            .set_legacy_form_field_value(
+                &control.source_part,
+                control.ordinal,
+                LegacyFormFieldValue::Text("control-new".into()),
+            )
+            .unwrap();
+        document
+            .set_legacy_form_field_value(
+                &related.source_part,
+                related.ordinal,
+                LegacyFormFieldValue::Text("related-control-new".into()),
+            )
+            .unwrap();
+        for (name, updated) in [("linked", "linked-new"), ("inserted", "inserted-new")] {
+            let field = document
+                .legacy_form_fields()
+                .unwrap()
+                .into_iter()
+                .find(|field| field.name.as_deref() == Some(name))
+                .unwrap();
+            document
+                .set_legacy_form_field_value(
+                    &field.source_part,
+                    field.ordinal,
+                    LegacyFormFieldValue::Text(updated.into()),
+                )
+                .unwrap();
+        }
+        let saved = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let document_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        let header = std::str::from_utf8(package.get_part("/word/header.xml").unwrap()).unwrap();
+        assert!(document_xml.contains("keep-sdt-control"), "{document_xml}");
+        assert!(document_xml.contains("keep-control"), "{document_xml}");
+        assert!(
+            document_xml.contains(r#"w:default w:val="control-old""#),
+            "{document_xml}"
+        );
+        assert!(document_xml.contains("control-new"), "{document_xml}");
+        assert!(document_xml.contains("body-old"), "{document_xml}");
+        assert!(document_xml.contains("linked-new"), "{document_xml}");
+        assert!(document_xml.contains("inserted-new"), "{document_xml}");
+        assert!(document_xml.contains("deleted-old"), "{document_xml}");
+        assert!(
+            document_xml.contains(r#"w:default w:val="linked-old""#),
+            "{document_xml}"
+        );
+        assert!(
+            document_xml.contains(r#"w:default w:val="inserted-old""#),
+            "{document_xml}"
+        );
+        assert!(header.contains("keep-sdt-related-control"), "{header}");
+        assert!(
+            header.contains(r#"w:default w:val="related-control-old""#),
+            "{header}"
+        );
+        assert!(header.contains("related-control-new"), "{header}");
+        assert!(header.contains("related-body-old"), "{header}");
+        let reopened = Document::from_bytes(&saved)
+            .unwrap()
+            .legacy_form_fields()
+            .unwrap();
+        assert_eq!(
+            reopened
+                .iter()
+                .find(|field| field.name.as_deref() == Some("control"))
+                .unwrap()
+                .value,
+            LegacyFormFieldValue::Text("control-new".into())
+        );
+        assert_eq!(
+            reopened
+                .iter()
+                .find(|field| field.name.as_deref() == Some("related-control"))
+                .unwrap()
+                .value,
+            LegacyFormFieldValue::Text("related-control-new".into())
+        );
+        assert_eq!(
+            reopened
+                .iter()
+                .find(|field| field.name.as_deref() == Some("body"))
+                .unwrap()
+                .value,
+            LegacyFormFieldValue::Text("body-old".into())
+        );
+        assert_eq!(
+            reopened
+                .iter()
+                .find(|field| field.name.as_deref() == Some("linked"))
+                .unwrap()
+                .value,
+            LegacyFormFieldValue::Text("linked-new".into())
+        );
+        assert_eq!(
+            reopened
+                .iter()
+                .find(|field| field.name.as_deref() == Some("inserted"))
+                .unwrap()
+                .value,
+            LegacyFormFieldValue::Text("inserted-new".into())
+        );
+        assert!(
+            reopened
+                .iter()
+                .all(|field| field.name.as_deref() != Some("deleted"))
+        );
+    }
+
+    #[test]
+    fn text_box_deleted_sibling_does_not_steal_the_live_span() {
+        let mut package = base_package();
+        let drawing = |name: &str, value: &str, id: &str| {
+            format!(
+                r#"<w:r><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="100" cy="100"/><wp:wrapNone/><wp:docPr id="{id}" name="{name}"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:txbx><w:txbxContent><w:p>{}</w:p><x:opaque x:flag="keep-{name}"/></w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>"#,
+                text_form_runs(name, value)
+            )
+        };
+        let paragraph = format!(
+            "{}<w:del w:id=\"8\" w:author=\"Ada\">{}</w:del><w:moveFrom w:id=\"9\" w:author=\"Ada\">{}</w:moveFrom><x:opaque>{}</x:opaque><w:dir w:val=\"rtl\">{}</w:dir><ignored>{}</ignored><w:r><mc:AlternateContent><mc:Choice Requires=\"wps\">{}</mc:Choice><mc:Fallback>{}</mc:Fallback></mc:AlternateContent></w:r>",
+            drawing("active", "old", "21"),
+            drawing("deleted", "old", "22"),
+            drawing("moved", "old", "23"),
+            drawing("wrapped", "old", "24"),
+            drawing("directed", "old", "27"),
+            drawing("bare", "old", "28"),
+            drawing("chosen", "old", "25"),
+            drawing("fallback", "old", "26"),
+        );
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id("rIdHdr", rel_types::HEADER, "header.xml");
+        add_story_content_type(&mut package, "/word/header.xml", rel_types::HEADER);
+        package.set_part(
+            "/word/header.xml",
+            format!(
+                r#"<?xml version="1.0"?><w:hdr xmlns:w="{WORD_NS}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x="urn:producer"><w:p>{paragraph}</w:p></w:hdr>"#
+            )
+            .into_bytes(),
+        );
+        let original_header = package.get_part("/word/header.xml").unwrap().to_vec();
+        let mut document = Document::from_bytes(&package_bytes(package)).unwrap();
+        let fields = document.legacy_form_fields().unwrap();
+        let names = fields
+            .iter()
+            .map(|field| field.name.clone().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["active".to_string()]);
+        let active = fields
+            .iter()
+            .find(|field| field.name.as_deref() == Some("active"))
+            .unwrap();
+        assert_eq!(active.ordinal, 0);
+        document
+            .set_legacy_form_field_value(
+                &active.source_part,
+                active.ordinal,
+                LegacyFormFieldValue::Text("new".into()),
+            )
+            .unwrap();
+        let saved = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let header = package.get_part("/word/header.xml").unwrap();
+        let header_xml = std::str::from_utf8(header).unwrap();
+        let original = std::str::from_utf8(&original_header).unwrap();
+        assert!(header_xml.contains("new"), "{header_xml}");
+        assert!(
+            header_xml.contains(r#"w:default w:val="old""#),
+            "{header_xml}"
+        );
+        for marker in [
+            "deleted", "moved", "wrapped", "directed", "bare", "chosen", "fallback",
+        ] {
+            let start = original
+                .find(&format!(r#"w:name w:val="{marker}""#))
+                .unwrap();
+            let end =
+                original[start..].find("</w:drawing>").unwrap() + start + "</w:drawing>".len();
+            assert!(
+                header_xml.contains(&original[start..end]),
+                "{marker} {header_xml}"
+            );
+        }
+        let reopened = Document::from_bytes(&saved)
+            .unwrap()
+            .legacy_form_fields()
+            .unwrap();
+        assert_eq!(
+            reopened
+                .iter()
+                .map(|field| field.name.clone().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["active".to_string()]
+        );
+        assert_eq!(
+            reopened
+                .iter()
+                .find(|field| field.name.as_deref() == Some("active"))
+                .unwrap()
+                .value,
+            LegacyFormFieldValue::Text("new".into())
+        );
+        assert_eq!(reopened[0].ordinal, 0);
+    }
+
+    #[test]
+    fn text_box_second_identical_field_ignores_opaque_lookalike() {
+        let mut package = base_package();
+        let twin = text_form_runs("twin", "twin-old");
+        let lookalike = format!("<x:opaque><![CDATA[{twin}]]></x:opaque>");
+        let drawing = format!(
+            r#"<w:r><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:producer"><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="100" cy="100"/><wp:wrapNone/><wp:docPr id="8" name="twins"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:txbx><w:txbxContent>{lookalike}<w:p>{twin}{twin}</w:p></w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>"#
+        );
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{WORD_NS}" xmlns:x="urn:producer"><w:body><w:p>{drawing}</w:p><w:sectPr/></w:body></w:document>"#
+            )
+            .into_bytes(),
+        );
+        let mut document = Document::from_bytes(&package_bytes(package)).unwrap();
+        let fields = document.legacy_form_fields().unwrap();
+        assert_eq!(fields.len(), 2);
+        assert!(
+            fields
+                .iter()
+                .all(|field| field.value == LegacyFormFieldValue::Text("twin-old".into()))
+        );
+        let before = document.to_bytes().unwrap();
+        let before_xml = std::str::from_utf8(
+            OpcPackage::from_reader(std::io::Cursor::new(&before))
+                .unwrap()
+                .get_part("/word/document.xml")
+                .unwrap(),
+        )
+        .unwrap()
+        .to_owned();
+        let opaque_at = before_xml.find("<x:opaque>").unwrap();
+        let opaque_end = before_xml.find("</x:opaque>").unwrap() + "</x:opaque>".len();
+        let opaque = before_xml[opaque_at..opaque_end].to_owned();
+        document
+            .set_legacy_form_field_value(
+                &fields[1].source_part,
+                fields[1].ordinal,
+                LegacyFormFieldValue::Text("twin-new".into()),
+            )
+            .unwrap();
+        let saved = document.to_bytes().unwrap();
+        let xml = std::str::from_utf8(
+            OpcPackage::from_reader(std::io::Cursor::new(&saved))
+                .unwrap()
+                .get_part("/word/document.xml")
+                .unwrap(),
+        )
+        .unwrap()
+        .to_owned();
+        let opaque_at = xml.find("<x:opaque>").unwrap();
+        let opaque_end = xml.find("</x:opaque>").unwrap() + "</x:opaque>".len();
+        assert_eq!(&xml[opaque_at..opaque_end], opaque);
+        let reopened = Document::from_bytes(&saved)
+            .unwrap()
+            .legacy_form_fields()
+            .unwrap();
+        assert_eq!(
+            reopened[0].value,
+            LegacyFormFieldValue::Text("twin-old".into())
+        );
+        assert_eq!(
+            reopened[1].value,
+            LegacyFormFieldValue::Text("twin-new".into())
+        );
+        document
+            .set_legacy_form_field_value(
+                &reopened[0].source_part,
+                reopened[0].ordinal,
+                LegacyFormFieldValue::Text("twin-new".into()),
+            )
+            .unwrap();
+        let both = Document::from_bytes(&document.to_bytes().unwrap())
+            .unwrap()
+            .legacy_form_fields()
+            .unwrap();
+        assert_eq!(both[0].value, LegacyFormFieldValue::Text("twin-new".into()));
+        assert_eq!(both[1].value, LegacyFormFieldValue::Text("twin-new".into()));
+        let again = std::str::from_utf8(
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap()
+                .get_part("/word/document.xml")
+                .unwrap(),
+        )
+        .unwrap()
+        .to_owned();
+        let opaque_at = again.find("<x:opaque>").unwrap();
+        let opaque_end = again.find("</x:opaque>").unwrap() + "</x:opaque>".len();
+        assert_eq!(&again[opaque_at..opaque_end], opaque);
+    }
+
+    #[test]
+    fn text_box_alias_fill_uses_inherited_word_namespace() {
+        let mut package = base_package();
+        let form = |name: &str, value: &str| {
+            format!(
+                r#"<q:r><q:fldChar q:fldCharType="begin"><q:ffData><q:name q:val="{name}"/><q:textInput><q:default q:val="{value}"/></q:textInput></q:ffData></q:fldChar></q:r><q:r><q:instrText> FORMTEXT </q:instrText></q:r><q:r><q:fldChar q:fldCharType="separate"/></q:r><q:r><q:t>{value}</q:t></q:r><q:r><q:fldChar q:fldCharType="end"/></q:r>"#
+            )
+        };
+        let drawing = |name: &str, value: &str, id: &str| {
+            let field = form(name, value);
+            format!(
+                r#"<q:r><q:drawing xmlns:w="urn:foreign-shadow" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="100" cy="100"/><wp:wrapNone/><wp:docPr id="{id}" name="{name}"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:txbx><q:txbxContent><w:p><w:r><w:t>shadow-{name}</w:t></w:r></w:p><q:p>{field}</q:p></q:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></q:drawing></q:r>"#
+            )
+        };
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><q:document xmlns:q="{WORD_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><q:body><q:p>{}</q:p><q:sectPr><q:headerReference q:type="default" r:id="rIdHdr"/></q:sectPr></q:body></q:document>"#,
+                drawing("main-alias", "alias-old", "4")
+            )
+            .into_bytes(),
+        );
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id("rIdHdr", rel_types::HEADER, "header.xml");
+        add_story_content_type(&mut package, "/word/header.xml", rel_types::HEADER);
+        package.set_part(
+            "/word/header.xml",
+            format!(
+                r#"<?xml version="1.0"?><q:hdr xmlns:q="{WORD_NS}"><q:p>{}</q:p></q:hdr>"#,
+                drawing("related-alias", "related-alias-old", "5")
+            )
+            .into_bytes(),
+        );
+        let mut document = Document::from_bytes(&package_bytes(package)).unwrap();
+        let fields = document.legacy_form_fields().unwrap();
+        let main = fields
+            .iter()
+            .find(|field| field.name.as_deref() == Some("main-alias"))
+            .unwrap();
+        let related = fields
+            .iter()
+            .find(|field| field.name.as_deref() == Some("related-alias"))
+            .unwrap();
+        document
+            .set_legacy_form_field_value(
+                &main.source_part,
+                main.ordinal,
+                LegacyFormFieldValue::Text("alias-new".into()),
+            )
+            .unwrap();
+        document
+            .set_legacy_form_field_value(
+                &related.source_part,
+                related.ordinal,
+                LegacyFormFieldValue::Text("related-alias-new".into()),
+            )
+            .unwrap();
+        let saved = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let document_xml =
+            std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        let header = std::str::from_utf8(package.get_part("/word/header.xml").unwrap()).unwrap();
+        assert!(document_xml.contains("shadow-main-alias"), "{document_xml}");
+        assert!(header.contains("shadow-related-alias"), "{header}");
+        assert!(
+            document_xml.contains(r#"q:default q:val="alias-old""#),
+            "{document_xml}"
+        );
+        assert!(
+            header.contains(r#"q:default q:val="related-alias-old""#),
+            "{header}"
+        );
+        let reopened = Document::from_bytes(&saved)
+            .unwrap()
+            .legacy_form_fields()
+            .unwrap();
+        assert_eq!(
+            reopened
+                .iter()
+                .find(|field| field.name.as_deref() == Some("main-alias"))
+                .unwrap()
+                .value,
+            LegacyFormFieldValue::Text("alias-new".into())
+        );
+        assert_eq!(
+            reopened
+                .iter()
+                .find(|field| field.name.as_deref() == Some("related-alias"))
+                .unwrap()
+                .value,
+            LegacyFormFieldValue::Text("related-alias-new".into())
+        );
+    }
+
+    #[test]
     fn positioned_legacy_result_keeps_bold_formatting() {
         let mut package = base_package();
         let xml = format!(
