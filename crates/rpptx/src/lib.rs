@@ -8878,7 +8878,7 @@ impl Presentation {
         *self = staged.checked_commit(|staged| {
             let package_signatures_invalidated = staged.package_signatures_invalidated
                 || staged.retained_package_signature_would_be_invalidated()?;
-            let mut package = staged.staged_package(false)?;
+            let mut package = staged.staged_package(true)?;
             embedded::persist_invalidated_package_signature(
                 &mut package,
                 package_signatures_invalidated,
