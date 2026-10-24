@@ -1,5 +1,6 @@
 //! Layout engine orchestrator: ties all phases together.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -2515,7 +2516,7 @@ fn projected_content_char_starts(run: &CT_R) -> Vec<usize> {
             RunContent::Text(text) | RunContent::DeletedText(text) => text.text.chars().count(),
             RunContent::Tab | RunContent::Break(_) => 1,
             RunContent::Field(field) => field
-                .projected_text()
+                .effective_projected_text()
                 .map_or(0, |text| text.chars().count()),
             RunContent::SpecialCharacter(SpecialCharacter::CarriageReturn) => 1,
             RunContent::FootnoteRef { custom_mark, .. }
@@ -3365,7 +3366,7 @@ fn stored_note_cache_runs(
     inherited: Option<&CT_RPr>,
 ) -> Vec<CT_R> {
     let Some(runs) = field.cached_result_runs() else {
-        let mut run = CT_R::new(&field.cached_result);
+        let mut run = CT_R::new(&field.effective_display());
         run.properties = inherited.cloned();
         return vec![run];
     };
@@ -10235,16 +10236,18 @@ fn layout_paragraph_with_source_and_table(
                     } else {
                         (computed_value, field_kind)
                     };
-                    let stored_segments = field.cached_display_field_segments();
-                    let segments = if let Some(value) = computed_value.as_deref() {
-                        let stored_properties = stored_segments
-                            .first()
-                            .and_then(|(_, properties, _)| *properties);
-                        vec![(value, stored_properties, field)]
-                    } else {
-                        stored_segments
-                    };
+                    let stored_segments = field.effective_display_field_segments();
+                    let segments: Vec<(Cow<'_, str>, Option<&CT_RPr>, &rdocx_oxml::text::Field)> =
+                        if let Some(value) = computed_value.as_deref() {
+                            let stored_properties = stored_segments
+                                .first()
+                                .and_then(|(_, properties, _)| *properties);
+                            vec![(Cow::Borrowed(value), stored_properties, field)]
+                        } else {
+                            stored_segments
+                        };
                     for (value, stored_properties, display_owner) in segments {
+                        let value = value.as_ref();
                         let segment_field_source = source_node
                             .zip(
                                 field_indices

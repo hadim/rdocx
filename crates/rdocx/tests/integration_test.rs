@@ -14460,6 +14460,179 @@ mod legacy_forms_and_building_blocks {
     }
 
     #[test]
+    fn legacy_reset_defaults_survive_current_value_updates() {
+        let mut package = base_package();
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{WORD_NS}"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Imported"/><w:textInput><w:default w:val="Foo"/></w:textInput></w:ffData></w:fldChar></w:r><w:r><w:instrText> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Bar</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p><w:sectPr/></w:body></w:document>"#
+        );
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut document = Document::from_bytes(&package_bytes(package)).expect("import");
+        let before = document.legacy_form_fields().expect("inventory");
+        assert_eq!(before[0].value, LegacyFormFieldValue::Text("Bar".into()));
+        let saved_before = document.to_bytes().unwrap();
+        document
+            .set_legacy_form_field_value(
+                "/word/document.xml",
+                0,
+                LegacyFormFieldValue::Text("Baz".into()),
+            )
+            .unwrap();
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(xml.contains(r#"w:default w:val="Foo""#), "{xml}");
+        assert!(!xml.contains(r#"w:default w:val="Baz""#), "{xml}");
+        assert!(xml.contains(">Baz<"), "{xml}");
+        let _ = saved_before;
+    }
+
+    #[test]
+    fn parsed_parent_shows_absent_result_child_default_without_a_parent_cache() {
+        let mut package = base_package();
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{WORD_NS}"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Parent"/><w:textInput><w:default w:val="outer"/></w:textInput></w:ffData></w:fldChar></w:r><w:r><w:instrText> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Child"/><w:textInput><w:default w:val="foo"/></w:textInput></w:ffData></w:fldChar></w:r><w:r><w:instrText> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p><w:sectPr/></w:body></w:document>"#
+        );
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut document = Document::from_bytes(&package_bytes(package)).unwrap();
+        let fields = document.legacy_form_fields().unwrap();
+        let parent = fields
+            .iter()
+            .find(|field| field.name.as_deref() == Some("Parent"))
+            .expect("parent");
+        assert_eq!(parent.value, LegacyFormFieldValue::Text("foo".into()));
+        let paragraphs = document.paragraphs();
+        let mut cached = None;
+        for run in paragraphs[0].runs() {
+            for item in run.items() {
+                if let rdocx::RunItemRef::Field(field) = item {
+                    cached = Some(field.cached_result().to_owned());
+                }
+            }
+        }
+        assert_eq!(cached.as_deref(), Some(""));
+        assert!(document.text().contains("foo"), "{}", document.text());
+        let before = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&before).unwrap();
+        assert_eq!(
+            reopened.legacy_form_fields().unwrap()[0].value,
+            LegacyFormFieldValue::Text("foo".into())
+        );
+        let package = OpcPackage::from_reader(std::io::Cursor::new(before)).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(xml.contains(r#"w:default w:val="foo""#), "{xml}");
+        assert!(!xml.contains("<w:t>foo</w:t>"), "{xml}");
+    }
+
+    #[test]
+    fn positioned_legacy_result_keeps_bold_formatting() {
+        let mut package = base_package();
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{WORD_NS}"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:textInput><w:default w:val="plain"/></w:textInput></w:ffData></w:fldChar></w:r><w:r><w:instrText> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>BoldForm</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>"#
+        );
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let document = Document::from_bytes(&package_bytes(package)).unwrap();
+        let layout = document.layout_deterministic().unwrap();
+        let mut found = false;
+        for page in &layout.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let oxml_layout::PositionedElement::Text(run) = element
+                    && run.text.contains("BoldForm")
+                    && run.bold
+                {
+                    found = true;
+                }
+            });
+        }
+        assert!(found, "expected a positioned bold field result");
+    }
+
+    #[test]
+    fn cross_consumer_render_fallback_before_empty_assignment() {
+        let mut package = base_package();
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{WORD_NS}"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Imported"/><w:textInput><w:default w:val="foo"/></w:textInput></w:ffData></w:fldChar></w:r><w:r><w:instrText> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p><w:sectPr/></w:body></w:document>"#
+        );
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut document = Document::from_bytes(&package_bytes(package)).unwrap();
+        assert!(document.text().contains("foo"), "{}", document.text());
+        let before = document.to_bytes().unwrap();
+        assert_eq!(document.replace_text("foo", "bar"), 0);
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let page_text = |document: &Document| {
+            let layout = document.layout_deterministic().unwrap();
+            let mut text = String::new();
+            for page in &layout.layout.pages {
+                oxml_layout::walk(&page.elements, &mut |element, _| match element {
+                    oxml_layout::PositionedElement::Text(run) => text.push_str(&run.text),
+                    oxml_layout::PositionedElement::MultilingualText(run) => {
+                        text.push_str(&run.logical_text)
+                    }
+                    _ => {}
+                });
+            }
+            text
+        };
+        assert!(
+            page_text(&document).contains("foo"),
+            "{}",
+            page_text(&document)
+        );
+        let pdf = document.to_pdf_deterministic().unwrap();
+        let path = std::env::temp_dir().join("f288-fallback.pdf");
+        std::fs::write(&path, &pdf).unwrap();
+        let extracted = std::process::Command::new("pdftotext")
+            .arg(&path)
+            .arg("-")
+            .output()
+            .expect("pdftotext");
+        assert!(extracted.status.success());
+        let pdf_text = String::from_utf8_lossy(&extracted.stdout);
+        assert!(pdf_text.contains("foo"), "{pdf_text}");
+        document
+            .set_legacy_form_field_value(
+                "/word/document.xml",
+                0,
+                LegacyFormFieldValue::Text(String::new()),
+            )
+            .unwrap();
+        assert!(!document.text().contains("foo"), "{}", document.text());
+        assert!(
+            !page_text(&document).contains("foo"),
+            "{}",
+            page_text(&document)
+        );
+        let saved = document.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        assert!(xml.contains(r#"w:default w:val="foo""#), "{xml}");
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(
+            reopened.legacy_form_fields().unwrap()[0].value,
+            LegacyFormFieldValue::Text(String::new())
+        );
+        assert_eq!(
+            reopened.legacy_form_fields_with_defaults().unwrap()[0].1,
+            Some(LegacyFormFieldValue::Text("foo".into()))
+        );
+        let docx = std::env::temp_dir().join("f288-fallback.docx");
+        std::fs::write(&docx, &saved).unwrap();
+        let cli =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/rdocx");
+        let output = std::process::Command::new(&cli)
+            .arg("text")
+            .arg(&docx)
+            .output()
+            .expect("rdocx text");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let cli_text = String::from_utf8_lossy(&output.stdout);
+        assert!(!cli_text.contains("foo"), "{cli_text}");
+    }
+
+    #[test]
     fn glossary_entries_autotext_and_building_blocks_round_trip() {
         let mut package = base_package();
         package

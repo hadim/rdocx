@@ -837,6 +837,19 @@ fn caption_bookmark_names(document: &Document) -> Result<HashSet<String>> {
 impl Document {
     /// Inventory typed legacy form fields in deterministic story-part order.
     pub fn legacy_form_fields(&self) -> Result<Vec<LegacyFormFieldInfo>> {
+        Ok(self
+            .legacy_form_fields_with_defaults()?
+            .into_iter()
+            .map(|(field, _)| field)
+            .collect())
+    }
+
+    /// One inventory walk that also returns an explicit reset default.
+    ///
+    /// `None` means the reset-default metadata is absent. Old ordinals stay.
+    pub fn legacy_form_fields_with_defaults(
+        &self,
+    ) -> Result<Vec<(LegacyFormFieldInfo, Option<LegacyFormFieldValue>)>> {
         let mut fields = Vec::new();
         let mut paragraphs = Vec::new();
         collect_body_paragraphs(&self.document.body, &mut paragraphs);
@@ -1028,7 +1041,7 @@ fn legacy_story_parts(document: &Document) -> Result<Vec<(String, LegacyStoryKin
 }
 
 fn append_legacy_form_infos(
-    output: &mut Vec<LegacyFormFieldInfo>,
+    output: &mut Vec<(LegacyFormFieldInfo, Option<LegacyFormFieldValue>)>,
     source_part: &str,
     paragraphs: &[&CT_P],
 ) -> Result<()> {
@@ -1040,7 +1053,7 @@ fn append_legacy_form_infos(
 }
 
 fn append_legacy_form_infos_in_paragraph(
-    output: &mut Vec<LegacyFormFieldInfo>,
+    output: &mut Vec<(LegacyFormFieldInfo, Option<LegacyFormFieldValue>)>,
     source_part: &str,
     ordinal: &mut usize,
     paragraph: &CT_P,
@@ -1061,7 +1074,7 @@ fn append_legacy_form_infos_in_paragraph(
 }
 
 fn append_legacy_form_infos_in_run(
-    output: &mut Vec<LegacyFormFieldInfo>,
+    output: &mut Vec<(LegacyFormFieldInfo, Option<LegacyFormFieldValue>)>,
     source_part: &str,
     ordinal: &mut usize,
     run: &CT_R,
@@ -1075,7 +1088,7 @@ fn append_legacy_form_infos_in_run(
 }
 
 fn append_legacy_form_infos_in_control(
-    output: &mut Vec<LegacyFormFieldInfo>,
+    output: &mut Vec<(LegacyFormFieldInfo, Option<LegacyFormFieldValue>)>,
     source_part: &str,
     ordinal: &mut usize,
     control: &CT_Sdt,
@@ -1118,7 +1131,7 @@ fn append_legacy_form_infos_in_control(
 }
 
 fn append_legacy_form_field_info(
-    output: &mut Vec<LegacyFormFieldInfo>,
+    output: &mut Vec<(LegacyFormFieldInfo, Option<LegacyFormFieldValue>)>,
     source_part: &str,
     ordinal: &mut usize,
     field: &Field,
@@ -1132,22 +1145,29 @@ fn append_legacy_form_field_info(
 }
 
 fn append_one_legacy_form_field_info(
-    output: &mut Vec<LegacyFormFieldInfo>,
+    output: &mut Vec<(LegacyFormFieldInfo, Option<LegacyFormFieldValue>)>,
     source_part: &str,
     ordinal: &mut usize,
     field: &Field,
 ) {
-    if let Some(form) = &field.legacy_form {
-        output.push(LegacyFormFieldInfo {
-            source_part: source_part.to_owned(),
-            ordinal: *ordinal,
-            name: form.name.clone(),
-            enabled: form.enabled,
-            calculate_on_exit: form.calculate_on_exit,
-            kind: form.kind,
-            value: form.value.clone(),
-            choices: form.choices.clone(),
-        });
+    if let Some(value) = field.legacy_form_value().ok().flatten() {
+        let Some(form) = &field.legacy_form else {
+            return;
+        };
+        let default = field.legacy_form_default_value().ok().flatten();
+        output.push((
+            LegacyFormFieldInfo {
+                source_part: source_part.to_owned(),
+                ordinal: *ordinal,
+                name: form.name.clone(),
+                enabled: form.enabled,
+                calculate_on_exit: form.calculate_on_exit,
+                kind: form.kind,
+                value,
+                choices: form.choices.clone(),
+            },
+            default,
+        ));
         *ordinal += 1;
     }
 }
@@ -15990,6 +16010,7 @@ fn field_source_has_typed_ancestors(
         buffer.clear();
     }
 }
+
 
 fn typed_field_ancestors(ancestors: &[(usize, bool, Vec<u8>)], paragraph_start: usize) -> bool {
     let Some(paragraph_index) = ancestors

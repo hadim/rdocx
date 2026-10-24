@@ -910,6 +910,15 @@ pub struct Field {
     /// Typed legacy form metadata retained below the begin `w:fldChar`.
     pub legacy_form: Option<LegacyFormFieldData>,
     legacy_form_parse_error: bool,
+    /// Explicit reset default. Absent metadata stays `None`.
+    legacy_reset_default: Option<LegacyFormFieldValue>,
+    /// Borrowed text fallback for an absent result region.
+    legacy_text_default: Option<String>,
+    /// A physical result region is present, or a setter published one.
+    legacy_result_published: bool,
+    /// Last parent cache derived from children or from the imported source.
+    /// A later direct parent assignment diverges from this baseline.
+    derived_parent_cache: String,
     nested_order: Vec<NestedFieldPosition>,
     cached_fields: Vec<(std::ops::Range<usize>, Field)>,
     simple_cached_runs: Option<Vec<CT_R>>,
@@ -989,6 +998,10 @@ impl Field {
             locked: None,
             legacy_form: None,
             legacy_form_parse_error: false,
+            legacy_reset_default: None,
+            legacy_text_default: None,
+            legacy_result_published: false,
+            derived_parent_cache: cached_result.to_owned(),
             nested_order: Vec::new(),
             cached_fields: Vec::new(),
             simple_cached_runs: None,
@@ -1069,7 +1082,14 @@ impl Field {
         validate_cached_field_runs(&runs)?;
         let mut candidate = self.clone();
         candidate.cached_result = runs.iter().map(cached_run_display).collect();
+        candidate.derived_parent_cache = candidate.cached_result.clone();
         candidate.typed_cached_runs = Some(runs);
+        if let Some(form) = candidate.legacy_form.as_mut()
+            && form.kind == LegacyFormFieldKind::TextInput
+        {
+            form.value = LegacyFormFieldValue::Text(candidate.cached_result.clone());
+            candidate.legacy_result_published = true;
+        }
         candidate.typed_cached_comment_ranges.clear();
         candidate.simple_cached_runs = None;
         candidate.cached_fields.clear();
@@ -1221,6 +1241,38 @@ impl Field {
         if original_cached_result != Some(&self.cached_result) {
             oxml_core::xml::reject_non_xml_characters("field result", &self.cached_result)?;
         }
+        if let Some(form) = &self.legacy_form {
+            let instruction = self.effective_instruction();
+            let matches_kind = matches!(
+                (form.kind, instruction.name.as_str()),
+                (LegacyFormFieldKind::TextInput, "FORMTEXT")
+                    | (LegacyFormFieldKind::CheckBox, "FORMCHECKBOX")
+                    | (LegacyFormFieldKind::DropDownList, "FORMDROPDOWN")
+            );
+            if !matches_kind {
+                return Err(OxmlError::InvalidValue(
+                    "legacy form metadata contradicts its field instruction".into(),
+                ));
+            }
+            let kind_matches_value = matches!(
+                (&form.kind, &form.value),
+                (
+                    LegacyFormFieldKind::TextInput,
+                    LegacyFormFieldValue::Text(_)
+                ) | (
+                    LegacyFormFieldKind::CheckBox,
+                    LegacyFormFieldValue::Checked(_)
+                ) | (
+                    LegacyFormFieldKind::DropDownList,
+                    LegacyFormFieldValue::SelectedIndex(_)
+                )
+            );
+            if !kind_matches_value {
+                return Err(OxmlError::InvalidValue(
+                    "legacy form value kind does not match the field kind".into(),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -1239,15 +1291,22 @@ impl Field {
         let source_id = NEXT_FIELD_SOURCE_ID.fetch_add(1, Ordering::Relaxed);
         let original_instruction = instruction.clone();
         let original_cached_result = cached_result.clone();
-        let (legacy_form, legacy_form_parse_error) = match parse_legacy_form_data(
-            &raw_xml,
-            &word_prefixes,
-            &instruction.name,
-            &cached_result,
-        ) {
-            Ok(legacy_form) => (legacy_form, false),
-            Err(_) => (None, true),
-        };
+        let result_published = form == FieldForm::Simple || complex_outer_result_present(&raw_xml);
+        let (legacy_form, legacy_reset_default, legacy_text_default, legacy_form_parse_error) =
+            match parse_legacy_form_data(
+                &raw_xml,
+                &word_prefixes,
+                &instruction.name,
+                &cached_result,
+                result_published,
+            ) {
+                Ok(Some((data, reset_default, text_default))) => {
+                    (Some(data), reset_default, text_default, false)
+                }
+                Ok(None) => (None, None, None, false),
+                Err(_) => (None, None, None, true),
+            };
+        let derived_parent_cache = cached_result.clone();
         Self {
             instruction,
             cached_result,
@@ -1255,6 +1314,10 @@ impl Field {
             locked,
             legacy_form: legacy_form.clone(),
             legacy_form_parse_error,
+            legacy_reset_default,
+            legacy_text_default,
+            legacy_result_published: result_published,
+            derived_parent_cache,
             nested_order: Vec::new(),
             cached_fields: Vec::new(),
             simple_cached_runs: None,
@@ -1274,6 +1337,7 @@ impl Field {
                 original_dirty: dirty,
                 original_locked: locked,
                 original_legacy_form: legacy_form,
+                original_result_published: result_published,
                 word_prefixes,
             },
         }
@@ -1423,12 +1487,14 @@ impl Field {
     pub fn refresh_cached_field_projection(&mut self) {
         if let Some(value) = self.nested_cached_projection() {
             self.cached_result = value;
+            self.derived_parent_cache = self.cached_result.clone();
         }
     }
 
     fn nested_cached_projection(&self) -> Option<String> {
         if let Some(runs) = self
-            .typed_cache()
+            .typed_cached_runs
+            .as_deref()
             .or(self.simple_cached_runs.as_deref())
             .or(self.parsed_cached_child_runs())
         {
@@ -1630,6 +1696,7 @@ impl Field {
                 original_dirty,
                 original_locked,
                 original_legacy_form,
+                original_result_published,
                 ..
             } => {
                 self.instruction == *original_instruction
@@ -1638,6 +1705,7 @@ impl Field {
                     && self.dirty == *original_dirty
                     && self.locked == *original_locked
                     && self.legacy_form == *original_legacy_form
+                    && self.legacy_result_published == *original_result_published
                     && self
                         .cached_fields_in_source_order()
                         .iter()
@@ -1833,43 +1901,269 @@ impl Field {
         }
     }
 
-    /// Change the typed value of a legacy form field and its cached display.
+    /// Read the authoritative current value. `Ok(None)` is a non-legacy field.
+    #[doc(hidden)]
+    pub fn legacy_form_value(&self) -> Result<Option<LegacyFormFieldValue>> {
+        self.validate_legacy_form_owner()?;
+        Ok(self.legacy_form.as_ref().map(|form| match form.kind {
+            LegacyFormFieldKind::TextInput => {
+                LegacyFormFieldValue::Text(self.effective_display().into_owned())
+            }
+            LegacyFormFieldKind::CheckBox | LegacyFormFieldKind::DropDownList => form.value.clone(),
+        }))
+    }
+
+    /// Read explicit reset-default metadata. `None` means that metadata is absent.
+    pub fn legacy_form_default_value(&self) -> Result<Option<LegacyFormFieldValue>> {
+        self.validate_legacy_form_owner()?;
+        if self.legacy_form.is_none() {
+            return Ok(None);
+        }
+        Ok(self.legacy_reset_default.clone())
+    }
+
+    /// Change the typed current value and cache. The reset default stays put.
+    ///
+    /// Candidate bytes decide whether the edit is a no-op. Typed equality does not.
     #[doc(hidden)]
     pub fn set_legacy_form_value(&mut self, value: LegacyFormFieldValue) -> Result<()> {
+        self.validate_legacy_form_owner()?;
         let form = self
             .legacy_form
-            .as_mut()
+            .clone()
             .ok_or_else(|| OxmlError::MissingElement("w:ffData".to_owned()))?;
-        let display = match (&form.kind, &value) {
-            (LegacyFormFieldKind::TextInput, LegacyFormFieldValue::Text(value)) => {
-                if form
-                    .max_length
-                    .is_some_and(|maximum| value.chars().count() > maximum)
-                {
-                    return Err(OxmlError::InvalidValue(
-                        "legacy text form value exceeds w:maxLength".to_owned(),
-                    ));
-                }
-                value.clone()
-            }
-            (LegacyFormFieldKind::CheckBox, LegacyFormFieldValue::Checked(checked)) => {
-                if *checked { "☒" } else { "☐" }.to_owned()
-            }
-            (LegacyFormFieldKind::DropDownList, LegacyFormFieldValue::SelectedIndex(index)) => {
-                let choice = form.choices.get(*index).ok_or_else(|| {
-                    OxmlError::InvalidValue("legacy drop-down selection is out of range".to_owned())
-                })?;
-                choice.clone()
-            }
-            _ => {
-                return Err(OxmlError::InvalidValue(
-                    "legacy form value kind does not match the field kind".to_owned(),
-                ));
-            }
-        };
-        form.value = value;
-        self.cached_result = display;
+        let display = legacy_form_canonical_display(&form, &value)?;
+        let mut candidate = self.clone();
+        let region = self.legacy_result_published;
+        let force_region = !region && (display != self.cached_result || value != form.value);
+        if force_region {
+            candidate.legacy_result_published = true;
+        }
+        if region || force_region {
+            candidate.cached_result = display;
+        }
+        if let Some(form) = candidate.legacy_form.as_mut() {
+            form.value = value;
+        }
+        if field_publication_bytes(self)? == field_publication_bytes(&candidate)? {
+            return Ok(());
+        }
+        *self = candidate;
         Ok(())
+    }
+
+    /// Semantic display. An observable parent cache wins over nested children.
+    pub fn effective_display(&self) -> std::borrow::Cow<'_, str> {
+        let nested = self.nested_effective_segments();
+        let nested_text = joined_nested_text(nested.as_deref());
+        if self.observable_parent_cache_override(nested_text.as_deref()) {
+            return std::borrow::Cow::Borrowed(self.cached_result.as_str());
+        }
+        if let Some(nested_text) = nested_text {
+            return std::borrow::Cow::Owned(nested_text);
+        }
+        self.own_effective_display()
+    }
+
+    /// Semantic projection with the same complex-field visibility as [`Self::projected_text`].
+    pub fn effective_projected_text(&self) -> Option<std::borrow::Cow<'_, str>> {
+        let visible = self.is_parsed_complex()
+            || matches!(
+                self.source,
+                FieldSource::New {
+                    form: FieldForm::Complex,
+                    ..
+                }
+            );
+        visible.then(|| self.effective_display())
+    }
+
+    /// Semantic display segments. Nested rows keep the child owner and its `CT_RPr`.
+    pub fn effective_display_field_segments(
+        &self,
+    ) -> Vec<(std::borrow::Cow<'_, str>, Option<&CT_RPr>, &Field)> {
+        let nested = self.nested_effective_segments();
+        let nested_text = joined_nested_text(nested.as_deref());
+        if self.observable_parent_cache_override(nested_text.as_deref()) {
+            return vec![(
+                std::borrow::Cow::Borrowed(self.cached_result.as_str()),
+                self.first_cached_properties(),
+                self,
+            )];
+        }
+        if let Some(segments) = nested {
+            return segments;
+        }
+        if self.text_result_absent() {
+            return vec![(
+                std::borrow::Cow::Borrowed(self.legacy_text_default.as_deref().unwrap_or("")),
+                self.first_cached_properties(),
+                self,
+            )];
+        }
+        self.cached_display_field_segments()
+            .into_iter()
+            .map(|(text, properties, owner)| (std::borrow::Cow::Borrowed(text), properties, owner))
+            .collect()
+    }
+
+    fn text_current(&self) -> &str {
+        if self.legacy_result_published
+            || self.typed_cached_runs.is_some()
+            || self.cached_result != self.original_cached_result()
+        {
+            return self.cached_result.as_str();
+        }
+        self.legacy_text_default.as_deref().unwrap_or("")
+    }
+
+    fn text_result_absent(&self) -> bool {
+        self.legacy_form
+            .as_ref()
+            .is_some_and(|form| form.kind == LegacyFormFieldKind::TextInput)
+            && !self.legacy_result_published
+            && self.typed_cached_runs.is_none()
+            && self.cached_result == self.original_cached_result()
+    }
+
+    fn first_cached_properties(&self) -> Option<&CT_RPr> {
+        match &self.source {
+            FieldSource::Parsed {
+                cached_segments, ..
+            }
+            | FieldSource::New {
+                cached_segments, ..
+            } => cached_segments
+                .first()
+                .and_then(|segment| segment.properties.as_ref()),
+        }
+    }
+
+    fn own_effective_display(&self) -> std::borrow::Cow<'_, str> {
+        if self
+            .legacy_form
+            .as_ref()
+            .is_some_and(|form| form.kind == LegacyFormFieldKind::TextInput)
+        {
+            return std::borrow::Cow::Borrowed(self.text_current());
+        }
+        std::borrow::Cow::Borrowed(self.cached_result.as_str())
+    }
+
+    fn original_cached_result(&self) -> &str {
+        match &self.source {
+            FieldSource::Parsed {
+                original_cached_result,
+                ..
+            }
+            | FieldSource::New {
+                original_cached_result,
+                ..
+            } => original_cached_result,
+        }
+    }
+
+    fn observable_parent_cache_override(&self, nested_text: Option<&str>) -> bool {
+        let Some(nested_text) = nested_text else {
+            return false;
+        };
+        if self.cached_result == nested_text {
+            return false;
+        }
+        self.cached_result != self.derived_parent_cache
+    }
+
+    fn nested_effective_segments(&self) -> Option<Vec<NestedEffectiveSegment<'_>>> {
+        note_nested_effective_projection();
+        // Unfiltered typed runs stay visible after a child edit. The filtered
+        // physical helper remains the source for borrowed cache reads.
+        let runs = self
+            .typed_cached_runs
+            .as_deref()
+            .or(self.simple_cached_runs.as_deref())
+            .or(self.parsed_cached_runs.as_deref())
+            .or(match &self.source {
+                FieldSource::New { cached_runs, .. } => cached_runs.as_deref(),
+                _ => None,
+            });
+        if let Some(runs) = runs {
+            let has_field = runs.iter().any(|run| {
+                run.content
+                    .iter()
+                    .any(|content| matches!(content, RunContent::Field(_)))
+            });
+            if has_field {
+                let mut segments = Vec::new();
+                for run in runs {
+                    for content in &run.content {
+                        match content {
+                            RunContent::Field(child) => {
+                                segments.extend(child.effective_display_field_segments());
+                            }
+                            RunContent::Break(BreakType::Page) => {
+                                segments.push((
+                                    std::borrow::Cow::Borrowed("\u{000c}"),
+                                    run.properties.as_ref(),
+                                    self,
+                                ));
+                            }
+                            RunContent::Break(BreakType::Column) => {
+                                segments.push((
+                                    std::borrow::Cow::Borrowed("\u{000b}"),
+                                    run.properties.as_ref(),
+                                    self,
+                                ));
+                            }
+                            other => {
+                                let text = CT_R::content_text(other);
+                                segments.push((
+                                    std::borrow::Cow::Borrowed(text),
+                                    run.properties.as_ref(),
+                                    self,
+                                ));
+                            }
+                        }
+                    }
+                }
+                return Some(segments);
+            }
+        }
+        if self.cached_fields.is_empty() {
+            return None;
+        }
+        let (original_cached_result, cached_segments) = match &self.source {
+            FieldSource::Parsed {
+                original_cached_result,
+                cached_segments,
+                ..
+            }
+            | FieldSource::New {
+                original_cached_result,
+                cached_segments,
+                ..
+            } => (original_cached_result.as_str(), cached_segments.as_slice()),
+        };
+        let mut segments = Vec::new();
+        let mut start = 0usize;
+        for (range, child) in &self.cached_fields {
+            segments.extend(
+                cached_display_range(cached_segments, start..range.start, self)
+                    .into_iter()
+                    .map(|(text, properties, owner)| {
+                        (std::borrow::Cow::Borrowed(text), properties, owner)
+                    }),
+            );
+            segments.extend(child.effective_display_field_segments());
+            start = range.end;
+        }
+        segments.extend(
+            cached_display_range(cached_segments, start..original_cached_result.len(), self)
+                .into_iter()
+                .map(|(text, properties, owner)| {
+                    (std::borrow::Cow::Borrowed(text), properties, owner)
+                }),
+        );
+        Some(segments)
     }
 }
 
@@ -2039,6 +2333,58 @@ fn cached_display_range<'a>(
     result
 }
 
+#[cfg(test)]
+thread_local! {
+    static COUNT_NESTED_EFFECTIVE_PROJECTION: Cell<bool> = const { Cell::new(false) };
+    static NESTED_EFFECTIVE_PROJECTION_VISITS: Cell<u64> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+struct NestedProjectionCount {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl NestedProjectionCount {
+    fn start() -> Self {
+        let previous = COUNT_NESTED_EFFECTIVE_PROJECTION.get();
+        NESTED_EFFECTIVE_PROJECTION_VISITS.set(0);
+        COUNT_NESTED_EFFECTIVE_PROJECTION.set(true);
+        Self { previous }
+    }
+
+    fn reset(&self) {
+        NESTED_EFFECTIVE_PROJECTION_VISITS.set(0);
+    }
+
+    fn visits(&self) -> u64 {
+        NESTED_EFFECTIVE_PROJECTION_VISITS.get()
+    }
+}
+
+#[cfg(test)]
+impl Drop for NestedProjectionCount {
+    fn drop(&mut self) {
+        COUNT_NESTED_EFFECTIVE_PROJECTION.set(self.previous);
+    }
+}
+
+fn joined_nested_text(segments: Option<&[NestedEffectiveSegment<'_>]>) -> Option<String> {
+    let segments = segments?;
+    if segments.is_empty() {
+        return None;
+    }
+    Some(segments.iter().map(|(text, _, _)| text.as_ref()).collect())
+}
+
+fn note_nested_effective_projection() {
+    #[cfg(test)]
+    if COUNT_NESTED_EFFECTIVE_PROJECTION.get() {
+        NESTED_EFFECTIVE_PROJECTION_VISITS
+            .set(NESTED_EFFECTIVE_PROJECTION_VISITS.get().saturating_add(1));
+    }
+}
+
 fn cached_run_display(run: &CT_R) -> String {
     run.content
         .iter()
@@ -2173,6 +2519,7 @@ enum FieldSource {
         original_dirty: Option<bool>,
         original_locked: Option<bool>,
         original_legacy_form: Option<LegacyFormFieldData>,
+        original_result_published: bool,
         word_prefixes: Vec<String>,
     },
 }
@@ -2868,7 +3215,18 @@ impl CT_R {
 
     /// Get the combined text of all text content in this run.
     pub fn text(&self) -> String {
-        self.content.iter().map(Self::content_text).collect()
+        let mut text = String::new();
+        for content in &self.content {
+            match content {
+                RunContent::Field(field) => {
+                    if let Some(projected) = field.effective_projected_text() {
+                        text.push_str(&projected);
+                    }
+                }
+                other => text.push_str(Self::content_text(other)),
+            }
+        }
+        text
     }
 
     /// The text one content item contributes to [`Self::text`].
@@ -4320,12 +4678,20 @@ struct LegacyFormProjection {
     max_length_seen: bool,
 }
 
+type NestedEffectiveSegment<'a> = (std::borrow::Cow<'a, str>, Option<&'a CT_RPr>, &'a Field);
+type ParsedLegacyForm = (
+    LegacyFormFieldData,
+    Option<LegacyFormFieldValue>,
+    Option<String>,
+);
+
 fn parse_legacy_form_data(
     raw: &[u8],
     word_prefixes: &[String],
     instruction_name: &str,
     cached_result: &str,
-) -> Result<Option<LegacyFormFieldData>> {
+    result_published: bool,
+) -> Result<Option<ParsedLegacyForm>> {
     let mut reader = Reader::from_reader(raw);
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
@@ -4520,40 +4886,99 @@ fn parse_legacy_form_data(
             "w:checkBox requires w:size or w:sizeAuto".to_owned(),
         ));
     }
-    let value = match kind {
-        LegacyFormFieldKind::TextInput => LegacyFormFieldValue::Text(
-            projection
-                .default_text
-                .unwrap_or_else(|| cached_result.to_owned()),
-        ),
-        LegacyFormFieldKind::CheckBox => LegacyFormFieldValue::Checked(
-            projection
-                .checked
-                .or(projection.check_default)
-                .unwrap_or(false),
+    let (value, reset_default, text_default) = match kind {
+        LegacyFormFieldKind::TextInput => {
+            let current = if result_published {
+                cached_result.to_owned()
+            } else {
+                projection.default_text.clone().unwrap_or_default()
+            };
+            (
+                LegacyFormFieldValue::Text(current),
+                projection
+                    .default_text
+                    .clone()
+                    .map(LegacyFormFieldValue::Text),
+                projection.default_text,
+            )
+        }
+        LegacyFormFieldKind::CheckBox => (
+            LegacyFormFieldValue::Checked(
+                projection
+                    .checked
+                    .or(projection.check_default)
+                    .unwrap_or(false),
+            ),
+            projection.check_default.map(LegacyFormFieldValue::Checked),
+            None,
         ),
         LegacyFormFieldKind::DropDownList => {
-            let index = projection
-                .selected_index
-                .or(projection.selected_default)
-                .unwrap_or(0);
+            let index = if projection.selected_index.is_some() {
+                projection.selected_index.unwrap_or(0)
+            } else {
+                projection.selected_default.unwrap_or(0)
+            };
             if projection.choices.get(index).is_none() {
                 return Err(OxmlError::InvalidValue(
                     "w:ddList selection is outside its entry list".to_owned(),
                 ));
             }
-            LegacyFormFieldValue::SelectedIndex(index)
+            (
+                LegacyFormFieldValue::SelectedIndex(index),
+                projection
+                    .selected_default
+                    .map(LegacyFormFieldValue::SelectedIndex),
+                None,
+            )
         }
     };
-    Ok(Some(LegacyFormFieldData {
-        name: projection.name,
-        enabled: projection.enabled.unwrap_or(true),
-        calculate_on_exit: projection.calculate_on_exit.unwrap_or(true),
-        kind,
-        value,
-        choices: projection.choices,
-        max_length: projection.max_length,
-    }))
+    Ok(Some((
+        LegacyFormFieldData {
+            name: projection.name,
+            enabled: projection.enabled.unwrap_or(true),
+            calculate_on_exit: projection.calculate_on_exit.unwrap_or(true),
+            kind,
+            value,
+            choices: projection.choices,
+            max_length: projection.max_length,
+        },
+        reset_default,
+        text_default,
+    )))
+}
+
+fn complex_outer_result_present(raw: &[u8]) -> bool {
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0i32;
+    let mut saw_separate = false;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Empty(element) | Event::Start(element)) => {
+                if element.name().as_ref().ends_with(b"fldChar") {
+                    let kind = element.attributes().flatten().find_map(|attribute| {
+                        attribute
+                            .key
+                            .as_ref()
+                            .ends_with(b"fldCharType")
+                            .then(|| String::from_utf8_lossy(&attribute.value).into_owned())
+                    });
+                    match kind.as_deref() {
+                        Some("begin") => depth += 1,
+                        Some("separate") if depth == 1 => saw_separate = true,
+                        Some("end") if depth > 0 => depth -= 1,
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => return false,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    saw_separate
 }
 
 fn project_legacy_form_element(
@@ -10309,6 +10734,7 @@ fn write_field_with_result_properties<W: std::io::Write>(
         original_dirty,
         original_locked,
         original_legacy_form,
+        original_result_published,
         word_prefixes,
         ..
     } = &field.source
@@ -10318,21 +10744,30 @@ fn write_field_with_result_properties<W: std::io::Write>(
     {
         let cached_changed = field.cached_result != *original_cached_result
             && field.nested_cached_projection().as_ref() != Some(&field.cached_result);
+        let publish_missing = field.legacy_result_published && !*original_result_published;
         let legacy_form_changed = field.legacy_form != *original_legacy_form;
+        let text_current_only =
+            legacy_text_value_only_change(original_legacy_form, &field.legacy_form);
         let updated = match form {
             FieldForm::Simple => {
                 update_simple_field_source(field, raw_xml, word_prefixes, cached_changed)?
             }
             FieldForm::Complex => {
                 let mut updated = update_nested_field_sources(field, raw_xml, word_prefixes)?;
-                if legacy_form_changed {
+                if legacy_form_changed && !text_current_only {
                     let form = field.legacy_form.as_ref().ok_or_else(|| {
                         OxmlError::MissingElement("typed legacy form data".to_owned())
                     })?;
                     updated = rewrite_legacy_form_source(&updated, word_prefixes, form)?;
                 }
-                if cached_changed || field.dirty != *original_dirty {
-                    update_complex_field_source(field, &updated, word_prefixes, cached_changed)?
+                if cached_changed || publish_missing || field.dirty != *original_dirty {
+                    update_complex_field_source(
+                        field,
+                        &updated,
+                        word_prefixes,
+                        cached_changed || publish_missing,
+                        publish_missing,
+                    )?
                 } else {
                     updated
                 }
@@ -10594,6 +11029,82 @@ fn word_local_name(element: &BytesStart<'_>, word_prefixes: &[String]) -> Option
 fn qname_prefix(name: &[u8]) -> Option<&str> {
     let separator = name.iter().position(|byte| *byte == b':')?;
     std::str::from_utf8(&name[..separator]).ok()
+}
+
+fn field_publication_bytes(field: &Field) -> Result<Vec<u8>> {
+    let mut writer = Writer::new(Vec::new());
+    write_field(&mut writer, field, None)?;
+    Ok(writer.into_inner())
+}
+
+fn legacy_text_value_only_change(
+    before: &Option<LegacyFormFieldData>,
+    after: &Option<LegacyFormFieldData>,
+) -> bool {
+    match (before, after) {
+        (Some(before), Some(after)) => {
+            before.kind == LegacyFormFieldKind::TextInput
+                && after.kind == LegacyFormFieldKind::TextInput
+                && before.name == after.name
+                && before.enabled == after.enabled
+                && before.calculate_on_exit == after.calculate_on_exit
+                && before.choices == after.choices
+                && before.max_length == after.max_length
+                && before.value != after.value
+        }
+        _ => false,
+    }
+}
+
+fn legacy_form_canonical_display(
+    form: &LegacyFormFieldData,
+    value: &LegacyFormFieldValue,
+) -> Result<String> {
+    match (&form.kind, value) {
+        (LegacyFormFieldKind::TextInput, LegacyFormFieldValue::Text(value)) => {
+            if form
+                .max_length
+                .is_some_and(|maximum| value.chars().count() > maximum)
+            {
+                return Err(OxmlError::InvalidValue(
+                    "legacy text form value exceeds w:maxLength".to_owned(),
+                ));
+            }
+            oxml_core::xml::reject_non_xml_characters("legacy form text", value)?;
+            Ok(value.clone())
+        }
+        (LegacyFormFieldKind::CheckBox, LegacyFormFieldValue::Checked(checked)) => {
+            Ok(if *checked { "☒" } else { "☐" }.to_owned())
+        }
+        (LegacyFormFieldKind::DropDownList, LegacyFormFieldValue::SelectedIndex(index)) => {
+            form.choices.get(*index).cloned().ok_or_else(|| {
+                OxmlError::InvalidValue("legacy drop-down selection is out of range".to_owned())
+            })
+        }
+        _ => Err(OxmlError::InvalidValue(
+            "legacy form value kind does not match the field kind".to_owned(),
+        )),
+    }
+}
+
+
+fn write_missing_legacy_result_region<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    display: &str,
+    canonical_word_binding: bool,
+) -> Result<()> {
+    let _ = canonical_word_binding;
+    writer.write_event(Event::End(BytesEnd::new("w:r")))?;
+    write_word_run_start(writer, None)?;
+    let mut separate = BytesStart::new("w:fldChar");
+    separate.push_attribute(("w:fldCharType", "separate"));
+    writer.write_event(Event::Empty(separate))?;
+    writer.write_event(Event::End(BytesEnd::new("w:r")))?;
+    write_word_run_start(writer, None)?;
+    write_field_result_content_with_binding(writer, display, canonical_word_binding)?;
+    writer.write_event(Event::End(BytesEnd::new("w:r")))?;
+    write_word_run_start(writer, None)?;
+    Ok(())
 }
 
 fn write_legacy_form_value_element(output: &mut Vec<u8>, prefix: &str, name: &str, value: &str) {
@@ -11090,6 +11601,7 @@ fn rewrite_isolated_nested_field(
         original_cached_result,
         original_dirty,
         original_legacy_form,
+        original_result_published,
         ..
     } = &field.source
     else {
@@ -11107,7 +11619,9 @@ fn rewrite_isolated_nested_field(
     if raw_only_instruction_changed {
         updated = update_complex_instruction_source(field, &updated, word_prefixes)?;
     }
-    if field.legacy_form != *original_legacy_form {
+    let legacy_form_changed = field.legacy_form != *original_legacy_form;
+    let text_current_only = legacy_text_value_only_change(original_legacy_form, &field.legacy_form);
+    if legacy_form_changed && !text_current_only {
         let form = field
             .legacy_form
             .as_ref()
@@ -11116,8 +11630,15 @@ fn rewrite_isolated_nested_field(
     }
     let cached_changed = field.cached_result != *original_cached_result
         && field.nested_cached_projection().as_ref() != Some(&field.cached_result);
-    if cached_changed || field.dirty != *original_dirty {
-        updated = update_complex_field_source(field, &updated, word_prefixes, cached_changed)?;
+    let publish_missing = field.legacy_result_published && !*original_result_published;
+    if cached_changed || publish_missing || field.dirty != *original_dirty {
+        updated = update_complex_field_source(
+            field,
+            &updated,
+            word_prefixes,
+            cached_changed || publish_missing,
+            publish_missing,
+        )?;
     }
     if let Some(runs) = field.typed_cache() {
         updated = replace_typed_field_cache(
@@ -11987,6 +12508,7 @@ fn update_complex_field_source(
     raw: &[u8],
     word_prefixes: &[String],
     cached_changed: bool,
+    publish_missing_result: bool,
 ) -> Result<Vec<u8>> {
     let mut reader = Reader::from_reader(raw);
     reader.config_mut().trim_text(false);
@@ -12017,6 +12539,20 @@ fn update_complex_field_source(
                     let depth_before = field_depth;
                     let outer_marker = matches!(kind.as_deref(), Some("begin")) && field_depth == 0
                         || matches!(kind.as_deref(), Some("separate" | "end")) && field_depth == 1;
+                    if outer_marker
+                        && kind.as_deref() == Some("end")
+                        && !outer_result
+                        && publish_missing_result
+                        && !wrote_result
+                        && depth_before == 1
+                    {
+                        write_missing_legacy_result_region(
+                            &mut writer,
+                            &field.cached_result,
+                            canonical_word_binding,
+                        )?;
+                        wrote_result = true;
+                    }
                     if outer_marker
                         && kind.as_deref() == Some("end")
                         && outer_result
@@ -12146,6 +12682,20 @@ fn update_complex_field_source(
                     let depth_before = field_depth;
                     let outer_marker = matches!(kind.as_deref(), Some("begin")) && field_depth == 0
                         || matches!(kind.as_deref(), Some("separate" | "end")) && field_depth == 1;
+                    if outer_marker
+                        && kind.as_deref() == Some("end")
+                        && !outer_result
+                        && publish_missing_result
+                        && !wrote_result
+                        && depth_before == 1
+                    {
+                        write_missing_legacy_result_region(
+                            &mut writer,
+                            &field.cached_result,
+                            canonical_word_binding,
+                        )?;
+                        wrote_result = true;
+                    }
                     if outer_marker
                         && kind.as_deref() == Some("end")
                         && outer_result
@@ -12635,13 +13185,7 @@ fn write_complex_field<W: std::io::Write>(
     foreign_word_namespace: Option<&str>,
     result_properties: Option<&CT_RPr>,
 ) -> Result<()> {
-    write_field_char_run(
-        writer,
-        "begin",
-        field.dirty,
-        field.locked,
-        foreign_word_namespace,
-    )?;
+    write_field_char_run(writer, "begin", field.dirty, field.locked, foreign_word_namespace)?;
     let mut text = format!(" {}", field.instruction.name);
     for argument in &field.instruction.arguments {
         match argument {
@@ -21831,5 +22375,73 @@ mod tests {
                 assert_eq!(output, again.into_inner(), "namespace closure is stable");
             }
         }
+    }
+
+    #[test]
+    fn nested_quote_chain_projects_each_node_once() {
+        fn innermost(field: &Field) -> &Field {
+            match field.cached_fields_in_source_order().as_slice() {
+                [child] => innermost(child),
+                [] => field,
+                _ => panic!("expected one child"),
+            }
+        }
+
+        let parents = 4usize;
+        let mut leaf_run = CT_R::new("x");
+        leaf_run.properties = Some(CT_RPr {
+            bold: Some(true),
+            ..Default::default()
+        });
+        let mut field = Field::from_instruction(
+            FieldInstruction::new("QUOTE", Vec::new(), Vec::new()).unwrap(),
+            FieldForm::Simple,
+            vec![leaf_run],
+        )
+        .unwrap();
+        for _ in 0..parents {
+            field = Field::from_instruction(
+                FieldInstruction::new("QUOTE", Vec::new(), Vec::new()).unwrap(),
+                FieldForm::Complex,
+                vec![field_run(field, None)],
+            )
+            .unwrap();
+        }
+        let nodes = (parents + 1) as u64;
+        let count = super::NestedProjectionCount::start();
+        let display = field.effective_display();
+        let display_visits = count.visits();
+        count.reset();
+        let segments = field.effective_display_field_segments();
+        let segment_visits = count.visits();
+        assert_eq!(display.as_ref(), "x");
+        assert_eq!(
+            segments
+                .iter()
+                .map(|(text, _, _)| text.as_ref())
+                .collect::<String>(),
+            "x"
+        );
+        assert_eq!(segments.len(), 1);
+        assert_eq!(
+            segments[0].1.and_then(|properties| properties.bold),
+            Some(true)
+        );
+        assert!(std::ptr::eq(segments[0].2, innermost(&field)));
+        assert_eq!(
+            (display_visits, segment_visits),
+            (nodes, nodes),
+            "scalar {display_visits} segment {segment_visits}"
+        );
+
+        field.cached_result = "Override".to_owned();
+        assert_eq!(field.effective_display().as_ref(), "Override");
+        let overridden = field.effective_display_field_segments();
+        assert_eq!(overridden.len(), 1);
+        assert_eq!(overridden[0].0.as_ref(), "Override");
+        assert!(std::ptr::eq(overridden[0].2, &field));
+        field.cached_result.clear();
+        assert_eq!(field.effective_display().as_ref(), "");
+        assert_eq!(field.effective_display_field_segments()[0].0.as_ref(), "");
     }
 }
