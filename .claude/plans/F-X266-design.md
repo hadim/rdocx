@@ -197,10 +197,10 @@ Expected unchanged. The fragment declaration omission must not change saved pack
 
 ## Implementation checklist
 
-- [ ] Add the named helpers on existing document and binding types.
-- [ ] Keep `plan` returning `None` as the fallback.
-- [ ] Publish only after prepare and the native edit succeed.
-- [ ] Instrument real owner and byte counters.
+- [x] Add the named helpers on existing document and binding types.
+- [x] Keep `plan` returning `None` as the fallback.
+- [x] Publish only after prepare and the native edit succeed.
+- [x] Instrument real owner and byte counters.
 - [ ] Leave the release ratio unrun until the final union.
 
 ## Open questions

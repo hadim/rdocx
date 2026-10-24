@@ -1967,6 +1967,11 @@ actual scope. Paragraph identifiers and opaque control payload remain owned
 source through save and reopen. The validation inventory still requires the
 same physical paragraph owners and refuses malformed source.
 
+Direct body paragraph, run, table and cell reads serialize that owner alone.
+A standalone fragment omits only a redundant unrelated canonical root
+`xmlns:w14` binding. An original root binding, a binding the fragment uses,
+and unknown child bytes stay. Saved package bytes stay on the existing writer.
+
 Checked paragraph, regular-run, table, cell and section-property replacement
 first resolves the actual held physical owner. One complete expected expanded-
 name root, modeled sequence and known property profiles, relationship kind and
