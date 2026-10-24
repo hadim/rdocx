@@ -864,6 +864,24 @@ impl ParagraphMarkRef<'_> {
     }
 }
 
+/// The `w:line` value, in 240ths of a line, that `w:lineRule="auto"` stores
+/// for a line multiple.
+///
+/// A multiple equal to `n / 240.0` for an `n` inside the signed 32-bit range
+/// writes `n`, including when the raw product is one ulp away from `n`. Any
+/// other multiple truncates toward zero. A value outside that domain saturates
+/// the same way a bare cast does, and NaN becomes zero.
+#[doc(hidden)]
+pub fn auto_line_spacing(multiple: f64) -> Twips {
+    let scaled = multiple * 240.0;
+    let nearest = scaled.round();
+    if nearest >= i32::MIN as f64 && nearest <= i32::MAX as f64 && nearest / 240.0 == multiple {
+        Twips(nearest as i32)
+    } else {
+        Twips(scaled as i32)
+    }
+}
+
 /// A mutable reference to a paragraph in a document.
 pub struct Paragraph<'a> {
     pub(crate) inner: &'a mut CT_P,
@@ -1609,11 +1627,18 @@ impl<'a> Paragraph<'a> {
         self
     }
 
-    /// Set multiplied line spacing in place.
+    /// Set multiplied line spacing in place, converted by [`auto_line_spacing`].
+    ///
+    /// Writing the stored multiple back when `w:lineRule` is absent keeps that
+    /// absence. A different multiple writes the auto rule.
     pub fn set_line_spacing_multiple(&mut self, multiple: f64) {
+        let twips = auto_line_spacing(multiple);
         let ppr = self.ensure_ppr();
+        if ppr.line_spacing == Some(twips) && ppr.line_rule.is_none() {
+            return;
+        }
         // In "auto" mode, line spacing is in 240ths of a line (240 = single)
-        ppr.line_spacing = Some(Twips((multiple * 240.0) as i32));
+        ppr.line_spacing = Some(twips);
         ppr.line_rule = Some("auto".to_string());
     }
 
