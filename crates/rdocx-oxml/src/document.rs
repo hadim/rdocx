@@ -3983,6 +3983,26 @@ impl CT_Document {
         Ok(xml)
     }
 
+    /// Serialize `item` as the only child of this document's body, under the
+    /// part root and with the bytes [`Self::to_xml`] writes for it there.
+    ///
+    /// The item need not belong to the body. As in [`Self::to_xml`], the root
+    /// declares `w14` when the original root does or the written bytes use it,
+    /// so a root without `w14` here does not say whether the whole part has it.
+    #[doc(hidden)]
+    pub fn standalone_body_item_xml(&self, item: &BodyContent) -> Result<Vec<u8>> {
+        let _binding_scope = self.root_binding_scope();
+        let mut writer = Writer::new(Vec::new());
+        writer.write_event(Event::Start(self.root_start()))?;
+        writer.write_event(Event::Start(BytesStart::new("w:body")))?;
+        write_body_content(item, &mut writer)?;
+        writer.write_event(Event::End(BytesEnd::new("w:body")))?;
+        writer.write_event(Event::End(BytesEnd::new("w:document")))?;
+        let mut xml = writer.into_inner();
+        declare_w14_on_part_root(&mut xml)?;
+        Ok(xml)
+    }
+
     /// The part-root guarantees the body is serialized under.
     fn root_binding_scope(&self) -> crate::text::RootBindingScope {
         let wp_ns = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
