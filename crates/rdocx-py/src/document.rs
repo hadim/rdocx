@@ -111,6 +111,16 @@ pub(crate) fn staging_work() -> [usize; 4] {
     rdocx::take_staging_work()
 }
 
+/// The work reopening documents did since the previous call, as packages
+/// written as a ZIP, main document parts parsed and bytes of identifier
+/// parts scanned. Debug builds only.
+#[cfg(debug_assertions)]
+#[pyfunction]
+#[pyo3(name = "_reopen_work")]
+pub(crate) fn reopen_work() -> [usize; 3] {
+    rdocx::take_reopen_work()
+}
+
 use oxml_py_support::{
     ContentPath, PathSeg, PreparedRevision, RevisionCounter, RevisionScope, RevisionState,
     StaleElementError, revision_to_pyerr,
