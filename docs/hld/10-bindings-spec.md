@@ -4254,6 +4254,18 @@ and drop-down a nonnegative int excluding bool. A non-integer dropdown
 refusal names the actual Python type, integer index and legacy_form_fields()
 snapshot choices. It does not select SDT display text or values. Native bounds and malformed
 source checks remain authoritative across supported related legacy stories.
+`default_value` is the explicit reset default, or `None` when that metadata is
+absent. It is distinct from the current `value`. `LegacyFormFieldDefinition`
+is frozen. `text_input`, `checkbox`, and `drop_down_list` return that class.
+The direct constructor is private. `calculate_on_exit` defaults to false.
+Help and status default to `None`, which is distinct from an empty text pair.
+Checkbox `size_half_points` `None` means auto half-point sizing, and an integer is a
+half-point count from 0 through the unsigned 64-bit maximum. Help and status
+tags are `text` and `autoText`. Choices are
+copied. A `str` or `bytes` object is not a choice sequence. Duplicate labels
+are legal. Bool arguments reject other types. `Run.add_legacy_form_field` and
+`Document.insert_legacy_form_field` validate the definition before they change
+the destination. `insert_legacy_form_field` takes a public `StoryRunPosition`.
 
 Bind dictionaries validate all keys and values before staging. Both new Python
 mutations allocate returned Python values before prepared owner publication.

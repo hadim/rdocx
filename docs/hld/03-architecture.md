@@ -737,7 +737,11 @@ same result-local projection consumed by marker layout, TOC rebuild, and REF
 evaluation.
 
 The same grammar owns the bounded `w:ffData` projection on complex legacy form
-fields and the `w:glossaryDocument` root model. Typed form values and glossary
+fields and the `w:glossaryDocument` root model. Current text, checkbox, and
+drop-down values stay in the result region. An explicit reset default stays in
+`w:ffData` and is not rewritten when only the current value changes. A new
+legacy field always writes a result region, including an empty one, and writes
+`w:ffData` only on the begin marker. Typed form values and glossary
 properties are namespace aware, while retained XML remains the serialization
 source for every unsupported attribute and subtree. The `rdocx` facade owns
 relationship resolution, story-part identity, staged validation, and package

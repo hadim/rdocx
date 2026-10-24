@@ -770,7 +770,10 @@ Authored mixed runs keep typed children and raw boundaries in one logical
 sequence. Because `w:fldSimple` and complex field sequences are paragraph
 children, the writer emits physical `w:r` segments around each field. Direct
 run properties are copied to authored segments and the cached field result.
-Positioned raw children stay on the same side of each field boundary. Legacy
+Positioned raw children stay on the same side of each field boundary. An authored
+legacy form field writes its `w:ffData` inside the begin `w:fldChar` and keeps a
+separate result region even when that result is empty. Unknown bytes, macros,
+and source prefixes on an imported field stay in place. Legacy
 unordered raw children remain at the final run boundary. Readers remain prefix
 tolerant and writers use the fixed Word prefixes.
 
