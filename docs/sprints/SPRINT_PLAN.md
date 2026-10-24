@@ -2852,7 +2852,10 @@ estimate. The earlier 8 to 11 figure is only the pre-Python native basis for
 those three stories. The four repair drafts add a provisional 15 to 24
 developer-days. The expanded planning total is 27 to 41 developer-days for those original
 seven stories. That figure stays historical. The 2026-10-24 refresh adds
-F-X268. Codex root approved that design on 2026-10-24. Its additional estimate is a provisional 7 to 12 developer-days. That figure is not a measurement.
+F-X268. Codex root approved that design on 2026-10-24. The estimate recorded
+at that approval is a provisional 7 to 12 developer-days and stays historical.
+The later refresh2 amendment revises the combined scope to a provisional
+10 to 17 developer-days. Codex root approved that extension. That figure is not a measurement.
 Those figures are estimates, not measurements, and they are not a capacity
 promise. The visible over-two-week scope is approved intake. The clock has
 not started. F-X267 is the largest repair. No timing is invented here.
@@ -3089,7 +3092,29 @@ User answers on 2026-10-24, with the recorded choice text:
 - Q20 is "Use these bounds and report residuals (Recommended)". Every targeted call at 100 paragraphs is at most 1.5 times the 25-paragraph time plus 5 ms. The full pinned 252-call catalogue is measured and residuals stay individual. The original Issue 407 gate of 100 versus 1000 paragraphs remains.
 - Q21 is "Add checked Rust methods (Recommended)". This refines Q19. The four existing infallible Rust methods keep their legacy behavior. The new methods are `try_add_paragraph(&mut self, text: &str) -> Result<Paragraph<'_>>`, `try_insert_paragraph(&mut self, index: usize, text: &str) -> Result<Paragraph<'_>>`, `try_add_table(&mut self, rows: usize, cols: usize) -> Result<Table<'_>>`, and `try_insert_table(&mut self, index: usize, rows: usize, cols: usize) -> Result<Table<'_>>`. Python uses a checked path for every affected alias. Old signatures do not change to `Result`. The later design names existing index and error behavior and the namespace guard. There is no general XML framework.
 
-F-X268 is pending and unclaimed. Codex root approved `.claude/plans/F-X268-design.md` on 2026-10-24. The eight-story inventory is F-288, F-289, F-290, F-X264, F-X265, F-X266, F-X267, and F-X268. The additional estimate is a provisional 7 to 12 developer-days. It is not a measurement and not a capacity promise. The original seven-story estimate of 27 to 41 developer-days stays historical. No story is marked done. `AS_BUILT.md` and `SPRINT_TRACKER.md` are unchanged. Implementation of F-X268 has not started.
+F-X268 is pending and unclaimed. Codex root approved `.claude/plans/F-X268-design.md` on 2026-10-24. The eight-story inventory is F-288, F-289, F-290, F-X264, F-X265, F-X266, F-X267, and F-X268. The additional estimate at that approval is a provisional 7 to 12 developer-days. It is not a measurement and not a capacity promise. The original seven-story estimate of 27 to 41 developer-days stays historical. No story is marked done. `AS_BUILT.md` and `SPRINT_TRACKER.md` are unchanged. Implementation of F-X268 has not started.
+
+##### S95.4 issue and PR refresh, 2026-10-24T13:49:35Z
+
+Receipt cutoff 2026-10-24T13:49:35Z. The refresh lists 11 open issues and 12 open pull requests. No issue changed. Nothing closed or merged. The 2026-10-23 intake and the 2026-10-24T11:33:08Z refresh stay the historical record, including every pin for PR409 through PR418. This section does not replace them and it does not add a tracker or an F-ID.
+
+New pull requests, still unmerged candidates and not accepted code. F-X268 takes the own increments, not the stacks against main:
+
+| PR | Story | Head SHA | What changed |
+|---|---|---|---|
+| [419](https://github.com/tensorbee/rdocx/pull/419) | F-X268 | `9916bcdc01bc4acc065ae45afa8bd8ae07a2d30c` | 3 own commits and 7 paths after PR418 `dba496fcd8b4d482995a23ab81d27ad2bfcbf5e7`. Own diff SHA-256 `0de97b8eb0df312584bb86976676eb8fc66d7be694dd96a99830b0647836cc53`. |
+| [420](https://github.com/tensorbee/rdocx/pull/420) | F-X268 | `37851676af3e82a0500c4743ef86da417950d2c3` | 5 own commits and 11 paths after the PR419 head. Own diff SHA-256 `5b94cfeb7854c8d86a5f76c1d6a32424be8faa6d6af1b565af6eeb6fc28da728`. |
+
+Actions run `40092396584` at the PR419 head is donor evidence only. Word fidelity job `120867623753` failed while downloading LibreOffice 26.2.5.2, with TLS `CERTIFICATE_VERIFY_FAILED`, before any fidelity comparison. The evidence file was absent. CI gate job `120878395382` failed because that Word job failed. The hash harness on that same donor run succeeded. No Word comparison was performed. A later green PR420 check is not a PR419 pass. Final fidelity on the own union stays mandatory. No product hash or render defect is inferred.
+
+Sources for this section are `/private/tmp/s95.4-refresh2-assessment-inputs.txt`, `/private/tmp/s95.4-refresh2-assessment-ready.txt`, and the own diffs named there.
+
+User answers on 2026-10-24, with the recorded choice text:
+
+- Q22 is "Apply the measured-memory policy (Recommended)". Each new cache layer and the combined footprint need actual release measurements. No cap is chosen. The donor 68 MiB figure is not accepted.
+- Q23 is "Use the added flat and linear gates (Recommended)". The flat set becomes 73 calls under the existing 25 and 100 paragraph bound. Five named calls gain a separate 250 and 1000 paragraph linear bound.
+
+Formal dependencies stay F-X266 and F-X267. F-X268 stays serial after F-289 and F-290. The eight-story inventory is unchanged. The combined-scope estimate is a provisional 10 to 17 developer-days. The 7 to 12 figure and the seven-story 27 to 41 figure stay historical. Codex root approved the refresh2 extension on 2026-10-24 after reading the full revised contract and the four-file delta. The earlier approval stays historical. No story is marked done. Implementation of F-X268 has not started. No gate pass is claimed.
 
 #### Sprint S96, Fillable PDF forms
 

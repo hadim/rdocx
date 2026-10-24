@@ -4,7 +4,8 @@
 **Sprint**: S95.4
 **Size**: L
 **Depends on**: F-X266, F-X267
-**Estimate**: 7 to 12 developer-days. This is a provisional Root planning estimate. It is not a measurement and not a capacity promise. Do not add it to the historical seven-story figure of 27 to 41 developer-days.
+**Estimate**: 10 to 17 developer-days for the combined scope. This is a provisional Root planning judgment. It is not a measurement and not a capacity promise. Do not add it to the historical seven-story figure of 27 to 41 developer-days. The earlier 7 to 12 figure stays historical for the scope approved before the 419 and 420 amendment.
+**Amendment**: Codex root approved the 2026-10-24 refresh2 extension. It extends the approved contract. No implementation is underway. No gate pass is claimed.
 
 ## Problem
 
@@ -30,7 +31,7 @@ The cache and piece facts below are copied from the pinned PR417 and PR418 trees
 
 ## Approach
 
-One story, four serial mechanisms. The Q19 and Q21 behavior is its own labelled commit. Performance and memory steps are separate commits. No stack is reimported. The reviewed F-X266 and F-X267 source stays. F-288, F-289, and F-290 keep their approved contracts. Their fact-changing publishers are named in the consumer map.
+One story, six serial mechanisms. The first four stay as approved. The fifth and sixth are the approved 2026-10-24 refresh2 extension. The Q19 and Q21 behavior is its own labelled commit. Performance and memory steps are separate commits. No stack is reimported. The reviewed F-X266 and F-X267 source stays. F-288, F-289, and F-290 keep their approved contracts. Their fact-changing publishers are named in the consumer map.
 
 Captured increment boundaries, not the stacked diffs against main:
 
@@ -38,7 +39,14 @@ Captured increment boundaries, not the stacked diffs against main:
 - PR417 `bdf49f0005d1d15078b76b5da83c5f3e2b8cce12` has six own commits after the new PR415 head. Its own tree is 14 paths: `README.md`, `crates/rdocx-oxml/README.md`, `crates/rdocx-oxml/src/borders.rs`, `crates/rdocx-oxml/src/text.rs`, `crates/rdocx-py/src/document.rs`, `crates/rdocx-py/src/lib.rs`, `crates/rdocx-py/src/paragraph.rs`, `crates/rdocx-py/src/run.rs`, `crates/rdocx-py/src/table.rs`, `crates/rdocx-py/tests/test_core.py`, `crates/rdocx/src/document.rs`, `crates/rdocx/src/lib.rs`, `docs/hld/03-architecture.md`, `scripts/readme_doctests.py`.
 - PR418 `dba496fcd8b4d482995a23ab81d27ad2bfcbf5e7` has six own commits after merge `0912a40e19950b223745ef83e8164266b4c36b66`. The merge parents are the PR417 head and PR416 head `768f8c109bd43fb9c1f6ecdfe2d913382bcc0368`. Its own tree is 8 paths: `README.md`, `crates/rdocx-py/src/document.rs`, `crates/rdocx-py/src/lib.rs`, `crates/rdocx-py/tests/test_core.py`, `crates/rdocx/src/document.rs`, `crates/rdocx/src/lib.rs`, `docs/hld/03-architecture.md`, `scripts/readme_doctests.py`.
 
-Donor timings and the donor 68 MiB claim are unverified. README and crate README numbers in those trees are not copied.
+Own increments only, still candidates and not accepted code:
+
+- PR419 `9916bcdc01bc4acc065ae45afa8bd8ae07a2d30c` follows PR418 `dba496fcd8b4d482995a23ab81d27ad2bfcbf5e7`. It has 3 own commits and 7 paths. The own diff SHA-256 is `0de97b8eb0df312584bb86976676eb8fc66d7be694dd96a99830b0647836cc53`.
+- PR420 `37851676af3e82a0500c4743ef86da417950d2c3` follows that PR419 head. It has 5 own commits and 11 paths. The own diff SHA-256 is `5b94cfeb7854c8d86a5f76c1d6a32424be8faa6d6af1b565af6eeb6fc28da728`.
+
+Actions run `40092396584` on the PR419 head is donor evidence only. Word fidelity job `120867623753` failed while downloading LibreOffice 26.2.5.2, with TLS `CERTIFICATE_VERIFY_FAILED`, before any fidelity comparison. The evidence file was absent. CI gate job `120878395382` failed because that Word job failed. The hash harness on that same donor run succeeded. No Word comparison was performed. A later green PR420 check is not a PR419 pass. Final fidelity on the own union stays mandatory. No product hash or render defect is inferred from that log.
+
+Donor timings and the donor 68 MiB claim are unverified. README and crate README numbers in those trees are not copied. The donor figure is not accepted.
 
 ### 1. Qualified body splice and namespace replay
 
@@ -55,6 +63,14 @@ Share the opened package, the parsed main part, the retained owners, and the che
 ### 4. Binding publication
 
 Python publication uses the prepared inventory. It allocates every result object and revision token before commit. A no-op and a refusal keep the old bytes, revisions, and live handles. Conservative publication still retires prior scopes. Append keeps only eligible owners. An owned old snapshot stays old. A returned handle uses the prepared proved route or the old fallback. It does not start a new whole-document walk.
+
+### 5. Eligible in-memory reopen
+
+`reopen_prepared_staged_with_limits` may reuse OPC reread only for a document opened from bytes, with `PackageReadLimits::UNBOUNDED`, and with trusted provenance. A new or in-memory document means there is no trusted opened-byte baseline, so that commit keeps the checked ZIP path. The same document may qualify after it is legitimately saved and then reopened from those bytes. A Flat OPC first commit, a limited reopen, a failure hook, and any unproved context keep the checked ZIP path. A previously authored document is not excluded forever. The carried main parse, nested namespace owners, and canonicalization record, including a cached error, move only when the main bytes and the original contextual dependencies are exact. Relationship, identifier, section, and related-part facts stay checked. A per-part identifier definition cache may replay only when duplicate ordering and errors match, including a retyped part. Exact bytes alone are not enough when relationship or type context changed. Both reopen routes carry the mechanism 6 scans only when frame, context, and bytes are proved exact. A debug whole-path comparison is internal agreement. It is not a substitute for release regressions.
+
+### 6. Incremental direct-body addressing
+
+`to_xml_with_body_spans` must reproduce the exact existing `to_xml` bytes, the direct-body order, and the head, tail, and final section context. A block source, owner, item, cell, or text box fact is reused only when the bytes match and the namespace, relationship, owner grammar, and context match. A root or frame change, and every changed fact, is invalidated. Duplicates match position and occurrence. There is no ordinal alias after prefix, suffix, or middle alignment, or after a reorder. Preserve the F-289 corrected accepted physical providers, per-part physical ordinals, and independent story scope for fields and controls. Preserve default, current, glyph, font, placeholder, and protection facts, and F-290 metadata. Do not overwrite `content_control.rs` from the donor. The existing direct id lookup and `collect_control_ids` may use an index while they preserve uniqueness, errors, and physical order. `direct_body_item_location` must equal the full story snapshot lookup for zero, one, and many items, nested controlled content, tables, cells, text boxes, and moved, removed, or repeated blocks, before and after both reopen routes. An unsupported independent block scan takes the checked full scan. An error is never an empty success. Whole-main hash and serialization stay separately counted and disclosed. A debug whole-path comparison is internal agreement. It is not a substitute for release regressions.
 
 ### Public Rust contract
 
@@ -80,7 +96,7 @@ The four existing infallible methods keep their signatures and their legacy beha
 
 ### Hidden native helpers
 
-Adopt a donor helper only where the Python binding or `Document` is an actual consumer. The declarations below are methods, not free functions. None of these is a stable Python, WASM, or CLI export. `BodyItemContext` is the whole fact source for piece reuse, and a caller must hold that proof. No forwarding wrapper, trait, generic, module, crate, feature flag, or dependency is added. No new trait or generic is planned. The repository rule that needs two implementers or two instantiations applies to traits and generics, not to this method. `CT_Body::paragraph_count_before` is the concrete count. `Document::paragraph_count_before_content` is one call chain into that method, not a second independent consumer. A public cross-crate count helper needs the actual `Document` consumer. It does not need an arbitrary second consumer.
+Adopt a donor helper only where the Python binding or `Document` is an actual consumer. The declarations in the PR417 and PR418 block below are methods, not free functions. The later refresh2 block adds the free function `take_reopen_work`. None of these is a stable Python, WASM, or CLI export. `BodyItemContext` is the whole fact source for piece reuse, and a caller must hold that proof. No forwarding wrapper, trait, generic, module, crate, feature flag, or dependency is added. No new trait or generic is planned. The repository rule that needs two implementers or two instantiations applies to traits and generics, not to this method. `CT_Body::paragraph_count_before` is the concrete count. `Document::paragraph_count_before_content` is one call chain into that method, not a second independent consumer. A public cross-crate count helper needs the actual `Document` consumer. It does not need an arbitrary second consumer.
 
 Optional eligibility `None` chooses the checked full path. A helper `Err` may take that full path only where the full path returns the same checked result, error, and error order the old path would have returned before publication. A full-path `Err` propagates through the existing native and Python mapping. Invalid ownership or invalid XML never becomes empty facts or success. `unsavable_body_edit` returning `None` is not a general proof that the document is savable.
 
@@ -158,6 +174,32 @@ impl CT_Body {
 
 `saves_as` is the PR418 method now declared on `impl Document`. It may use `OpcPackage::reread` only while the current trusted-baseline precondition still guarantees the same bytes, the same error, and the same error order as `to_bytes`. Otherwise it uses the ZIP compare. The donor comment that a reread is automatically byte-identical is not adopted as proof.
 
+The refresh2 amendment adds these hidden cross-crate contracts. They are not stable Python, WASM, or CLI exports. No new trait, generic, module, file, or dependency is added.
+
+```rust
+impl CT_Document {
+    #[doc(hidden)]
+    pub fn to_xml_with_body_spans(
+        &self,
+    ) -> Result<(Vec<u8>, std::ops::Range<usize>, Vec<std::ops::Range<usize>>)>;
+}
+
+impl Document {
+    #[doc(hidden)]
+    pub fn direct_body_item_location(&self, slot: usize) -> Result<Option<ContentLocation>>;
+
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn main_body_block_scans() -> usize;
+}
+
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn take_reopen_work() -> [usize; 3];
+```
+
+`to_xml_with_body_spans` is consumed by the actual native `Document` story-source and direct-slot callers. `direct_body_item_location` is consumed by the actual Python document and table callers. `None` means absence only. Failed fast eligibility uses the checked full lookup. A genuine `Err` is preserved. `take_reopen_work` is a free function, exported from the native `lib.rs` for the Python `_reopen_work` counter. The array order, taken from the assessed counter body before any local test, is ZIP package writes, then main document part parses, then identifier-part bytes scanned. The implementation counts those actual sites. `main_body_block_scans` is the debug count of main-part body children scanned rather than reused, and it feeds Python `_main_body_block_scans`. Debug hooks are not stable exports and are not release exports. A release installed full test may guard a helper only for a counter case. Mandatory debug proof stays. There is no broad skip.
+
 ## Consumer map
 
 | Rule | Entry points and outputs | Shared provider and caller policy | Lifecycle stages compared |
@@ -166,6 +208,8 @@ impl CT_Body {
 | Namespace replay | `unsavable_body_edit` against current XML, model, and owners | Proof dies when the owner, local namespace, text, or typed field changes | Before mutation and again after a fact change |
 | Piece inventory | `body_item_owners`, `body_item_context`, `body_children`, story part helpers | Binding publication is the consumer. Context equality is caller proof | Read, project, serialize, reopen |
 | Staging | `saves_as` and the opened baseline shared with a staged clone | OPC `trusted_baseline` stays. Related parts stay checked | Save, error order, reopen, drop |
+| In-memory reopen | `reopen_prepared_staged_with_limits` and `take_reopen_work` | UNBOUNDED opened-from-bytes trusted provenance only. Every other context keeps the ZIP path. Identifier replay keeps duplicate order and errors | ZIP path, in-memory path, limited reopen, both routes after mechanism 6 |
+| Direct-body address | `to_xml_with_body_spans`, `direct_body_item_location`, `main_body_block_scans` | Exact `to_xml` bytes. `None` is absence. Fast-path failure uses the full lookup. `Err` stays `Err` | Full snapshot, both reopen routes, cache off, invalidated context |
 | Form and settings facts | Direct `cached_result`, `set_cached_runs`, annotation cache, `cached_field_mut`, refresh, attachment, and `set_legacy_form_field_value`. F-289 `validate_form`, `fill_form`, `reset_form`, `protect_form`, `set_document_protection`, `remove_document_protection`, and `add_story_permission_range`. F-290 `set_mail_merge_package`, `remove_mail_merge_package`, and `prepare_mail_merge_data` | Approved callables only. No second form model. Property callbacks and direct candidate assignment invalidate changed facts even when the generation is unchanged. Private field source form and equality that ignores serialization facts use proved invalidation or the full fallback. They must not publish a different truth. Dead owners stay dead | Held value, fresh value, native value, save, and reopen |
 
 Imported metadata and an absent cache fact stay absent. A missing fact is not filled with a default by the cache.
@@ -187,17 +231,17 @@ Imported metadata and an absent cache fact stay absent. A missing fact is not fi
 
 F-X266 source `9c6ef377971182a73b2e3cef07ccedde579d2f37` is integrated at `9ee48bf0902d976de016553b1dd0c79fed856612`. F-X267 source `70573c91030be7073d29e3451383060eb207207a` is integrated at `d0f17a6ac7ef675d0ed2a86cea641ce21d65bfdd`. Both are reviewed and in progress. Neither is done. Approval of those plans is not final acceptance.
 
-Proposed local prefix, for Root to approve before F-X268 implementation. This draft does not edit the provider plans and does not mark those providers done. The next provider-plan amendment may cite these existing tables unchanged. It does not weaken their final performance, hash, or Word riders.
+The local prefix is approved contract. Canonical `0d8dfb68396e33ddfcaa0d9400c30c006e12d2b7` added `## F-X268 local provider checkpoint` to `.claude/plans/F-X266-design.md` and `.claude/plans/F-X267-design.md`. Codex root approved both checkpoints on 2026-10-24 for use by F-X268. Actual prefix completion has not been performed. Neither story is done. The checkpoints do not weaken the final performance, hash, or Word riders.
 
-The prefix names every local scoped row already in those plans. Outcomes and commands come from the existing progress records. This draft does not invent a combined pass.
+The prefix names every local scoped row already in those approved sections. Outcomes and commands come from the existing progress records. The approved contract does not invent a combined pass. No gate pass is claimed here.
 
 F-X266 test plan, all 9 local scoped rows: `direct_routes_match_full_body_bytes`, `append_keeps_eligible_owners`, `conservative_retires_all_scopes`, `failed_splice_publishes_nothing`, `fragment_omits_unused_w14`, `owner_scope_precedence_unchanged`, `held_fresh_reopen_match_old_semantics`, `body_work_counters_follow_owners`, `missing_run_path_refuses`.
 
 F-X267 test plan, all 13 local scoped rows: `remove_part_returns_shared_bytes`, `reread_matches_write_and_read`, `reread_matches_shared_zip_name_limits`, `hand_built_baseline_uses_fallback`, `untouched_slide_bytes_stay`, `fit_text_ignores_unrelated_broken_slide`, `fit_text_at_selects_size_valid_in_distinct_shared_contexts`, `footer_proof_is_part_local`, `parsed_baseline_tracks_real_edits`, `fx211b_native_opaque_root_edit_retains_invalidated_signature`, `embedded_replace_counts_commit_zip_write`, `unnormalized_opaque_part_counts_reread_zip_fallback`, `commit_counters_follow_real_work`.
 
-The prefix also consumes the actual scoped checks, clean Root reviews, and the current applicable artifact proof. An old artifact is not reused as a fresh qualifier. Rerun only the inputs a later change invalidates, including a checked build and import where binding evidence is affected. No full oracle rider runs at the prefix. Word, the full suite, the hash harness, the final release 65-call and 252-call runs, the F-X267 248-call run, and the memory rider stay pending. Before any F-X268 claim, verify that the F-X266 and F-X267 source heads above are actual ancestors, that this prefix is actually done, and that binding source proof exists where the binding is affected. `AS_BUILT.md` and `SPRINT_TRACKER.md` are written once, after the full union. A formal consumer claim waits for the actual done checkpoint.
+The prefix also consumes the actual scoped checks, clean Root reviews, and the current applicable artifact proof. An old artifact is not reused as a fresh qualifier. Rerun only the inputs a later change invalidates, including a checked build and import where binding evidence is affected. No full oracle rider runs at the prefix. Word, the full suite, the hash harness, the final release 73-call and 252-call runs, the F-X267 248-call run, and the memory rider stay pending. Before any F-X268 claim, verify that the F-X266 and F-X267 source heads above are actual ancestors, that this prefix is actually done, and that binding source proof exists where the binding is affected. `AS_BUILT.md` and `SPRINT_TRACKER.md` are written once, after the full union. A formal consumer claim waits for the actual done checkpoint.
 
-F-289 may finish its own native checkpoint on its unchanged contract. Its interim native review 1 records 8 defects and is not clean. That review is not delivery credit. F-X268 does not start while the shared leases are held by F-289 and then F-290.
+F-289 may finish its own native checkpoint on its unchanged contract. Native interim pass 1 recorded 8 defects. Native interim pass 2 records 4 defects, D1, D3, D5, and D9. Repair 2 is still running. Its new tests are not all verified and there is no clean review. Those reviews are not delivery credit. F-X268 does not start while the shared leases are held by F-289 and then F-290.
 
 ## Acceptance criteria
 
@@ -205,14 +249,15 @@ F-289 may finish its own native checkpoint on its unchanged contract. Its interi
 |---|---|---|---|---|---|
 | A1 | Q19 and Q21. Four new Rust methods and every named Python delegate. An old document whose save already fails. A valid document. Bad index, non-XML text, zero columns | Refusal is atomic. Model, bytes, and handles stay at the old unsavable state. The old four methods stay legacy. Valid bytes match the checked source. Errors keep the existing family | Native `Document` and Python document, paragraph, heading, and page break | `checked_body_insertions_refuse_unsavable_namespace_owners_atomically`, `test_checked_body_insertions_preserve_owners_on_namespace_refusal` | Local behavior commit. Not the performance commit |
 | A2 | New PR415 unrouted facade position and nested namespace proof. Then an owner, local namespace, text, or typed field edit | First proof matches the checked source. The stale proof is not reused. Accepted aliases and unknown bytes stay. No incidental namespace byte change | Facade and fragment writer | `word_owner_piece_sources_match_the_full_physical_inventory` | Local regression |
-| A3 | Piece inventory against the full inventory for body, nested cell, text box, comment, note, shared header, duplicate part, invalid relationship, identical blocks, and a direct returned owner. The publishers named in the consumer map, including direct candidate assignment and property callbacks | Equal owners, parents, routes, projections, read facts, order, births, generations, and retired set. Unsupported shape falls back before publish. Held, fresh, native, save, and reopen agree. Ignored serialization facts do not count as proof | Binding and native readers | `word_owner_piece_sources_match_the_full_physical_inventory`, `word_owner_pieces_follow_splices_and_fact_changing_publishers` | Local regression on the integrated ancestor that contains those publishers |
+| A3 | Piece inventory against the full inventory for body, nested cell, text box, comment, note, shared header, duplicate part, invalid relationship, identical blocks, and a direct returned owner. The publishers named in the consumer map, including direct candidate assignment and property callbacks. Direct-body span bytes and block reuse | Equal owners, parents, routes, projections, read facts, order, births, generations, and retired set. Span bytes match existing `to_xml`. Unsupported shape falls back before publish. Held, fresh, native, save, and reopen agree. Ignored serialization facts do not count as proof | Binding and native readers | `word_owner_piece_sources_match_the_full_physical_inventory`, `word_owner_pieces_follow_splices_and_fact_changing_publishers`, `body_span_serialization_matches_existing_xml`, `main_body_block_reuse_preserves_physical_owners_and_publication`, `test_body_block_reuse_preserves_forms_settings_and_live_owners` | Local regression on the integrated ancestor that contains those publishers |
 | A4 | Splices at head, middle, and tail, plus a missing item. A later edit. No-op and refusal | Route and later edit stay inside the work bound. Conservative births and retirement match the old path. Dead owners stay dead. No-op and refusal preserve bytes, revisions, and handles | Python publication | `word_owner_pieces_follow_splices_and_fact_changing_publishers`, `test_word_owner_pieces_follow_edits_splices_and_related_owners` | Local regression |
-| A5 | Opened cache and `saves_as` for new, opened, clone, source-edited, relationship, media, signature, and embedded packages. Main unchanged with a changed related part | Exact bytes and native error order, or the ZIP fallback. Related changes are checked. A warm edit does not reparse an unchanged main part | OPC and binding | `unchanged_main_staging_preserves_save_bytes_and_error_order`, `unchanged_main_staging_reuse_counts_actual_work`, `test_unchanged_main_staging_keeps_forms_and_settings_authoritative` | Local regression |
-| A6 | The 65 targeted calls and the full 252-call catalogue on a fresh release install | The 65 meet the Q20 bound. The 252 results and residuals are reported without xfail hiding. The original 407 gate still holds for its three calls | Installed Python 3.12 | Named in the performance section. Not a worker run | Final union |
-| A7 | Q18 memory workload | Actual RSS samples at the named points. No 68 MiB pass line and no hard cap | Fresh release process | Named in the memory section | Final union |
-| A8 | Installed Python, strict mypy, stubtest, rustdoc, publish archive, WASM, hash, and the prior seven stories | Prior Word, SSIM, risk, and hash gates stay mandatory and stay unrun here. Q19 compares the previous save failure, model, and handles. Two failing `to_bytes` calls are not atomicity proof | Final union | None in the worker | Final union |
+| A5 | Opened cache and `saves_as` for new, opened, clone, source-edited, relationship, media, signature, and embedded packages. Main unchanged with a changed related part. Eligible in-memory reopen and a document with no trusted opened-byte baseline | Exact bytes and native error order, or the ZIP fallback. Related changes are checked. Identifier order matches. A warm edit does not reparse an unchanged main part. A document qualifies for in-memory reread only after a trusted opened-byte baseline exists | OPC and binding | `unchanged_main_staging_preserves_save_bytes_and_error_order`, `unchanged_main_staging_reuse_counts_actual_work`, `test_unchanged_main_staging_keeps_forms_and_settings_authoritative`, `in_memory_reopen_matches_zip_bytes_errors_and_identifier_order`, `test_in_memory_reopen_keeps_related_parts_and_read_limits` | Local regression |
+| A6 | The 73 targeted calls and the full 252-call catalogue on a fresh release install | The 73 meet the Q20 and Q23 flat bound. The 252 results and residuals are reported without xfail hiding. The original 407 gate still holds for its three calls. The four extra PR419 test-map keys are not silently added | Installed Python 3.12 | Named in the performance section. Not a worker run | Final union |
+| A7 | Q18 and Q22 memory workload | Actual per-layer and combined RSS samples at the named points. No summed RSS fabrication. No 68 MiB pass line and no hard cap | Fresh release process | Named in the memory section | Final union |
+| A8 | Installed Python, strict mypy, stubtest, rustdoc, publish archive, WASM, hash, and the prior seven stories | Prior Word, SSIM, risk, and hash gates stay mandatory and stay unrun here. Q19 compares the previous save failure, model, and handles. Two failing `to_bytes` calls are not atomicity proof. Final own-union fidelity is mandatory. The PR419 donor log is not that pass | Final union | None in the worker | Final union |
+| A9 | Q23 linear calls at 250 and 1000 paragraphs | Each call meets `large <= 5 * small + 5 ms`. Each relevant pass count meets `large <= 5 * small`, with additive allowance 0. Setup counts stay outside that pass. Whole-main hash and serialization are reported separately | Installed Python 3.12 | `body_lookup_work_is_linear_at_250_and_1000` for counts. Timings only in the final union | Final union |
 
-The 65 targeted calls are 62 catalogue keys plus `Run.xml`, `Table.xml`, and `Cell.xml`. The pinned 252 does not cover those three reads.
+The original 65 targeted calls are 62 catalogue keys plus `Run.xml`, `Table.xml`, and `Cell.xml`. The pinned 252 does not cover those three reads. The refresh2 amendment adds 8 calls. The combined flat set is 73 unique calls, which is 70 catalogue keys plus the same 3 XML reads.
 
 Targeted calls from PR415, 13:
 
@@ -230,19 +275,31 @@ PR418 calls, 10:
 
 `Document.set_font`, `Document.embed_font`, `Document.remove_embedded_font`, `Document.remove_font`, `Document.embed_true_type_fonts`, `Document.save_subset_fonts`, `Document.embed_system_fonts`, `Document.add_numbering_definition`, `Document.add_numbering_instance`, `Document.link_style_to_numbering`.
 
-That is 65 unique calls. `Run.xml`, `Table.xml`, and `Cell.xml` are the three additional required read timings. They are not catalogue keys.
+That original list is 65 unique calls. `Run.xml`, `Table.xml`, and `Cell.xml` are the three additional required read timings. They are not catalogue keys.
+
+The 8 added flat calls, none of them in the original 65, are:
+
+`Document.replace_image`, `Document.replace_image_for_story`, `HeaderFooter.add_paragraph`, `HeaderFooter.add_table`, `SectionHandle.set_text_watermark`, `SectionHandle.set_image_watermark`, `SectionHandle.remove_watermark`, `Cell.add_table`.
+
+All 73 use the Q20 bound. The 100-paragraph time is at most 1.5 times the 25-paragraph time plus 5 ms, under the existing sample rules. The four extra keys in the PR419 test map are `FootnoteEndnote.add_paragraph`, `FootnoteEndnote.add_table`, `Document.add_custom_xml_store`, and `Document.set_chart_legend`. They are not added to the 73 and they are not silently gated. `Run.add_picture`, `Cell.add_picture`, and `Cell.merge` stay 252 residuals. They are not a new flat promise.
+
+### A9 linear calls
+
+The five Q23 calls are `Cell.replace_text`, `Document.set_picture_size`, `Document.add_picture`, `Document.move_content_control`, and `Document.move_comment`. Use the same pinned builder, adapted to 250 and 1000 paragraphs, with the same six formatted runs and the same target geometry between sizes. Fresh target, call setup, and open stay outside the clock. The full public lookup, validation, and publication are inside the clock. Alternate 3 fresh changed targets at the small size and the large size. Retain every raw sample. The minimum follows `costs_ms`. The cold first sample stays visible. Warm statistics stay separate. There is no compilation concurrency. For each call, the large time is at most 5 times the small time plus 5 ms. Count the actual visited nodes, blocks, identifier operations, and lookup operations at 250 and at 1000. Pin that counted work before measurement. For each relevant pass, the large count is at most 5 times the small count, and the additive allowance is 0. Count setup separately, outside the measured pass. Retain the raw counts for each phase. A constant entry counter is not proof. Report whole-main hash and serialization separately. If the first cold scan is itself linear, disclose that. A semantic mutant or a cache-off build must expose the count regression. Absence of a new helper is a compile failure, not that RED.
 
 ### Post-pin public surface audit
 
-The immutable 252-call catalogue stays. Its timed coverage checker predates F-288, F-289, and F-290. The final union public stub inventory enumerates every added or changed method and maps each new read-only, factory, global, and local method to its F-ID, its A-ID, and its timing disposition. Do not relabel a local method `WHOLE_DOCUMENT` only so the old checker passes. A transparent qualification driver may adapt only the post-pin coverage classification, with the new methods and the reasons named. It preserves all 252 old keys and all 65 required timings. It does not skip or drop broadly. A new local method that is not in the pinned 65 stays outside the Q20 timing promise unless the original authoring plan already owns a performance criterion. Correctness, runtime, and stub tests for those methods stay mandatory. Report the expanded inventory count separately. Do not claim that 252 covers it.
+The immutable 252-call catalogue stays. Its timed coverage checker predates F-288, F-289, and F-290. The final union public stub inventory enumerates every added or changed method and maps each new read-only, factory, global, and local method to its F-ID, its A-ID, and its timing disposition. Do not relabel a local method `WHOLE_DOCUMENT` only so the old checker passes. A transparent qualification driver may adapt only the post-pin coverage classification, with the new methods and the reasons named. It preserves all 252 old keys and all 73 required timings. It does not skip or drop broadly. A new local method that is not in the 73 stays outside the Q20 timing promise unless the original authoring plan already owns a performance criterion. Correctness, runtime, and stub tests for those methods stay mandatory. Report the expanded inventory count separately. Do not claim that 252 covers it.
 
-The full catalogue is 252, which is 250 timed calls plus 2 reads: 216 literal timed calls, 15 CoreProperties calls, 13 Section calls, 6 App calls, and 2 reads. Of those, 145 were the old growing set and 107 were the old non-growing set. Run all 252 without hiding status behind xfail. Report each slow residual. Do not copy a donor pass count. Existing non-growing calls that are not in the 65 keep the original bound of 2.5 times N plus 5 ms. Each of the 65 uses the Q20 bound: the 100-paragraph time is at most 1.5 times the 25-paragraph time plus 5 ms.
+The full catalogue is 252, which is 250 timed calls plus 2 reads: 216 literal timed calls, 15 CoreProperties calls, 13 Section calls, 6 App calls, and 2 reads. Of those, 145 were the old growing set and 107 were the old non-growing set. Run all 252 without hiding status behind xfail. Report each slow residual. Do not copy a donor pass count. Existing non-growing calls that are not in the 73 keep the original bound of 2.5 times N plus 5 ms. Each of the 73 uses the Q20 bound: the 100-paragraph time is at most 1.5 times the 25-paragraph time plus 5 ms.
 
 The final consumer is a fresh release install of Python 3.12 from the actual union source head, with the artifact SHA, interpreter, and config recorded. The external builders use 25 and 100 paragraphs, six formatted runs, a picture or table every 10th paragraph, two sections, a header, comments, and a control, for the qualified targets in the pin `4646db50ed783ddf4a2220f4b95a15ad7a225944`. Sampling alternates N and 4N, up to 3 fresh changed targets, and keeps the minimum the way `costs_ms` does. Two samples may stop early only when both fastest samples are above 50 ms. Setup, open, and build stay outside the clock. Every raw sample is retained. There is no concurrent compilation. The first sample is cold and stays visible. Warm statistics are separate. A cold walk and a fallback cost are disclosed. A warm minimum is not a constant-time claim. The original Issue 407 gate stays: mean of 3, 100 versus 1000 paragraphs, six verbose run-property runs, `large <= 3 * max(small, 1 ms)`, plus a separate fresh median of 7, for both cold and warm, on the original F-X266 methods. A native benchmark does not replace the Python public lookup, validation, and publication.
 
 Local counters sit at the real walk, parse, and serialization sites. Separate the owner-projection phase from the total public call. On a qualified case, 20 versus 80 or 50 versus 200 unrelated body blocks of equal piece count, the piece owner projection reads at most 2 pieces, and at most 1 piece after a qualified top splice or tail removal. That phase does not serialize an unrelated body block. Underlying staging may still serialize the current typed main part as the exact byte proof. Count those whole-main serialization bytes and that time separately. Do not hide them inside a zero reparse or zero canonicalization count. After the first unchanged main check, an eligible warm edit does 0 main reparses, 0 main canonicalizations, and 0 ZIP compare writes. That is not zero serialization for the whole call and it is not an O(1) whole call. The total public Python time covers lookup, validation, publication, and serialization. The existing F-X266 qualified direct-read and splice bound of no unrelated serialization stays unchanged. Misses and visited metadata are counted, so an O(N) metadata walk is disclosed and is not called O(1). Registry owner work keeps the existing F-X266 linear bound and is not quadratic. The cold proof body walk is counted separately. Native counters cover the current main parse, owner scan, canonicalization, and ZIP writes. Related-part checks are still counted. A constant entry counter is not proof. A build with the cache forced off, or a mutant that skips invalidation, must fail these asserts. Absence of a new helper is a compile failure, not that semantic RED. The debug full-path oracle is internal agreement, not external parity. Debug counters and release guards do not skip the production check.
 
-Memory, final Q18 rider only. The workload is 20000 paragraphs, six runs each, with fixed text and run formatting. Measure and report the actual main XML length. The donor 6 MiB claim is unverified. Use 3 paired alternating fresh processes. Record the median current RSS and report each peak, with the raw samples and the aggregation named, after open, after the first font edit, after 100 distinct warm edits, after clone and drop, after reopen and drop, and after the document drop. Pair a pre-cache commit baseline with the final release, sharing the inventory and otherwise equal. Record the baseline source, build, artifact, allocator, and process boundary. The shared cache may retain the opened baseline, one parsed model, and one serialized copy, and the current changed parts, plus bounded projection facts for each live piece. It does not retain a history per edit. N edits and 4N edits must not retain one baseline per edit. Clone ownership and reopen release stay safe. There is no 68 MiB pass claim and no hard budget the user did not choose. Measure authored and new-document fallback, and the unsavable namespace, duplicate part, signed, and embedded fallback times, separately. Correctness is mandatory on those paths.
+Memory, final Q18 and Q22 rider only. The workload is 20000 paragraphs, six runs each, with fixed text and run formatting. Measure and report the actual main XML length. The donor 6 MiB claim is unverified. Use 3 paired alternating fresh processes. Record the median current RSS and report each peak, with the raw samples and the aggregation named, after open, after the first font edit, after 100 distinct warm edits, after clone and drop, after reopen and drop, and after the document drop. Pair a pre-cache commit baseline with the final release, sharing the inventory and otherwise equal. Record the baseline source, build, artifact, allocator, and process boundary. The shared cache may retain the opened baseline, one parsed model, and one serialized copy, and the current changed parts, plus bounded projection facts for each live piece. It does not retain a history per edit. N edits and 4N edits must not retain one baseline per edit. Clone ownership and reopen release stay safe. There is no 68 MiB pass claim and no hard budget the user did not choose. The donor 68 MiB figure is not accepted. Measure authored and new-document fallback, and the unsavable namespace, duplicate part, signed, and embedded fallback times, separately. Correctness is mandatory on those paths.
+
+Q22 measures each cache layer on otherwise equal release builds, and it measures the combined footprint the same way. The layers are the PR418 parsed model and serialized copy, the PR419 reopen and identifier caches, and the PR420 body bytes and scans. Use true equivalent pre-layer and final variants. Retain the original fixture, statistics, raw RSS, peaks, clone, reopen, drop, and the N versus 4N history test. Do not add RSS deltas together and call that sum the combined footprint.
 
 ## Test matrix
 
@@ -252,6 +309,8 @@ Memory, final Q18 rider only. The workload is 20000 paragraphs, six runs each, w
 | C2 | Current versus default form value. Implicit and explicit protection | Facts change even when the generation does not | Semantic equality used as the only proof fails |
 | C3 | New document and reopened package. Partial write and whole write | Bytes and error order agree, or the ZIP fallback runs | A main-unchanged skip that ignores a related part fails |
 | C4 | No-op, refusal, and conservative splice | Handles and retired scopes match the old publication | A refusal that mutates, or a dead owner that returns, fails |
+| C5 | Opened UNBOUNDED package, new document, limited reopen, and both reopen routes | In-memory reuse matches ZIP bytes, errors, and identifier order only on the eligible path | A limited reopen or a changed relationship context that skips the ZIP path fails |
+| C6 | Direct slot zero, one, and many, nested controls, tables, cells, text boxes, and moved or repeated blocks | Span bytes match `to_xml`. Slot lookup matches the full snapshot before and after both reopen routes | An ordinal alias, an empty success, or a donor overwrite of form providers fails |
 
 Omitted permutations are the full cross product of those axes. Each axis above has one discriminating case. Same-consumer round trip does not replace the native, Python, stored, layout, and reopen comparison named in A3 and A5.
 
@@ -262,6 +321,10 @@ Native groups go in the existing `crates/rdocx/tests/integration_test.rs`:
 - `word_owner_pieces_follow_splices_and_fact_changing_publishers`
 - `unchanged_main_staging_preserves_save_bytes_and_error_order`
 - `unchanged_main_staging_reuse_counts_actual_work`
+- `in_memory_reopen_matches_zip_bytes_errors_and_identifier_order`
+- `body_span_serialization_matches_existing_xml`
+- `main_body_block_reuse_preserves_physical_owners_and_publication`
+- `body_lookup_work_is_linear_at_250_and_1000`
 
 Python groups go in the existing `crates/rdocx-py/tests/test_core.py`:
 
@@ -269,6 +332,10 @@ Python groups go in the existing `crates/rdocx-py/tests/test_core.py`:
 - `test_word_owner_pieces_follow_edits_splices_and_related_owners`
 - `test_unchanged_main_staging_keeps_forms_and_settings_authoritative`
 - `test_unchanged_main_staging_counts_actual_work`
+- `test_in_memory_reopen_keeps_related_parts_and_read_limits`
+- `test_body_block_reuse_preserves_forms_settings_and_live_owners`
+
+The original five native groups and four Python groups stay. A9 timings run only in the final union. The new named tests cover a forced fallback, a cache-off build, an invalidated context, and an actual RED on the old provenance. Inline unit helpers already in `document.rs` stay allowed.
 
 `crates/rdocx-py/tests/typing_smoke.py` changes only if a public Python signature changes. None is expected. The native test calls all four new `try_` methods. Each local batch names one RED case on the old unsavable mutation, one GREEN case on a valid document, and one negative control. Worker verification is scoped `cargo fmt` and clippy on the changed crates. It is not the full suite, Word, the hash harness, or the performance rider.
 
@@ -276,7 +343,7 @@ The Q19 RED captures the model, the bytes, and the live handles at the point whe
 
 ## Rejected alternatives
 
-- Importing PR415, PR417, or PR418 as a wholesale merge.
+- Importing PR415, PR417, PR418, PR419, or PR420 as a wholesale merge.
 - Trusting semantic `PartialEq` as the only cache proof.
 - Dropping the full-rebuild fallback in order to keep a fast path.
 - Making the old infallible Rust methods panic or return `Result`. Q21 rejects both.
@@ -287,9 +354,10 @@ The Q19 RED captures the model, the bytes, and the live handles at the point whe
 
 | Timing | Category | Test | Asserts |
 |---|---|---|---|
-| local scoped | regression | The five native groups and four Python groups above | Old-source semantic RED on the unsavable mutation. Fixed-source GREEN. Negative control on cache-off or a skipped invalidation |
+| local scoped | regression | The original five native groups and four Python groups | Old-source semantic RED on the unsavable mutation. Fixed-source GREEN. Negative control on cache-off or a skipped invalidation |
+| local scoped | regression | The four added native groups and two added Python groups | Forced fallback, cache off, invalidated context, and actual RED provenance. A9 timings stay out of this row |
 | local scoped | regression | Four `try_` methods | Index, text, zero-column, and namespace results. Old four methods unchanged |
-| final sprint | performance | Release Python 3.12, the 65 calls, the 252 catalogue, and the original 407 gate | A6 bounds and an individual residual report |
+| final sprint | performance | Release Python 3.12, the 73 calls, the five A9 calls, the 252 catalogue, and the original 407 gate | A6 and A9 bounds and an individual residual report |
 | final sprint | memory | The 20000-paragraph RSS rider | A7 samples. No invented cap |
 | final sprint | risk rider | `/verify --full`, hash, rustdoc, WASM, publish dry-run, installed stubs, and the prior seven Word and SSIM gates | A8. Unrun until the union |
 
@@ -312,6 +380,8 @@ Implementation leases, existing files only:
 - `crates/rdocx-py/src/document.rs`, `crates/rdocx-py/src/lib.rs`, `crates/rdocx-py/src/paragraph.rs`, `crates/rdocx-py/src/run.rs`, and `crates/rdocx-py/src/table.rs`
 - `crates/rdocx/tests/integration_test.rs` and inline units already in `document.rs`
 - `crates/rdocx-py/tests/test_core.py`
+- `crates/rdocx/src/content_control.rs`, only the existing indexed element lookup and `collect_control_ids`, composed with the final F-289 provider
+- `crates/rdocx-oxml/README.md`, only when an actual final inventory needs it
 
 No new source file, module, or test binary. README, the rdocx crate README, and `scripts/readme_doctests.py` change only for an actual final archive inventory, on the same pattern as a reviewed measurement, and not by copying donor figures. Stable Python is unchanged, so no new stub export is added.
 
@@ -323,11 +393,11 @@ Matched rows of `.claude/skills/risk-routing.md`, each added to the existing fin
 - WASM or PyO3 bindings. `cargo check --target wasm32-unknown-unknown`. Workspace tests keep `--exclude rdocx-py --exclude rpptx-py`.
 - Any parser or serialiser. Namespace replay and saved bytes stay exact apart from the requested edit.
 - Cached read facts or projections. Every fact-changing publisher is in A3, including an unchanged generation.
-- Performance budget or bounded-edit optimization. A6 and the local counters.
+- Performance budget or bounded-edit optimization. A6, A9, and the local counters.
 - Shared semantic behavior with multiple consumers. Native, Python, stored package, layout invalidation, and reopen.
 - Public API accepting raw XML bytes. Opaque bytes stay. The new refusal is only the namespace-owner save failure, not a general XML validator.
-- Grammar, scope, compatibility mode or empty collection. The C1 through C4 matrix.
-- Contributed PR or new issue acceptance. The three heads are pinned and are not accepted code.
+- Grammar, scope, compatibility mode or empty collection. The C1 through C6 matrix.
+- Contributed PR or new issue acceptance. The PR415, PR417, PR418, PR419, and PR420 heads are pinned and are not accepted code. The PR419 Actions log is donor evidence only.
 - Compatibility, numeric conversion or collection ordering. Owner order, error order, and the retained 407 gate.
 
 Rustdoc warnings are denied. Installed stub tests run in the union. F-288 A6 stays the native Word gate in that plan: Word-created originals and library-created files for all three kinds, with stored-property equality separated from Word-open formatting and calculation effects. It is unchanged and it is not an SSIM gate. F-289 A7 stays equal page count, exact text and checkbox semantics, per-page SSIM at least 0.95 at 144 DPI, matched fonts, deterministic drawing, and documented margin alignment. It is unrun. Other original story riders stay unchanged. No new Word oracle and no performance comparison against Word is invented. F-X267 M21 behavior stays on that story and is not attributed to F-X268.
@@ -344,7 +414,9 @@ Expected unchanged for existing fixtures touched by F-X268. Do not re-record a b
 - [ ] Add the hidden piece and staging helpers with the captured signatures.
 - [ ] Count real walk, parse, and serialization work.
 - [ ] Land the behavior commit separately from the performance commit.
-- [ ] Leave the 65-call, 252-call, memory, Word, and hash riders for the final union.
+- [ ] Leave the 73-call, A9, 252-call, memory, Word, and hash riders for the final union.
+- [ ] Add the eligible in-memory reopen and the direct-body span helpers with the captured signatures.
+- [ ] Keep `content_control.rs` to the indexed lookup and `collect_control_ids`, composed with the final F-289 provider.
 
 ## Open questions
 
@@ -354,9 +426,13 @@ Expected unchanged for existing fixtures touched by F-X268. Do not re-record a b
 | Q19 | F-X268 A1 | Refuse atomically in Rust and Python before mutation when a retained namespace owner would make saving fail. Valid documents keep working. Separate labelled behavior commit. | Answered 2026-10-24 by the user. "Refuse atomically in Rust and Python (Recommended)". Refined by Q21. |
 | Q20 | F-X268 A6 | Targeted 100-paragraph time is at most 1.5 times the 25-paragraph time plus 5 ms. Report every 252-call residual. Keep the original 407 gate. | Answered 2026-10-24 by the user. "Use these bounds and report residuals (Recommended)". |
 | Q21 | F-X268 A1 | Add the four checked Rust methods. The original four infallible methods keep legacy behavior and are exempt from Q19. Python uses the checked path without new names. | Answered 2026-10-24 by the user. "Add checked Rust methods (Recommended)". |
+| Q22 | F-X268 A7 | Apply the measured-memory policy to the PR419 and PR420 caches. Measure each layer and the combined footprint. Do not invent a cap and do not accept the donor 68 MiB figure. | Answered 2026-10-24 by the user. "Apply the measured-memory policy (Recommended)". Root approved the extension the same day. |
+| Q23 | F-X268 A6 and A9 | Add the 8 flat calls to the Q20 bound and add the five linear calls at 250 and 1000 paragraphs. Residuals and the 407 gate stay. | Answered 2026-10-24 by the user. "Use the added flat and linear gates (Recommended)". Root approved the extension the same day. |
 
-No open question remains. Answered questions do not approve this draft.
+No open question remains. Q18, Q19, Q20, and Q21 belong to the earlier approved contract. Q22 and Q23 belong to the approved refresh2 extension.
 
 ## Contract closure
 
-Codex root approved this contract on 2026-10-24 after reading the full draft and the revision delta. The canonical HEAD at approval is `c0b58c7fa8e4e919b9bfe5c02932f74827cea36b`, plus this working draft. Q18, Q19, Q20, and Q21 stay answered. The 65 targeted calls, the split of 62 catalogue keys plus 3 reads, the 252-call catalogue, the cache error rule, the counter split, the memory rule, and the public APIs are unchanged by this approval. The 7 to 12 developer-day figure stays a provisional planning estimate. No implementation has started. No gate pass is claimed.
+Codex root approved the contract that preceded this amendment on 2026-10-24 after reading the full draft and the revision delta. The canonical HEAD at that approval is `c0b58c7fa8e4e919b9bfe5c02932f74827cea36b`, plus the working draft of that day. Q18, Q19, Q20, and Q21 stay answered. That approval left the original 65 targeted calls, the split of 62 catalogue keys plus 3 reads, the 252-call catalogue, the cache error rule, the counter split, the memory rule, and the public APIs as then written. The 7 to 12 developer-day figure stays the historical estimate for that approved scope.
+
+Codex root approved the refresh2 extension on 2026-10-24 after reading the full revised contract and the four-file delta. The canonical HEAD at that approval is `0d8dfb68396e33ddfcaa0d9400c30c006e12d2b7`, plus this working draft. The extension revises the combined-scope estimate to 10 to 17 developer-days and adds mechanisms 5 and 6, the 8 flat calls, and A9. No implementation has started. No gate pass is claimed.

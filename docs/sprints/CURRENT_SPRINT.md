@@ -9,27 +9,30 @@ content-control model, and author mail-merge packages with offline diagnostics.
 Eight designs are approved. F-X264, F-X265, F-X266 and F-X267 are reviewed
 and integrated, and their final sprint gates are still pending. F-288 has its
 approved local provider prefix. Its final Word and sprint gates stay pending.
-F-289 is claimed. Its native increment has five named tests and a passing
-native check. Sixty-four existing regressions pass. One CLI path fails with
-NotFound and stays pending. The native interim microscope pass 1 records 8
-defects, 0 smells, and 0 nitpicks. It is not clean. The next work is that
-repair, then Python and the HLD updates, which stay pending. F-289 is not
-complete and has not passed a full gate. F-290 stays pending and unclaimed.
+F-289 is claimed. Native interim microscope pass 2 records 4 defects, D1,
+D3, D5, and D9, 0 smells, and 0 nitpicks. Repair 2 is still running. Its new
+tests are not all verified. There is no clean review. Python and the HLD
+updates stay pending. F-289 is not complete and has not passed a full gate.
+F-290 stays pending and unclaimed.
 F-X268 is pending, owner `-`. Its design is approved and it is not claimed.
-It follows F-289 and F-290, and it also waits for the actual F-X266 and
-F-X267 local prefix. It is not product implementation. The repairs do not
-replace the original authoring contract. The sprint now has eight stories.
-The previously authorized full run remains authorized. This approval does
-not ask for a new permission. No product choice is unanswered.
+Codex root approved the 2026-10-24 refresh2 extension. No implementation
+has started and no gate pass is claimed. It follows F-289 and F-290, and it also waits for actual completion of the
+approved F-X266 and F-X267 local provider checkpoints. That completion has
+not been performed. It is not product implementation. The
+repairs do not replace the original authoring contract. The sprint now has
+eight stories. The previously authorized full run remains authorized. This
+approval does not ask for a new permission. No product choice is unanswered.
 
 **Estimated effort**: the 12 to 17 developer-day figure applies only to the
 original three Rust and Python authoring stories, F-288, F-289 and F-290.
 The earlier 8 to 11 figure is the pre-Python native basis for those same three
 stories. The four repair designs add a provisional 15 to 24 developer-days.
 The expanded planning total is 27 to 41 developer-days for those original
-seven stories. That figure stays historical. The F-X268 draft records a
-provisional 7 to 12 developer-days. That figure is a planning estimate, not
-a measurement and not a capacity promise. It is not added to the historical
+seven stories. That figure stays historical. The approved F-X268 contract
+recorded a provisional 7 to 12 developer-days. That figure stays historical.
+The 2026-10-24 refresh2 amendment revises the combined scope to a provisional
+10 to 17 developer-days. Codex root approved that extension. It is
+not a measurement and not a capacity promise. It is not added to the historical
 27 to 41. These figures are estimates, not measurements, and they are not
 a capacity promise. The visible over-two-week
 scope is an approved intake. The sprint clock started with F-X264
@@ -44,6 +47,7 @@ full gate. F-X267 remains the largest repair.
   Section F-X268 defines the pending story. Its design is approved and the story is unclaimed.
   The durable issue and PR mapping is the S95.4 issue and PR intake, 2026-10-23 section in `docs/sprints/SPRINT_PLAN.md`.
   The 2026-10-24 refresh is a later section in the same file.
+  The 2026-10-24T13:49:35Z refresh is appended to that same intake.
   Eight designs are approved. F-X268 stays pending and unclaimed.
 - `docs/hld/03-architecture.md`, the existing legacy form, field, content-control,
   protection and mail-merge ownership contracts settle reuse of the document
@@ -86,13 +90,12 @@ distinct. Shared facade, binding or HLD files require serial ownership.
 All seven stories started pending and unclaimed. The seven designs are now
 approved. F-X264, F-X265, F-X266 and F-X267 are reviewed and integrated, with
 their final sprint gates pending. F-288 local prefix is recorded at
-`96718dadf6840fe6ff73663dff3cd2b286418844`. F-289 is claimed. Its native
-checkpoint has five named tests and a passing native check. Sixty-four
-existing regressions pass. One CLI path fails with NotFound and stays
-pending. Python and the HLD updates stay pending. The native interim
-microscope pass 1 records 8 defects, 0 smells, and 0 nitpicks. It is not
-clean and it does not approve completion. F-289 is not complete and has not
-passed a full gate. F-290 stays pending and unclaimed. The consumed
+`96718dadf6840fe6ff73663dff3cd2b286418844`. F-289 is claimed. Native interim
+microscope pass 2 records 4 defects, D1, D3, D5, and D9, 0 smells, and 0
+nitpicks. Repair 2 is still running. Its new tests are not all verified.
+There is no clean review. Python and the HLD updates stay pending. Pass 2
+does not approve completion. F-289 is not complete and has not passed a full
+gate. F-290 stays pending and unclaimed. The consumed
 local gate
 includes every named native group, A7 and the render fallback, the affected
 Python checks, a clean microscope, and that integrated ancestor. Reviewed
@@ -109,9 +112,10 @@ F-X266, and F-X260 and F-X262 for F-X267.
 
 Proposed serial integration, because leases overlap, is F-X264, F-X265,
 F-X266, F-X267, then F-288, then its verified local provider prefix, then
-F-289, then F-290. F-X268 follows F-289 and F-290, and it also waits for an
-approved local provider prefix of integrated F-X266 and F-X267. Those two
-providers are not done and are not final-accepted. F-X268 is not claimed.
+F-289, then F-290. F-X268 follows F-289 and F-290, and it also waits for actual completion of
+the approved F-X266 and F-X267 local provider checkpoints. Those checkpoints
+are approved contract and have not been performed. Those two providers are
+not done and are not final-accepted. F-X268 is not claimed.
 That order is not a set of invented formal dependencies. Formal dependencies
 for F-X268 are F-X266 and F-X267. Preserve the F-288 verified local provider
 prefix before F-289. Final Word qualification of that prefix stays pending.
@@ -224,4 +228,10 @@ The user adds the 2026-10-24T11:33:08Z refresh to active S95.4. The durable mapp
 
 Existing status and owners stay. F-288 stays done, with its recorded local prefix. F-289 stays claimed and in progress. Its native increment has five named tests and a passing native check. Sixty-four existing regressions pass. One CLI path fails with NotFound and stays pending. Python, HLD, and review stay pending. This checkpoint does not mark F-289 complete and does not claim a full gate. F-290 stays pending and unclaimed. F-X264, F-X265, F-X266, and F-X267 stay in progress and reviewed. Their final gates stay pending. Run state is not edited. `AS_BUILT.md` and `SPRINT_TRACKER.md` gain no row.
 
-The original seven-story estimate of 27 to 41 developer-days stays historical. The F-X268 estimate is unknown. The previously authorized full run remains authorized after Root approves the F-X268 design. This checkpoint does not ask for a new permission, claim a feature, commit, or push. F-X268 is not product implementation.
+The original seven-story estimate of 27 to 41 developer-days stays historical. The F-X268 estimate is unknown in this checkpoint. The previously authorized full run remains authorized after Root approves the F-X268 design. This checkpoint does not ask for a new permission, claim a feature, commit, or push. F-X268 is not product implementation.
+
+## Resume checkpoint, refresh2 amendment on 2026-10-24
+
+Receipt cutoff 2026-10-24T13:49:35Z. The same S95.4 intake in `docs/sprints/SPRINT_PLAN.md` records 11 open issues and 12 open pull requests. No issue changed. PR419 and PR420 are new. Nothing closed or merged. Heads 409 through 418 are unchanged. F-X268 stays pending, owner `-`, and unclaimed. Codex root approved the refresh2 extension on 2026-10-24 after reading the full revised contract and the four-file delta. The earlier approval paragraph stays historical. No implementation has started. No gate pass is claimed.
+
+Q22 is "Apply the measured-memory policy (Recommended)". Q23 is "Use the added flat and linear gates (Recommended)". Both were answered by the user on 2026-10-24. The combined-scope estimate is a provisional 10 to 17 developer-days. The earlier 7 to 12 figure and the seven-story 27 to 41 figure stay historical. Eight stories stay. Formal dependencies stay F-X266 and F-X267. Serial order still places F-X268 after F-289 and F-290. This checkpoint does not claim a feature, commit, push, or mark a story done.
