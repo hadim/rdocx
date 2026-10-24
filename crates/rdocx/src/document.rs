@@ -4910,7 +4910,7 @@ fn empty_section_properties() -> CT_SectPr {
 /// Each set represents one OOXML scope. References are deliberately excluded
 /// from definition sets, so a bookmark end, comment anchor, or numbering use
 /// does not collide with the definition it names.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DocumentIdentifiers {
     relationship_ids: HashMap<String, HashSet<String>>,
     bookmark_ids: HashSet<i32>,
@@ -6678,8 +6678,10 @@ pub struct Document {
 ///
 /// The record lives until the document is reopened, which in the binding is
 /// as long as the Python document lives, and keeps memory meanwhile: the
-/// main part parsed, about ten times the part's bytes, and the opened bytes
-/// of every part an edit has replaced since.
+/// main part parsed, about ten times the part's bytes, the part as the model
+/// serializes it, about its size, and the opened bytes of every part an edit
+/// has replaced since. A 6 MiB document.xml of 20000 paragraphs keeps about
+/// 68 MiB more after a first font edit.
 struct Parsed {
     /// The package as opened. Its parts share their bytes with the
     /// document's package until an edit replaces one, whose opened bytes
@@ -6695,6 +6697,21 @@ struct Parsed {
     /// The nested namespace owners of the main part, or `None` when the scan
     /// fails.
     nested_namespace_owners: OnceLock<Option<Vec<NestedNamespaceOwner>>>,
+    /// What canonicalizing drawing identifiers reads in the main part when it
+    /// has nothing to renumber there, or `None` when one of its checks fails.
+    unchanged_main_part: OnceLock<Option<UnchangedMainPart>>,
+}
+
+/// What canonicalizing drawing identifiers reads in a main part it has
+/// nothing to renumber in, found with the checks it makes, which all passed.
+struct UnchangedMainPart {
+    /// The main part as the typed model serializes it.
+    xml: Vec<u8>,
+    /// The body namespace bindings the checks read relationships with.
+    body_namespace_bindings: Vec<(String, String)>,
+    /// The drawing identifiers `xml` holds, or `None` when it cannot be read
+    /// for them.
+    drawing_ids: Option<HashSet<u32>>,
 }
 
 impl Parsed {
@@ -6705,6 +6722,7 @@ impl Parsed {
             main_part: main_part.to_owned(),
             main_document: OnceLock::new(),
             nested_namespace_owners: OnceLock::new(),
+            unchanged_main_part: OnceLock::new(),
         }
     }
 
@@ -6791,6 +6809,39 @@ fn without_staging_work<T>(run: impl FnOnce() -> T) -> T {
     let result = run();
     STAGING_WORK_PAUSED.set(paused);
     result
+}
+
+/// Asserts that canonicalizing beside an unchanged main part gave what the
+/// whole canonicalization gives: the same error, or the same model, package
+/// and identifiers.
+#[cfg(debug_assertions)]
+fn assert_same_canonicalization(
+    document: &Document,
+    result: &Result<()>,
+    full: &Document,
+    full_result: &Result<()>,
+) {
+    match (result, full_result) {
+        (Ok(()), Ok(())) => {}
+        (Err(error), Err(full_error)) => assert_eq!(error.to_string(), full_error.to_string()),
+        (result, full_result) => panic!(
+            "canonicalizing beside the unchanged main part gives {result:?} where the whole \
+             canonicalization gives {full_result:?}"
+        ),
+    }
+    assert!(
+        document.document == full.document
+            && document.document.to_xml().ok() == full.document.to_xml().ok(),
+        "canonicalizing beside the unchanged main part changes the model otherwise"
+    );
+    assert!(
+        document.package.same_package_as(&full.package),
+        "canonicalizing beside the unchanged main part changes the package otherwise"
+    );
+    assert!(
+        document.identifiers == full.identifiers,
+        "canonicalizing beside the unchanged main part changes the identifiers otherwise"
+    );
 }
 
 enum ChartPackageSource<'a> {
@@ -18143,7 +18194,177 @@ impl Document {
             .collect())
     }
 
+    /// Give the authored relationships and drawings of the main part and of
+    /// its related story parts their canonical identifiers. A main part with
+    /// nothing to renumber, as [`Document::unchanged_main_part`] checks, is
+    /// not read again: what the checks of a whole canonicalization found in
+    /// it the first time stands for it.
     fn canonicalize_drawing_ids(&mut self) -> Result<()> {
+        let Some(kept) = self.unchanged_main_part() else {
+            return self.canonicalize_all_drawing_ids();
+        };
+        let unchanged = kept
+            .unchanged_main_part
+            .get()
+            .and_then(Option::as_ref)
+            .expect("checked unchanged main part");
+        // Debug builds, which run the binding tests, canonicalize a copy that
+        // forgets the opening, the whole way, and compare.
+        #[cfg(debug_assertions)]
+        let mut full = self.clone_for_staging();
+        #[cfg(debug_assertions)]
+        {
+            full.parsed = None;
+        }
+        let result = self.canonicalize_beside_unchanged_main_part(unchanged);
+        #[cfg(debug_assertions)]
+        {
+            let full_result = without_staging_work(|| full.canonicalize_all_drawing_ids());
+            assert_same_canonicalization(self, &result, &full, &full_result);
+        }
+        result
+    }
+
+    /// The opening kept for a main part that canonicalizing drawing
+    /// identifiers has nothing to renumber in: it holds the bytes and the
+    /// model it was opened with, which serializes as it did, its
+    /// relationships and section references were all there when it was
+    /// opened, the references are in canonical order, and it holds no
+    /// authored drawing or nested story relationship. The checks a whole
+    /// canonicalization makes on it passed when first made, with the same
+    /// body namespace bindings.
+    fn unchanged_main_part(&self) -> Option<Arc<Parsed>> {
+        let kept = self.kept_main_part()?;
+        let owner_identity = relationship_owner_identity(&self.doc_part_name);
+        if self
+            .identifiers
+            .authored_nested_story_relationship_ids
+            .get(&owner_identity)
+            .is_some_and(|ids| !ids.is_empty())
+        {
+            return None;
+        }
+        let preserved = self
+            .identifiers
+            .preserved_relationship_ids
+            .get(&owner_identity);
+        let preserved = |id: &String| preserved.is_some_and(|ids| ids.contains(id));
+        if self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .is_some_and(|relationships| {
+                !relationships
+                    .items
+                    .iter()
+                    .all(|relationship| preserved(&relationship.id))
+            })
+        {
+            return None;
+        }
+        if let Some(section) = &self.document.body.sect_pr
+            && (!section
+                .header_refs
+                .iter()
+                .chain(&section.footer_refs)
+                .all(|reference| preserved(&reference.rel_id))
+                || !section
+                    .header_refs
+                    .is_sorted_by_key(|reference| hdr_ftr_type_order(reference.hdr_ftr_type))
+                || !section
+                    .footer_refs
+                    .is_sorted_by_key(|reference| hdr_ftr_type_order(reference.hdr_ftr_type)))
+        {
+            return None;
+        }
+        let mut authored_drawing = false;
+        visit_authored_drawings(&self.document.body.content, &mut |_| {
+            authored_drawing = true;
+        });
+        if authored_drawing || kept.main_document() != Some(&self.document) {
+            return None;
+        }
+        let unchanged = kept
+            .unchanged_main_part
+            .get_or_init(|| self.unchanged_main_part_checks().ok())
+            .as_ref()?;
+        if unchanged.body_namespace_bindings != self.body_namespace_bindings
+            || self.document.to_xml().ok()? != unchanged.xml
+        {
+            return None;
+        }
+        Some(kept)
+    }
+
+    /// The checks [`Document::canonicalize_all_drawing_ids`] makes on a main
+    /// part it has nothing to renumber in, in its order, and what they read
+    /// there: the part as the model serializes it and its drawing
+    /// identifiers.
+    fn unchanged_main_part_checks(&self) -> Result<UnchangedMainPart> {
+        note_staging_work(|work| {
+            work.canonicalized += self
+                .package
+                .get_part(&self.doc_part_name)
+                .map_or(0, <[u8]>::len);
+        });
+        let mut modeled_story_relationships = Vec::new();
+        collect_relationship_ids(
+            &self.document.body.content,
+            &mut modeled_story_relationships,
+        );
+        if let Some(section) = &self.document.body.sect_pr {
+            for reference in section.header_refs.iter().chain(&section.footer_refs) {
+                if !modeled_story_relationships.contains(&reference.rel_id) {
+                    modeled_story_relationships.push(reference.rel_id.clone());
+                }
+            }
+        }
+        self.opaque_relationship_ids_from_serialized_story(&modeled_story_relationships)?;
+        let xml = self.document.to_xml()?;
+        xml_relationship_ids_in_order_with_bindings(&xml, &self.body_namespace_bindings)?;
+        authored_drawing_slots_in_source_order(&xml, &[], &HashSet::new())?;
+        let drawing_ids = drawing_ids_in_xml(&xml).ok();
+        xml_relationship_ids_in_order(&xml)?;
+        Ok(UnchangedMainPart {
+            xml,
+            body_namespace_bindings: self.body_namespace_bindings.clone(),
+            drawing_ids,
+        })
+    }
+
+    /// What [`Document::canonicalize_all_drawing_ids`] does beside a main
+    /// part it has nothing to renumber in: the related story parts and the
+    /// image parts are canonicalized, and the main part keeps its
+    /// relationships, drawings and authored registries.
+    fn canonicalize_beside_unchanged_main_part(
+        &mut self,
+        unchanged: &UnchangedMainPart,
+    ) -> Result<()> {
+        let owner_identity = relationship_owner_identity(&self.doc_part_name);
+        self.identifiers
+            .authored_nested_story_relationship_ids
+            .remove(&owner_identity);
+        let related_parts = self.related_story_parts();
+        let mut occupied_drawings = self.identifiers.preserved_drawing_ids.clone();
+        if let Some(live_ids) = &unchanged.drawing_ids {
+            occupied_drawings.extend(live_ids);
+        }
+        for part in &related_parts {
+            if !self.identifiers.authored_story_parts.contains(part)
+                && let Some(xml) = self.package.get_part(part)
+                && let Ok(live_ids) = drawing_ids_in_xml(xml)
+            {
+                occupied_drawings.extend(live_ids);
+            }
+        }
+        self.identifiers
+            .authored_nested_story_drawing_ids
+            .remove(&owner_identity);
+        self.canonicalize_related_story_relationships(&related_parts, &mut occupied_drawings)?;
+        self.identifiers.drawing_ids = occupied_drawings;
+        self.canonicalize_image_parts(true)
+    }
+
+    fn canonicalize_all_drawing_ids(&mut self) -> Result<()> {
         let owner = self.doc_part_name.clone();
         let owner_identity = relationship_owner_identity(&owner);
         note_staging_work(|work| {
@@ -18558,7 +18779,7 @@ impl Document {
         }
         self.canonicalize_related_story_relationships(&related_parts, &mut occupied_drawings)?;
         self.identifiers.drawing_ids = occupied_drawings;
-        self.canonicalize_image_parts()?;
+        self.canonicalize_image_parts(false)?;
         Ok(())
     }
 
@@ -18858,13 +19079,35 @@ impl Document {
         Ok(())
     }
 
-    fn canonicalize_image_parts(&mut self) -> Result<()> {
+    /// Move each authored image part to its canonical name. With
+    /// `main_checked`, the main part serializes as when its checks passed, and
+    /// when each of its image relationships names a part that was there when
+    /// it was opened, it gives no part to move, in any order.
+    fn canonicalize_image_parts(&mut self, main_checked: bool) -> Result<()> {
         let mut ordered = Vec::new();
-        let main_xml = self.document.to_xml()?;
-        let mut owners = vec![(
-            self.doc_part_name.clone(),
-            xml_relationship_ids_in_order(&main_xml)?,
-        )];
+        let main_moves_nothing = main_checked
+            && self
+                .package
+                .get_part_rels(&self.doc_part_name)
+                .is_none_or(|relationships| {
+                    relationships
+                        .items
+                        .iter()
+                        .filter(|relationship| relationship.rel_type == rel_types::IMAGE)
+                        .all(|relationship| {
+                            self.identifiers
+                                .part_is_preserved(&OpcPackage::resolve_rel_target(
+                                    &self.doc_part_name,
+                                    &relationship.target,
+                                ))
+                        })
+                });
+        let main_ids = if main_moves_nothing {
+            Vec::new()
+        } else {
+            xml_relationship_ids_in_order(&self.document.to_xml()?)?
+        };
+        let mut owners = vec![(self.doc_part_name.clone(), main_ids)];
         for owner in self.related_story_parts() {
             let owner_identity = relationship_owner_identity(&owner);
             if self.identifiers.authored_story_parts.contains(&owner)
