@@ -11544,3 +11544,87 @@ def test_staging_reads_the_main_part_once_while_it_keeps_its_opened_bytes(edit):
             sample.append(list(work()))
         counts.append(sample)
     assert counts[0] == counts[1] == [[0, 0, 0, 0], [0, 0, 0, 0]], counts
+
+
+def _reopen_work():
+    from rdocx import _rdocx
+
+    work = getattr(_rdocx, "_reopen_work", None)
+    if work is None:
+        pytest.skip("the reopen work counter exists in debug builds only")
+    return work
+
+
+def _main_part_keeping_edits():
+    """Edits whose commit leaves the main document part as the last commit left it, each given the document and
+    returning the call that makes the edit, or a document read again and that call: the calls of the rdocx-skills
+    scaling test that keep the main part. A local edit of the body leaves the main part to the next commit, so the
+    targets are made by commits, or read again."""
+    import rdocx
+
+    def paragraph(doc):
+        return next(p for p in reversed(list(doc.paragraphs)) if p.text.startswith("run 0 of paragraph"))
+
+    def footnote(doc):
+        return doc.add_footnote(paragraph(doc), "note")
+
+    def chart_legend(doc):
+        data = rdocx.CategoryChartData()
+        data.categories = ["a", "b"]
+        data.add_series("s", (1, 2))
+        doc.add_chart(rdocx.XL_CHART_TYPE.COLUMN_CLUSTERED, data, rdocx.Inches(4), rdocx.Inches(3))
+        doc = rdocx.Document.from_bytes(doc.to_bytes())
+        chart = doc.paragraphs[-1]
+        return doc, lambda: doc.set_chart_legend(chart, visible=True, position="b")
+
+    def watermark(doc):
+        section = doc.section(0)
+        section.set_text_watermark("DRAFT", width=rdocx.Inches(4), height=rdocx.Inches(1), font_size=rdocx.Pt(36))
+        return section
+
+    image = _one_pixel_png(b"\x00\x00\xff")
+    return {
+        "HeaderFooter.add_paragraph": lambda doc: (lambda header: lambda: header.add_paragraph("x"))(
+            doc.section(0).header),
+        "HeaderFooter.add_table": lambda doc: (lambda header: lambda: header.add_table(1, 1))(doc.section(0).header),
+        "FootnoteEndnote.add_paragraph": lambda doc: (lambda note: lambda: note.add_paragraph("x"))(footnote(doc)),
+        "FootnoteEndnote.add_table": lambda doc: (lambda note: lambda: note.add_table(1, 1))(footnote(doc)),
+        "SectionHandle.set_text_watermark": lambda doc: lambda: doc.section(0).set_text_watermark(
+            "COPY", width=rdocx.Inches(4), height=rdocx.Inches(1), font_size=rdocx.Pt(36)),
+        "SectionHandle.set_image_watermark": lambda doc: lambda: doc.section(0).set_image_watermark(
+            image, "mark.png", width=rdocx.Inches(2), height=rdocx.Inches(2)),
+        "SectionHandle.remove_watermark": lambda doc: watermark(doc).remove_watermark,
+        "Document.replace_image": lambda doc: (lambda rid: lambda: doc.replace_image(rid, image))(
+            doc.pictures()[-1].relationship_id),
+        "Document.replace_image_for_story": lambda doc: (lambda rid: lambda: doc.replace_image_for_story(
+            next(s for s in doc.stories if s.kind == "body"), rid, image))(doc.pictures()[-1].relationship_id),
+        "Document.add_custom_xml_store": lambda doc: lambda: doc.add_custom_xml_store(b"<data><v>1</v></data>"),
+        "Document.set_chart_legend": chart_legend,
+    }
+
+
+@pytest.mark.parametrize("edit", sorted(_main_part_keeping_edits()))
+def test_a_commit_that_keeps_the_main_part_reopens_without_reading_it(edit):
+    import rdocx
+
+    # A commit of a document read from bytes reopens its package in memory, as a write and a read of the ZIP would.
+    # With the main document part left as the last commit left it, the reopen parses none of it and scans none of it
+    # for identifiers: it scans as many bytes in a body four times as large. The staging of the first commit after an
+    # opening still parses the main part once, which this reopen counter does not count. Debug builds also reopen
+    # through the ZIP and assert the same document.
+    work = _reopen_work()
+    counts = []
+    for paragraphs in (20, 80):
+        doc = _word_piece_document(paragraphs)
+        made = _main_part_keeping_edits()[edit](doc)
+        doc, call = made if isinstance(made, tuple) else (doc, made)
+        work()
+        call()
+        counts.append(work())
+        reopened = rdocx.Document.from_bytes(doc.to_bytes())
+        assert [p.text for p in reopened.paragraphs] == [p.text for p in doc.paragraphs]
+    (zip_writes, main_parses, scanned), large = counts
+    assert zip_writes == main_parses == large[0] == large[1] == 0, (edit, counts)
+    # An identifier written into a changed part may take one more digit in the larger document. Scanning the main
+    # part again would add the tens of kilobytes its 60 more paragraphs hold.
+    assert abs(large[2] - scanned) <= 16, (edit, counts)
