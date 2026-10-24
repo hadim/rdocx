@@ -7208,13 +7208,15 @@ impl MainPartBlocks {
 
     /// Whether the part these blocks make parses to `document`, as
     /// `CT_Document::from_xml(part) == Ok(document)` tells, or `None` when a
-    /// block does not parse back to itself or the frame does not parse.
+    /// block does not parse back to itself or the frame does not parse, or
+    /// parses to body children.
     fn parses_to(&self, document: &CT_Document) -> Option<bool> {
         let frame = self.frame()?;
-        if !self
-            .blocks
-            .iter()
-            .all(|block| block.parses_back(self.root()))
+        if !frame.body.content.is_empty()
+            || !self
+                .blocks
+                .iter()
+                .all(|block| block.parses_back(self.root()))
         {
             return None;
         }
@@ -7322,6 +7324,39 @@ impl MainPartBlocks {
                 CT_Document::from_xml(&part).ok()
             })
             .as_ref()
+    }
+
+    /// The blocks of `part`, a main part whose body children parse to
+    /// `content`, each child with the bytes before it. Each parses alone to
+    /// its value, since the body parser reads each child alone under the
+    /// root and a plain body start, and takes only the first section
+    /// properties for the body's, which [`body_children`] finds last. `None`
+    /// when it does not find the children, or as many as `content` holds.
+    fn read(part: &Arc<Vec<u8>>, content: &[BodyContent]) -> Option<Self> {
+        let (head, children, tail) = body_children(part)?;
+        if children.len() != content.len() {
+            return None;
+        }
+        let head = part[..head].to_vec();
+        let blocks = children
+            .into_iter()
+            .zip(content)
+            .map(|(child, item)| {
+                Arc::new(BodyBlockScan {
+                    parsed: true,
+                    ..BodyBlockScan::of(part[child].to_vec(), Some(item.clone()))
+                })
+            })
+            .collect();
+        Some(Self {
+            root: root_start_tag(&head)?,
+            head,
+            tail: part[tail..].to_vec(),
+            blocks,
+            part: Some(Arc::clone(part)),
+            frame: OnceLock::new(),
+            nested_namespace_owners: OnceLock::new(),
+        })
     }
 
     /// What [`CT_Document::from_xml`] gives for the part these blocks are,
@@ -7880,6 +7915,73 @@ fn root_start_tag(xml: &[u8]) -> Option<Range<usize>> {
             Event::Eof | Event::Empty(_) => return None,
             _ => buffer.clear(),
         }
+    }
+}
+
+/// Where the body children of the main part `xml` lie: the end of its body
+/// start tag, a plain `<w:body>` in a `w:document` root, which a child read
+/// alone is closed with, each direct child of the body with the bytes
+/// before it since the previous child, and the start of the bytes after the
+/// children, which hold section properties when they are the last child.
+/// `None` when section properties are another child, the root or the body
+/// starts otherwise, or `xml` does not read.
+fn body_children(xml: &[u8]) -> Option<(usize, Vec<Range<usize>>, usize)> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut body = None;
+    let mut children = Vec::new();
+    let mut from = 0;
+    let mut section = None;
+    loop {
+        let at = reader.buffer_position() as usize;
+        let event = reader.read_event_into(&mut buffer).ok()?;
+        let after = reader.buffer_position() as usize;
+        let closed = match &event {
+            Event::Start(element) | Event::Empty(element) => {
+                if depth == 0
+                    && !(xml[at..].starts_with(b"<w:document")
+                        && matches!(xml.get(at + 11), Some(b'>' | b' ' | b'\t' | b'\r' | b'\n')))
+                {
+                    return None;
+                }
+                if depth == 1 && body.is_none() && element.local_name().as_ref() == b"body" {
+                    if &xml[at..after] != b"<w:body>" {
+                        return None;
+                    }
+                    body = Some(after);
+                    from = after;
+                } else if depth == 2 && body.is_some() {
+                    if section.is_some() {
+                        return None;
+                    }
+                    if element.local_name().as_ref() == b"sectPr" {
+                        section = Some(from);
+                    }
+                }
+                let closed = depth == 2 && matches!(event, Event::Empty(_));
+                depth += usize::from(matches!(event, Event::Start(_)));
+                closed
+            }
+            Event::End(_) => {
+                depth = depth.checked_sub(1)?;
+                if depth == 1
+                    && let Some(body) = body
+                {
+                    return Some((body, children, section.unwrap_or(from)));
+                }
+                depth == 2
+            }
+            Event::Eof => return None,
+            _ => false,
+        };
+        if closed && body.is_some() {
+            if section.is_none() {
+                children.push(from..after);
+            }
+            from = after;
+        }
+        buffer.clear();
     }
 }
 
@@ -12669,7 +12771,7 @@ pub(crate) fn set_story_source_xml(
         // the model is parsed only where it differs from them.
         let xml = Arc::new(xml);
         let blocks = match document.source_blocks(&xml) {
-            Some((mut blocks, replaced, items, reparsed)) => {
+            Some((mut blocks, replaced, items, reparsed, serialized)) => {
                 let frame = blocks.frame().expect("parsed source frame");
                 let model = &mut document.document;
                 model.extra_namespaces.clone_from(&frame.extra_namespaces);
@@ -12695,7 +12797,7 @@ pub(crate) fn set_story_source_xml(
                         "the blocks of a story source parse to another model than the source"
                     );
                 }
-                Some(blocks)
+                Some((blocks, serialized))
             }
             None => {
                 note_staging_work(|work| work.parsed += xml.len());
@@ -12706,17 +12808,21 @@ pub(crate) fn set_story_source_xml(
         let owners = OnceLock::new();
         match blocks
             .as_ref()
-            .and_then(MainPartBlocks::nested_namespace_owners)
+            .and_then(|(blocks, _)| blocks.nested_namespace_owners())
         {
             Some(found) => {
                 let _ = owners.set(Some(found.to_vec()));
             }
             None => note_staging_work(|work| work.scanned += xml.len()),
         }
-        if let Some(blocks) = blocks {
+        if let Some((blocks, serialized)) = blocks {
             let mut scans = document.lock_main_body_scans();
-            scans.blocks.clone_from(&blocks.blocks);
-            scans.fingerprint = None;
+            // Blocks read against the bytes the package held are not those
+            // of a serialization.
+            if serialized {
+                scans.blocks.clone_from(&blocks.blocks);
+                scans.fingerprint = None;
+            }
             scans.written = Some(Arc::new(blocks));
         }
         (
@@ -23098,15 +23204,11 @@ impl Document {
     }
 
     /// The blocks `xml` is made of, a main part story source: the main part
-    /// as the model serializes it with the bytes of some body children
-    /// replaced. The bytes the source keeps are the blocks of the model, and
-    /// the bytes it replaces are parsed alone, element by element. Returns
-    /// the blocks, the body children replaced and those the replacing bytes
-    /// parse to. `None` when the replacing bytes reach the frame or are not
-    /// whole elements, or a block or element does not parse back alone. A
-    /// kept block with a field is parsed again too, and returned with its
-    /// index.
-    #[allow(clippy::type_complexity)]
+    /// as the model serializes it, or else as the package holds it while
+    /// its blocks hold the body children of the model, with the bytes of
+    /// some body children replaced. Also returns whether the source was
+    /// read against the serialization.
+    #[allow(clippy::type_complexity)] // The blocks, what they replace and read again, the base.
     fn source_blocks(
         &self,
         xml: &[u8],
@@ -23115,21 +23217,68 @@ impl Document {
         Range<usize>,
         Vec<BodyContent>,
         Vec<(usize, BodyContent)>,
+        bool,
     )> {
         let (current, blocks) = self.serialized_main_part().ok()?;
-        let blocks = blocks?;
-        let same = current.iter().zip(xml).take_while(|(a, b)| a == b).count();
-        let same_end = if same == current.len() && same == xml.len() {
-            // An unchanged source replaces nothing, after the last child.
-            current.len() - blocks.head.len()
-        } else {
-            current[same..]
+        let found = blocks.and_then(|blocks| self.source_blocks_in(&current, blocks, xml));
+        if let Some((blocks, replaced, items, reparsed)) = found {
+            return Some((blocks, replaced, items, reparsed, true));
+        }
+        let held = self.package_main_part_blocks()?;
+        let content = &self.document.body.content;
+        if held.blocks.len() != content.len()
+            || held
+                .blocks
                 .iter()
-                .rev()
-                .zip(xml[same..].iter().rev())
-                .take_while(|(a, b)| a == b)
-                .count()
+                .zip(content)
+                .any(|(block, item)| block.value.as_ref() != Some(item))
+        {
+            return None;
+        }
+        let blocks = MainPartBlocks {
+            part: None,
+            nested_namespace_owners: OnceLock::new(),
+            ..(*held).clone()
         };
+        let (blocks, replaced, items, reparsed) =
+            self.source_blocks_in(held.part.as_deref()?, blocks, xml)?;
+        Some((blocks, replaced, items, reparsed, false))
+    }
+
+    /// The blocks `xml` is made of: `current`, made of `blocks`, with the
+    /// bytes of some body children replaced. The bytes the source keeps are
+    /// the blocks, and the bytes it replaces are parsed alone, element by
+    /// element. Returns the blocks, the body children replaced and those
+    /// the replacing bytes parse to. `None` when the replacing bytes reach
+    /// the frame or are not whole elements, or a block or element does not
+    /// parse back alone. A kept block with a field is parsed again too, and
+    /// returned with its index.
+    #[allow(clippy::type_complexity)] // The blocks and what they replace and read again.
+    fn source_blocks_in(
+        &self,
+        current: &[u8],
+        blocks: MainPartBlocks,
+        xml: &[u8],
+    ) -> Option<(
+        MainPartBlocks,
+        Range<usize>,
+        Vec<BodyContent>,
+        Vec<(usize, BodyContent)>,
+    )> {
+        // Bytes the source shares past the children are the tail's, and an
+        // unchanged source replaces nothing, after the last child.
+        let same = current
+            .iter()
+            .zip(xml)
+            .take_while(|(a, b)| a == b)
+            .count()
+            .min(current.len() - blocks.tail.len());
+        let same_end = current[same..]
+            .iter()
+            .rev()
+            .zip(xml[same..].iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
         if same < blocks.head.len() || same_end < blocks.tail.len() {
             return None;
         }
@@ -23246,6 +23395,41 @@ impl Document {
         let part = written.part.as_deref()?;
         let current = self.package.get_part(&self.doc_part_name)?;
         std::ptr::eq(part.as_slice(), current).then_some(written)
+    }
+
+    /// The blocks of the main part as the package holds it: those a flush
+    /// or a story source wrote it from, or, while it holds the bytes the
+    /// document was opened with and the opening parsed them, its body
+    /// children read once with their values in that parse, which the
+    /// scans then keep as written.
+    fn package_main_part_blocks(&self) -> Option<Arc<MainPartBlocks>> {
+        if let Some(written) = self.main_part_blocks() {
+            return Some(written);
+        }
+        let kept = self.kept_main_part()?;
+        let opened = kept.main_document.get()?.as_ref()?;
+        let current = self.package.get_part(&self.doc_part_name)?;
+        let part = self
+            .package
+            .parts
+            .values()
+            .find(|bytes| std::ptr::eq(bytes.as_slice(), current))?;
+        let blocks = MainPartBlocks::read(part, &opened.body.content)
+            .filter(|blocks| blocks.parses_to(opened) == Some(true))?;
+        // Debug builds, which run the binding tests, parse each child alone.
+        #[cfg(debug_assertions)]
+        without_staging_work(|| {
+            assert!(
+                blocks
+                    .blocks
+                    .iter()
+                    .all(|block| block.reparsed(blocks.root()) == block.value),
+                "a body child of the opened main part parses alone to another value"
+            )
+        });
+        let blocks = Arc::new(blocks);
+        self.lock_main_body_scans().written = Some(Arc::clone(&blocks));
+        Some(blocks)
     }
 
     /// The main part as the model serializes it, from the bytes of the kept
