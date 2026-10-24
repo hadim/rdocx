@@ -8725,6 +8725,8 @@ struct BlockStagingReads {
     /// The identifiers defined, as [`main_part_identifier_definitions`]
     /// reads them.
     definitions: OnceLock<Option<Vec<IdentifierDefinition>>>,
+    /// Whether [`xml_decodes`] reads the bytes.
+    decodes: OnceLock<bool>,
 }
 
 /// What a main part holds around its body children, read alone.
@@ -8820,6 +8822,13 @@ impl BodyBlockScan {
             })
     }
 
+    fn decodes(&self, root: &[u8]) -> bool {
+        *self
+            .staging
+            .decodes
+            .get_or_init(|| xml_decodes(&self.alone(root).0))
+    }
+
     fn definitions(&self, root: &[u8]) -> Option<&[IdentifierDefinition]> {
         self.staging
             .definitions
@@ -8874,6 +8883,16 @@ impl MainStoryLayout {
                 ..owner.clone()
             })
             .partition(|owner| owner.full.start < self.content.start)
+    }
+
+    /// The kind of each owner of [`Self::owners`], in order.
+    fn owner_kinds(&self) -> Vec<StoryKind> {
+        let (head, tail) = self.frame_owners();
+        head.iter()
+            .chain(self.blocks.iter().flat_map(|(_, block)| block.owners()))
+            .chain(&tail)
+            .map(|owner| owner.kind)
+            .collect()
     }
 
     /// [`scan_story_owners`] of the part `xml` as the body story's root.
@@ -9474,6 +9493,92 @@ struct XmlElementFrame {
     word_prefixes: Vec<String>,
     opaque: bool,
     typed_sdt_content_seen: bool,
+}
+
+/// Whether every event of `xml` reads, and every attribute of its elements
+/// parses and decodes, so that a whole scan of a part that reads and
+/// decodes them raises nothing in these bytes.
+fn xml_decodes(xml: &[u8]) -> bool {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element) | Event::Empty(element)) => {
+                for attribute in element.attributes() {
+                    let Ok(attribute) = attribute else {
+                        return false;
+                    };
+                    if attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .is_err()
+                        || attribute
+                            .key
+                            .as_ref()
+                            .strip_prefix(b"xmlns:")
+                            .is_some_and(|prefix| std::str::from_utf8(prefix).is_err())
+                    {
+                        return false;
+                    }
+                }
+            }
+            Ok(Event::Eof) => return true,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+        buffer.clear();
+    }
+}
+
+/// The marker of the scoped proof: the first that neither `original` nor
+/// `restored` holds.
+fn scoped_proof_marker(original: &[u8], restored: &[u8]) -> Result<String> {
+    let mut identity = 0usize;
+    loop {
+        let marker = format!("rdocxScopedPositionProof{identity}");
+        if !original
+            .windows(marker.len())
+            .any(|bytes| bytes == marker.as_bytes())
+            && !restored
+                .windows(marker.len())
+                .any(|bytes| bytes == marker.as_bytes())
+        {
+            return Ok(marker);
+        }
+        identity = identity
+            .checked_add(1)
+            .ok_or_else(|| Error::Other("scoped source proof identity exhausted".into()))?;
+    }
+}
+
+/// The block of the scoped proof that holds `marker` in place of
+/// `selected_closed`, a qualified Word block with its namespaces closed.
+fn scoped_proof_sentinel(selected_closed: &[u8], marker: &str) -> Result<String> {
+    let mut reader = NsReader::from_reader(selected_closed);
+    let (namespace, event) = reader
+        .read_resolved_event()
+        .map_err(|error| Error::Other(error.to_string()))?;
+    let root = match event {
+        Event::Start(element) | Event::Empty(element) => element,
+        _ => return Err(Error::Other("scoped source proof has no root".into())),
+    };
+    if !word_element(&namespace) {
+        return Err(Error::Other(
+            "scoped source proof needs a qualified Word block".into(),
+        ));
+    }
+    let paragraph =
+        format!(r#"<w:p xmlns:w="{WORD_NAMESPACE}"><w:r><w:t>{marker}</w:t></w:r></w:p>"#);
+    Ok(match root.local_name().as_ref() {
+        b"p" => paragraph,
+        b"tbl" => format!(
+            r#"<w:tbl xmlns:w="{WORD_NAMESPACE}"><w:tr><w:tc>{paragraph}</w:tc></w:tr></w:tbl>"#
+        ),
+        b"tc" => format!(r#"<w:tc xmlns:w="{WORD_NAMESPACE}">{paragraph}</w:tc>"#),
+        b"sdt" => format!(
+            r#"<w:sdt xmlns:w="{WORD_NAMESPACE}"><w:sdtPr/><w:sdtContent>{paragraph}</w:sdtContent></w:sdt>"#
+        ),
+        _ => return Err(Error::Other("unsupported scoped source proof kind".into())),
+    })
 }
 
 fn word_element(namespace: &ResolveResult<'_>) -> bool {
@@ -11267,8 +11372,17 @@ fn content_fragment_root_is_section_properties(xml: &[u8], item: &StoryItemSpan)
 }
 
 fn direct_story_content_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemSpan>> {
+    direct_story_content_items_in(xml, owner, scan_story_items(xml, owner, None)?)
+}
+
+/// The direct content items of `owner` in `xml` among its story `items`.
+fn direct_story_content_items_in(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    story_items: Vec<StoryItemSpan>,
+) -> Result<Vec<StoryItemSpan>> {
     let mut items = Vec::new();
-    for item in scan_story_items(xml, owner, None)? {
+    for item in story_items {
         if !item.direct_owner_child {
             continue;
         }
@@ -24541,6 +24655,17 @@ impl Document {
         &'a self,
         story: &StoryId,
     ) -> Result<(StorySource<'a>, StoryOwnerSpan)> {
+        let (source, owner, _) = self.fragment_story_source_owner_and_owners(story)?;
+        Ok((source, owner))
+    }
+
+    /// [`Self::fragment_story_source_and_owner`], with every owner of the
+    /// source part, in order.
+    #[allow(clippy::type_complexity)] // The source, the owner and the source's owners.
+    fn fragment_story_source_owner_and_owners<'a>(
+        &'a self,
+        story: &StoryId,
+    ) -> Result<(StorySource<'a>, StoryOwnerSpan, Vec<StoryOwnerSpan>)> {
         let (canonical, _) = self.story_source_and_owner(story)?;
         let xml = self.package.get_part(&canonical.part_name).ok_or_else(|| {
             Error::Other(format!(
@@ -24548,9 +24673,11 @@ impl Document {
                 canonical.part_name
             ))
         })?;
-        let owner = scan_story_owners(xml, canonical.root_kind)?
-            .into_iter()
+        let owners = scan_story_owners(xml, canonical.root_kind)?;
+        let owner = owners
+            .iter()
             .find(|owner| owner.kind == story.kind && owner.owner_index == story.owner_index)
+            .cloned()
             .ok_or_else(|| StoryError::OwnerNotFound {
                 story: story.clone(),
             })?;
@@ -24560,6 +24687,7 @@ impl Document {
                 ..canonical
             },
             owner,
+            owners,
         ))
     }
 
@@ -40494,17 +40622,33 @@ impl Document {
         };
         // Flush only the private candidate before choosing the preserved physical span.
         candidate.prepare_staged_package()?;
-        let (canonical, canonical_owner) = candidate.story_source_and_owner(&story)?;
-        let (source, owner) = candidate.fragment_story_source_and_owner(&story)?;
-        let canonical_owners = scan_story_owners(&canonical.xml, canonical.root_kind)?;
-        let actual_owners = scan_story_owners(&source.xml, source.root_kind)?;
+        // The canonical owners and items are read in the body children that
+        // hold them.
+        let (canonical, canonical_owner, layout) =
+            candidate.story_source_owner_and_layout(&story, path.is_some())?;
+        let (source, owner, actual_owners) =
+            candidate.fragment_story_source_owner_and_owners(&story)?;
+        let canonical_owners = match &layout {
+            Some(layout) => layout.owner_kinds(),
+            None => scan_story_owners(&canonical.xml, canonical.root_kind)?
+                .iter()
+                .map(|owner| owner.kind)
+                .collect(),
+        };
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            Some(&canonical_owners),
+            scan_story_owners(&canonical.xml, canonical.root_kind)
+                .ok()
+                .map(|owners| owners.iter().map(|owner| owner.kind).collect::<Vec<_>>())
+                .as_ref(),
+            "the canonical owners of the children differ from a scan"
+        );
+        // Owners are numbered by kind in order, so equal kinds number alike.
         if canonical_owners
-            .iter()
-            .map(|o| (o.kind, o.owner_index))
-            .collect::<Vec<_>>()
             != actual_owners
                 .iter()
-                .map(|o| (o.kind, o.owner_index))
+                .map(|owner| owner.kind)
                 .collect::<Vec<_>>()
         {
             return Err(Error::Other(
@@ -40512,7 +40656,10 @@ impl Document {
             ));
         }
         let (canonical_span, span) = if let Some(location) = path {
-            let canonical_items = scan_story_items(&canonical.xml, &canonical_owner, None)?;
+            let canonical_items = match &layout {
+                Some(layout) => layout.owner_items(&canonical.xml, &canonical_owner)?,
+                None => scan_story_items(&canonical.xml, &canonical_owner, None)?,
+            };
             let index = location.index_path[0];
             let selected = canonical_items.get(index).ok_or(StoryError::OutOfBounds {
                 index,
@@ -40523,7 +40670,11 @@ impl Document {
                     "scoped replacement requires a block owner item".into(),
                 ));
             }
-            let canonical_direct = direct_story_content_items(&canonical.xml, &canonical_owner)?;
+            let canonical_direct = direct_story_content_items_in(
+                &canonical.xml,
+                &canonical_owner,
+                canonical_items.clone(),
+            )?;
             let actual_direct = direct_story_content_items(&source.xml, &owner)?;
             let slot = canonical_direct
                 .iter()
@@ -40640,6 +40791,212 @@ impl Document {
         original: &[u8],
         retained_span: Range<usize>,
     ) -> Result<()> {
+        if self.scoped_main_source_by_blocks(canonical, &canonical_span, original, &retained_span) {
+            // Debug builds, which run the binding tests, prove it whole too.
+            #[cfg(debug_assertions)]
+            without_staging_work(|| {
+                self.prove_whole_scoped_main_source(
+                    canonical,
+                    canonical_span,
+                    original,
+                    retained_span,
+                )
+            })
+            .expect("the body children prove a scoped source the whole proof refuses");
+            return Ok(());
+        }
+        note_staging_work(|work| work.parsed += original.len());
+        self.prove_whole_scoped_main_source(canonical, canonical_span, original, retained_span)
+    }
+
+    /// Whether [`Document::prove_whole_scoped_main_source`] holds, told by the
+    /// body children of `canonical`, the main part as the model serializes
+    /// it, and of `original`, the main part the package holds, without
+    /// parsing either whole. When every nested namespace owner of the
+    /// original is redundant in the canonical source, the restored source is
+    /// the canonical one. When the frames of both parse back to the model's,
+    /// and the children of both to its body children, both normalize alike.
+    /// A child that holds a field, or does not parse back, is normalized
+    /// alone on each side. The probes differ only in the child that holds
+    /// both spans, which is normalized alone with the sentinel on each side.
+    /// `false` when the children do not tell, and the whole proof decides.
+    fn scoped_main_source_by_blocks(
+        &self,
+        canonical: &[u8],
+        canonical_span: &Range<usize>,
+        original: &[u8],
+        retained_span: &Range<usize>,
+    ) -> bool {
+        let Some(held) = self.package_main_part_blocks() else {
+            return false;
+        };
+        let Ok((xml, Some(serialized))) = self.serialized_main_part() else {
+            return false;
+        };
+        let model = &self.document;
+        if !held
+            .part
+            .as_deref()
+            .is_some_and(|part| std::ptr::eq(part.as_slice(), original))
+            || xml != canonical
+            || held.parses_to(model) != Some(true)
+            || !serialized.frame().is_some_and(|frame| {
+                frame.body.content.is_empty()
+                    && frame.extra_namespaces == model.extra_namespaces
+                    && frame.background_xml == model.background_xml
+                    && frame.background_extra_xml == model.background_extra_xml
+                    && frame.root_attributes == model.root_attributes
+                    && frame.body.sect_pr == model.body.sect_pr
+            })
+        {
+            return false;
+        }
+        // The whole proof reads both parts from their start, so no child or
+        // frame of either may hold what it cannot read.
+        let reads = |blocks: &MainPartBlocks| {
+            let (head, tail) = blocks.frame_parts();
+            xml_decodes(&head)
+                && xml_decodes(&tail)
+                && blocks
+                    .blocks
+                    .iter()
+                    .all(|block| block.decodes(blocks.root()))
+        };
+        if !reads(&held) || !reads(&serialized) {
+            return false;
+        }
+        let child = |blocks: &MainPartBlocks, span: &Range<usize>| {
+            let starts = blocks.starts();
+            let index = blocks
+                .blocks
+                .iter()
+                .zip(&starts)
+                .position(|(block, start)| holds(*start, block, span))?;
+            Some((index, starts[index]))
+        };
+        // A fragment closed with the namespaces in scope where it starts.
+        let closed = |blocks: &MainPartBlocks, span: &Range<usize>, xml: &[u8]| {
+            let (index, start) = child(blocks, span)?;
+            let (alone, at) = blocks.blocks[index].alone(blocks.root());
+            story_namespace_scope_at(&alone, at + span.start - start)
+                .and_then(|scope| close_content_fragment_namespaces(&xml[span.clone()], &scope))
+                .ok()
+        };
+        let Some(owners) = held.nested_namespace_owners() else {
+            return false;
+        };
+        for owner in owners {
+            let (Some(original_owner), Some(targets)) = (
+                closed(&held, &owner.source, original),
+                serialized.spans(&xml, |name| name == owner.local_name),
+            ) else {
+                return false;
+            };
+            let mut redundant = 0;
+            for target in targets.iter().filter(|target| {
+                owner
+                    .declarations
+                    .iter()
+                    .all(|declaration| target.declarations.contains(declaration))
+            }) {
+                let Some(target_owner) = closed(&serialized, &(target.start..target.end), &xml)
+                else {
+                    return false;
+                };
+                match comment_namespace_source_boundaries(&original_owner, &target_owner) {
+                    Ok(Some((_, changed))) if changed.is_empty() => redundant += 1,
+                    Ok(_) => {}
+                    Err(_) => return false,
+                }
+            }
+            if redundant != 1 {
+                return false;
+            }
+        }
+        let Ok(marker) = scoped_proof_marker(original, canonical) else {
+            return false;
+        };
+        let occurrences = |xml: &[u8]| {
+            xml.windows(marker.len())
+                .filter(|bytes| *bytes == marker.as_bytes())
+                .count()
+        };
+        // A whole normalization declares `w14` on the root when it is used.
+        let normal_root = serialized.root();
+        let declares_w14 = normal_root.windows(10).any(|bytes| bytes == b"xmlns:w14=");
+        let normalized = |root: &[u8], bytes: Vec<u8>| -> Option<(BodyContent, Vec<u8>)> {
+            let item = BodyBlockScan::of(bytes, None).reparsed(root)?;
+            let written = model.body_item_xml(&item).ok()?;
+            if !declares_w14
+                && written.windows(5).any(|window| {
+                    matches!(window[0], b'<' | b'/' | b' ' | b'\t' | b'\r' | b'\n')
+                        && &window[1..] == b"w14:"
+                })
+            {
+                return None;
+            }
+            let item = BodyBlockScan::of(written, None).reparsed(normal_root)?;
+            let rewritten = model.body_item_xml(&item).ok()?;
+            Some((item, rewritten))
+        };
+        for (block, kept) in held.blocks.iter().zip(&serialized.blocks) {
+            if !(block.fieldless && kept.fieldless && kept.parses_back(normal_root)) {
+                match (
+                    normalized(held.root(), block.bytes.clone()),
+                    normalized(normal_root, kept.bytes.clone()),
+                ) {
+                    (Some((item, xml)), Some((kept_item, kept_xml)))
+                        if item == kept_item && occurrences(&xml) + occurrences(&kept_xml) == 0 => {
+                    }
+                    _ => return false,
+                }
+            }
+        }
+        let (Some((index, start)), Some((retained_index, retained_start))) = (
+            child(&serialized, canonical_span),
+            child(&held, retained_span),
+        ) else {
+            return false;
+        };
+        let Some(sentinel) = (index == retained_index)
+            .then(|| closed(&serialized, canonical_span, canonical))
+            .flatten()
+            .and_then(|closed| scoped_proof_sentinel(&closed, &marker).ok())
+        else {
+            return false;
+        };
+        let probe = |block: &BodyBlockScan, span: &Range<usize>, start: usize, root: &[u8]| {
+            let mut bytes = block.bytes.clone();
+            bytes.splice(span.start - start..span.end - start, sentinel.bytes());
+            normalized(root, bytes)
+        };
+        let (Some((checked, checked_xml)), Some((retained, retained_xml))) = (
+            probe(
+                &serialized.blocks[index],
+                canonical_span,
+                start,
+                normal_root,
+            ),
+            probe(
+                &held.blocks[index],
+                retained_span,
+                retained_start,
+                held.root(),
+            ),
+        ) else {
+            return false;
+        };
+        // Neither source holds the marker, so no other child does.
+        checked == retained && occurrences(&checked_xml) == 1 && occurrences(&retained_xml) == 1
+    }
+
+    fn prove_whole_scoped_main_source(
+        &self,
+        canonical: &[u8],
+        canonical_span: Range<usize>,
+        original: &[u8],
+        retained_span: Range<usize>,
+    ) -> Result<()> {
         let restored = self.namespace_restored_main_source()?;
         let (boundaries, _) = comment_namespace_source_boundaries(canonical, &restored)?
             .ok_or_else(|| {
@@ -40664,50 +41021,10 @@ impl Document {
                 "scoped source has no equivalent checked model projection".into(),
             ));
         }
-        let mut identity = 0usize;
-        let marker = loop {
-            let marker = format!("rdocxScopedPositionProof{identity}");
-            if !original
-                .windows(marker.len())
-                .any(|bytes| bytes == marker.as_bytes())
-                && !restored
-                    .windows(marker.len())
-                    .any(|bytes| bytes == marker.as_bytes())
-            {
-                break marker;
-            }
-            identity = identity
-                .checked_add(1)
-                .ok_or_else(|| Error::Other("scoped source proof identity exhausted".into()))?;
-        };
+        let marker = scoped_proof_marker(original, &restored)?;
         let scope = story_namespace_scope_at(&restored, start)?;
         let selected_closed = close_content_fragment_namespaces(&restored[start..end], &scope)?;
-        let mut reader = NsReader::from_reader(selected_closed.as_slice());
-        let (namespace, event) = reader
-            .read_resolved_event()
-            .map_err(|error| Error::Other(error.to_string()))?;
-        let root = match event {
-            Event::Start(element) | Event::Empty(element) => element,
-            _ => return Err(Error::Other("scoped source proof has no root".into())),
-        };
-        if !word_element(&namespace) {
-            return Err(Error::Other(
-                "scoped source proof needs a qualified Word block".into(),
-            ));
-        }
-        let paragraph =
-            format!(r#"<w:p xmlns:w="{WORD_NAMESPACE}"><w:r><w:t>{marker}</w:t></w:r></w:p>"#);
-        let sentinel = match root.local_name().as_ref() {
-            b"p" => paragraph,
-            b"tbl" => format!(
-                r#"<w:tbl xmlns:w="{WORD_NAMESPACE}"><w:tr><w:tc>{paragraph}</w:tc></w:tr></w:tbl>"#
-            ),
-            b"tc" => format!(r#"<w:tc xmlns:w="{WORD_NAMESPACE}">{paragraph}</w:tc>"#),
-            b"sdt" => format!(
-                r#"<w:sdt xmlns:w="{WORD_NAMESPACE}"><w:sdtPr/><w:sdtContent>{paragraph}</w:sdtContent></w:sdt>"#
-            ),
-            _ => return Err(Error::Other("unsupported scoped source proof kind".into())),
-        };
+        let sentinel = scoped_proof_sentinel(&selected_closed, &marker)?;
         let mut checked_probe = restored;
         checked_probe.splice(start..end, sentinel.bytes());
         let mut retained_probe = original.to_vec();
