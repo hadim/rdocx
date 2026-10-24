@@ -6297,6 +6297,9 @@ fn spliced_table_blocks(
 pub(crate) enum WordPublication {
     Conservative,
     FormValues,
+    /// Metadata and form publication that may keep comment and text-box
+    /// owners when their physical part is proved unchanged.
+    ModernFormValues,
     Signing,
     AppendBody,
     HeaderFooterAppend(usize),
@@ -6315,6 +6318,7 @@ fn form_owner_certificates(
     matched: &[Option<usize>],
     before: &FormSources,
     after: &FormSources,
+    eligible_parts: &std::collections::HashSet<String>,
 ) -> std::collections::HashSet<(usize, usize)> {
     let mut old_routes = HashMap::<FormOwnerRoute, Vec<usize>>::new();
     let mut new_routes = HashMap::<FormOwnerRoute, Vec<usize>>::new();
@@ -6368,7 +6372,11 @@ fn form_owner_certificates(
                 FormOwnerRoute::Paragraph(key) | FormOwnerRoute::Table(key)
                     if matches!(key.0, rdocx::StoryKind::Comment | rdocx::StoryKind::TextBox) =>
                 {
-                    false
+                    eligible_parts.contains(&key.1)
+                        && matches!(
+                            (before.xml.get(&route), after.xml.get(&route)),
+                            (Some(Some(a)), Some(Some(b))) if a == b
+                        )
                 }
                 _ => {
                     matches!((before.xml.get(&route), after.xml.get(&route)), (Some(Some(a)), Some(Some(b))) if a == b)
@@ -6404,7 +6412,14 @@ fn signing_owner_certificates(
     before: &FormSources,
     after: &FormSources,
 ) -> std::collections::HashSet<(usize, usize)> {
-    let mut proved = form_owner_certificates(old, new, matched, before, after);
+    let mut proved = form_owner_certificates(
+        old,
+        new,
+        matched,
+        before,
+        after,
+        &std::collections::HashSet::new(),
+    );
     let mut paragraphs = HashMap::<FormSourceKey, Vec<(usize, usize)>>::new();
     for &(previous, next) in &proved {
         if let WordOwnerLocation::Paragraph(location) = &new[next].location {
@@ -6438,6 +6453,136 @@ fn signing_owner_certificates(
         }
     }
     proved
+}
+
+/// Comment and text-box certificates still need the ordinary owner proof.
+/// A run survives only when that proof already covers its paragraph.
+fn modern_form_owner_certificates(
+    old: &[WordOwner],
+    new: &[WordOwnerAddress],
+    matched: &[Option<usize>],
+    before: &FormSources,
+    after: &FormSources,
+    eligible_parts: &std::collections::HashSet<String>,
+) -> std::collections::HashSet<(usize, usize)> {
+    let mut proved = form_owner_certificates(old, new, matched, before, after, eligible_parts);
+    for (next, address) in new.iter().enumerate() {
+        let Some(previous) = matched[next] else {
+            continue;
+        };
+        let survives = match (&old[previous].location, &address.location) {
+            (WordOwnerLocation::Run(a, left), WordOwnerLocation::Run(b, right)) => {
+                left == right
+                    && form_source_key(a) == form_source_key(b)
+                    && matches!(
+                        (old[previous].parent, address.parent),
+                        (Some(a), Some(b)) if proved.contains(&(a, b))
+                    )
+            }
+            _ => false,
+        };
+        if survives {
+            proved.insert((previous, next));
+        }
+    }
+    proved
+}
+
+fn related_owner_part(location: &WordOwnerLocation) -> Option<String> {
+    let content = match location {
+        WordOwnerLocation::Paragraph(location) | WordOwnerLocation::Table(location) => location,
+        _ => return None,
+    };
+    if !matches!(
+        content.story().kind(),
+        rdocx::StoryKind::Comment | rdocx::StoryKind::TextBox
+    ) {
+        return None;
+    }
+    Some(content.story().part_name().to_owned())
+}
+
+/// One inventory name, or none when case-insensitive lookup is missing or repeated.
+fn unique_part_name<'a>(names: &'a [String], route: &str) -> Option<&'a str> {
+    let mut found = names.iter().filter(|name| name.eq_ignore_ascii_case(route));
+    match (found.next(), found.next()) {
+        (Some(name), None) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// Unchanged comment and text-box parts, plus whether content snapshots match.
+///
+/// `part_xml` is the save-equivalent XML text. A UTF-8 BOM is stripped, so
+/// this is not a ZIP byte proof. `part_names`, `stories` and `part_xml` each
+/// stage the package. One part is proved once. That cost is whole-package
+/// validation, not a constant-time claim. A helper error is not equality.
+fn unchanged_related_owner_parts(
+    old: &rdocx::Document,
+    new: &rdocx::Document,
+    old_owners: &[WordOwner],
+    new_addresses: &[WordOwnerAddress],
+) -> rdocx::Result<(std::collections::HashSet<String>, bool)> {
+    let mut requested = Vec::new();
+    for part in old_owners
+        .iter()
+        .filter_map(|owner| related_owner_part(&owner.location))
+        .chain(
+            new_addresses
+                .iter()
+                .filter_map(|address| related_owner_part(&address.location)),
+        )
+    {
+        if !requested.iter().any(|seen: &String| seen == &part) {
+            requested.push(part);
+        }
+    }
+    let old_names = old.part_names()?;
+    let new_names = new.part_names()?;
+    let old_stories = old.stories()?;
+    let new_stories = new.stories()?;
+    let mut eligible = std::collections::HashSet::new();
+    for part in &requested {
+        let distinct = requested
+            .iter()
+            .filter(|candidate| candidate.eq_ignore_ascii_case(part))
+            .count();
+        if distinct != 1 {
+            continue;
+        }
+        let Some(actual_old) = unique_part_name(&old_names, part) else {
+            continue;
+        };
+        let Some(actual_new) = unique_part_name(&new_names, part) else {
+            continue;
+        };
+        if actual_old != actual_new || actual_old != part {
+            continue;
+        }
+        let old_part = old_stories
+            .iter()
+            .filter(|story| story.part_name() == actual_old)
+            .cloned()
+            .collect::<Vec<_>>();
+        let new_part = new_stories
+            .iter()
+            .filter(|story| story.part_name() == actual_new)
+            .cloned()
+            .collect::<Vec<_>>();
+        if old_part != new_part {
+            continue;
+        }
+        match (old.part_xml(actual_old), new.part_xml(actual_new)) {
+            (Ok(before), Ok(after)) if before == after => {
+                eligible.insert(actual_old.to_owned());
+            }
+            (Ok(_), Ok(_)) => {}
+            (Err(_), _) | (_, Err(_)) => {}
+        }
+    }
+    let preserve =
+        old_stories == new_stories && old.story_item_snapshots()? == new.story_item_snapshots()?;
+    Ok((eligible, preserve))
 }
 
 fn same_inventory_route(
@@ -7352,6 +7497,26 @@ fn ensure_nonnegative(value: &Bound<'_, PyAny>, message: &str) -> PyResult<()> {
     Ok(())
 }
 
+fn optional_exact_bool(value: Option<&Bound<'_, PyAny>>, label: &str) -> PyResult<Option<bool>> {
+    let Some(value) = value.filter(|value| !value.is_none()) else {
+        return Ok(None);
+    };
+    Ok(Some(require_exact_bool(value, label)?))
+}
+
+fn optional_u32(value: Option<&Bound<'_, PyAny>>, label: &str) -> PyResult<Option<u32>> {
+    let Some(value) = value.filter(|value| !value.is_none()) else {
+        return Ok(None);
+    };
+    if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err(format!(
+            "{label} requires an integer or None"
+        )));
+    }
+    ensure_nonnegative(value, &format!("{label} cannot be negative"))?;
+    Ok(Some(value.extract()?))
+}
+
 /// Frozen authoring payload for one legacy form field.
 #[pyclass(name = "LegacyFormFieldDefinition", frozen, skip_from_py_object)]
 #[derive(Clone)]
@@ -7515,6 +7680,467 @@ impl PyLegacyFormFieldDefinition {
             },
         )
     }
+}
+
+fn refuse_direct(class_name: &str) -> PyErr {
+    PyTypeError::new_err(format!("{class_name} cannot be constructed directly"))
+}
+
+fn protection_mode(value: &str) -> PyResult<rdocx::ProtectionMode> {
+    match value {
+        "readOnly" => Ok(rdocx::ProtectionMode::ReadOnly),
+        "comments" => Ok(rdocx::ProtectionMode::Comments),
+        "trackedChanges" => Ok(rdocx::ProtectionMode::TrackedChanges),
+        "forms" => Ok(rdocx::ProtectionMode::Forms),
+        _ => Err(PyValueError::new_err(
+            "document protection mode must be readOnly, comments, trackedChanges, or forms",
+        )),
+    }
+}
+
+fn crypt_provider(value: &str) -> PyResult<rdocx::CryptProviderType> {
+    match value {
+        "rsaAES" => Ok(rdocx::CryptProviderType::RsaAes),
+        "rsaFull" => Ok(rdocx::CryptProviderType::RsaFull),
+        "custom" => Ok(rdocx::CryptProviderType::Custom),
+        _ => Err(PyValueError::new_err(
+            "document protection provider_type must be rsaAES, rsaFull, or custom",
+        )),
+    }
+}
+
+fn crypt_algorithm_class(value: &str) -> PyResult<rdocx::CryptAlgorithmClass> {
+    match value {
+        "hash" => Ok(rdocx::CryptAlgorithmClass::Hash),
+        "custom" => Ok(rdocx::CryptAlgorithmClass::Custom),
+        _ => Err(PyValueError::new_err(
+            "document protection algorithm_class must be hash or custom",
+        )),
+    }
+}
+
+fn crypt_algorithm_type(value: &str) -> PyResult<rdocx::CryptAlgorithmType> {
+    match value {
+        "typeAny" => Ok(rdocx::CryptAlgorithmType::Any),
+        "custom" => Ok(rdocx::CryptAlgorithmType::Custom),
+        _ => Err(PyValueError::new_err(
+            "document protection algorithm_type must be typeAny or custom",
+        )),
+    }
+}
+
+/// Frozen tag or legacy identity for one form field.
+#[pyclass(name = "FormFieldTarget", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyFormFieldTarget {
+    inner: rdocx::FormFieldTarget,
+}
+
+#[pymethods]
+impl PyFormFieldTarget {
+    #[new]
+    fn new(_private: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Err(refuse_direct("FormFieldTarget"))
+    }
+
+    #[staticmethod]
+    fn content_control_tag(tag: String) -> Self {
+        Self {
+            inner: rdocx::FormFieldTarget::ContentControlTag(tag),
+        }
+    }
+
+    #[staticmethod]
+    fn legacy(source_part: String, #[pyo3(from_py_with = strict_index)] ordinal: usize) -> Self {
+        Self {
+            inner: rdocx::FormFieldTarget::Legacy {
+                source_part,
+                ordinal,
+            },
+        }
+    }
+}
+
+/// Frozen typed value for one form field.
+#[pyclass(name = "FormFieldValue", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyFormFieldValue {
+    inner: rdocx::FormFieldValue,
+}
+
+#[pymethods]
+impl PyFormFieldValue {
+    #[new]
+    fn new(_private: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Err(refuse_direct("FormFieldValue"))
+    }
+
+    #[staticmethod]
+    fn text(py: Python<'_>, value: String) -> PyResult<Self> {
+        Ok(Self {
+            inner: rdocx::FormFieldValue::Text(checked_form_text(py, value)?),
+        })
+    }
+
+    #[staticmethod]
+    fn checked(#[pyo3(from_py_with = strict_flag)] value: bool) -> Self {
+        Self {
+            inner: rdocx::FormFieldValue::Checked(value),
+        }
+    }
+
+    #[staticmethod]
+    fn selected_index(#[pyo3(from_py_with = strict_index)] value: usize) -> Self {
+        Self {
+            inner: rdocx::FormFieldValue::SelectedIndex(value),
+        }
+    }
+}
+
+/// Frozen reset payload. A value and a placeholder are separate factories.
+#[pyclass(name = "FormResetValue", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyFormResetValue {
+    inner: rdocx::FormResetValue,
+}
+
+#[pymethods]
+impl PyFormResetValue {
+    #[new]
+    fn new(_private: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Err(refuse_direct("FormResetValue"))
+    }
+
+    #[staticmethod]
+    fn value(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let value = value
+            .cast::<PyFormFieldValue>()
+            .map_err(|_| PyTypeError::new_err("reset value requires FormFieldValue"))?
+            .get()
+            .inner
+            .clone();
+        Ok(Self {
+            inner: rdocx::FormResetValue::Value(value),
+        })
+    }
+
+    #[staticmethod]
+    fn placeholder(py: Python<'_>, text: String) -> PyResult<Self> {
+        Ok(Self {
+            inner: rdocx::FormResetValue::Placeholder {
+                text: checked_form_text(py, text)?,
+            },
+        })
+    }
+}
+
+/// One transient validation and reset rule.
+#[pyclass(name = "FormFieldRule", frozen, skip_from_py_object)]
+pub struct PyFormFieldRule {
+    #[pyo3(get)]
+    target: Py<PyFormFieldTarget>,
+    #[pyo3(get)]
+    reset: Py<PyFormResetValue>,
+    #[pyo3(get)]
+    required: bool,
+}
+
+#[pymethods]
+impl PyFormFieldRule {
+    #[new]
+    #[pyo3(
+        signature = (*, target, reset, required = false),
+        text_signature = "(*, target, reset, required=False)"
+    )]
+    fn new(
+        py: Python<'_>,
+        target: &Bound<'_, PyAny>,
+        reset: &Bound<'_, PyAny>,
+        #[pyo3(from_py_with = strict_flag)] required: bool,
+    ) -> PyResult<Self> {
+        let target = copied_target(py, target)?;
+        let reset = copied_reset(py, reset)?;
+        Ok(Self {
+            target,
+            reset,
+            required,
+        })
+    }
+}
+
+/// One value to publish for a target that a rule already names.
+#[pyclass(name = "FormFieldAssignment", frozen, skip_from_py_object)]
+pub struct PyFormFieldAssignment {
+    #[pyo3(get)]
+    target: Py<PyFormFieldTarget>,
+    #[pyo3(get)]
+    value: Py<PyFormFieldValue>,
+}
+
+#[pymethods]
+impl PyFormFieldAssignment {
+    #[new]
+    #[pyo3(
+        signature = (*, target, value),
+        text_signature = "(*, target, value)"
+    )]
+    fn new(py: Python<'_>, target: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            target: copied_target(py, target)?,
+            value: copied_value(py, value)?,
+        })
+    }
+}
+
+/// One current-state problem for one physical control or legacy field.
+#[pyclass(name = "FormValidationIssue", frozen, skip_from_py_object)]
+pub struct PyFormValidationIssue {
+    #[pyo3(get)]
+    target: Py<PyFormFieldTarget>,
+    #[pyo3(get)]
+    source_part: String,
+    #[pyo3(get)]
+    ordinal: usize,
+    #[pyo3(get)]
+    message: String,
+}
+
+#[pymethods]
+impl PyFormValidationIssue {
+    #[new]
+    fn new(_private: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Err(refuse_direct("FormValidationIssue"))
+    }
+}
+
+/// Caller-supplied `w:documentProtection` metadata. No password is derived.
+#[pyclass(name = "DocumentProtection", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyDocumentProtection {
+    inner: rdocx::DocumentProtection,
+}
+
+#[pymethods]
+impl PyDocumentProtection {
+    #[new]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(
+        signature = (
+            *,
+            mode,
+            enforcement=None,
+            formatting=None,
+            provider_type=None,
+            algorithm_class=None,
+            algorithm_type=None,
+            algorithm_sid=None,
+            spin_count=None,
+            hash=None,
+            salt=None
+        ),
+        text_signature = "(*, mode, enforcement=None, formatting=None, provider_type=None, algorithm_class=None, algorithm_type=None, algorithm_sid=None, spin_count=None, hash=None, salt=None)"
+    )]
+    fn new(
+        mode: &str,
+        enforcement: Option<&Bound<'_, PyAny>>,
+        formatting: Option<&Bound<'_, PyAny>>,
+        provider_type: Option<&str>,
+        algorithm_class: Option<&str>,
+        algorithm_type: Option<&str>,
+        algorithm_sid: Option<&Bound<'_, PyAny>>,
+        spin_count: Option<&Bound<'_, PyAny>>,
+        hash: Option<String>,
+        salt: Option<String>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: rdocx::DocumentProtection {
+                mode: protection_mode(mode)?,
+                enforcement: optional_exact_bool(enforcement, "enforcement")?,
+                formatting: optional_exact_bool(formatting, "formatting")?,
+                provider_type: provider_type.map(crypt_provider).transpose()?,
+                algorithm_class: algorithm_class.map(crypt_algorithm_class).transpose()?,
+                algorithm_type: algorithm_type.map(crypt_algorithm_type).transpose()?,
+                algorithm_sid: optional_u32(algorithm_sid, "algorithm_sid")?,
+                spin_count: optional_u32(spin_count, "spin_count")?,
+                hash,
+                salt,
+            },
+        })
+    }
+
+    #[getter]
+    fn mode(&self) -> &'static str {
+        match self.inner.mode {
+            rdocx::ProtectionMode::ReadOnly => "readOnly",
+            rdocx::ProtectionMode::Comments => "comments",
+            rdocx::ProtectionMode::TrackedChanges => "trackedChanges",
+            rdocx::ProtectionMode::Forms => "forms",
+        }
+    }
+
+    #[getter]
+    fn enforcement(&self) -> Option<bool> {
+        self.inner.enforcement
+    }
+
+    #[getter]
+    fn formatting(&self) -> Option<bool> {
+        self.inner.formatting
+    }
+
+    #[getter]
+    fn provider_type(&self) -> Option<&'static str> {
+        self.inner.provider_type.map(|value| match value {
+            rdocx::CryptProviderType::RsaAes => "rsaAES",
+            rdocx::CryptProviderType::RsaFull => "rsaFull",
+            rdocx::CryptProviderType::Custom => "custom",
+        })
+    }
+
+    #[getter]
+    fn algorithm_class(&self) -> Option<&'static str> {
+        self.inner.algorithm_class.map(|value| match value {
+            rdocx::CryptAlgorithmClass::Hash => "hash",
+            rdocx::CryptAlgorithmClass::Custom => "custom",
+        })
+    }
+
+    #[getter]
+    fn algorithm_type(&self) -> Option<&'static str> {
+        self.inner.algorithm_type.map(|value| match value {
+            rdocx::CryptAlgorithmType::Any => "typeAny",
+            rdocx::CryptAlgorithmType::Custom => "custom",
+        })
+    }
+
+    #[getter]
+    fn algorithm_sid(&self) -> Option<u32> {
+        self.inner.algorithm_sid
+    }
+
+    #[getter]
+    fn spin_count(&self) -> Option<u32> {
+        self.inner.spin_count
+    }
+
+    #[getter]
+    fn hash(&self) -> Option<&str> {
+        self.inner.hash.as_deref()
+    }
+
+    #[getter]
+    fn salt(&self) -> Option<&str> {
+        self.inner.salt.as_deref()
+    }
+}
+
+fn checked_form_text(py: Python<'_>, value: String) -> PyResult<String> {
+    rdocx_oxml::CT_SdtPr::default()
+        .prepare_text_value(&value)
+        .map_err(|error| rdocx_to_pyerr(py, rdocx::Error::Oxml(error)))?;
+    Ok(value)
+}
+
+fn require_carrier_sequence(value: &Bound<'_, PyAny>, label: &str) -> PyResult<()> {
+    let abc = value.py().import("collections.abc")?;
+    if value.is_instance_of::<PyString>()
+        || value.is_instance_of::<PyBytes>()
+        || value.is_instance(&abc.getattr("Mapping")?)?
+        || value.is_instance(&abc.getattr("Set")?)?
+    {
+        return Err(PyTypeError::new_err(format!(
+            "{label} must be a sequence, not str, bytes, mapping, or set"
+        )));
+    }
+    if !value.is_instance(&abc.getattr("Sequence")?)? {
+        return Err(PyTypeError::new_err(format!("{label} must be a sequence")));
+    }
+    Ok(())
+}
+
+fn copied_rules(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Vec<rdocx::FormFieldRule>> {
+    require_carrier_sequence(value, "rules")?;
+    let mut rules = Vec::new();
+    for item in value.try_iter()? {
+        let item = item?;
+        let rule = item
+            .cast::<PyFormFieldRule>()
+            .map_err(|_| PyTypeError::new_err("rules must be a sequence of FormFieldRule"))?;
+        let rule = rule.borrow();
+        rules.push(rdocx::FormFieldRule {
+            target: rule.target.bind(py).borrow().inner.clone(),
+            required: rule.required,
+            reset: rule.reset.bind(py).borrow().inner.clone(),
+        });
+    }
+    Ok(rules)
+}
+
+fn copied_assignments(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<rdocx::FormFieldAssignment>> {
+    require_carrier_sequence(value, "assignments")?;
+    let mut assignments = Vec::new();
+    for item in value.try_iter()? {
+        let item = item?;
+        let assignment = item.cast::<PyFormFieldAssignment>().map_err(|_| {
+            PyTypeError::new_err("assignments must be a sequence of FormFieldAssignment")
+        })?;
+        let assignment = assignment.borrow();
+        assignments.push(rdocx::FormFieldAssignment {
+            target: assignment.target.bind(py).borrow().inner.clone(),
+            value: assignment.value.bind(py).borrow().inner.clone(),
+        });
+    }
+    Ok(assignments)
+}
+
+fn issue_to_py(
+    py: Python<'_>,
+    issue: rdocx::FormValidationIssue,
+) -> PyResult<PyFormValidationIssue> {
+    Ok(PyFormValidationIssue {
+        target: Py::new(
+            py,
+            PyFormFieldTarget {
+                inner: issue.target,
+            },
+        )?,
+        source_part: issue.source_part,
+        ordinal: issue.ordinal,
+        message: issue.message,
+    })
+}
+
+fn copied_target(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyFormFieldTarget>> {
+    let inner = value
+        .cast::<PyFormFieldTarget>()
+        .map_err(|_| PyTypeError::new_err("target requires FormFieldTarget"))?
+        .get()
+        .inner
+        .clone();
+    Py::new(py, PyFormFieldTarget { inner })
+}
+
+fn copied_value(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyFormFieldValue>> {
+    let inner = value
+        .cast::<PyFormFieldValue>()
+        .map_err(|_| PyTypeError::new_err("value requires FormFieldValue"))?
+        .get()
+        .inner
+        .clone();
+    Py::new(py, PyFormFieldValue { inner })
+}
+
+fn copied_reset(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Py<PyFormResetValue>> {
+    let inner = value
+        .cast::<PyFormResetValue>()
+        .map_err(|_| PyTypeError::new_err("reset requires FormResetValue"))?
+        .get()
+        .inner
+        .clone();
+    Py::new(py, PyFormResetValue { inner })
 }
 
 /// Type payload for `Document.set_content_control_type`.
@@ -8644,8 +9270,11 @@ impl PyDocument {
     ) -> PyResult<PreparedWordRevision> {
         let forms = matches!(
             publication,
-            WordPublication::FormValues | WordPublication::Signing
+            WordPublication::FormValues
+                | WordPublication::ModernFormValues
+                | WordPublication::Signing
         );
+        let modern = matches!(publication, WordPublication::ModernFormValues);
         let mut old_sources = FormSources::default();
         let mut new_sources = FormSources::default();
         let locations = word_owner_locations(candidate, forms.then_some(&mut new_sources))
@@ -8690,6 +9319,7 @@ impl PyDocument {
             publication,
             WordPublication::Conservative
                 | WordPublication::FormValues
+                | WordPublication::ModernFormValues
                 | WordPublication::Signing
                 | WordPublication::AppendBody
         ) && selected_index.is_none()
@@ -8699,6 +9329,12 @@ impl PyDocument {
             ));
         }
         let matches = indexed_inventory_matches(&self.owners, &locations, &publication);
+        let (eligible_parts, modern_snapshot) = if modern {
+            unchanged_related_owner_parts(&self.inner, candidate, &self.owners, &locations)
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+        } else {
+            (std::collections::HashSet::new(), false)
+        };
         let form_certificates = if matches!(publication, WordPublication::Signing) {
             signing_owner_certificates(
                 &self.owners,
@@ -8707,6 +9343,15 @@ impl PyDocument {
                 &old_sources,
                 &new_sources,
             )
+        } else if modern {
+            modern_form_owner_certificates(
+                &self.owners,
+                &locations,
+                &matches,
+                &old_sources,
+                &new_sources,
+                &eligible_parts,
+            )
         } else if forms {
             form_owner_certificates(
                 &self.owners,
@@ -8714,25 +9359,27 @@ impl PyDocument {
                 &matches,
                 &old_sources,
                 &new_sources,
+                &std::collections::HashSet::new(),
             )
         } else {
             std::collections::HashSet::new()
         };
-        let preserve_snapshot = matches!(publication, WordPublication::Signing)
-            && self
-                .inner
-                .stories()
-                .map_err(|error| rdocx_to_pyerr(py, error))?
-                == candidate
+        let preserve_snapshot = modern_snapshot
+            || matches!(publication, WordPublication::Signing)
+                && self
+                    .inner
                     .stories()
                     .map_err(|error| rdocx_to_pyerr(py, error))?
-            && self
-                .inner
-                .story_item_snapshots()
-                .map_err(|error| rdocx_to_pyerr(py, error))?
-                == candidate
+                    == candidate
+                        .stories()
+                        .map_err(|error| rdocx_to_pyerr(py, error))?
+                && self
+                    .inner
                     .story_item_snapshots()
-                    .map_err(|error| rdocx_to_pyerr(py, error))?;
+                    .map_err(|error| rdocx_to_pyerr(py, error))?
+                    == candidate
+                        .story_item_snapshots()
+                        .map_err(|error| rdocx_to_pyerr(py, error))?;
         let mut retained = Vec::new();
         let mut births = Vec::new();
         for (index, address) in locations.iter().enumerate() {
@@ -8802,6 +9449,7 @@ impl PyDocument {
                             publication,
                             WordPublication::Conservative
                                 | WordPublication::FormValues
+                                | WordPublication::ModernFormValues
                                 | WordPublication::Signing
                         )
                         && !descendant
@@ -8844,9 +9492,15 @@ impl PyDocument {
             retired.push(self.snapshot_scope.clone());
             births.push(RevisionScope::Text);
         }
+        // A run handle also carries the document epoch. Modern publication
+        // keeps that epoch with the same local commit Signing uses. A proved
+        // run then stays current. An unproved owner state still retires it.
         let revision = if matches!(
             publication,
-            WordPublication::ElementXml(_) | WordPublication::RunText(_) | WordPublication::Signing
+            WordPublication::ElementXml(_)
+                | WordPublication::RunText(_)
+                | WordPublication::Signing
+                | WordPublication::ModernFormValues
         ) {
             self.revisions
                 .prepare_local_scopes(operation, &retired, &births)
@@ -8994,14 +9648,14 @@ impl PyDocument {
         py: Python<'_>,
         mut candidate: rdocx::Document,
         operation: &'static str,
+        publication: WordPublication,
     ) -> PyResult<()> {
         let before = self.inner.to_bytes().map_err(|e| rdocx_to_pyerr(py, e))?;
         let after = candidate.to_bytes().map_err(|e| rdocx_to_pyerr(py, e))?;
         if before == after {
             return Ok(());
         }
-        let prepared =
-            self.prepare_word_revision(py, &candidate, operation, WordPublication::FormValues)?;
+        let prepared = self.prepare_word_revision(py, &candidate, operation, publication)?;
         self.commit_word_revision(prepared)?;
         self.inner = candidate;
         Ok(())
@@ -10185,6 +10839,174 @@ impl PyDocument {
         Ok(count)
     }
 
+    fn validate_form<'py>(
+        &self,
+        py: Python<'py>,
+        rules: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let rules = copied_rules(py, rules)?;
+        let issues = self
+            .inner
+            .validate_form(&rules)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let issues = issues
+            .into_iter()
+            .map(|issue| issue_to_py(py, issue))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, issues)
+    }
+
+    fn fill_form(
+        &mut self,
+        py: Python<'_>,
+        rules: &Bound<'_, PyAny>,
+        assignments: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyTuple>> {
+        let rules = copied_rules(py, rules)?;
+        let assignments = copied_assignments(py, assignments)?;
+        let mut candidate = self.inner.clone_for_staging();
+        let counts = candidate
+            .fill_form(&rules, &assignments)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let result = PyTuple::new(py, counts)?.unbind();
+        self.publish_form_candidate(
+            py,
+            candidate,
+            "Document.fill_form",
+            WordPublication::ModernFormValues,
+        )?;
+        Ok(result)
+    }
+
+    fn reset_form(&mut self, py: Python<'_>, rules: &Bound<'_, PyAny>) -> PyResult<Py<PyTuple>> {
+        let rules = copied_rules(py, rules)?;
+        let mut candidate = self.inner.clone_for_staging();
+        let counts = candidate
+            .reset_form(&rules)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let result = PyTuple::new(py, counts)?.unbind();
+        self.publish_form_candidate(
+            py,
+            candidate,
+            "Document.reset_form",
+            WordPublication::ModernFormValues,
+        )?;
+        Ok(result)
+    }
+
+    fn protect_form(
+        &mut self,
+        py: Python<'_>,
+        rules: &Bound<'_, PyAny>,
+        protection: &PyDocumentProtection,
+    ) -> PyResult<()> {
+        let rules = copied_rules(py, rules)?;
+        let protection = protection.inner.clone();
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .protect_form(&rules, protection)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.publish_form_candidate(
+            py,
+            candidate,
+            "Document.protect_form",
+            WordPublication::ModernFormValues,
+        )?;
+        Ok(())
+    }
+
+    #[getter]
+    fn document_protection(&self) -> Option<PyDocumentProtection> {
+        self.inner
+            .document_protection()
+            .cloned()
+            .map(|inner| PyDocumentProtection { inner })
+    }
+
+    fn set_document_protection(
+        &mut self,
+        py: Python<'_>,
+        value: &PyDocumentProtection,
+    ) -> PyResult<()> {
+        let value = value.inner.clone();
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .set_document_protection(value)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.publish_form_candidate(
+            py,
+            candidate,
+            "Document.set_document_protection",
+            WordPublication::ModernFormValues,
+        )?;
+        Ok(())
+    }
+
+    fn remove_document_protection(
+        &mut self,
+        py: Python<'_>,
+    ) -> PyResult<Option<Py<PyDocumentProtection>>> {
+        // Py::new runs before publication. Allocation failure here is a source
+        // ordering counterfactual, not an observed allocation RED.
+        let snapshot = self
+            .inner
+            .document_protection()
+            .cloned()
+            .map(|inner| Py::new(py, PyDocumentProtection { inner }))
+            .transpose()?;
+        let mut candidate = self.inner.clone_for_staging();
+        let removed = candidate
+            .remove_document_protection()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        if removed.is_none() {
+            return Ok(None);
+        }
+        self.publish_form_candidate(
+            py,
+            candidate,
+            "Document.remove_document_protection",
+            WordPublication::ModernFormValues,
+        )?;
+        Ok(snapshot)
+    }
+
+    #[pyo3(
+        signature = (range, *, editor=None, group=None),
+        text_signature = "($self, range, *, editor=None, group=None)"
+    )]
+    fn add_story_permission_range(
+        &mut self,
+        py: Python<'_>,
+        range: &Bound<'_, PyAny>,
+        editor: Option<String>,
+        group: Option<String>,
+    ) -> PyResult<Py<PyInt>> {
+        let range = range
+            .cast::<PyStoryRunRange>()
+            .map_err(|_| PyTypeError::new_err("range must be a StoryRunRange"))?;
+        let range = range.borrow();
+        let start = rdocx::StoryRunPosition {
+            location: self.native_location(py, &range.start.item)?,
+            run_index: range.start.run_index,
+        };
+        let end = rdocx::StoryRunPosition {
+            location: self.native_location(py, &range.end.item)?,
+            run_index: range.end.run_index,
+        };
+        drop(range);
+        let mut candidate = self.inner.clone_for_staging();
+        let id = candidate
+            .add_story_permission_range(
+                editor.as_deref(),
+                group.as_deref(),
+                rdocx::StoryRunRange { start, end },
+            )
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let id = id.into_pyobject(py)?.unbind();
+        self.publish_api_candidate(py, candidate, "Document.add_story_permission_range")?;
+        Ok(id)
+    }
+
     fn bind_content_controls(
         &mut self,
         py: Python<'_>,
@@ -10199,7 +11021,12 @@ impl PyDocument {
             .detach(|| candidate.bind_content_controls(&values))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         let result = count.into_pyobject(py)?.unbind();
-        self.publish_form_candidate(py, candidate, "Document.bind_content_controls")?;
+        self.publish_form_candidate(
+            py,
+            candidate,
+            "Document.bind_content_controls",
+            WordPublication::FormValues,
+        )?;
         Ok(result)
     }
 
@@ -10327,7 +11154,12 @@ impl PyDocument {
             py,
             PyLegacyFormField::from_info(py, reopened, default_value)?,
         )?;
-        self.publish_form_candidate(py, candidate, "Document.set_legacy_form_field_value")?;
+        self.publish_form_candidate(
+            py,
+            candidate,
+            "Document.set_legacy_form_field_value",
+            WordPublication::FormValues,
+        )?;
         Ok(prepared)
     }
 
@@ -15781,7 +16613,14 @@ fn fx241_form_certificates_require_unique_routes_and_unchanged_source() {
     let old = fx237_test_owners(word_owner_locations(&document, Some(&mut before)).unwrap());
     let new = word_owner_locations(&candidate, Some(&mut after)).unwrap();
     let matched = indexed_inventory_matches(&old, &new, &WordPublication::FormValues);
-    let certificates = form_owner_certificates(&old, &new, &matched, &before, &after);
+    let certificates = form_owner_certificates(
+        &old,
+        &new,
+        &matched,
+        &before,
+        &after,
+        &std::collections::HashSet::new(),
+    );
     let paragraph_indexes = new
         .iter()
         .enumerate()
@@ -15796,8 +16635,15 @@ fn fx241_form_certificates_require_unique_routes_and_unchanged_source() {
     let route = form_owner_route(&new[unchanged].location).unwrap();
     before.xml.insert(route.clone(), None);
     assert!(
-        !form_owner_certificates(&old, &new, &matched, &before, &after)
-            .contains(&(matched[unchanged].unwrap(), unchanged))
+        !form_owner_certificates(
+            &old,
+            &new,
+            &matched,
+            &before,
+            &after,
+            &std::collections::HashSet::new(),
+        )
+        .contains(&(matched[unchanged].unwrap(), unchanged))
     );
     // A duplicated actual owner route must not inherit the matcher's first index.
     let mut before = FormSources::default();
@@ -15814,8 +16660,76 @@ fn fx241_form_certificates_require_unique_routes_and_unchanged_source() {
     let matched = indexed_inventory_matches(&duplicate, &new, &WordPublication::FormValues);
     assert!(matched[unchanged].is_some());
     assert!(
-        !form_owner_certificates(&duplicate, &new, &matched, &before, &after)
-            .contains(&(matched[unchanged].unwrap(), unchanged))
+        !form_owner_certificates(
+            &duplicate,
+            &new,
+            &matched,
+            &before,
+            &after,
+            &std::collections::HashSet::new(),
+        )
+        .contains(&(matched[unchanged].unwrap(), unchanged))
+    );
+}
+
+#[test]
+fn fx289_related_owner_needs_unique_part_and_eligible_source() {
+    use std::collections::HashSet;
+    let story = |part: &str| {
+        rdocx::ContentLocation::new(
+            rdocx::StoryId::new(rdocx::StoryKind::Comment, part, 0),
+            rdocx::StoryItemKind::Paragraph,
+            vec![0],
+        )
+    };
+    let address = |part: &str| WordOwnerAddress {
+        location: WordOwnerLocation::Paragraph(story(part)),
+        parent: None,
+        body_slot: None,
+        projection_ordinal: Some(0),
+        read_facts: WordReadFacts::None,
+    };
+    let old = fx237_test_owners(vec![address("/word/comments.xml")]);
+    let new = vec![address("/word/comments.xml")];
+    let matched = indexed_inventory_matches(&old, &new, &WordPublication::ModernFormValues);
+    assert_eq!(
+        matched,
+        indexed_inventory_matches(&old, &new, &WordPublication::FormValues)
+    );
+    let route = form_owner_route(&new[0].location).unwrap();
+    let mut before = FormSources::default();
+    let mut after = FormSources::default();
+    before.xml.insert(route.clone(), Some(b"<w:p/>".to_vec()));
+    after.xml.insert(route, Some(b"<w:p/>".to_vec()));
+    let empty = HashSet::new();
+    assert!(
+        !form_owner_certificates(&old, &new, &matched, &before, &after, &empty).contains(&(0, 0))
+    );
+    let mut eligible = HashSet::new();
+    eligible.insert("/word/comments.xml".to_owned());
+    assert!(
+        form_owner_certificates(&old, &new, &matched, &before, &after, &eligible).contains(&(0, 0))
+    );
+    let other = vec![address("/word/comments2.xml")];
+    let crossed = indexed_inventory_matches(&old, &other, &WordPublication::ModernFormValues);
+    assert!(crossed[0].is_none());
+    let duplicate = fx237_test_owners(vec![
+        address("/word/comments.xml"),
+        address("/word/comments.xml"),
+    ]);
+    let duplicated = indexed_inventory_matches(&duplicate, &new, &WordPublication::FormValues);
+    assert!(
+        !modern_form_owner_certificates(&duplicate, &new, &duplicated, &before, &after, &eligible)
+            .contains(&(duplicated[0].unwrap(), 0))
+    );
+    let names = vec![
+        "/word/comments.xml".to_owned(),
+        "/word/Comments.xml".to_owned(),
+    ];
+    assert!(unique_part_name(&names, "/word/comments.xml").is_none());
+    assert_eq!(
+        unique_part_name(&["/word/comments.xml".to_owned()], "/WORD/comments.xml"),
+        Some("/word/comments.xml")
     );
 }
 

@@ -255,8 +255,10 @@ same batched native inventory as their addresses. Section source uses the
 existing checked section XML provider. Every ancestor must also be certified.
 Cells bind their exact table, row, cell and physical story, so a changed table
 retires all its cells and descendants. Changed or ambiguous paragraphs retire.
-Equal text or equal inventory counts alone grant no authority. Run/Hyperlink
-and existing global run/snapshot epochs retire on actual mutation. Exact
+Equal text or equal inventory counts alone grant no authority. Existing FormValues publication retires run, hyperlink, and existing global
+run and snapshot epochs on actual mutation. Modern form publication keeps
+proved runs and exact snapshots as the bindings spec describes.
+`validate_form` does not publish. Signing behavior stays as specified. Exact
 no-ops and refused operations keep all current tokens. Other conservative
 publishers retain their existing behavior, and retired pre-existing tokens
 cannot be revived by a same-route or equal-text form result.
@@ -1731,6 +1733,8 @@ inherited-prefix opaque children but rejects actual raw Word delimiters and
 malformed XML. Attachment failures keep destination runs unchanged, and the
 legacy plain-string field API retains its existing serialization. Existing
 `text.rs` unit tests and `regression_test.rs` provide this round-trip gate.
+
+High-level form tests build the dense document in source. The native integration entrypoint and the public Python helper `_source_built_dense_form` share one profile: six rules, a body checkbox, date, list, custom store, legacy field, repeat, permission, and header criterion. Positive cases do not inject XML as the primary construction path. Imported negative edge fixtures remain allowed. The local Python public check calls `to_pdfa_deterministic("pdfa-2b")` and reads a bounding box and a PNG diagnostic. PATH Poppler 26.09.0 is that local reader. It is not the 26.01.0 pin, and it is not a baseline or an external oracle. Named final gates stay the hash harness, rustdoc, WASM, the publish dry-run, strict installed mypy, stubtest, and the full suite, and they run only on the final union. No new hard performance cap is part of this form surface.
 
 ## The hash harness
 
@@ -4430,6 +4434,8 @@ F-X265 local regressions cover picture order and reuse, staged picture, chart an
 
 F-X266 local regressions cover direct body routes, append owner retention, conservative retirement, atomic splice refusal, unused root `w14` omission, scope precedence, held fresh native and reopened reads, and debug owner and byte counters. The Issue 407 release ratio stays pending for the final union.
 
+Modern form parity for this authoring surface is native Word 16.114 with an independent Word PDF. The compared packages are source-built current Rust and current Python, not an older F-286 package. The criterion is equal page count, exact text and checkbox semantics, per-page SSIM of at least 0.95 at 144 DPI, matched fonts, deterministic drawing, and documented margin alignment. That comparison has not run. A local PDF bounding box from a different Poppler build does not qualify it. Full hash, rustdoc, WASM, publish dry-run, strict installed mypy, stubtest, and the full suite stay on the final union. No Word-compared performance claim and no new hard cap belong to this control.
+
 Text controls compare accepted Paragraph and story snapshots across body, tables, controls and related stories. CLI plain and JSON views retain aliases, tabs, direct and simple-field newlines, and closed complex cached-field page and column controls. Nested instruction, deleted and moveFrom content stays suppressed. Malformed related stories retain main text and the existing ordered omission diagnostic. Markdown keeps literal whitespace and physical field, control, revision and hard-break boundaries. Export controls inspect owned ODT space elements and EPUB content rather than relying on lexical XML substrings.
 
 ## PowerPoint names and finite language controls
@@ -4804,6 +4810,8 @@ Native opening and saving of library-authored outputs is consumer acceptance,
 not original-oracle authorship. Record types, payloads, ids, text, image bytes
 and individual native normalizations. Do not turn no repair prompt into a
 claim of complete structural or behavioral equality.
+
+The same native Word 16.114 producer remains the unrun form qualification for current source-built Rust and Python packages. It requires an independent Word PDF, equal page count, exact text and checkbox semantics, per-page SSIM of at least 0.95 at 144 DPI, matched fonts, deterministic drawing, and documented margin alignment. It has not run. A local Poppler bounding box does not substitute for it. Older typed-control evidence does not qualify this form surface. Full hash, rustdoc, WASM, publish dry-run, strict installed mypy, stubtest, and the full suite remain final-union gates.
 
 ## Word checked XML qualification
 

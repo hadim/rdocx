@@ -399,6 +399,10 @@ Page-break elements are lifted out of paragraph and inline formatting before
 the XHTML documents are packaged, so spine items retain conforming flow
 content.
 
+Modern form composition uses that same package as its only store. Caller rules are transient. The private inventory is the current physical owner of each part, in deterministic preorder, before the tag filter. Dedup is only the same part and span. An exact tag spans every currently authorable internal story. Overlap, a duplicate, the wrong kind, a schema or reset binding conflict, or missing store ownership fails atomically. One current invalid state is one owned issue per physical target. Package and XML failure are errors. Empty rules discover nothing. A partial fill may leave an unassigned required control empty. A byte-equivalent candidate is a no-op, and typed equality is not a shortcut. Fields, markers, permissions, unknown XML, and independent owners stay on the approved physical grammar. There is no second form model.
+
+Accepted owned values are rich, plain, date, combo, and modern-list text, checkbox `Checked` with false present, and legacy drop-down `SelectedIndex`. Picture, group, and repeating controls refuse a scalar. A modern list keeps the existing native value and label policy. `lastValue` is a hint, not authority. Dates keep the two existing Gregorian formats and canonical UTC midnight. A placeholder is semantic empty. Reset clears `fullDate` and list selection, empties the bound value, and leaves the prompt visible. Legacy reset must use the F-288 default or fallback pair. Empty-display insertion uses the same accepted owning-content boundary as read and rewrite. The owned value is that accepted policy, not a claim that only `w:t` text was considered.
+
 ## Generalising the constructors
 
 The only docx-specific code in the existing crate is two constructors. They are
@@ -2030,6 +2034,8 @@ quoting and entity spelling may be normalized by reconstruction. Captured
 adjacent foreign children retain their exact bytes through replacement,
 scalar edits and save/reopen cycles. Namespace closure supplies the emitted
 owner bindings without rewriting the preserved foreign child payload.
+
+Modern form fill, reset, and protect resolve one authoritative package inventory before mutation. The private walk is the current physical owner of each part in deterministic preorder, then the tag filter. Dedup is only the same part and span. Structural picture, group, and repeating controls refuse a scalar. Rich, plain, date, combo, and modern-list text, checkbox `Checked`, and legacy `SelectedIndex` are the accepted scalars. Empty display shares the accepted owning-content boundary with read and rewrite. Placeholder reset clears `fullDate` and list selection and empties the bound value. Comment and text box certification on this path is modern only. It requires a unique case-insensitive part, exact filtered story identity and fingerprints, exact per-owner XML, and save-equivalent `part_xml` text. That text drops a BOM and is not ZIP byte proof. A proved run needs an accepted path and a proved parent. Changed or unproved parts stay conservative.
 
 ## Picture extraction and one-shot publication
 

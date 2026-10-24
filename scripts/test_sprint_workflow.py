@@ -8936,6 +8936,9 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-288 completes DOCX-055 additive field creation.
                 # Removal, Word evaluation, and the final union stay outside that row.
                 288,
+                # F-289 completes DOCX-056. The row owner is complete, so it is
+                # not a live incomplete owner.
+                289,
             }
         } | {"F-X192"}
         self.assertEqual(

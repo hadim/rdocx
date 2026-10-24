@@ -9,15 +9,15 @@ content-control model, and author mail-merge packages with offline diagnostics.
 Eight designs are approved. F-X264, F-X265, F-X266 and F-X267 are reviewed
 and integrated, and their final sprint gates are still pending. F-288 has its
 approved local provider prefix. Its final Word and sprint gates stay pending.
-F-289 is claimed and running, owner grok. The active local checkpoint, tested
-on Python extension `8bcf0c076bf93eaf5f48f7c5b3ec69bd5eeff15b15d217a4abc5ace037bb00e2` before the latest repair, is native 87 and Python 13. Five
-HLD drafts exist. The whole-feature review recorded 3 defects and 0 smells at
-the worker file `.claude/reviews/F-289-whole-feature-pass-1.md`. Separate
-remediation is underway. F-289 is not integrated and is not done. Native pass
-5, with 0 defects, 0 smells, 0 nitpicks, and 86 affected native tests, stays
-a bounded historical outcome. It is not the current whole-feature result and
-it is not a clean final claim. The worker is uncommitted. Final Word and the
-hash harness are unrun.
+F-289 is integrated and reviewed locally, owner grok, and stays in progress.
+The consumed local checkpoint is native 91 and Python 13. Whole-feature pass 2
+is clean, with 0 defects and 0 smells, at
+`.claude/reviews/F-289-whole-feature-pass-2.md`. Native pass 5, with 0 defects,
+0 smells, 0 nitpicks, and 86 affected native tests, stays a bounded historical
+outcome. It is not the current whole-feature result. Final Word 16.114 A7, a
+fresh final CLI, the full workspace, full verify, the full hash suite, WASM,
+publish dry-run, strict installed mypy, and stubtest stay pending. F-289 is
+not done.
 F-290 stays pending and unclaimed.
 F-X268 is pending, owner `-`. Its design is approved and it is not claimed.
 Codex root approved the 2026-10-24 refresh2 extension. Codex root approved
@@ -46,8 +46,8 @@ not a measurement and not a capacity promise. It is not added to the historical
 27 to 41. These figures are estimates, not measurements, and they are not
 a capacity promise. The visible over-two-week
 scope is an approved intake. The sprint clock started with F-X264
-`/start-feature`. F-289 is claimed. The native evidence named above is not a
-full gate. F-X267 remains the largest repair.
+`/start-feature`. F-289 is integrated locally and stays in progress. The
+consumed local evidence is not a full gate. F-X267 remains the largest repair.
 
 ## Spec references
 
@@ -101,15 +101,14 @@ distinct. Shared facade, binding or HLD files require serial ownership.
 All seven stories started pending and unclaimed. The seven designs are now
 approved. F-X264, F-X265, F-X266 and F-X267 are reviewed and integrated, with
 their final sprint gates pending. F-288 local prefix is recorded at
-`96718dadf6840fe6ff73663dff3cd2b286418844`. F-289 is claimed and running,
-owner grok. The active local checkpoint, tested on Python extension `8bcf0c076bf93eaf5f48f7c5b3ec69bd5eeff15b15d217a4abc5ace037bb00e2` before the
-latest repair, is native 87 and Python 13. Five HLD drafts exist. The
-whole-feature review recorded 3 defects and 0 smells at the worker file
-`.claude/reviews/F-289-whole-feature-pass-1.md`. Separate remediation is
-underway. F-289 is not integrated and is not done. Native pass 5, with 86
-affected native tests and a bounded clean native review, stays historical.
-It is not the current whole-feature result and it is not a clean final claim.
-Pass 5 does not approve completion. F-289 has not passed a full gate. F-290
+`96718dadf6840fe6ff73663dff3cd2b286418844`. F-289 is integrated and reviewed
+locally, owner grok, and stays in progress. The consumed local checkpoint is
+native 91 and Python 13. Whole-feature pass 2 is clean at
+`.claude/reviews/F-289-whole-feature-pass-2.md`. Native pass 5 stays historical.
+It is not the current whole-feature result. Pass 5 does not approve completion.
+F-289 has not passed a full gate. Final Word 16.114 A7, a fresh final CLI, the
+full workspace, full verify, the full hash suite, WASM, publish dry-run, strict
+installed mypy, and stubtest stay pending. F-290
 stays pending and unclaimed. The consumed
 local gate
 includes every named native group, A7 and the render fallback, the affected

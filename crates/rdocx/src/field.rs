@@ -865,8 +865,8 @@ impl Document {
         let mut fields = Vec::new();
         let mut paragraphs = Vec::new();
         collect_body_paragraphs(&self.document.body, &mut paragraphs);
-        append_legacy_form_infos(&mut fields, &self.doc_part_name, &paragraphs)?;
-        append_legacy_textbox_fields(&mut fields, &self.doc_part_name, &paragraphs)?;
+        append_legacy_form_infos(&mut fields, &self.doc_part_name, &paragraphs, false)?;
+        append_legacy_textbox_fields(&mut fields, &self.doc_part_name, &paragraphs, false)?;
 
         for (part_name, kind, xml) in legacy_story_parts(self)? {
             let story = legacy_story_paragraphs(&xml, kind.package_kind())?;
@@ -874,10 +874,32 @@ impl Document {
                 .iter()
                 .map(|paragraph| &paragraph.paragraph)
                 .collect::<Vec<_>>();
-            append_legacy_form_infos(&mut fields, &part_name, &paragraphs)?;
-            append_legacy_textbox_fields(&mut fields, &part_name, &paragraphs)?;
+            append_legacy_form_infos(&mut fields, &part_name, &paragraphs, false)?;
+            append_legacy_textbox_fields(&mut fields, &part_name, &paragraphs, false)?;
         }
         Ok(fields)
+    }
+
+    /// Physical anchors for the same accepted walk, from flushed package bytes.
+    ///
+    /// Public metadata does not encode field sources. Span projection parses
+    /// the package that `flush_to_package` already wrote, including a field
+    /// that was authored as `FieldSource::New`.
+    pub(crate) fn legacy_form_physical_anchors(&self) -> Result<Vec<LegacyFormAnchor>> {
+        let mut anchors = Vec::new();
+        let xml = self.package.get_part(&self.doc_part_name).ok_or_else(|| {
+            Error::Other(format!("form story part {} is missing", self.doc_part_name))
+        })?;
+        collect_legacy_form_anchors(
+            &mut anchors,
+            &self.doc_part_name,
+            xml,
+            PackageStoryKind::Document,
+        )?;
+        for (part_name, kind, xml) in legacy_story_parts(self)? {
+            collect_legacy_form_anchors(&mut anchors, &part_name, &xml, kind.package_kind())?;
+        }
+        Ok(anchors)
     }
 
     /// Set the typed value of one existing legacy form field atomically.
@@ -1105,14 +1127,33 @@ fn legacy_story_parts(document: &Document) -> Result<Vec<(String, LegacyStoryKin
     Ok(parts)
 }
 
+pub(crate) struct LegacyFormAnchor {
+    pub part: String,
+    pub ordinal: usize,
+    pub start: usize,
+    pub end: usize,
+}
+
 fn append_legacy_form_infos(
     output: &mut Vec<(LegacyFormFieldInfo, Option<LegacyFormFieldValue>)>,
     source_part: &str,
     paragraphs: &[&CT_P],
+    capture_source: bool,
 ) -> Result<()> {
-    let mut ordinal = 0usize;
+    let mut ordinal = output
+        .iter()
+        .filter(|field| field.0.source_part == source_part)
+        .count();
+    let mut captured = Vec::new();
     for paragraph in paragraphs {
-        append_legacy_form_infos_in_paragraph(output, source_part, &mut ordinal, paragraph)?;
+        append_legacy_form_infos_in_paragraph(
+            output,
+            source_part,
+            &mut ordinal,
+            paragraph,
+            capture_source,
+            &mut captured,
+        )?;
     }
     Ok(())
 }
@@ -1122,6 +1163,8 @@ fn append_legacy_form_infos_in_paragraph(
     source_part: &str,
     ordinal: &mut usize,
     paragraph: &CT_P,
+    capture_source: bool,
+    captured: &mut Vec<Vec<u8>>,
 ) -> Result<()> {
     for boundary in 0..=paragraph.runs.len() {
         for (_, _, _, control) in paragraph
@@ -1129,10 +1172,24 @@ fn append_legacy_form_infos_in_paragraph(
             .iter()
             .filter(|(position, _, _, _)| *position == boundary)
         {
-            append_legacy_form_infos_in_control(output, source_part, ordinal, control)?;
+            append_legacy_form_infos_in_control(
+                output,
+                source_part,
+                ordinal,
+                control,
+                capture_source,
+                captured,
+            )?;
         }
         if let Some(run) = paragraph.runs.get(boundary) {
-            append_legacy_form_infos_in_run(output, source_part, ordinal, run)?;
+            append_legacy_form_infos_in_run(
+                output,
+                source_part,
+                ordinal,
+                run,
+                capture_source,
+                captured,
+            )?;
         }
     }
     Ok(())
@@ -1143,10 +1200,19 @@ fn append_legacy_form_infos_in_run(
     source_part: &str,
     ordinal: &mut usize,
     run: &CT_R,
+    capture_source: bool,
+    captured: &mut Vec<Vec<u8>>,
 ) -> Result<()> {
     for content in &run.content {
         if let RunContent::Field(field) = content {
-            append_legacy_form_field_info(output, source_part, ordinal, field)?;
+            append_legacy_form_field_info(
+                output,
+                source_part,
+                ordinal,
+                field,
+                capture_source,
+                captured,
+            )?;
         }
     }
     Ok(())
@@ -1157,6 +1223,8 @@ fn append_legacy_form_infos_in_control(
     source_part: &str,
     ordinal: &mut usize,
     control: &CT_Sdt,
+    capture_source: bool,
+    captured: &mut Vec<Vec<u8>>,
 ) -> Result<()> {
     let inline_fields = control.inline_legacy_form_fields_with_content_indices()?;
     let mut inline_index = 0usize;
@@ -1170,17 +1238,29 @@ fn append_legacy_form_infos_in_control(
                 source_part,
                 ordinal,
                 &inline_fields[inline_index].1,
-            );
+                capture_source,
+                captured,
+            )?;
             inline_index += 1;
         }
         match content {
             SdtContent::Run(_) => {}
-            SdtContent::ContentControl(control) => {
-                append_legacy_form_infos_in_control(output, source_part, ordinal, control)?
-            }
-            SdtContent::Paragraph(paragraph) => {
-                append_legacy_form_infos_in_paragraph(output, source_part, ordinal, paragraph)?
-            }
+            SdtContent::ContentControl(control) => append_legacy_form_infos_in_control(
+                output,
+                source_part,
+                ordinal,
+                control,
+                capture_source,
+                captured,
+            )?,
+            SdtContent::Paragraph(paragraph) => append_legacy_form_infos_in_paragraph(
+                output,
+                source_part,
+                ordinal,
+                paragraph,
+                capture_source,
+                captured,
+            )?,
             SdtContent::Table(_)
             | SdtContent::Row(_)
             | SdtContent::Cell(_)
@@ -1200,11 +1280,27 @@ fn append_legacy_form_field_info(
     source_part: &str,
     ordinal: &mut usize,
     field: &Field,
+    capture_source: bool,
+    captured: &mut Vec<Vec<u8>>,
 ) -> Result<()> {
     field.validate_legacy_form_owner()?;
-    append_one_legacy_form_field_info(output, source_part, ordinal, field);
+    append_one_legacy_form_field_info(
+        output,
+        source_part,
+        ordinal,
+        field,
+        capture_source,
+        captured,
+    )?;
     for nested in field.nested_fields_in_source_order() {
-        append_legacy_form_field_info(output, source_part, ordinal, nested)?;
+        append_legacy_form_field_info(
+            output,
+            source_part,
+            ordinal,
+            nested,
+            capture_source,
+            captured,
+        )?;
     }
     Ok(())
 }
@@ -1214,12 +1310,22 @@ fn append_one_legacy_form_field_info(
     source_part: &str,
     ordinal: &mut usize,
     field: &Field,
-) {
+    capture_source: bool,
+    captured: &mut Vec<Vec<u8>>,
+) -> Result<()> {
     if let Some(value) = field.legacy_form_value().ok().flatten() {
         let Some(form) = &field.legacy_form else {
-            return;
+            return Ok(());
         };
         let default = field.legacy_form_default_value().ok().flatten();
+        if capture_source {
+            let Some((raw, _)) = field.source_replacement()? else {
+                return Err(Error::Other(
+                    "legacy form field has no parsed physical source".to_owned(),
+                ));
+            };
+            captured.push(raw.to_vec());
+        }
         output.push((
             LegacyFormFieldInfo {
                 source_part: source_part.to_owned(),
@@ -1235,29 +1341,24 @@ fn append_one_legacy_form_field_info(
         ));
         *ordinal += 1;
     }
+    Ok(())
 }
 
 fn append_legacy_textbox_fields(
     output: &mut Vec<(LegacyFormFieldInfo, Option<LegacyFormFieldValue>)>,
     source_part: &str,
     paragraphs: &[&CT_P],
+    capture_source: bool,
 ) -> Result<()> {
     let mut seen = std::collections::HashSet::new();
     for paragraph in paragraphs {
         seen.insert(std::ptr::from_ref(*paragraph) as usize);
     }
-    let mut ordinal = output
-        .iter()
-        .filter(|(field, _)| field.source_part == source_part)
-        .count();
     let mut extra = Vec::new();
     for paragraph in paragraphs {
         collect_unseen_textbox_paragraphs(paragraph, &mut seen, &mut extra);
     }
-    for paragraph in extra {
-        append_legacy_form_infos_in_paragraph(output, source_part, &mut ordinal, paragraph)?;
-    }
-    Ok(())
+    append_legacy_form_infos(output, source_part, &extra, capture_source)
 }
 
 fn collect_unseen_textbox_paragraphs<'a>(
@@ -1718,7 +1819,7 @@ fn textbox_owner_is_rejected(namespace: Option<&str>, local: &[u8]) -> bool {
     }
 }
 
-fn word_accepted_form_container(local: &[u8]) -> bool {
+pub(crate) fn word_accepted_form_container(local: &[u8]) -> bool {
     // accepted_run_paths exposes sdt, sdtContent, hyperlink, ins, and moveTo.
     // Story and body collection expose the package roots, tables, and cells.
     // smartTag, customXml, and fldSimple stay out because that walk does not
@@ -2782,6 +2883,7 @@ impl Document {
                 PackageStoryKind::Footnotes => "footnotes".into(),
                 PackageStoryKind::Endnotes => "endnotes".into(),
                 PackageStoryKind::Comments => "comments".into(),
+                PackageStoryKind::Document => "document".into(),
             };
             if matches!(kind, PackageStoryKind::Comments) {
                 evaluator.sequence_nodes = vec![None; paragraphs.len()];
@@ -3833,6 +3935,9 @@ impl Document {
                     }
                     PackageStoryKind::Comments => {
                         CT_Comments::from_xml(&xml)?;
+                    }
+                    PackageStoryKind::Document => {
+                        CT_Document::from_xml(&xml)?;
                     }
                 }
                 staged.push((part_name, kind, xml));
@@ -16115,6 +16220,7 @@ fn section_page_format(document: &CT_Document, index: usize) -> Option<String> {
 
 #[derive(Clone, Copy)]
 enum PackageStoryKind {
+    Document,
     Header,
     Footer,
     Footnotes,
@@ -16132,6 +16238,8 @@ enum LegacyBlockOwner {
 
 #[derive(Clone, Copy)]
 enum LegacyStoryElementKind {
+    DocumentRoot,
+    BodyRoot,
     HeaderFooterRoot,
     FootnotesRoot,
     EndnotesRoot,
@@ -16184,7 +16292,7 @@ fn legacy_story_paragraphs(
     let general_context = |depth: usize| match story_kind {
         PackageStoryKind::Header | PackageStoryKind::Footer => depth == 1,
         PackageStoryKind::Footnotes | PackageStoryKind::Endnotes => depth == 2,
-        PackageStoryKind::Comments => false,
+        PackageStoryKind::Comments | PackageStoryKind::Document => false,
     };
     loop {
         let before = reader.buffer_position() as usize;
@@ -16477,6 +16585,9 @@ fn legacy_story_element_kind(
 ) -> Option<LegacyStoryElementKind> {
     if stack.is_empty() {
         return Some(match story_kind {
+            PackageStoryKind::Document if word && local == b"document" => {
+                LegacyStoryElementKind::DocumentRoot
+            }
             PackageStoryKind::Header if word && local == b"hdr" => {
                 LegacyStoryElementKind::HeaderFooterRoot
             }
@@ -16518,6 +16629,13 @@ fn legacy_story_element_kind(
     {
         return Some(LegacyStoryElementKind::NormalComment);
     }
+    if matches!(story_kind, PackageStoryKind::Document)
+        && word
+        && local == b"body"
+        && matches!(stack.last(), Some(LegacyStoryElementKind::DocumentRoot))
+    {
+        return Some(LegacyStoryElementKind::BodyRoot);
+    }
     if let Some(LegacyStoryElementKind::ContentControl(owner)) = stack.last()
         && word
         && local == b"sdtContent"
@@ -16525,7 +16643,8 @@ fn legacy_story_element_kind(
         return Some(LegacyStoryElementKind::ContentControlContent(*owner));
     }
     let owner = match stack.last()? {
-        LegacyStoryElementKind::HeaderFooterRoot
+        LegacyStoryElementKind::BodyRoot
+        | LegacyStoryElementKind::HeaderFooterRoot
         | LegacyStoryElementKind::NormalNote
         | LegacyStoryElementKind::NormalComment => LegacyBlockOwner::Root,
         LegacyStoryElementKind::Table => LegacyBlockOwner::Table,
@@ -16551,6 +16670,7 @@ fn legacy_story_element_kind(
 
 fn package_story_root_matches(story_kind: PackageStoryKind, word: bool, local: &[u8]) -> bool {
     word && match story_kind {
+        PackageStoryKind::Document => local == b"document",
         PackageStoryKind::Header => local == b"hdr",
         PackageStoryKind::Footer => local == b"ftr",
         PackageStoryKind::Footnotes => local == b"footnotes",
@@ -16857,6 +16977,140 @@ fn note_is_normal(element: &BytesStart<'_>, resolver: &NamespaceResolver) -> boo
         Some("normal") => id.is_some(),
         Some(_) => false,
         None => id.is_some_and(|id| id > 0),
+    }
+}
+
+fn collect_legacy_form_anchors(
+    output: &mut Vec<LegacyFormAnchor>,
+    part: &str,
+    xml: &[u8],
+    kind: PackageStoryKind,
+) -> Result<()> {
+    let story = legacy_story_paragraphs(xml, kind)?;
+    let mut ordinal = 0usize;
+    for paragraph in &story {
+        let sources = legacy_form_sources_in_paragraph(&paragraph.paragraph)?;
+        place_legacy_sources(
+            output,
+            part,
+            xml,
+            paragraph.start,
+            paragraph.end,
+            &sources,
+            &mut ordinal,
+        )?;
+    }
+    for paragraph in &story {
+        let boxes = textbox_paragraphs(&paragraph.paragraph);
+        if boxes.is_empty() {
+            continue;
+        }
+        let spans = word_txbx_paragraph_spans(xml, &[])?
+            .into_iter()
+            .filter(|(start, _)| *start >= paragraph.start && *start < paragraph.end)
+            .collect::<Vec<_>>();
+        if spans.len() != boxes.len() {
+            return Err(Error::Other(
+                "text box paragraph boundaries do not match the typed story owner".to_owned(),
+            ));
+        }
+        for ((start, end), box_paragraph) in spans.into_iter().zip(boxes) {
+            let sources = legacy_form_sources_in_paragraph(box_paragraph)?;
+            place_legacy_sources(output, part, xml, start, end, &sources, &mut ordinal)?;
+        }
+    }
+    Ok(())
+}
+
+fn legacy_form_sources_in_paragraph(paragraph: &CT_P) -> Result<Vec<Vec<u8>>> {
+    let mut fields = Vec::new();
+    let mut ordinal = 0usize;
+    let mut sources = Vec::new();
+    append_legacy_form_infos_in_paragraph(
+        &mut fields,
+        "",
+        &mut ordinal,
+        paragraph,
+        true,
+        &mut sources,
+    )?;
+    if sources.len() != fields.len() {
+        return Err(Error::Other(
+            "legacy form field has no parsed physical source".to_owned(),
+        ));
+    }
+    Ok(sources)
+}
+
+fn place_legacy_sources(
+    output: &mut Vec<LegacyFormAnchor>,
+    part: &str,
+    xml: &[u8],
+    paragraph_start: usize,
+    paragraph_end: usize,
+    sources: &[Vec<u8>],
+    ordinal: &mut usize,
+) -> Result<()> {
+    let mut search_start = 0usize;
+    for source in sources {
+        let Some(relative) =
+            find_typed_field_source(xml, paragraph_start, paragraph_end, source, search_start)?
+        else {
+            return Err(Error::Other(
+                "legacy form field source was not found in its accepted paragraph".to_owned(),
+            ));
+        };
+        let start = paragraph_start + relative;
+        output.push(LegacyFormAnchor {
+            part: part.to_owned(),
+            ordinal: *ordinal,
+            start,
+            end: start + source.len(),
+        });
+        *ordinal += 1;
+        // The next accepted field may be nested inside this span. Advance one
+        // byte so a later identical sibling is distinct and a nested field remains.
+        search_start = relative.saturating_add(1);
+    }
+    Ok(())
+}
+
+fn textbox_paragraphs(paragraph: &CT_P) -> Vec<&CT_P> {
+    let mut output = Vec::new();
+    push_nested_textbox_paragraphs(paragraph, &mut output);
+    output
+}
+
+fn push_nested_textbox_paragraphs<'a>(paragraph: &'a CT_P, output: &mut Vec<&'a CT_P>) {
+    for path in paragraph.accepted_run_paths() {
+        let Some(run) = paragraph.accepted_run(&path) else {
+            continue;
+        };
+        for content in &run.content {
+            if let RunContent::Drawing(drawing) = content {
+                push_shape_paragraphs(drawing, output);
+            }
+        }
+    }
+}
+
+fn push_shape_paragraphs<'a>(drawing: &'a CT_Drawing, output: &mut Vec<&'a CT_P>) {
+    let Some(shape) = drawing
+        .anchor
+        .as_ref()
+        .and_then(|anchor| anchor.shape.as_ref())
+    else {
+        return;
+    };
+    let mut paragraphs = Vec::new();
+    if let Some(body) = &shape.text_body {
+        collect_body_paragraphs(body, &mut paragraphs);
+    } else {
+        paragraphs.extend(shape.text.iter());
+    }
+    for paragraph in paragraphs {
+        output.push(paragraph);
+        push_nested_textbox_paragraphs(paragraph, output);
     }
 }
 

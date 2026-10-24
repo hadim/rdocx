@@ -62,7 +62,8 @@ pub use comparison::{
 };
 pub use content_control::{
     ContentControlAppearance, ContentControlLock, ContentControlPlacement, ContentControlRef,
-    ContentControlSpec, ContentControlTypePayload,
+    ContentControlSpec, ContentControlTypePayload, FormFieldAssignment, FormFieldRule,
+    FormFieldTarget, FormFieldValue, FormResetValue, FormValidationIssue,
 };
 pub use document::{
     AccessibilityIssue, BodyContentRef, BodyItemRef, ContentFragment, ContentLocation,

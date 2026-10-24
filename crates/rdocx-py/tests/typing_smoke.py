@@ -619,6 +619,95 @@ def fx241_form_types(document: Document) -> None:
     assert_type(definition, LegacyFormFieldDefinition)
 
 
+def fx289_form_carriers(document: Document, span: StoryRunRange) -> None:
+    from rdocx import (
+        DocumentProtection,
+        FormFieldAssignment,
+        FormFieldRule,
+        FormFieldTarget,
+        FormFieldValue,
+        FormResetValue,
+        FormValidationIssue,
+    )
+    target = FormFieldTarget.content_control_tag("")
+    legacy = FormFieldTarget.legacy("word/document.xml", 0)
+    text = FormFieldValue.text("")
+    checked = FormFieldValue.checked(False)
+    selected = FormFieldValue.selected_index(0)
+    reset = FormResetValue.value(text)
+    prompt = FormResetValue.placeholder("")
+    rule = FormFieldRule(target=target, reset=reset)
+    explicit = FormFieldRule(target=legacy, reset=prompt, required=True)
+    assignment = FormFieldAssignment(target=target, value=checked)
+    other = FormFieldAssignment(target=legacy, value=selected)
+    protection = DocumentProtection(mode="forms")
+    full = DocumentProtection(
+        mode="readOnly",
+        enforcement=False,
+        formatting=True,
+        provider_type="rsaAES",
+        algorithm_class="hash",
+        algorithm_type="typeAny",
+        algorithm_sid=0,
+        spin_count=1,
+        hash="",
+        salt=None,
+    )
+    assert_type(target, FormFieldTarget)
+    assert_type(legacy, FormFieldTarget)
+    assert_type(text, FormFieldValue)
+    assert_type(checked, FormFieldValue)
+    assert_type(selected, FormFieldValue)
+    assert_type(reset, FormResetValue)
+    assert_type(prompt, FormResetValue)
+    assert_type(rule, FormFieldRule)
+    assert_type(explicit, FormFieldRule)
+    assert_type(rule.target, FormFieldTarget)
+    assert_type(rule.reset, FormResetValue)
+    assert_type(rule.required, bool)
+    assert_type(assignment, FormFieldAssignment)
+    assert_type(other, FormFieldAssignment)
+    assert_type(assignment.target, FormFieldTarget)
+    assert_type(assignment.value, FormFieldValue)
+    assert_type(protection, DocumentProtection)
+    assert_type(full.mode, Literal["readOnly", "comments", "trackedChanges", "forms"])
+    assert_type(full.enforcement, bool | None)
+    assert_type(full.formatting, bool | None)
+    assert_type(full.provider_type, Literal["rsaAES", "rsaFull", "custom"] | None)
+    assert_type(full.algorithm_class, Literal["hash", "custom"] | None)
+    assert_type(full.algorithm_type, Literal["typeAny", "custom"] | None)
+    assert_type(full.algorithm_sid, int | None)
+    assert_type(full.spin_count, int | None)
+    assert_type(full.hash, str | None)
+    assert_type(full.salt, str | None)
+    def _read_issue(issue: FormValidationIssue) -> None:
+        assert_type(issue.target, FormFieldTarget)
+        assert_type(issue.source_part, str)
+        assert_type(issue.ordinal, int)
+        assert_type(issue.target, FormFieldTarget)
+        assert_type(issue.source_part, str)
+        assert_type(issue.ordinal, int)
+        assert_type(issue.message, str)
+    issues = document.validate_form([rule])
+    filled = document.fill_form((rule,), [assignment])
+    reset_counts = document.reset_form([explicit])
+    document.protect_form([rule], protection)
+    current = document.document_protection
+    document.set_document_protection(full)
+    removed = document.remove_document_protection()
+    permission = document.add_story_permission_range(span, editor="Clerk")
+    assert_type(issues, tuple[FormValidationIssue, ...])
+    assert_type(filled, tuple[int, ...])
+    assert_type(reset_counts, tuple[int, ...])
+    assert_type(current, DocumentProtection | None)
+    assert_type(removed, DocumentProtection | None)
+    assert_type(permission, int)
+    if current is not None:
+        assert_type(current.mode, Literal["readOnly", "comments", "trackedChanges", "forms"])
+    if issues:
+        _read_issue(issues[0])
+
+
 def fx240_owned_signature_reports(owner: Document, private_key: bytes, certificate: bytes) -> None:
     report = owner.sign(private_key, certificate)
     part: str = report["signature_part"]

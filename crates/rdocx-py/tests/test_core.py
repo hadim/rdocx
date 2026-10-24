@@ -9309,6 +9309,1127 @@ def test_legacy_field_factories_and_attachment_refuse_atomically():
     )
 
 
+def _owned_control_location(document, tag):
+    import rdocx
+
+    needle = f'w:val="{tag}"'.encode()
+    item = next(
+        item
+        for item in document.story_items
+        if item.kind == "content_control" and needle in item.xml.split(b"<w:sdtContent", 1)[0]
+    )
+    return rdocx.ContentLocation(item.story, item.kind, item.index_path)
+
+
+def _source_built_dense_form():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Anchor")
+
+    def body():
+        return next(story for story in document.stories if story.kind == "body")
+
+    document.insert_content_control(
+        rdocx.ContentLocation.end(body()), "block", "plain_text", tag="name"
+    )
+    document.insert_content_control(
+        rdocx.ContentLocation.end(body()), "block", "rich_text", tag="agree"
+    )
+    document.set_content_control_type(
+        _owned_control_location(document, "agree"),
+        rdocx.ContentControlTypePayload.checkbox(),
+    )
+    document.insert_content_control(
+        rdocx.ContentLocation.end(body()), "block", "rich_text", tag="when"
+    )
+    document.set_content_control_type(
+        _owned_control_location(document, "when"),
+        rdocx.ContentControlTypePayload.date("yyyy-MM-dd"),
+    )
+    document.insert_content_control(
+        rdocx.ContentLocation.end(body()), "block", "rich_text", tag="color"
+    )
+    document.set_content_control_type(
+        _owned_control_location(document, "color"),
+        rdocx.ContentControlTypePayload.drop_down_list([("Red", "r"), ("Blue", "b")]),
+    )
+    document.insert_content_control(
+        rdocx.ContentLocation.end(body()), "block", "rich_text", tag="rows"
+    )
+    document.set_content_control_type(
+        _owned_control_location(document, "rows"),
+        rdocx.ContentControlTypePayload.repeating_section(),
+    )
+    document.repeat_content_control(_owned_control_location(document, "rows"))
+    store_id = document.add_custom_xml_store(
+        b'<ns:root xmlns:ns="urn:example"><ns:child></ns:child></ns:root>',
+        ["urn:example"],
+    )
+    document.set_content_control_binding(
+        _owned_control_location(document, "name"),
+        store_id,
+        "/ns:root/ns:child",
+        "xmlns:ns='urn:example'",
+    )
+    before_paragraphs = [
+        item
+        for item in document.story_items
+        if item.kind == "paragraph" and item.story.kind == "body"
+    ]
+    document.add_paragraph("")
+    paragraphs = [
+        item
+        for item in document.story_items
+        if item.kind == "paragraph" and item.story.kind == "body"
+    ]
+    target = paragraphs[len(before_paragraphs)]
+    document.insert_legacy_form_field(
+        rdocx.StoryRunPosition(item=target, run_index=0),
+        rdocx.LegacyFormFieldDefinition.text_input(name="Legacy", value="now", default="keep"),
+    )
+    anchor = next(
+        item
+        for item in document.story_items
+        if item.kind == "paragraph" and item.story.kind == "body" and item.text == "Anchor"
+    )
+    document.add_story_permission_range(
+        rdocx.StoryRunRange(
+            start=rdocx.StoryRunPosition(item=anchor, run_index=0),
+            end=rdocx.StoryRunPosition(item=anchor, run_index=1),
+        ),
+        editor="Clerk",
+    )
+    header = document.section(0).header
+    header.is_linked_to_previous = False
+    header_story = next(story for story in document.stories if story.kind == "header")
+    document.insert_content_control(
+        rdocx.ContentLocation.end(header_story), "block", "plain_text", tag="office"
+    )
+    legacy = document.legacy_form_fields()[0]
+    legacy_target = rdocx.FormFieldTarget.legacy(legacy.source_part, legacy.ordinal)
+    rules = (
+        rdocx.FormFieldRule(
+            target=rdocx.FormFieldTarget.content_control_tag("name"),
+            reset=rdocx.FormResetValue.placeholder("Name"),
+            required=True,
+        ),
+        rdocx.FormFieldRule(
+            target=rdocx.FormFieldTarget.content_control_tag("agree"),
+            reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.checked(False)),
+            required=True,
+        ),
+        rdocx.FormFieldRule(
+            target=rdocx.FormFieldTarget.content_control_tag("when"),
+            reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.text("2026-10-24")),
+            required=True,
+        ),
+        rdocx.FormFieldRule(
+            target=rdocx.FormFieldTarget.content_control_tag("color"),
+            reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.text("Red")),
+            required=True,
+        ),
+        rdocx.FormFieldRule(
+            target=legacy_target,
+            reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.text("keep")),
+            required=True,
+        ),
+        rdocx.FormFieldRule(
+            target=rdocx.FormFieldTarget.content_control_tag("office"),
+            reset=rdocx.FormResetValue.placeholder("Office"),
+            required=False,
+        ),
+    )
+    assignments = (
+        rdocx.FormFieldAssignment(target=rules[0].target, value=rdocx.FormFieldValue.text("FormAda")),
+        rdocx.FormFieldAssignment(target=rules[1].target, value=rdocx.FormFieldValue.checked(True)),
+        rdocx.FormFieldAssignment(target=rules[2].target, value=rdocx.FormFieldValue.text("2026-10-23")),
+        rdocx.FormFieldAssignment(target=rules[3].target, value=rdocx.FormFieldValue.text("Blue")),
+        rdocx.FormFieldAssignment(target=legacy_target, value=rdocx.FormFieldValue.text("typed")),
+        rdocx.FormFieldAssignment(target=rules[5].target, value=rdocx.FormFieldValue.text("North")),
+    )
+    return document, rules, assignments
+
+
+def test_form_rules_fill_reset_and_protect_public_api(tmp_path):
+    # Basic public carriers stay. The dense half is public creation only.
+    import inspect
+    import rdocx
+
+    for name in (
+        "FormFieldTarget",
+        "FormFieldValue",
+        "FormResetValue",
+        "FormFieldRule",
+        "FormFieldAssignment",
+        "FormValidationIssue",
+        "DocumentProtection",
+    ):
+        assert getattr(rdocx, name) is getattr(rdocx._rdocx, name)
+        assert name in rdocx.__all__
+
+    empty_tag = rdocx.FormFieldTarget.content_control_tag("")
+    legacy = rdocx.FormFieldTarget.legacy("", 0)
+    text = rdocx.FormFieldValue.text("")
+    checked = rdocx.FormFieldValue.checked(False)
+    selected = rdocx.FormFieldValue.selected_index(0)
+    reset = rdocx.FormResetValue.value(text)
+    prompt = rdocx.FormResetValue.placeholder("")
+    rule = rdocx.FormFieldRule(target=empty_tag, reset=reset)
+    assignment = rdocx.FormFieldAssignment(target=legacy, value=checked)
+    protection = rdocx.DocumentProtection(mode="forms")
+    blank = rdocx.DocumentProtection(
+        mode="readOnly",
+        hash="",
+        salt=None,
+        algorithm_sid=0,
+        spin_count=2**32 - 1,
+    )
+    assert rule.target is not empty_tag and rule.target is rule.target
+    assert rule.reset is not reset and assignment.target is not legacy
+    assert assignment.value is not checked
+    assert rule.required is False
+    assert type(rule.target).__name__ == "FormFieldTarget"
+    assert type(rule.reset).__name__ == "FormResetValue"
+    assert type(assignment.value).__name__ == "FormFieldValue"
+    assert protection.mode == "forms"
+    assert protection.enforcement is None and protection.formatting is None
+    assert protection.provider_type is None and protection.algorithm_class is None
+    assert protection.algorithm_type is None and protection.algorithm_sid is None
+    assert protection.spin_count is None and protection.hash is None and protection.salt is None
+    assert blank.hash == "" and blank.salt is None
+    assert blank.algorithm_sid == 0 and blank.spin_count == 2**32 - 1
+    full = rdocx.DocumentProtection(
+        mode="comments",
+        enforcement=False,
+        formatting=True,
+        provider_type="rsaFull",
+        algorithm_class="custom",
+        algorithm_type="custom",
+        algorithm_sid=14,
+        spin_count=100000,
+        hash="abc",
+        salt="def",
+    )
+    assert (
+        full.mode,
+        full.enforcement,
+        full.formatting,
+        full.provider_type,
+        full.algorithm_class,
+        full.algorithm_type,
+        full.algorithm_sid,
+        full.spin_count,
+        full.hash,
+        full.salt,
+    ) == ("comments", False, True, "rsaFull", "custom", "custom", 14, 100000, "abc", "def")
+    for frozen, name in (
+        (rule, "required"),
+        (assignment, "target"),
+        (protection, "mode"),
+        (empty_tag, "tag"),
+    ):
+        with pytest.raises(AttributeError):
+            setattr(frozen, name, None)
+    rule_signature = inspect.signature(rdocx.FormFieldRule)
+    assert [item.kind for item in rule_signature.parameters.values()] == [
+        inspect.Parameter.KEYWORD_ONLY
+    ] * 3
+    assert rule_signature.parameters["required"].default is False
+    assignment_signature = inspect.signature(rdocx.FormFieldAssignment)
+    assert list(assignment_signature.parameters) == ["target", "value"]
+    assert all(
+        item.kind is inspect.Parameter.KEYWORD_ONLY
+        for item in assignment_signature.parameters.values()
+    )
+    protection_signature = inspect.signature(rdocx.DocumentProtection)
+    assert list(protection_signature.parameters) == [
+        "mode",
+        "enforcement",
+        "formatting",
+        "provider_type",
+        "algorithm_class",
+        "algorithm_type",
+        "algorithm_sid",
+        "spin_count",
+        "hash",
+        "salt",
+    ]
+    assert protection_signature.parameters["mode"].default is inspect.Parameter.empty
+    assert all(
+        protection_signature.parameters[name].default is None
+        for name in protection_signature.parameters
+        if name != "mode"
+    )
+    assert protection_signature.parameters["mode"].kind is inspect.Parameter.KEYWORD_ONLY
+    for factory in (
+        rdocx.FormFieldTarget,
+        rdocx.FormFieldValue,
+        rdocx.FormResetValue,
+        rdocx.FormValidationIssue,
+    ):
+        with pytest.raises(TypeError):
+            factory()
+    with pytest.raises(TypeError):
+        rdocx.FormFieldValue.checked(1)
+    with pytest.raises(TypeError):
+        rdocx.FormFieldValue.checked(None)
+    with pytest.raises(TypeError):
+        rdocx.FormFieldTarget.legacy("word/document.xml", True)
+    with pytest.raises(TypeError):
+        rdocx.FormFieldValue.selected_index(True)
+    with pytest.raises(ValueError):
+        rdocx.FormFieldTarget.legacy("word/document.xml", -1)
+    with pytest.raises(ValueError):
+        rdocx.FormFieldValue.selected_index(-(2**200))
+    with pytest.raises(OverflowError):
+        rdocx.FormFieldTarget.legacy("word/document.xml", 2**200)
+    with pytest.raises(TypeError):
+        rdocx.FormResetValue.value("text")
+    with pytest.raises(TypeError):
+        rdocx.FormFieldRule(empty_tag, reset)
+    with pytest.raises(TypeError):
+        rdocx.FormFieldRule(target="tag", reset=reset)
+    with pytest.raises(TypeError):
+        rdocx.FormFieldAssignment(target=legacy, value="no")
+    with pytest.raises(TypeError):
+        rdocx.FormFieldRule(target=empty_tag, reset=reset, required=1)
+    with pytest.raises(ValueError):
+        rdocx.DocumentProtection(mode="password")
+    with pytest.raises(ValueError):
+        rdocx.DocumentProtection(mode="forms", provider_type="")
+    with pytest.raises(ValueError):
+        rdocx.DocumentProtection(mode="forms", algorithm_class="sha1")
+    with pytest.raises(ValueError):
+        rdocx.DocumentProtection(mode="forms", algorithm_type="sha1")
+    with pytest.raises(TypeError):
+        rdocx.DocumentProtection(mode="forms", enforcement=1)
+    with pytest.raises(TypeError):
+        rdocx.DocumentProtection(mode="forms", formatting="true")
+    with pytest.raises(TypeError):
+        rdocx.DocumentProtection(mode="forms", algorithm_sid=True)
+    with pytest.raises(TypeError):
+        rdocx.DocumentProtection(mode="forms", spin_count=1.5)
+    with pytest.raises(ValueError):
+        rdocx.DocumentProtection(mode="forms", algorithm_sid=-1)
+    with pytest.raises(ValueError):
+        rdocx.DocumentProtection(mode="forms", spin_count=-(2**200))
+    with pytest.raises(OverflowError):
+        rdocx.DocumentProtection(mode="forms", algorithm_sid=2**32)
+    with pytest.raises(OverflowError):
+        rdocx.DocumentProtection(mode="forms", spin_count=2**200)
+    tracked = rdocx.DocumentProtection(mode="trackedChanges", provider_type="custom", algorithm_type="typeAny", algorithm_class="hash")
+    assert tracked.mode == "trackedChanges"
+    assert tracked.provider_type == "custom"
+    assert tracked.algorithm_type == "typeAny"
+    assert tracked.algorithm_class == "hash"
+    assert rdocx.FormFieldValue.selected_index(0) is not selected
+    assert prompt is not reset
+    with pytest.raises(rdocx.XmlError):
+        rdocx.FormFieldValue.text("a\x00b")
+    with pytest.raises(rdocx.XmlError):
+        rdocx.FormResetValue.placeholder("a\x00b")
+    assert rdocx.FormFieldValue.text("").__class__ is rdocx.FormFieldValue
+    assert rdocx.FormResetValue.placeholder("").__class__ is rdocx.FormResetValue
+
+    document = rdocx.Document()
+    document.add_paragraph("Anchor")
+    body = next(story for story in document.stories if story.kind == "body")
+    document.insert_content_control(
+        rdocx.ContentLocation.end(body), "block", "plain_text", tag="name"
+    )
+    rule = rdocx.FormFieldRule(
+        target=rdocx.FormFieldTarget.content_control_tag("name"),
+        reset=rdocx.FormResetValue.placeholder("Name"),
+        required=True,
+    )
+    for bad in ("", b"", {}, set(), frozenset()):
+        with pytest.raises(TypeError):
+            document.validate_form(bad)
+        with pytest.raises(TypeError):
+            document.fill_form(bad, [])
+        with pytest.raises(TypeError):
+            document.fill_form([], bad)
+        with pytest.raises(TypeError):
+            document.reset_form(bad)
+        with pytest.raises(TypeError):
+            document.protect_form(bad, rdocx.DocumentProtection(mode="forms"))
+    class CarrierSequence(tuple):
+        pass
+    assert document.validate_form(CarrierSequence()) == ()
+    assert document.fill_form([], ()) == ()
+    assert document.reset_form(()) == ()
+    issues = document.validate_form([rule])
+    assert isinstance(issues, tuple) and issues
+    issue = issues[0]
+    assert issue.message == "required value is empty"
+    assert issue.source_part and isinstance(issue.ordinal, int)
+    assert type(issue.target).__name__ == "FormFieldTarget"
+    before = document.to_bytes()
+    revision = document.revisions
+    with pytest.raises(rdocx.RdocxError):
+        document.protect_form([rule], rdocx.DocumentProtection(mode="forms"))
+    with pytest.raises(rdocx.RdocxError):
+        document.protect_form([rule], rdocx.DocumentProtection(mode="readOnly"))
+    assert document.to_bytes() == before
+    counts = document.fill_form([rule], [rdocx.FormFieldAssignment(
+        target=rdocx.FormFieldTarget.content_control_tag("name"),
+        value=rdocx.FormFieldValue.text("Ada"),
+    )])
+    assert counts == (1,)
+    assert document.validate_form((rule,)) == ()
+    document.protect_form([rule], rdocx.DocumentProtection(mode="forms", enforcement=True))
+    stored = document.document_protection
+    assert stored is not None and stored.mode == "forms" and stored.enforcement is True
+    assert len(document.document_protection.__dict__ if False else (
+        stored.mode, stored.enforcement, stored.formatting, stored.provider_type,
+        stored.algorithm_class, stored.algorithm_type, stored.algorithm_sid,
+        stored.spin_count, stored.hash, stored.salt,
+    )) == 10
+    removed = document.remove_document_protection()
+    assert removed is not None and removed.mode == "forms" and removed.enforcement is True
+    assert document.document_protection is None
+    assert document.remove_document_protection() is None
+    anchor = document.paragraphs[0]
+    span = rdocx.StoryRunRange(
+        start=rdocx.StoryRunPosition(paragraph=anchor, run_index=0),
+        end=rdocx.StoryRunPosition(paragraph=anchor, run_index=1),
+    )
+    permission = document.add_story_permission_range(span, editor="Clerk")
+    assert isinstance(permission, int)
+    refused = rdocx.Document()
+    refused.add_paragraph("Anchor")
+    refused_anchor = refused.paragraphs[0]
+    refused_span = rdocx.StoryRunRange(
+        start=rdocx.StoryRunPosition(paragraph=refused_anchor, run_index=0),
+        end=rdocx.StoryRunPosition(paragraph=refused_anchor, run_index=1),
+    )
+    refused_before = refused.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        refused.add_story_permission_range(refused_span, editor=None, group=None)
+    with pytest.raises(rdocx.RdocxError):
+        refused.add_story_permission_range(refused_span, editor="Clerk", group="Staff")
+    with pytest.raises(rdocx.RdocxError):
+        refused.add_story_permission_range(refused_span, editor="")
+    with pytest.raises(rdocx.XmlError):
+        refused.add_story_permission_range(refused_span, group="a\x00b")
+    assert refused.to_bytes() == refused_before
+    assert document.reset_form([rule]) == (1,)
+    assert revision != document.revisions or document.to_bytes() != before
+
+    dense, rules, assignments = _source_built_dense_form()
+    owned_legacy = dense.legacy_form_fields()[0]
+    assert owned_legacy.value == "now" and owned_legacy.default_value == "keep"
+    before = dense.to_bytes()
+    issues = dense.validate_form(rules)
+    assert any(issue.message == "required value is empty" and issue.ordinal < 20 for issue in issues)
+    with pytest.raises(rdocx.RdocxError, match="valid form"):
+        dense.protect_form(rules, rdocx.DocumentProtection(mode="forms"))
+    assert dense.document_protection is None
+    with pytest.raises(rdocx.RdocxError, match="kind"):
+        dense.fill_form(
+            rules,
+            [rdocx.FormFieldAssignment(
+                target=rdocx.FormFieldTarget.content_control_tag("color"),
+                value=rdocx.FormFieldValue.selected_index(1),
+            )],
+        )
+    assert dense.to_bytes() == before
+    assert issues[0].message == "required value is empty"
+    assert owned_legacy.value == "now"
+    assert dense.fill_form(rules, assignments) == (1, 1, 1, 1, 1, 1)
+    raw = dense.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(raw)) as package:
+        document_xml = package.read("word/document.xml")
+        header_xml = next(
+            package.read(name) for name in package.namelist() if name.startswith("word/header")
+        )
+        stored = package.read("customXml/item1.xml")
+    assert b"FormAda" in document_xml
+    assert b"2026-10-23T00:00:00Z" in document_xml
+    assert b">Blue<" in document_xml and b'w:lastValue="b"' in document_xml
+    assert b'w:displayText="Blue"' in document_xml
+    assert document_xml.count(b"repeatingSectionItem") == 2
+    assert b"North" in header_xml
+    assert b"FormAda" in stored
+    assert dense.legacy_form_fields()[0].value == "typed"
+    assert dense.legacy_form_fields()[0].default_value == "keep"
+    assert dense.validate_form(rules) == ()
+    dense.protect_form(rules, rdocx.DocumentProtection(mode="forms"))
+    assert dense.document_protection is not None and dense.document_protection.mode == "forms"
+    import math
+    version = subprocess.run(["pdftotext", "-v"], capture_output=True, check=True, text=True)
+    assert version.stderr.splitlines()[0].startswith("pdftotext version ")
+    pdf_path = tmp_path / "dense-form.pdf"
+    pdf = dense.to_pdfa_deterministic("pdfa-2b")
+    assert pdf.startswith(b"%PDF-") and b"<pdfaid:part>2</pdfaid:part>" in pdf
+    pdf_path.write_bytes(pdf)
+    extracted = subprocess.run(
+        ["pdftotext", str(pdf_path), "-"], capture_output=True, check=True, text=True
+    ).stdout
+    assert "FormAda" in extracted
+    bbox = subprocess.run(
+        ["pdftotext", "-bbox", str(pdf_path), "-"], capture_output=True, check=True, text=True
+    ).stdout
+    word = next(line for line in bbox.splitlines() if ">FormAda<" in line)
+    numbers = [float(piece.split('"')[1]) for piece in word.split(" ") if '="' in piece]
+    assert len(numbers) >= 4 and all(math.isfinite(number) for number in numbers)
+    raster = tmp_path / "dense-form"
+    subprocess.run(
+        ["pdftoppm", "-png", "-r", "72", str(pdf_path), str(raster)],
+        check=True,
+    )
+    pngs = list(tmp_path.glob("dense-form*.png"))
+    assert pngs and pngs[0].read_bytes().startswith(b"\x89PNG")
+    assert dense.reset_form(rules) == (1, 1, 1, 1, 1, 1)
+    raw = dense.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(raw)) as package:
+        document_xml = package.read("word/document.xml")
+        header_xml = next(
+            package.read(name) for name in package.namelist() if name.startswith("word/header")
+        )
+        stored = package.read("customXml/item1.xml")
+        package_text = b"".join(package.read(name) for name in package.namelist())
+    assert b"Name" in document_xml
+    assert b"2026-10-24T00:00:00Z" in document_xml
+    assert b">Red<" in document_xml and b'w:lastValue="r"' in document_xml
+    assert b'w:displayText="Red"' in document_xml
+    assert document_xml.count(b"repeatingSectionItem") == 2
+    assert b"Office" in header_xml
+    assert b"<ns:child></ns:child>" in stored or b"<ns:child/>" in stored
+    assert b"permStart" in package_text
+    assert dense.legacy_form_fields()[0].value == "keep"
+    assert dense.legacy_form_fields()[0].default_value == "keep"
+    assert owned_legacy.value == "now"
+    reopened = rdocx.Document.from_bytes(raw)
+    assert reopened.document_protection is not None and reopened.document_protection.mode == "forms"
+    assert reopened.validate_form(()) == ()
+    reopened_issues = reopened.validate_form(rules)
+    assert reopened_issues and all(issue.message == "required value is empty" for issue in reopened_issues)
+    assert reopened.legacy_form_fields()[0].value == "keep"
+    assert reopened.legacy_form_fields()[0].default_value == "keep"
+
+
+def _protection_fields(protection):
+    return (
+        protection.mode,
+        protection.enforcement,
+        protection.formatting,
+        protection.provider_type,
+        protection.algorithm_class,
+        protection.algorithm_type,
+        protection.algorithm_sid,
+        protection.spin_count,
+        protection.hash,
+        protection.salt,
+    )
+
+
+def _related_owner_document():
+    import rdocx
+
+    content = "<w:txbxContent><w:p><w:r><w:t>box held</w:t></w:r></w:p></w:txbxContent>"
+    body = (
+        "<w:p><w:r><w:t>body held</w:t></w:r></w:p>"
+        "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid>"
+        "<w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>cell held</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+        "<w:p><w:r><mc:AlternateContent "
+        "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" "
+        "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" "
+        "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" "
+        "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\" "
+        "xmlns:v=\"urn:schemas-microsoft-com:vml\">"
+        "<mc:Choice Requires=\"wps\"><w:drawing><wp:inline>"
+        "<wp:extent cx=\"914400\" cy=\"457200\"/><wp:docPr id=\"1\" name=\"scoped box\"/>"
+        "<a:graphic><a:graphicData "
+        "uri=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\">"
+        f"<wps:wsp><wps:txbx>{content}</wps:txbx></wps:wsp>"
+        "</a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice>"
+        f"<mc:Fallback><w:pict><v:shape id=\"fallback\"><v:textbox>{content}</v:textbox>"
+        "</v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p><w:sectPr/>"
+    )
+    document = _replace_document_body(rdocx.Document(), body)
+    header = document.section(0).header
+    header.is_linked_to_previous = False
+    header.add_paragraph("header held")
+    document.add_footnote(document.paragraphs[0], "note held")
+    document.add_comment(
+        rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=0, run_index=0),
+            end=rdocx.RunPosition(body_index=0, run_index=1),
+        ),
+        author="Ada",
+        text="comment held",
+    )
+    return rdocx.Document.from_bytes(document.to_bytes())
+
+
+def _story_paragraph(document, kind):
+    return next(
+        item.paragraph
+        for item in document.story_items
+        if item.story.kind == kind and item.kind == "paragraph"
+    )
+
+
+def test_form_protection_and_permission_composition():
+    import rdocx
+
+    document = _related_owner_document()
+    body = document.paragraphs[0]
+    body_run = body.runs[0]
+    table = document.tables[0]
+    cell = table.cell(0, 0)
+    cell_paragraph = cell.paragraphs[0]
+    cell_run = cell_paragraph.runs[0]
+    header = document.section(0).header.paragraphs[0]
+    header_run = header.runs[0]
+    note = _story_paragraph(document, "footnote")
+    note_run = next(run for run in note.runs if run.text == "note held")
+    comment = _story_paragraph(document, "comment")
+    comment_run = comment.runs[0]
+    text_box = _story_paragraph(document, "text_box")
+    text_box_run = text_box.runs[0]
+    held = (
+        (comment, "comment held"),
+        (comment_run, "comment held"),
+        (text_box, "box held"),
+        (text_box_run, "box held"),
+        (body, "body held"),
+        (body_run, "body held"),
+        (cell, "cell held"),
+        (cell_paragraph, "cell held"),
+        (cell_run, "cell held"),
+        (header, "header held"),
+        (header_run, "header held"),
+        (note, "note held"),
+        (note_run, "note held"),
+    )
+    before = document.to_bytes()
+    assert document.fill_form([], ()) == ()
+    assert document.to_bytes() == before
+    for handle, text in held:
+        assert handle.text == text
+    empty = rdocx.FormFieldRule(
+        target=rdocx.FormFieldTarget.content_control_tag("missing"),
+        reset=rdocx.FormResetValue.placeholder("Name"),
+        required=True,
+    )
+    with pytest.raises(rdocx.RdocxError):
+        document.protect_form([empty], rdocx.DocumentProtection(mode="forms"))
+    with pytest.raises(rdocx.RdocxError):
+        document.protect_form([], rdocx.DocumentProtection(mode="readOnly"))
+    assert document.to_bytes() == before
+    for handle, text in held:
+        assert handle.text == text
+
+    full = rdocx.DocumentProtection(
+        mode="comments",
+        enforcement=False,
+        formatting=True,
+        provider_type="rsaFull",
+        algorithm_class="custom",
+        algorithm_type="custom",
+        algorithm_sid=14,
+        spin_count=100000,
+        hash="abc",
+        salt="def",
+    )
+    document.set_document_protection(full)
+    stored = document.document_protection
+    assert stored is not None and _protection_fields(stored) == _protection_fields(full)
+    assert len(_protection_fields(stored)) == 10
+    for handle, text in held:
+        assert handle.text == text
+    fresh_comment = _story_paragraph(document, "comment")
+    fresh_box = _story_paragraph(document, "text_box")
+    assert fresh_comment.text == comment.text == "comment held"
+    assert fresh_box.text == text_box.text == "box held"
+    assert document.paragraphs[0].text == body.text == "body held"
+    assert document.tables[0].cell(0, 0).text == cell.text == "cell held"
+    assert document.section(0).header.paragraphs[0].text == header.text == "header held"
+    assert _story_paragraph(document, "footnote").text == note.text == "note held"
+    removed = document.remove_document_protection()
+    assert removed is not None and _protection_fields(removed) == _protection_fields(full)
+    with pytest.raises(AttributeError):
+        removed.mode = "readOnly"
+    assert document.document_protection is None
+    assert document.remove_document_protection() is None
+    for handle, text in held:
+        assert handle.text == text
+    document.protect_form([], rdocx.DocumentProtection(mode="forms", enforcement=True))
+    assert document.document_protection.mode == "forms"
+    assert document.document_protection.enforcement is True
+    for handle, text in held:
+        assert handle.text == text
+
+    retired = document.paragraphs[0]
+    assert document.remove_content(0)
+    with pytest.raises(rdocx.StaleElementError):
+        _ = retired.text
+    document.set_document_protection(rdocx.DocumentProtection(mode="readOnly"))
+    with pytest.raises(rdocx.StaleElementError):
+        _ = retired.text
+    assert document.paragraphs[0].text != "body held"
+
+    # Permission stays on the conservative publication. A document-part edit
+    # retires held body and comment handles and does not revive the removed one.
+    permitted = _related_owner_document()
+    permitted_body = permitted.paragraphs[0]
+    permitted_comment = _story_paragraph(permitted, "comment")
+    span = rdocx.StoryRunRange(
+        start=rdocx.StoryRunPosition(paragraph=permitted_body, run_index=0),
+        end=rdocx.StoryRunPosition(paragraph=permitted_body, run_index=1),
+    )
+    assert isinstance(permitted.add_story_permission_range(span, editor="Clerk"), int)
+    for handle in (permitted_body, permitted_comment, retired):
+        with pytest.raises(rdocx.StaleElementError):
+            _ = handle.text
+
+    # A form fill that rewrites the body part keeps changed-owner staleness.
+    # The comment part is a different physical owner and is not an ordinal alias.
+    filled = rdocx.Document()
+    filled.add_paragraph("body zero")
+    story = next(item for item in filled.stories if item.kind == "body")
+    filled.insert_content_control(
+        rdocx.ContentLocation.end(story), "block", "plain_text", tag="name"
+    )
+    filled.add_comment(
+        rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=0, run_index=0),
+            end=rdocx.RunPosition(body_index=0, run_index=1),
+        ),
+        author="Ada",
+        text="comment zero",
+    )
+    box = (
+        "<w:p><w:r><w:t>body zero</w:t></w:r></w:p>"
+        "<w:sdt><w:sdtPr><w:tag w:val=\"name\"/><w:id w:val=\"7\"/>"
+        "<w:placeholder><w:docPart w:val=\"DefaultPlaceholder_-1854013440\"/>"
+        "</w:placeholder></w:sdtPr><w:sdtContent><w:p><w:r><w:t></w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt><w:sectPr/>"
+    )
+    filled = _replace_document_body(filled, box)
+    content = "<w:txbxContent><w:p><w:r><w:t>box zero</w:t></w:r></w:p></w:txbxContent>"
+    boxed = box.replace(
+        "<w:sectPr/>",
+        "<w:p><w:r><mc:AlternateContent "
+        "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" "
+        "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" "
+        "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" "
+        "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\" "
+        "xmlns:v=\"urn:schemas-microsoft-com:vml\">"
+        "<mc:Choice Requires=\"wps\"><w:drawing><wp:inline>"
+        "<wp:extent cx=\"914400\" cy=\"457200\"/><wp:docPr id=\"1\" name=\"scoped box\"/>"
+        "<a:graphic><a:graphicData "
+        "uri=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\">"
+        f"<wps:wsp><wps:txbx>{content}</wps:txbx></wps:wsp>"
+        "</a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice>"
+        f"<mc:Fallback><w:pict><v:shape id=\"fallback\"><v:textbox>{content}</v:textbox>"
+        "</v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p><w:sectPr/>",
+    )
+    filled = _replace_document_body(filled, boxed)
+    filled.add_comment(
+        rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=0, run_index=0),
+            end=rdocx.RunPosition(body_index=0, run_index=1),
+        ),
+        author="Ada",
+        text="comment zero",
+    )
+    filled = rdocx.Document.from_bytes(filled.to_bytes())
+    stable = filled.paragraphs[0]
+    changed = filled.paragraphs[1]
+    comment_zero = _story_paragraph(filled, "comment")
+    box_zero = _story_paragraph(filled, "text_box")
+    assert stable.text == "body zero" and changed.text == ""
+    assert comment_zero.text == "comment zero" and box_zero.text == "box zero"
+    assert comment_zero.text != stable.text
+    rule = rdocx.FormFieldRule(
+        target=rdocx.FormFieldTarget.content_control_tag("name"),
+        reset=rdocx.FormResetValue.placeholder("Name"),
+    )
+    assert filled.fill_form(
+        [rule],
+        [rdocx.FormFieldAssignment(
+            target=rdocx.FormFieldTarget.content_control_tag("name"),
+            value=rdocx.FormFieldValue.text("Ada"),
+        )],
+    ) == (1,)
+    with pytest.raises(rdocx.StaleElementError):
+        _ = changed.text
+    with pytest.raises(rdocx.StaleElementError):
+        _ = box_zero.text
+    assert stable.text == "body zero"
+    assert comment_zero.text == "comment zero"
+    assert _story_paragraph(filled, "comment").text == "comment zero"
+    assert filled.paragraphs[0].text == "body zero"
+
+    # Two package names that differ only by case cannot be opened. The OPC
+    # duplicate check refuses the package, so no publication can certify it.
+    ambiguous = _related_owner_document()
+    held_comment = _story_paragraph(ambiguous, "comment")
+    raw = ambiguous.to_bytes()
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(raw)) as source, zipfile.ZipFile(output, "w") as result:
+        payload = None
+        for info in source.infolist():
+            data = source.read(info.filename)
+            if info.filename == "word/comments.xml":
+                payload = data
+            result.writestr(info, data)
+        assert payload is not None
+        result.writestr("word/Comments.xml", payload)
+    with pytest.raises(rdocx.PackageError, match="duplicate OPC part name"):
+        rdocx.Document.from_bytes(output.getvalue())
+    assert ambiguous.to_bytes() == raw
+    assert held_comment.text == "comment held"
+
+
+def test_form_batches_preserve_owners_and_refuse_invalid_targets():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("held")
+    body = next(story for story in document.stories if story.kind == "body")
+    document.insert_content_control(
+        rdocx.ContentLocation.end(body), "block", "plain_text", tag="shared"
+    )
+    header = document.section(0).header
+    header.is_linked_to_previous = False
+    header.add_paragraph("header held")
+    header_story = next(story for story in document.stories if story.kind == "header")
+    document.insert_content_control(
+        rdocx.ContentLocation.end(header_story), "block", "plain_text", tag="shared"
+    )
+    footer = document.section(0).footer
+    footer.is_linked_to_previous = False
+    footer.add_paragraph("footer held")
+    footer_story = next(story for story in document.stories if story.kind == "footer")
+    document.insert_content_control(
+        rdocx.ContentLocation.end(footer_story), "block", "plain_text", tag="aside"
+    )
+    held = document.paragraphs[0]
+    shared = rdocx.FormFieldRule(
+        target=rdocx.FormFieldTarget.content_control_tag("shared"),
+        reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.text("")),
+    )
+    aside = rdocx.FormFieldRule(
+        target=rdocx.FormFieldTarget.content_control_tag("aside"),
+        reset=rdocx.FormResetValue.placeholder("Aside"),
+        required=True,
+    )
+    before = document.to_bytes()
+    assert document.validate_form(()) == ()
+    assert document.fill_form((), ()) == ()
+    with pytest.raises(TypeError):
+        rdocx.FormFieldAssignment()
+    assert document.to_bytes() == before
+    assert held.text == "held"
+    counts = document.fill_form(
+        [shared, aside],
+        [rdocx.FormFieldAssignment(
+            target=rdocx.FormFieldTarget.content_control_tag("shared"),
+            value=rdocx.FormFieldValue.text("Ada"),
+        )],
+    )
+    assert counts == (2,)
+    assert document.validate_form([shared, aside])[0].message == "required value is empty"
+    frozen = document.validate_form([aside])
+    assert frozen[0].message == "required value is empty"
+    assert document.fill_form(
+        [shared, aside],
+        [rdocx.FormFieldAssignment(
+            target=rdocx.FormFieldTarget.content_control_tag("shared"),
+            value=rdocx.FormFieldValue.text("Ada"),
+        )],
+    ) == (2,)
+    assert frozen[0].message == "required value is empty"
+    assert held.text == "held"
+    controls = [
+        (item.story.kind, item.text)
+        for item in document.story_items
+        if item.kind == "content_control"
+    ]
+    assert controls.count(("body", "Ada")) == 1
+    assert controls.count(("header", "Ada")) == 1
+    assert controls.count(("footer", "")) == 1
+
+    checkbox_properties = (
+        '<w14:checkbox xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">'
+        '<w14:checked w14:val="0"/>'
+        '<w14:checkedState w14:val="2612" w14:font="MS Gothic"/>'
+        '<w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/>'
+        "</w14:checkbox>"
+    )
+    checkbox = _replace_document_body(
+        rdocx.Document(),
+        '<w:p><w:r><w:t>stay</w:t></w:r></w:p>'
+        + _fx241_control("box", checkbox_properties, "\u2610")
+        + _fx241_control("group", "<w:group/>", "kept")
+        + "<w:sectPr/>",
+    )
+    stay = checkbox.paragraphs[0]
+    box_rule = rdocx.FormFieldRule(
+        target=rdocx.FormFieldTarget.content_control_tag("box"),
+        reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.checked(False)),
+    )
+    group_rule = rdocx.FormFieldRule(
+        target=rdocx.FormFieldTarget.content_control_tag("group"),
+        reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.text("no")),
+    )
+    refused = checkbox.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="form value kind"):
+        checkbox.fill_form(
+            [box_rule],
+            [rdocx.FormFieldAssignment(
+                target=box_rule.target,
+                value=rdocx.FormFieldValue.text("no"),
+            )],
+        )
+    with pytest.raises(rdocx.RdocxError, match="structural"):
+        checkbox.validate_form([group_rule])
+    with pytest.raises(rdocx.RdocxError, match="duplicate"):
+        checkbox.fill_form(
+            [box_rule],
+            [
+                rdocx.FormFieldAssignment(
+                    target=box_rule.target, value=rdocx.FormFieldValue.checked(True)
+                ),
+                rdocx.FormFieldAssignment(
+                    target=box_rule.target, value=rdocx.FormFieldValue.checked(False)
+                ),
+            ],
+        )
+    with pytest.raises(rdocx.RdocxError, match="unknown form assignment"):
+        checkbox.fill_form(
+            [box_rule],
+            [rdocx.FormFieldAssignment(
+                target=rdocx.FormFieldTarget.content_control_tag("missing"),
+                value=rdocx.FormFieldValue.checked(True),
+            )],
+        )
+    with pytest.raises(rdocx.RdocxError, match="form target kinds differ"):
+        mixed = _replace_document_body(
+            rdocx.Document(),
+            _fx241_control("shared", "<w:text/>", "x")
+            + _fx241_control("shared", checkbox_properties, "\u2610")
+            + "<w:sectPr/>",
+        )
+        mixed.validate_form([rdocx.FormFieldRule(
+            target=rdocx.FormFieldTarget.content_control_tag("shared"),
+            reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.text("x")),
+        )])
+    assert checkbox.to_bytes() == refused
+    assert stay.text == "stay"
+
+    overlap = _replace_document_body(
+        rdocx.Document(),
+        '<w:sdt><w:sdtPr><w:tag w:val="outer"/><w:text/></w:sdtPr><w:sdtContent>'
+        + _fx241_control("inner", "<w:text/>", "in")
+        + "</w:sdtContent></w:sdt>"
+        + _fx241_legacy_text(text="KEEP")
+        + '<w:p><w:r><w:t>held</w:t></w:r></w:p><w:sectPr/>',
+    )
+    outer = rdocx.FormFieldRule(
+        target=rdocx.FormFieldTarget.content_control_tag("outer"),
+        reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.text("O")),
+    )
+    inner = rdocx.FormFieldRule(
+        target=rdocx.FormFieldTarget.content_control_tag("inner"),
+        reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.text("I")),
+    )
+    legacy = overlap.legacy_form_fields()[0]
+    legacy_rule = rdocx.FormFieldRule(
+        target=rdocx.FormFieldTarget.legacy(legacy.source_part, legacy.ordinal),
+        reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.text("OTHER")),
+    )
+    listed = rdocx.Document()
+    listed.add_paragraph("list")
+    listed.paragraphs[0].runs[0].add_legacy_form_field(
+        rdocx.LegacyFormFieldDefinition.drop_down_list(["one", "two"], selected_index=0, default_index=0)
+    )
+    listed_field = listed.legacy_form_fields()[0]
+    listed_rule = rdocx.FormFieldRule(
+        target=rdocx.FormFieldTarget.legacy(listed_field.source_part, listed_field.ordinal),
+        reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.selected_index(0)),
+    )
+    choice = _replace_document_body(
+        rdocx.Document(),
+        _fx241_control(
+            "choice",
+            '<w:dropDownList><w:listItem w:displayText="One" w:value="one"/></w:dropDownList>',
+            "One",
+        )
+        + '<w:p><w:r><w:t>held</w:t></w:r></w:p><w:sectPr/>',
+    )
+    overlap_before = overlap.to_bytes()
+    listed_before = listed.to_bytes()
+    choice_before = choice.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="overlapping form targets"):
+        overlap.validate_form([outer, inner])
+    with pytest.raises(rdocx.RdocxError, match="legacy reset value is not the explicit default"):
+        overlap.validate_form([legacy_rule])
+    with pytest.raises(rdocx.RdocxError, match="selected index is outside the legacy list"):
+        listed.fill_form(
+            [listed_rule],
+            [rdocx.FormFieldAssignment(
+                target=listed_rule.target,
+                value=rdocx.FormFieldValue.selected_index(9),
+            )],
+        )
+    with pytest.raises(rdocx.RdocxError, match="form value kind"):
+        choice.fill_form(
+            [rdocx.FormFieldRule(
+                target=rdocx.FormFieldTarget.content_control_tag("choice"),
+                reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.text("one")),
+            )],
+            [rdocx.FormFieldAssignment(
+                target=rdocx.FormFieldTarget.content_control_tag("choice"),
+                value=rdocx.FormFieldValue.selected_index(0),
+            )],
+        )
+    assert overlap.to_bytes() == overlap_before
+    assert listed.to_bytes() == listed_before
+    assert choice.to_bytes() == choice_before
+    assert overlap.paragraphs[-1].text == "held"
+
+    missing = _replace_document_body(
+        rdocx.Document(),
+        _fx241_control(
+            "bound",
+            '<w:dataBinding w:storeItemID="" w:xpath="/root/name"/><w:text/>',
+            "",
+        )
+        + '<w:sectPr/>',
+    )
+    with pytest.raises(rdocx.RdocxError, match="form binding is incomplete"):
+        missing.validate_form([rdocx.FormFieldRule(
+            target=rdocx.FormFieldTarget.content_control_tag("bound"),
+            reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.text("A")),
+        )])
+    conflict = _form_batch_conflict_document()
+    conflict_before = conflict.to_bytes()
+    conflict_held = conflict.paragraphs[-1]
+    with pytest.raises(rdocx.RdocxError, match="different values to one custom XML element"):
+        conflict.fill_form([
+            rdocx.FormFieldRule(
+                target=rdocx.FormFieldTarget.content_control_tag("left"),
+                reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.text("A")),
+            ),
+            rdocx.FormFieldRule(
+                target=rdocx.FormFieldTarget.content_control_tag("right"),
+                reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.text("B")),
+            ),
+        ], [])
+    assert conflict.to_bytes() == conflict_before
+    assert conflict_held.text == "held"
+
+    with pytest.raises(rdocx.XmlError):
+        rdocx.FormFieldValue.text("a\x00b")
+    with pytest.raises(rdocx.PackageError):
+        rdocx.Document.from_bytes(b"not a package")
+
+    retired = rdocx.Document()
+    retired.add_paragraph("gone")
+    retired.add_paragraph("live")
+    dead = retired.paragraphs[0]
+    assert retired.remove_content(0)
+    with pytest.raises(rdocx.StaleElementError):
+        _ = dead.text
+    with pytest.raises(rdocx.RdocxError, match="unknown form target"):
+        retired.fill_form([rdocx.FormFieldRule(
+            target=rdocx.FormFieldTarget.content_control_tag("missing"),
+            reset=rdocx.FormResetValue.placeholder("Name"),
+        )], [])
+    with pytest.raises(rdocx.StaleElementError):
+        _ = dead.text
+    assert retired.paragraphs[0].text == "live"
+
+    property_xml = (
+        '<p:note xmlns:p="urn:producer"><w:p><w:r><w:t>PRODUCER</w:t></w:r></w:p></p:note>'
+    )
+    opaque = _replace_document_body(
+        rdocx.Document(),
+        '<w:p><w:r><w:t>OTHER</w:t></w:r></w:p>'
+        '<w:sdt><w:sdtPr><w:tag w:val="name"/><w:id w:val="81"/><w:text/>'
+        f'{property_xml}</w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt>'
+        + _fx241_control("keep", "<w:text/>", "UNSELECTED")
+        + '<w:sectPr/>',
+    )
+    other = opaque.paragraphs[0]
+    changed = next(item for item in opaque.paragraphs if item.text == "")
+    name = rdocx.FormFieldRule(
+        target=rdocx.FormFieldTarget.content_control_tag("name"),
+        reset=rdocx.FormResetValue.value(rdocx.FormFieldValue.text("BACK")),
+        required=True,
+    )
+    opened = _document_xml(opaque).decode()
+    assert property_xml in opened
+    assert opaque.fill_form(
+        [name],
+        [rdocx.FormFieldAssignment(
+            target=name.target, value=rdocx.FormFieldValue.text("NEW")
+        )],
+    ) == (1,)
+    saved = _document_xml(opaque).decode()
+    assert property_xml in saved
+    assert "<w:sdtContent><w:p><w:r><w:t>NEW</w:t></w:r></w:p></w:sdtContent>" in saved
+    assert ">UNSELECTED<" in saved and ">OTHER<" in saved
+    assert opaque.validate_form([name]) == ()
+    with pytest.raises(rdocx.StaleElementError):
+        _ = changed.text
+    assert other.text == "OTHER"
+    assert opaque.reset_form([name]) == (1,)
+    reset = _document_xml(opaque).decode()
+    assert property_xml in reset
+    assert "<w:sdtContent><w:p><w:r><w:t>BACK</w:t></w:r></w:p></w:sdtContent>" in reset
+    assert opaque.validate_form([name]) == ()
+
+
+def _form_batch_conflict_document():
+    import rdocx
+
+    binding = (
+        '<w:dataBinding w:storeItemID="{11111111-1111-1111-1111-111111111111}" '
+        'w:xpath="/c:root/c:name" w:prefixMappings="xmlns:c=\'urn:customer\'"/>'
+    )
+    body = (
+        _fx241_control("left", binding + "<w:text/>", "old")
+        + _fx241_control("right", binding + "<w:text/>", "old")
+        + '<w:p><w:r><w:t>held</w:t></w:r></w:p><w:sectPr/>'
+    )
+    document = _replace_document_body(rdocx.Document(), body)
+    source, result = io.BytesIO(document.to_bytes()), io.BytesIO()
+    with zipfile.ZipFile(source) as zin, zipfile.ZipFile(result, "w") as zout:
+        for entry in zin.infolist():
+            raw = zin.read(entry.filename)
+            if entry.filename == "word/_rels/document.xml.rels":
+                raw = raw.replace(
+                    b"</Relationships>",
+                    b'<Relationship Id="rIdBound289" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="../customXml/item1.xml"/></Relationships>',
+                )
+            if entry.filename == "[Content_Types].xml":
+                raw = raw.replace(
+                    b"</Types>",
+                    b'<Override PartName="/customXml/itemProps1.xml" ContentType="application/vnd.openxmlformats-officedocument.customXmlProperties+xml"/></Types>',
+                )
+            zout.writestr(entry, raw)
+        zout.writestr(
+            "customXml/item1.xml",
+            '<c:root xmlns:c="urn:customer"><c:name>old</c:name></c:root>',
+        )
+        zout.writestr(
+            "customXml/itemProps1.xml",
+            '<ds:datastoreItem xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml" ds:itemID="{11111111-1111-1111-1111-111111111111}"><ds:schemaRefs/></ds:datastoreItem>',
+        )
+        zout.writestr(
+            "customXml/_rels/item1.xml.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="props" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps" Target="itemProps1.xml"/></Relationships>',
+        )
+    return rdocx.Document.from_bytes(result.getvalue())
+
+
 def test_legacy_field_definition_public_factories_are_typed():
     import inspect
     import rdocx

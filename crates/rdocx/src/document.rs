@@ -21421,6 +21421,52 @@ impl Document {
         Ok((source.xml.into_owned(), owner.full))
     }
 
+    /// Accepted content controls, non-preserved carriers, and text-box owners.
+    ///
+    /// Ranges come from the story-item scan. Controls are already deduplicated
+    /// by part and byte span. Text-box ranges identify legacy fields that
+    /// belong after the non-textbox inventory.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn accepted_form_regions(
+        &self,
+    ) -> Result<(
+        Vec<(String, std::ops::Range<usize>)>,
+        Vec<(String, std::ops::Range<usize>)>,
+        Vec<(String, std::ops::Range<usize>)>,
+    )> {
+        let mut controls = Vec::new();
+        let mut carriers = Vec::new();
+        let mut text_boxes = Vec::new();
+        let mut seen_controls = HashSet::new();
+        // Story discovery still names the accepted parts. Offsets come from the
+        // package bytes those parts will be patched in. The body model serializes
+        // separately and its offsets are not the physical file.
+        for source in self.story_sources()? {
+            let Some(xml) = self.package.get_part(&source.part_name) else {
+                continue;
+            };
+            let part = source.part_name.clone();
+            for owner in scan_story_owners(xml, source.root_kind)? {
+                if owner.kind == StoryKind::TextBox {
+                    text_boxes.push((part.clone(), owner.full.clone()));
+                }
+                let items = scan_story_items(xml, &owner, None)?;
+                for item in items {
+                    if item.kind == StoryItemKind::ContentControl
+                        && seen_controls.insert((part.clone(), item.full.start, item.full.end))
+                    {
+                        controls.push((part.clone(), item.full.clone()));
+                    }
+                    if owner.kind != StoryKind::TextBox && item.kind != StoryItemKind::PreservedNode
+                    {
+                        carriers.push((part.clone(), item.full.clone()));
+                    }
+                }
+            }
+        }
+        Ok((controls, carriers, text_boxes))
+    }
+
     fn story_range_paragraph_source<'a>(
         &'a self,
         location: &ContentLocation,

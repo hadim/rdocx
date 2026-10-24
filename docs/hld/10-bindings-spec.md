@@ -331,6 +331,10 @@ table module's `WD_ALIGN_VERTICAL` aliases `WD_CELL_VERTICAL_ALIGNMENT` by ident
 highlight names and clears with None. Other break forms retain named
 line/page/column alternatives.
 
+Seven frozen classes are public on both `rdocx` and `rdocx._rdocx`, including exports, stubs, and `__all__`. The six form carriers are `FormFieldTarget`, `FormFieldValue`, `FormResetValue`, `FormFieldRule`, `FormFieldAssignment`, and `FormValidationIssue`. `DocumentProtection` is the seventh. Factory-private classes use `__new__` that returns the class, so the factory stays visible. Public constructors stay visible. Copies are readonly. `FormFieldRule.required` is keyword-only and defaults to false. `DocumentProtection` has exactly ten fields: `mode` plus nine optional cryptographic metadata fields. It does not derive a password. `validate_form`, `fill_form`, `reset_form`, and `protect_form` return a preallocated issue tuple, a count tuple, or `None`. `document_protection`, `set_document_protection`, and `remove_document_protection` use the same frozen value, and removal returns the old value allocated before publication. `add_story_permission_range` takes one nonempty editor or group through the existing range conversion.
+
+A strict sequence accepts `collections.abc.Sequence`, copies it frozen, and rejects `str`, `bytes`, `Mapping`, and `Set`, including empty ones. `bool` is not `int`. A negative value that cannot be a domain integer raises `ValueError` before range extraction. A nonnegative integer outside the native extraction range raises `OverflowError`. Native errors stay in the `RdocxError`, `XmlError`, and `PackageError` families. Text and placeholder checks use existing `CT_SdtPr.prepare_text_value`. That path adds no Rust export and no dependency. Every returned object, tuple, and revision token is allocated before publication.
+
 ## Python Word formatting and checked list publication
 
 Numbering restart admission and decimal continuation use the concrete instance's
@@ -4141,6 +4145,8 @@ Python values. `Twips` converts a checked signed twip count to EMU.
 
 SectionHandle.set_text_watermark admits only opacity 0.5. Other valid-range values raise the named unsupported RdocxError before publishing any story, linkage or source change. Legacy native VML methods and image watermark opacity are unchanged.
 
+Modern form publication certifies related comments and text boxes only. Resolution uses the unique actual part under case-insensitive identity. Before and after inventories keep filtered story ids and fingerprints. Save-equivalent `part_xml` text must be exact. Each owner needs exact XML, one route, a matched index, and parent proof. A proved run needs an accepted path and a proved parent. `part_xml` is text with a BOM removed. It is not proof of ZIP bytes. The check validates and serializes the whole package. It does not claim a part-local fast path.
+
 ## Extended PowerPoint properties, fills and export
 
 Font.baseline reads float or None and accepts fractions from-1 to1. Font.spacing
@@ -4297,18 +4303,9 @@ and bound scalar parity do not promise every native cache field. These scalar
 form operations do not add form creation, live snapshot proxies or a second
 XML provider.
 
-Form publication preserves an owner only when independent exact physical-route
-maps identify one old and one candidate owner, the existing matcher agrees,
-and native owning XML is byte-identical. Paragraph/table sources share the
-same batched native inventory as their addresses. Section source uses the
-existing checked section XML provider. Every ancestor must also be certified.
-Cells bind their exact table, row, cell and physical story, so a changed table
-retires all its cells and descendants. Changed or ambiguous paragraphs retire.
-Equal text or equal inventory counts alone grant no authority. Run/Hyperlink
-and existing global run/snapshot epochs retire on actual mutation. Exact
-no-ops and refused operations keep all current tokens. Other conservative
-publishers retain their existing behavior, and retired pre-existing tokens
-cannot be revived by a same-route or equal-text form result.
+Content-control binding, the legacy form setter, and signing keep their existing owner certification. Paragraph and table sources still share the batched native inventory. Section source still uses the checked section XML provider. Every ancestor of those paths must still be certified. Cells still bind their exact table, row, cell, and physical story, so a changed table retires its cells and descendants. Changed or ambiguous paragraphs retire. Equal text or equal inventory counts alone grant no authority on those paths. Exact no-ops and refused operations keep current tokens. Retired tokens are not revived.
+
+`fill_form`, `reset_form`, `protect_form`, `set_document_protection`, and `remove_document_protection` publish through private `WordPublication::ModernFormValues`. `validate_form` is readonly and creates no revision. Results and revision tokens are allocated before that publication. The proof keeps exact `stories` and `story_item_snapshots`. `localScopeCommit` keeps the document epoch, so only unproved states retire. A proved run needs an accepted path and a proved parent. A changed or unproved part stays conservative. Comment and text box proof on this path is the modern related-owner check above. The proof validates and serializes the whole package. It stores no second model and no history. `part_xml` remains stripped text, not ZIP byte proof. Permission insertion stays on the conservative structural publisher.
 
 ## Live PowerPoint masters and layouts
 

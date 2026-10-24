@@ -15692,8 +15692,12 @@ mod legacy_forms_and_building_blocks {
         );
         let docx = std::env::temp_dir().join("f288-fallback.docx");
         std::fs::write(&docx, &saved).unwrap();
-        let cli =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/rdocx");
+        let cli = std::env::var_os("CARGO_TARGET_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target")
+            })
+            .join("debug/rdocx");
         let output = std::process::Command::new(&cli)
             .arg("text")
             .arg(&docx)
@@ -30410,4 +30414,2751 @@ fn template_merge_and_typed_insert_follow_the_same_rule() {
         fx265_shown_colours(&mut fx265_save_reopen(&mut typed), 0, &colours),
         ["blue", "blue"]
     );
+}
+
+fn form_tag(tag: &str) -> rdocx::FormFieldTarget {
+    rdocx::FormFieldTarget::ContentControlTag(tag.to_owned())
+}
+
+fn form_rule(
+    target: rdocx::FormFieldTarget,
+    required: bool,
+    reset: rdocx::FormResetValue,
+) -> rdocx::FormFieldRule {
+    rdocx::FormFieldRule {
+        target,
+        required,
+        reset,
+    }
+}
+
+fn form_text(text: &str) -> rdocx::FormFieldValue {
+    rdocx::FormFieldValue::Text(text.to_owned())
+}
+
+fn form_assignment(
+    target: rdocx::FormFieldTarget,
+    value: rdocx::FormFieldValue,
+) -> rdocx::FormFieldAssignment {
+    rdocx::FormFieldAssignment { target, value }
+}
+
+fn form_protection(mode: rdocx::ProtectionMode) -> rdocx::DocumentProtection {
+    rdocx::DocumentProtection {
+        mode,
+        enforcement: Some(true),
+        formatting: None,
+        provider_type: None,
+        algorithm_class: None,
+        algorithm_type: None,
+        algorithm_sid: None,
+        spin_count: None,
+        hash: None,
+        salt: None,
+    }
+}
+
+fn insert_form_control(
+    document: &mut Document,
+    story: &rdocx::StoryId,
+    kind: rdocx_oxml::content_control::SdtType,
+    tag: &str,
+) {
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|item| {
+            item.kind() == story.kind()
+                && item.part_name() == story.part_name()
+                && item.owner_index() == story.owner_index()
+        })
+        .unwrap_or_else(|| panic!("missing story {:?}", story.kind()));
+    document
+        .insert_content_control(
+            &rdocx::ContentLocation::end(story),
+            content_control_spec(rdocx::ContentControlPlacement::Block, kind, tag),
+        )
+        .unwrap();
+}
+
+fn story_kind(document: &Document, kind: StoryKind) -> rdocx::StoryId {
+    document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == kind)
+        .unwrap_or_else(|| panic!("missing story {kind:?}"))
+}
+
+fn package_text(document: &mut Document) -> String {
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let mut text = String::new();
+    for part in package.parts.values() {
+        text.push_str(&String::from_utf8_lossy(part));
+    }
+    text
+}
+
+const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
+
+fn attribute_bindings(xml: &str, local: &str) -> Vec<(String, String)> {
+    let mut reader = quick_xml::reader::NsReader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut found = Vec::new();
+    while let Ok((_namespace, event)) = reader.read_resolved_event_into(&mut buffer) {
+        let element = match event {
+            quick_xml::events::Event::Start(element) | quick_xml::events::Event::Empty(element) => {
+                element
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {
+                buffer.clear();
+                continue;
+            }
+        };
+        for attribute in element.attributes().flatten() {
+            let (namespace, name) = reader.resolver().resolve_attribute(attribute.key);
+            if name.as_ref() != local.as_bytes() {
+                continue;
+            }
+            let uri = match namespace {
+                quick_xml::name::ResolveResult::Bound(quick_xml::name::Namespace(uri)) => {
+                    String::from_utf8_lossy(uri).into_owned()
+                }
+                _ => String::new(),
+            };
+            found.push((
+                uri,
+                String::from_utf8_lossy(attribute.value.as_ref()).into_owned(),
+            ));
+        }
+        buffer.clear();
+    }
+    found
+}
+
+fn assert_positioned(document: &Document, text: &str) {
+    let layout = document.layout_deterministic().unwrap();
+    let mut found = false;
+    for page in &layout.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && run.text.contains(text)
+            {
+                found = true;
+            }
+        });
+    }
+    assert!(found, "missing positioned text {text}");
+}
+
+#[test]
+fn dense_authored_form_fill_reset_and_protect_share_one_model() {
+    let mut document = Document::new();
+    document.add_paragraph("Anchor");
+    let body = body_story(&document);
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "name",
+    );
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::RichText,
+        "agree",
+    );
+    document
+        .set_content_control_type(
+            &control_by_tag(&document, "agree"),
+            rdocx::ContentControlTypePayload::CheckBox,
+        )
+        .unwrap();
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::RichText,
+        "when",
+    );
+    document
+        .set_content_control_type(
+            &control_by_tag(&document, "when"),
+            rdocx::ContentControlTypePayload::Date {
+                format: "yyyy-MM-dd".into(),
+            },
+        )
+        .unwrap();
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::RichText,
+        "color",
+    );
+    document
+        .set_content_control_type(
+            &control_by_tag(&document, "color"),
+            rdocx::ContentControlTypePayload::DropDownList {
+                items: vec![("Red".into(), "r".into()), ("Blue".into(), "b".into())],
+            },
+        )
+        .unwrap();
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::RichText,
+        "rows",
+    );
+    document
+        .set_content_control_type(
+            &control_by_tag(&document, "rows"),
+            rdocx::ContentControlTypePayload::RepeatingSection,
+        )
+        .unwrap();
+    document
+        .repeat_content_control(&control_by_tag(&document, "rows"))
+        .unwrap();
+    let store = br#"<ns:root xmlns:ns="urn:example"><ns:child></ns:child></ns:root>"#;
+    let store_id = document
+        .add_custom_xml_store(store, &["urn:example"])
+        .unwrap();
+    document
+        .set_content_control_binding(
+            &control_by_tag(&document, "name"),
+            &store_id,
+            "/ns:root/ns:child",
+            Some("xmlns:ns='urn:example'"),
+        )
+        .unwrap();
+    {
+        let mut paragraph = document.add_paragraph("");
+        let mut run = paragraph.add_run("");
+        let field = rdocx::Field::from_legacy_form(
+            rdocx::LegacyFormFieldOptions {
+                name: Some("Legacy".into()),
+                ..rdocx::LegacyFormFieldOptions::default()
+            },
+            rdocx::LegacyFormFieldDefinition::TextInput {
+                input_type: rdocx::LegacyTextInputType::Regular,
+                default: Some("keep".into()),
+                value: "now".into(),
+                max_length: None,
+                format: None,
+            },
+        )
+        .unwrap();
+        run.add_field_value(field).unwrap();
+    }
+    let anchor = document
+        .story_items(&body_story(&document))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .add_story_permission_range(
+            Some("Clerk"),
+            None,
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: anchor.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location: anchor,
+                    run_index: 1,
+                },
+            },
+        )
+        .unwrap();
+    let header = document
+        .create_section_story(0, rdocx::HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap();
+    insert_form_control(
+        &mut document,
+        &header,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "office",
+    );
+
+    let legacy = document.legacy_form_fields().unwrap().remove(0);
+    let legacy_target = rdocx::FormFieldTarget::Legacy {
+        source_part: legacy.source_part,
+        ordinal: legacy.ordinal,
+    };
+    let rules = vec![
+        form_rule(
+            form_tag("name"),
+            true,
+            rdocx::FormResetValue::Placeholder {
+                text: "Name".into(),
+            },
+        ),
+        form_rule(
+            form_tag("agree"),
+            true,
+            rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(false)),
+        ),
+        form_rule(
+            form_tag("when"),
+            true,
+            rdocx::FormResetValue::Value(form_text("2026-10-24")),
+        ),
+        form_rule(
+            form_tag("color"),
+            true,
+            rdocx::FormResetValue::Value(form_text("Red")),
+        ),
+        form_rule(
+            legacy_target.clone(),
+            true,
+            rdocx::FormResetValue::Value(form_text("keep")),
+        ),
+        form_rule(
+            form_tag("office"),
+            false,
+            rdocx::FormResetValue::Placeholder {
+                text: "Office".into(),
+            },
+        ),
+    ];
+    let before = document.to_bytes().unwrap();
+    let issues = document.validate_form(&rules).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.message == "required value is empty" && issue.ordinal < 20)
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let structural = document.protect_form(&rules, form_protection(rdocx::ProtectionMode::Forms));
+    assert!(structural.unwrap_err().to_string().contains("valid form"));
+    assert!(document.document_protection().is_none());
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let refused = document.fill_form(
+        &rules,
+        &[form_assignment(
+            form_tag("color"),
+            rdocx::FormFieldValue::SelectedIndex(1),
+        )],
+    );
+    assert!(refused.unwrap_err().to_string().contains("kind"));
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let counts = document
+        .fill_form(
+            &rules,
+            &[
+                form_assignment(form_tag("name"), form_text("FormAda")),
+                form_assignment(form_tag("agree"), rdocx::FormFieldValue::Checked(true)),
+                form_assignment(form_tag("when"), form_text("2026-10-23")),
+                form_assignment(form_tag("color"), form_text("Blue")),
+                form_assignment(legacy_target.clone(), form_text("typed")),
+                form_assignment(form_tag("office"), form_text("North")),
+            ],
+        )
+        .unwrap();
+    assert_eq!(counts, vec![1, 1, 1, 1, 1, 1]);
+    let filled = document_part_xml(&mut document);
+    assert!(filled.contains("FormAda"), "{filled}");
+    assert!(filled.contains("2026-10-23T00:00:00Z"), "{filled}");
+    assert!(filled.contains("Blue"), "{filled}");
+    assert_eq!(
+        document_part_xml(&mut document)
+            .matches("repeatingSectionItem")
+            .count(),
+        2
+    );
+    assert!(package_text(&mut document).contains("North"));
+    assert!(package_text(&mut document).contains("typed"));
+    assert!(document.validate_form(&rules).unwrap().is_empty());
+    document
+        .protect_form(&rules, form_protection(rdocx::ProtectionMode::Forms))
+        .unwrap();
+    assert_eq!(
+        document.document_protection().unwrap().mode,
+        rdocx::ProtectionMode::Forms
+    );
+    assert_positioned(&document, "FormAda");
+    let png = document
+        .render_page_to_png_deterministic(0, 72.0)
+        .unwrap()
+        .expect("local page render");
+    assert!(png.starts_with(b"\x89PNG"));
+
+    let counts = document.reset_form(&rules).unwrap();
+    assert_eq!(counts, vec![1, 1, 1, 1, 1, 1]);
+    let reset = document_part_xml(&mut document);
+    assert!(reset.contains("Name"), "{reset}");
+    assert!(reset.contains("2026-10-24T00:00:00Z"), "{reset}");
+    assert!(reset.contains("Red"), "{reset}");
+    assert_eq!(reset.matches("repeatingSectionItem").count(), 2);
+    assert!(reset.contains("permStart") || package_text(&mut document).contains("permStart"));
+    assert_eq!(
+        document.legacy_form_fields().unwrap()[0].value,
+        rdocx::LegacyFormFieldValue::Text("keep".into())
+    );
+    let mut reopened = reopen_document(&mut document);
+    assert_eq!(
+        reopened.document_protection().unwrap().mode,
+        rdocx::ProtectionMode::Forms
+    );
+    let issues = reopened.validate_form(&rules).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.message == "required value is empty"),
+        "{issues:?}"
+    );
+    assert!(
+        issues
+            .iter()
+            .all(|issue| issue.message == "required value is empty"),
+        "{issues:?}"
+    );
+    assert!(
+        document_part_xml(&mut reopened).contains(">keep<")
+            || package_text(&mut reopened).contains("keep")
+    );
+}
+
+#[test]
+fn form_batches_reject_invalid_values_without_partial_publication() {
+    let mut document = Document::new();
+    document.add_paragraph("Batch");
+    let body = body_story(&document);
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "name",
+    );
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::RichText,
+        "color",
+    );
+    document
+        .set_content_control_type(
+            &control_by_tag(&document, "color"),
+            rdocx::ContentControlTypePayload::DropDownList {
+                items: vec![("Red".into(), "r".into()), ("Blue".into(), "b".into())],
+            },
+        )
+        .unwrap();
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::RichText,
+        "group",
+    );
+    document
+        .set_content_control_type(
+            &control_by_tag(&document, "group"),
+            rdocx::ContentControlTypePayload::Group,
+        )
+        .unwrap();
+    let rules = vec![
+        form_rule(
+            form_tag("name"),
+            true,
+            rdocx::FormResetValue::Value(form_text("N")),
+        ),
+        form_rule(
+            form_tag("color"),
+            false,
+            rdocx::FormResetValue::Value(form_text("Red")),
+        ),
+    ];
+    assert!(document.validate_form(&[]).unwrap().is_empty());
+    let before = document.to_bytes().unwrap();
+    assert!(document.fill_form(&[], &[]).unwrap().is_empty());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let late = document.fill_form(
+        &rules,
+        &[
+            form_assignment(form_tag("name"), form_text("Ada")),
+            form_assignment(form_tag("color"), rdocx::FormFieldValue::SelectedIndex(0)),
+        ],
+    );
+    assert!(late.is_err(), "{late:?}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert!(!document_part_xml(&mut document).contains(">Ada<"));
+    let unknown = document.fill_form(
+        &rules,
+        &[form_assignment(form_tag("missing"), form_text("X"))],
+    );
+    assert!(
+        unknown
+            .unwrap_err()
+            .to_string()
+            .contains("unknown form assignment")
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let duplicate = document.fill_form(
+        &rules,
+        &[
+            form_assignment(form_tag("name"), form_text("A")),
+            form_assignment(form_tag("name"), form_text("B")),
+        ],
+    );
+    assert!(duplicate.unwrap_err().to_string().contains("duplicate"));
+    let structural = document.validate_form(&[form_rule(
+        form_tag("group"),
+        false,
+        rdocx::FormResetValue::Value(form_text("nope")),
+    )]);
+    assert!(structural.unwrap_err().to_string().contains("structural"));
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let counts = document
+        .fill_form(
+            &rules,
+            &[form_assignment(form_tag("color"), form_text("Blue"))],
+        )
+        .unwrap();
+    assert_eq!(counts, vec![1]);
+    assert!(document_part_xml(&mut document).contains("Blue"));
+    let issues = document.validate_form(&rules).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.message == "required value is empty")
+    );
+    let blocked = document.to_bytes().unwrap();
+    assert!(
+        document
+            .protect_form(&rules, form_protection(rdocx::ProtectionMode::Forms))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), blocked);
+
+    let mut imported = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="box"/><w:id w:val="9"/><w14:checkbox><w14:checked w14:val="0"/><w14:checkedState w14:val="2612" w14:font="MS Gothic"/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>NO</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let box_rules = vec![form_rule(
+        form_tag("box"),
+        true,
+        rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(false)),
+    )];
+    let issues = imported.validate_form(&box_rules).unwrap();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].message, "current form value is invalid");
+    let before_box = imported.to_bytes().unwrap();
+    let mut imported = imported;
+    assert_eq!(imported.validate_form(&box_rules).unwrap().len(), 1);
+    assert_eq!(imported.to_bytes().unwrap(), before_box);
+    let counts = imported
+        .fill_form(
+            &box_rules,
+            &[form_assignment(
+                form_tag("box"),
+                rdocx::FormFieldValue::Checked(false),
+            )],
+        )
+        .unwrap();
+    assert_eq!(counts, vec![1]);
+    let repaired = document_part_xml(&mut imported);
+    assert!(repaired.contains('\u{2610}'), "{repaired}");
+    assert!(!repaired.contains(">NO<"), "{repaired}");
+    assert!(imported.validate_form(&box_rules).unwrap().is_empty());
+}
+
+#[test]
+fn form_selection_and_updates_use_the_same_physical_story_owner() {
+    let mut document = Document::new();
+    document.add_paragraph("Body");
+    let body = body_story(&document);
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "shared",
+    );
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "alias-host",
+    );
+    document
+        .set_content_control_alias(&control_by_tag(&document, "alias-host"), Some("shared"))
+        .unwrap();
+    let header = document
+        .create_section_story(0, rdocx::HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap();
+    insert_form_control(
+        &mut document,
+        &header,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "shared",
+    );
+    let footer = document
+        .create_section_story(0, rdocx::HeaderFooterKind::Footer, HdrFtrType::Default)
+        .unwrap();
+    insert_form_control(
+        &mut document,
+        &footer,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "footer-note",
+    );
+    document.add_footnote("Noted");
+    let note = story_kind(&document, StoryKind::Footnote);
+    insert_form_control(
+        &mut document,
+        &note,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "note-tag",
+    );
+    document
+        .add_text_box_to_story(&body_story(&document), "Boxed", text_box_options())
+        .unwrap();
+    let text_box = story_kind(&document, StoryKind::TextBox);
+    insert_form_control(
+        &mut document,
+        &text_box,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "box-tag",
+    );
+    document.add_table(1, 1);
+    let table = document
+        .story_items(&body_story(&document))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Table)
+        .unwrap()
+        .location()
+        .clone();
+    let mut cell_path = table.index_path().to_vec();
+    cell_path.push(0);
+    document
+        .insert_content_control(
+            &rdocx::ContentLocation::new(table.story().clone(), StoryItemKind::Table, cell_path),
+            content_control_spec(
+                rdocx::ContentControlPlacement::Cell,
+                rdocx_oxml::content_control::SdtType::PlainText,
+                "cell-tag",
+            ),
+        )
+        .unwrap();
+    let inline_paragraph = document
+        .story_items(&body_story(&document))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .insert_content_control(
+            &inline_paragraph,
+            content_control_spec(
+                rdocx::ContentControlPlacement::Inline,
+                rdocx_oxml::content_control::SdtType::PlainText,
+                "inline-tag",
+            ),
+        )
+        .unwrap();
+    document
+        .add_comment(
+            RunRange {
+                start: RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "Comment",
+        )
+        .unwrap();
+    let comment = story_kind(&document, StoryKind::Comment);
+    insert_form_control(
+        &mut document,
+        &comment,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "comment-tag",
+    );
+
+    let rules = vec![
+        form_rule(
+            form_tag("shared"),
+            false,
+            rdocx::FormResetValue::Value(form_text("S")),
+        ),
+        form_rule(
+            form_tag("footer-note"),
+            false,
+            rdocx::FormResetValue::Value(form_text("F")),
+        ),
+        form_rule(
+            form_tag("note-tag"),
+            false,
+            rdocx::FormResetValue::Value(form_text("N")),
+        ),
+        form_rule(
+            form_tag("box-tag"),
+            false,
+            rdocx::FormResetValue::Value(form_text("B")),
+        ),
+        form_rule(
+            form_tag("cell-tag"),
+            false,
+            rdocx::FormResetValue::Value(form_text("C")),
+        ),
+        form_rule(
+            form_tag("inline-tag"),
+            false,
+            rdocx::FormResetValue::Value(form_text("I")),
+        ),
+        form_rule(
+            form_tag("comment-tag"),
+            false,
+            rdocx::FormResetValue::Value(form_text("K")),
+        ),
+    ];
+    let body_tags = document
+        .content_controls()
+        .into_iter()
+        .filter_map(|control| control.tag().map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert!(body_tags.iter().any(|tag| tag == "shared"));
+    assert!(!body_tags.iter().any(|tag| tag == "footer-note"));
+    let before_old = document.to_bytes().unwrap();
+    let old = document.set_content_control_value_by_tag("footer-note", "body-only");
+    assert!(old.is_err() || !package_text(&mut document).contains("body-only"));
+    if old.is_err() {
+        assert_eq!(document.to_bytes().unwrap(), before_old);
+    }
+    let counts = document
+        .fill_form(
+            &rules,
+            &[
+                form_assignment(form_tag("shared"), form_text("Both")),
+                form_assignment(form_tag("footer-note"), form_text("Foot")),
+                form_assignment(form_tag("note-tag"), form_text("Footnote")),
+                form_assignment(form_tag("box-tag"), form_text("TextBox")),
+                form_assignment(form_tag("cell-tag"), form_text("Cell")),
+                form_assignment(form_tag("inline-tag"), form_text("Inline")),
+                form_assignment(form_tag("comment-tag"), form_text("CommentText")),
+            ],
+        )
+        .unwrap();
+    assert_eq!(counts, vec![2, 1, 1, 1, 1, 1, 1]);
+    let packed = package_text(&mut document);
+    assert_eq!(packed.matches("Both").count(), 2, "{packed}");
+    assert!(packed.contains("Foot"));
+    assert!(packed.contains("Footnote"));
+    assert!(packed.contains("TextBox"));
+    assert!(packed.contains("Cell"));
+    assert!(packed.contains("Inline"));
+    assert!(packed.contains("CommentText"));
+    assert!(!story_control_xml(&document, &body_story(&document), "alias-host").contains("Both"));
+
+    let nested = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="same"/><w:id w:val="1"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>STAY</w:t></w:r><w:sdt><w:sdtPr><w:tag w:val="same"/><w:id w:val="2"/><w:richText/></w:sdtPr><w:sdtContent><w:r><w:t>LEAF</w:t></w:r></w:sdtContent></w:sdt></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let nested_rules = vec![form_rule(
+        form_tag("same"),
+        false,
+        rdocx::FormResetValue::Value(form_text("NEW")),
+    )];
+    let mut nested = nested;
+    let before_nested = nested.to_bytes().unwrap();
+    let nested_error = nested
+        .fill_form(
+            &nested_rules,
+            &[form_assignment(form_tag("same"), form_text("NEW"))],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        nested_error.contains("overlapping") || nested_error.contains("structural"),
+        "{nested_error}"
+    );
+    assert_eq!(nested.to_bytes().unwrap(), before_nested);
+
+    let mut overlap = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="outer"/><w:id w:val="1"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:sdt><w:sdtPr><w:tag w:val="inner"/><w:id w:val="2"/><w:richText/></w:sdtPr><w:sdtContent><w:r><w:t>IN</w:t></w:r></w:sdtContent></w:sdt></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let before = overlap.to_bytes().unwrap();
+    let mut overlap = overlap;
+    let error = overlap.validate_form(&[
+        form_rule(
+            form_tag("outer"),
+            false,
+            rdocx::FormResetValue::Value(form_text("O")),
+        ),
+        form_rule(
+            form_tag("inner"),
+            false,
+            rdocx::FormResetValue::Value(form_text("I")),
+        ),
+    ]);
+    assert!(error.unwrap_err().to_string().contains("overlapping"));
+    assert_eq!(overlap.to_bytes().unwrap(), before);
+
+    let mut hidden = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="live"/><w:id w:val="1"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>LIVE</w:t></w:r><w:r><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="100" cy="100"/><wp:wrapNone/><wp:docPr id="9" name="box"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:txbx><w:txbxContent><w:p><w:r><w:t>BOX</w:t></w:r></w:p><w:sdt><w:sdtPr><w:tag w:val="boxed"/><w:id w:val="3"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>INNER</w:t></w:r></w:p></w:sdtContent></w:sdt></w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p></w:sdtContent></w:sdt><x:wrap xmlns:x="urn:opaque"><w:sdt><w:sdtPr><w:tag w:val="live"/><w:id w:val="2"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>HIDDEN</w:t></w:r></w:p></w:sdtContent></w:sdt></x:wrap>"#,
+    );
+    let hidden_rules = vec![form_rule(
+        form_tag("live"),
+        false,
+        rdocx::FormResetValue::Value(form_text("NEW")),
+    )];
+    let counts = hidden
+        .fill_form(
+            &hidden_rules,
+            &[form_assignment(form_tag("live"), form_text("NEW"))],
+        )
+        .unwrap();
+    assert_eq!(counts, vec![1]);
+    let xml = document_part_xml(&mut hidden);
+    assert!(xml.contains("NEW"), "{xml}");
+    assert!(xml.contains("BOX"), "{xml}");
+    assert!(xml.contains("HIDDEN"), "{xml}");
+    assert!(xml.contains("INNER"), "{xml}");
+    assert!(!xml.contains(">LIVE<"), "{xml}");
+    let boxed = hidden
+        .fill_form(
+            &[form_rule(
+                form_tag("boxed"),
+                false,
+                rdocx::FormResetValue::Value(form_text("BOXED")),
+            )],
+            &[form_assignment(form_tag("boxed"), form_text("BOXED"))],
+        )
+        .unwrap();
+    assert_eq!(boxed, vec![1]);
+    let xml = document_part_xml(&mut hidden);
+    assert!(xml.contains("BOXED"), "{xml}");
+    assert!(xml.contains(">NEW<"), "{xml}");
+
+    let decoy = r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:textInput><w:default w:val="decoy"/></w:textInput></w:ffData></w:fldChar></w:r><w:r><w:instrText> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>DECOY</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+    let live = r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:textInput><w:default w:val="keep"/></w:textInput></w:ffData></w:fldChar></w:r><w:r><w:instrText> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>LIVE</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+    let mut shifted = document_with_body_inner(&format!(
+        r#"<x:wrap xmlns:x="urn:opaque"><w:p>{decoy}</w:p></x:wrap><w:sdt><w:sdtPr><w:tag w:val="wrap"/><w:id w:val="8"/><w:richText/></w:sdtPr><w:sdtContent><w:p>{live}</w:p></w:sdtContent></w:sdt>"#
+    ));
+    let legacy = shifted.legacy_form_fields().unwrap();
+    assert_eq!(legacy.len(), 1, "{legacy:?}");
+    let before = shifted.to_bytes().unwrap();
+    let error = shifted
+        .validate_form(&[
+            form_rule(
+                form_tag("wrap"),
+                false,
+                rdocx::FormResetValue::Value(form_text("W")),
+            ),
+            form_rule(
+                rdocx::FormFieldTarget::Legacy {
+                    source_part: legacy[0].source_part.clone(),
+                    ordinal: legacy[0].ordinal,
+                },
+                false,
+                rdocx::FormResetValue::Value(form_text("keep")),
+            ),
+        ])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("overlapping"), "{error}");
+    assert_eq!(shifted.to_bytes().unwrap(), before);
+
+    let mut nested_leaf = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="outer"/><w:id w:val="1"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>STAY</w:t></w:r><w:sdt><w:sdtPr><w:tag w:val="leaf"/><w:id w:val="2"/><w:text/></w:sdtPr><w:sdtContent><w:r><w:t>LEAF</w:t></w:r></w:sdtContent></w:sdt></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let leaf_counts = nested_leaf
+        .fill_form(
+            &[form_rule(
+                form_tag("leaf"),
+                false,
+                rdocx::FormResetValue::Value(form_text("NEW")),
+            )],
+            &[form_assignment(form_tag("leaf"), form_text("NEW"))],
+        )
+        .unwrap();
+    assert_eq!(leaf_counts, vec![1]);
+    let leaf_xml = document_part_xml(&mut nested_leaf);
+    assert!(leaf_xml.contains(">NEW<"), "{leaf_xml}");
+    assert!(leaf_xml.contains(">STAY<"), "{leaf_xml}");
+
+    let mut structural = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="same"/><w:id w:val="1"/><w:group/></w:sdtPr><w:sdtContent><w:p><w:sdt><w:sdtPr><w:tag w:val="same"/><w:id w:val="2"/><w:text/></w:sdtPr><w:sdtContent><w:r><w:t>LEAF</w:t></w:r></w:sdtContent></w:sdt></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let before_structural = structural.to_bytes().unwrap();
+    let structural_error = structural
+        .fill_form(
+            &[form_rule(
+                form_tag("same"),
+                false,
+                rdocx::FormResetValue::Value(form_text("NEW")),
+            )],
+            &[form_assignment(form_tag("same"), form_text("NEW"))],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        structural_error.contains("structural")
+            || structural_error.contains("kinds differ")
+            || structural_error.contains("overlapping"),
+        "{structural_error}"
+    );
+    assert_eq!(structural.to_bytes().unwrap(), before_structural);
+    assert!(document_part_xml(&mut structural).contains(">LEAF<"));
+}
+
+#[test]
+fn form_reset_preserves_repeat_count_and_editable_ranges() {
+    let mut document = Document::new();
+    document.add_paragraph("Editable");
+    let body = body_story(&document);
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "name",
+    );
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::RichText,
+        "rows",
+    );
+    document
+        .set_content_control_type(
+            &control_by_tag(&document, "rows"),
+            rdocx::ContentControlTypePayload::RepeatingSection,
+        )
+        .unwrap();
+    document
+        .repeat_content_control(&control_by_tag(&document, "rows"))
+        .unwrap();
+    let paragraph = document
+        .story_items(&body_story(&document))
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Paragraph)
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .add_story_permission_range(
+            Some("Clerk"),
+            None,
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: paragraph.clone(),
+                    run_index: 0,
+                },
+                end: rdocx::StoryRunPosition {
+                    location: paragraph,
+                    run_index: 1,
+                },
+            },
+        )
+        .unwrap();
+    {
+        let mut paragraph = document.add_paragraph("");
+        let mut run = paragraph.add_run("");
+        run.add_field_value(
+            rdocx::Field::from_legacy_form(
+                rdocx::LegacyFormFieldOptions::default(),
+                rdocx::LegacyFormFieldDefinition::TextInput {
+                    input_type: rdocx::LegacyTextInputType::Regular,
+                    default: None,
+                    value: "current".into(),
+                    max_length: None,
+                    format: None,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        run.add_field_value(
+            rdocx::Field::from_legacy_form(
+                rdocx::LegacyFormFieldOptions::default(),
+                rdocx::LegacyFormFieldDefinition::CheckBox {
+                    size: rdocx::LegacyCheckBoxSize::Auto,
+                    default: false,
+                    checked: true,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        run.add_field_value(
+            rdocx::Field::from_legacy_form(
+                rdocx::LegacyFormFieldOptions::default(),
+                rdocx::LegacyFormFieldDefinition::DropDownList {
+                    choices: vec!["one".into(), "two".into()],
+                    default_index: 0,
+                    selected_index: 1,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    let fields = document.legacy_form_fields_with_defaults().unwrap();
+    assert_eq!(fields[0].1, None);
+    assert_eq!(
+        fields[1].1,
+        Some(rdocx::LegacyFormFieldValue::Checked(false))
+    );
+    assert_eq!(
+        fields[2].1,
+        Some(rdocx::LegacyFormFieldValue::SelectedIndex(0))
+    );
+    let text_target = rdocx::FormFieldTarget::Legacy {
+        source_part: fields[0].0.source_part.clone(),
+        ordinal: fields[0].0.ordinal,
+    };
+    let check_target = rdocx::FormFieldTarget::Legacy {
+        source_part: fields[1].0.source_part.clone(),
+        ordinal: fields[1].0.ordinal,
+    };
+    let list_target = rdocx::FormFieldTarget::Legacy {
+        source_part: fields[2].0.source_part.clone(),
+        ordinal: fields[2].0.ordinal,
+    };
+    let bad_rules = vec![form_rule(
+        text_target.clone(),
+        false,
+        rdocx::FormResetValue::Value(form_text("current")),
+    )];
+    let before = document.to_bytes().unwrap();
+    assert!(document.reset_form(&bad_rules).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let placeholder = document.reset_form(&[form_rule(
+        check_target.clone(),
+        false,
+        rdocx::FormResetValue::Placeholder { text: "no".into() },
+    )]);
+    assert!(placeholder.unwrap_err().to_string().contains("placeholder"));
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let rules = vec![
+        form_rule(
+            form_tag("name"),
+            true,
+            rdocx::FormResetValue::Placeholder {
+                text: "Name".into(),
+            },
+        ),
+        form_rule(
+            text_target,
+            true,
+            rdocx::FormResetValue::Value(form_text("")),
+        ),
+        form_rule(
+            check_target,
+            true,
+            rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(false)),
+        ),
+        form_rule(
+            list_target,
+            true,
+            rdocx::FormResetValue::Value(rdocx::FormFieldValue::SelectedIndex(0)),
+        ),
+    ];
+    document
+        .fill_form(
+            &rules,
+            &[form_assignment(form_tag("name"), form_text("Filled"))],
+        )
+        .unwrap();
+    assert_eq!(
+        document_part_xml(&mut document)
+            .matches("repeatingSectionItem")
+            .count(),
+        2
+    );
+    let counts = document.reset_form(&rules).unwrap();
+    assert_eq!(counts, vec![1, 1, 1, 1]);
+    assert_eq!(
+        document_part_xml(&mut document)
+            .matches("repeatingSectionItem")
+            .count(),
+        2
+    );
+    assert!(package_text(&mut document).contains("permStart"));
+    let values = document.legacy_form_fields().unwrap();
+    assert_eq!(
+        values[0].value,
+        rdocx::LegacyFormFieldValue::Text(String::new())
+    );
+    assert_eq!(values[1].value, rdocx::LegacyFormFieldValue::Checked(false));
+    assert_eq!(
+        values[2].value,
+        rdocx::LegacyFormFieldValue::SelectedIndex(0)
+    );
+    let issues = document.validate_form(&rules).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.message == "required value is empty")
+    );
+    let blocked = document.to_bytes().unwrap();
+    assert!(
+        document
+            .protect_form(&rules, form_protection(rdocx::ProtectionMode::ReadOnly))
+            .unwrap_err()
+            .to_string()
+            .contains("forms mode")
+    );
+    assert!(
+        document
+            .protect_form(&rules, form_protection(rdocx::ProtectionMode::Forms))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), blocked);
+
+    let field = r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:textInput><w:default w:val="keep"/></w:textInput></w:ffData></w:fldChar></w:r><w:r><w:instrText> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>One</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+    let mut reindex = document_with_body_inner(&format!(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="wrap"/><w:id w:val="4"/><w:richText/></w:sdtPr><w:sdtContent><w:p>{field}</w:p></w:sdtContent></w:sdt><w:p>{field}</w:p>"#
+    ));
+    let legacy = reindex.legacy_form_fields().unwrap();
+    assert!(legacy.len() >= 2, "{legacy:?}");
+    let before = reindex.to_bytes().unwrap();
+    let error = reindex
+        .fill_form(
+            &[
+                form_rule(
+                    form_tag("wrap"),
+                    false,
+                    rdocx::FormResetValue::Value(form_text("W")),
+                ),
+                form_rule(
+                    rdocx::FormFieldTarget::Legacy {
+                        source_part: legacy[1].source_part.clone(),
+                        ordinal: legacy[1].ordinal,
+                    },
+                    false,
+                    rdocx::FormResetValue::Value(form_text("keep")),
+                ),
+            ],
+            &[form_assignment(form_tag("wrap"), form_text("Moved"))],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("reindex") || error.contains("overlap"),
+        "{error}"
+    );
+    assert_eq!(reindex.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn form_reopen_keeps_defaults_placeholders_and_bound_values() {
+    let mut document = Document::new();
+    document.add_paragraph("Reopen");
+    let body = body_story(&document);
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "name",
+    );
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::RichText,
+        "when",
+    );
+    document
+        .set_content_control_type(
+            &control_by_tag(&document, "when"),
+            rdocx::ContentControlTypePayload::Date {
+                format: "dd/MM/yyyy".into(),
+            },
+        )
+        .unwrap();
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::RichText,
+        "color",
+    );
+    document
+        .set_content_control_type(
+            &control_by_tag(&document, "color"),
+            rdocx::ContentControlTypePayload::DropDownList {
+                items: vec![("Red".into(), "r".into()), ("Blue".into(), "b".into())],
+            },
+        )
+        .unwrap();
+    let store =
+        br#"<ns:root xmlns:ns="urn:example"><ns:name></ns:name><ns:color>b</ns:color></ns:root>"#;
+    let store_id = document
+        .add_custom_xml_store(store, &["urn:example"])
+        .unwrap();
+    let mappings = Some("xmlns:ns='urn:example'");
+    document
+        .set_content_control_binding(
+            &control_by_tag(&document, "name"),
+            &store_id,
+            "/ns:root/ns:name",
+            mappings,
+        )
+        .unwrap();
+    document
+        .set_content_control_binding(
+            &control_by_tag(&document, "color"),
+            &store_id,
+            "/ns:root/ns:color",
+            mappings,
+        )
+        .unwrap();
+    let rules = vec![
+        form_rule(
+            form_tag("name"),
+            false,
+            rdocx::FormResetValue::Placeholder {
+                text: "Name".into(),
+            },
+        ),
+        form_rule(
+            form_tag("when"),
+            false,
+            rdocx::FormResetValue::Placeholder {
+                text: "Date".into(),
+            },
+        ),
+        form_rule(
+            form_tag("color"),
+            false,
+            rdocx::FormResetValue::Placeholder {
+                text: "Color".into(),
+            },
+        ),
+    ];
+    let issues = document.validate_form(&rules).unwrap();
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.message == "bound scalar is not empty")
+    );
+    let counts = document.reset_form(&rules).unwrap();
+    assert_eq!(counts, vec![1, 1, 1]);
+    assert!(document.validate_form(&rules).unwrap().is_empty());
+    document
+        .fill_form(
+            &rules,
+            &[
+                form_assignment(form_tag("name"), form_text("Ada")),
+                form_assignment(form_tag("when"), form_text("2026-10-23")),
+                form_assignment(form_tag("color"), form_text("Blue")),
+            ],
+        )
+        .unwrap();
+    let xml = document_part_xml(&mut document);
+    assert!(xml.contains("23/10/2026"), "{xml}");
+    assert!(xml.contains("2026-10-23T00:00:00Z"), "{xml}");
+    assert!(!xml.contains("fullDate=\"23/10/2026\""), "{xml}");
+    let mut reopened = reopen_document(&mut document);
+    assert!(reopened.validate_form(&rules).unwrap().is_empty());
+    let saved = document_part_xml(&mut reopened);
+    assert!(saved.contains("Ada"), "{saved}");
+    assert!(saved.contains("23/10/2026"), "{saved}");
+    assert!(saved.contains(">b<") || package_text(&mut reopened).contains(">b<"));
+    let again = reopened.to_bytes().unwrap();
+    reopened
+        .fill_form(
+            &rules,
+            &[form_assignment(form_tag("color"), form_text("Blue"))],
+        )
+        .unwrap();
+    assert_eq!(reopened.to_bytes().unwrap(), again);
+
+    let mut imported = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="when"/><w:id w:val="3"/><w:showingPlcHdr/><w:date f:fullDate="1999-01-01T00:00:00Z" w:fullDate = "2026-10-23T00:00:00Z" xmlns:f="urn:foreign"><w:dateFormat w:val="dd/MM/yyyy"/><w:storeMappedDataAs w:val="dateTime"/><w:calendar w:val="gregorian"/></w:date></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Choose</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="list"/><w:id w:val="4"/><w:dropDownList w:lastValue="r"><w:listItem w:displayText="Red" w:value="r"/><w:listItem w:displayText="Blue" w:value="b"/></w:dropDownList></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Blue</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let imported_rules = vec![
+        form_rule(
+            form_tag("when"),
+            false,
+            rdocx::FormResetValue::Placeholder {
+                text: "Choose".into(),
+            },
+        ),
+        form_rule(
+            form_tag("list"),
+            false,
+            rdocx::FormResetValue::Value(form_text("Blue")),
+        ),
+    ];
+    let before = imported.to_bytes().unwrap();
+    assert!(imported.validate_form(&imported_rules).unwrap().is_empty());
+    assert_eq!(imported.to_bytes().unwrap(), before);
+    imported.reset_form(&imported_rules).unwrap();
+    let xml = document_part_xml(&mut imported);
+    assert!(!xml.contains("w:fullDate"), "{xml}");
+    assert!(xml.contains("f:fullDate=\"1999-01-01T00:00:00Z\""), "{xml}");
+    assert!(xml.contains("showingPlcHdr"), "{xml}");
+    assert!(xml.contains("w:lastValue=\"b\""), "{xml}");
+    assert!(!xml.contains("<w:lastValue"), "{xml}");
+    assert!(xml.contains(">Blue<"), "{xml}");
+    let reopened = reopen_document(&mut imported);
+    assert!(reopened.validate_form(&imported_rules).unwrap().is_empty());
+    let wrong = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="list"/><w:id w:val="5"/><w:dropDownList w:lastValue="b"><w:listItem w:displayText="Red" w:value="r"/><w:listItem w:displayText="Blue" w:value="b"/></w:dropDownList></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Green</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let issues = wrong
+        .validate_form(&[form_rule(
+            form_tag("list"),
+            false,
+            rdocx::FormResetValue::Value(form_text("Blue")),
+        )])
+        .unwrap();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0].message, "current form value is invalid");
+
+    let glyphs = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="ok"/><w:id w:val="6"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Ready</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="bad"/><w:id w:val="7"/><w14:checkbox><w14:checked w14:val="0"/><w14:checkedState w14:val="ZZ"/><w14:uncheckedState w14:val="2610"/></w14:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>NO</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    assert!(glyphs.validate_form(&[]).unwrap().is_empty());
+    let ok_rules = vec![form_rule(
+        form_tag("ok"),
+        false,
+        rdocx::FormResetValue::Value(form_text("Ready")),
+    )];
+    assert!(glyphs.validate_form(&ok_rules).unwrap().is_empty());
+    let bad_rules = vec![form_rule(
+        form_tag("bad"),
+        false,
+        rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(false)),
+    )];
+    let issues = glyphs.validate_form(&bad_rules).unwrap();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0].message, "current form value is invalid");
+
+    let mut value_only = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="value-only"/><w:id w:val="8"/><w:dropDownList><w:listItem w:value="r"/></w:dropDownList></w:sdtPr><w:sdtContent><w:p><w:r><w:t>r</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="label-only"/><w:id w:val="9"/><w:dropDownList><w:listItem w:displayText="Only"/></w:dropDownList></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Only</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let value_rules = vec![form_rule(
+        form_tag("value-only"),
+        false,
+        rdocx::FormResetValue::Value(form_text("r")),
+    )];
+    assert!(value_only.validate_form(&value_rules).unwrap().is_empty());
+    let before = value_only.to_bytes().unwrap();
+    let label_error = value_only
+        .validate_form(&[form_rule(
+            form_tag("label-only"),
+            false,
+            rdocx::FormResetValue::Value(form_text("Only")),
+        )])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        label_error.contains("no value") || label_error.contains("value"),
+        "{label_error}"
+    );
+    assert_eq!(value_only.to_bytes().unwrap(), before);
+
+    let mut spaced = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="spaced"/><w:id w:val="10"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t f:space="keep" xml:space="default" xmlns:f="urn:foreign">x</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let space_rules = vec![form_rule(
+        form_tag("spaced"),
+        false,
+        rdocx::FormResetValue::Value(form_text(" a ")),
+    )];
+    spaced
+        .fill_form(
+            &space_rules,
+            &[form_assignment(form_tag("spaced"), form_text(" a "))],
+        )
+        .unwrap();
+    let mut spaced = reopen_document(&mut spaced);
+    let xml = document_part_xml(&mut spaced);
+    assert!(xml.contains("> a <"), "{xml}");
+    assert!(xml.contains("f:space=\"keep\""), "{xml}");
+    let space = attribute_bindings(&xml, "space");
+    assert!(
+        space
+            .iter()
+            .any(|(uri, value)| uri == XML_NS && value == "preserve"),
+        "{space:?}"
+    );
+    assert!(
+        space
+            .iter()
+            .any(|(uri, value)| uri == "urn:foreign" && value == "keep"),
+        "{space:?}"
+    );
+    let layout = spaced.layout_deterministic().unwrap();
+    let mut laid_out = String::new();
+    for page in &layout.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                laid_out.push_str(&run.text);
+            }
+        });
+    }
+    assert!(laid_out.contains(" a "), "{laid_out}");
+
+    let mut shared = Document::new();
+    shared.add_paragraph("Bind");
+    let body = body_story(&shared);
+    insert_form_control(
+        &mut shared,
+        &body,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "left",
+    );
+    insert_form_control(
+        &mut shared,
+        &body,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "right",
+    );
+    let store_id = shared
+        .add_custom_xml_store(
+            br#"<ns:root xmlns:ns="urn:example"><ns:child>same</ns:child></ns:root>"#,
+            &["urn:example"],
+        )
+        .unwrap();
+    for tag in ["left", "right"] {
+        shared
+            .set_content_control_binding(
+                &control_by_tag(&shared, tag),
+                &store_id,
+                "/ns:root/ns:child",
+                Some("xmlns:ns='urn:example'"),
+            )
+            .unwrap();
+    }
+    let conflict = vec![
+        form_rule(
+            form_tag("left"),
+            false,
+            rdocx::FormResetValue::Value(form_text("A")),
+        ),
+        form_rule(
+            form_tag("right"),
+            false,
+            rdocx::FormResetValue::Value(form_text("B")),
+        ),
+    ];
+    let before = shared.to_bytes().unwrap();
+    for result in [
+        shared.validate_form(&conflict).map(|_| ()),
+        shared.fill_form(&conflict, &[]).map(|_| ()),
+        shared
+            .fill_form(
+                &conflict,
+                &[form_assignment(form_tag("left"), form_text("A"))],
+            )
+            .map(|_| ()),
+        shared
+            .protect_form(&conflict, form_protection(rdocx::ProtectionMode::Forms))
+            .map(|_| ()),
+    ] {
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("different values"), "{error}");
+    }
+    assert_eq!(shared.to_bytes().unwrap(), before);
+    let agreed = vec![
+        form_rule(
+            form_tag("left"),
+            false,
+            rdocx::FormResetValue::Value(form_text("same")),
+        ),
+        form_rule(
+            form_tag("right"),
+            false,
+            rdocx::FormResetValue::Value(form_text("same")),
+        ),
+    ];
+    shared
+        .fill_form(
+            &agreed,
+            &[
+                form_assignment(form_tag("left"), form_text("same")),
+                form_assignment(form_tag("right"), form_text("same")),
+            ],
+        )
+        .unwrap();
+    assert!(shared.validate_form(&agreed).unwrap().is_empty());
+
+    let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let mut bare = document_with_body_inner(&format!(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="bare"/><w:id w:val="11"/><date xmlns="{word}" xmlns:w="urn:foreign"><dateFormat xmlns:a="{word}" a:val="yyyy-MM-dd"/></date></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Choose</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+    ));
+    bare.fill_form(
+        &[form_rule(
+            form_tag("bare"),
+            false,
+            rdocx::FormResetValue::Value(form_text("2026-10-23")),
+        )],
+        &[form_assignment(form_tag("bare"), form_text("2026-10-23"))],
+    )
+    .unwrap();
+    let bare_xml = document_part_xml(&mut bare);
+    assert!(bare_xml.contains("xmlns:w=\"urn:foreign\""), "{bare_xml}");
+    assert!(
+        !bare_xml.contains(" fullDate=") && !bare_xml.contains("\tfullDate="),
+        "{bare_xml}"
+    );
+    let full_dates = attribute_bindings(&bare_xml, "fullDate");
+    assert!(
+        full_dates
+            .iter()
+            .any(|(uri, value)| uri == word && value == "2026-10-23T00:00:00Z"),
+        "{full_dates:?} {bare_xml}"
+    );
+
+    let mut alias = document_with_body_inner(&format!(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="alias"/><w:id w:val="12"/><q:date xmlns:q="{word}" xmlns:w="urn:foreign" q:fullDate="2020-01-01T00:00:00Z" p:fullDate="foreign" xmlns:p="urn:producer"><w:dateFormat w:val="foreign"/><q:dateFormat q:val="yyyy-MM-dd"/></q:date></w:sdtPr><w:sdtContent><w:p><w:r><w:t>old</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+    ));
+    alias
+        .fill_form(
+            &[form_rule(
+                form_tag("alias"),
+                false,
+                rdocx::FormResetValue::Value(form_text("2026-10-23")),
+            )],
+            &[form_assignment(form_tag("alias"), form_text("2026-10-23"))],
+        )
+        .unwrap();
+    let alias_xml = document_part_xml(&mut alias);
+    assert!(alias_xml.contains("p:fullDate=\"foreign\""), "{alias_xml}");
+    assert!(alias_xml.contains("w:val=\"foreign\""), "{alias_xml}");
+    let alias_dates = attribute_bindings(&alias_xml, "fullDate");
+    assert!(
+        alias_dates
+            .iter()
+            .any(|(uri, value)| uri == word && value == "2026-10-23T00:00:00Z"),
+        "{alias_dates:?}"
+    );
+    assert!(
+        alias_dates
+            .iter()
+            .any(|(uri, value)| uri == "urn:producer" && value == "foreign"),
+        "{alias_dates:?}"
+    );
+
+    let mut box_alias = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="box"/><w:id w:val="13"/><w14:checkbox><w14:checked f:val="9" w14:val="0" xmlns:f="urn:foreign"/><w14:checkedState w14:val="2612"/><w14:uncheckedState w14:val="2610"/></w14:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>NO</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    box_alias
+        .fill_form(
+            &[form_rule(
+                form_tag("box"),
+                false,
+                rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(true)),
+            )],
+            &[form_assignment(
+                form_tag("box"),
+                rdocx::FormFieldValue::Checked(true),
+            )],
+        )
+        .unwrap();
+    let box_xml = document_part_xml(&mut box_alias);
+    let checked = attribute_bindings(&box_xml, "val");
+    assert!(
+        checked.iter().any(|(uri, value)| {
+            uri == "http://schemas.microsoft.com/office/word/2010/wordml" && value == "1"
+        }),
+        "{checked:?} {box_xml}"
+    );
+    assert!(
+        checked
+            .iter()
+            .any(|(uri, value)| uri == "urn:foreign" && value == "9"),
+        "{checked:?}"
+    );
+
+    let mut hinted = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="hint"/><w:id w:val="14"/><w:showingPlcHdr/><w:dropDownList f:lastValue="keep" w:lastValue="r" xmlns:f="urn:foreign"><w:listItem w:displayText="Red" w:value="r"/><w:listItem w:displayText="Blue" w:value="b"/></w:dropDownList></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Red</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    hinted
+        .reset_form(&[form_rule(
+            form_tag("hint"),
+            false,
+            rdocx::FormResetValue::Placeholder {
+                text: "Pick".into(),
+            },
+        )])
+        .unwrap();
+    let hint_xml = document_part_xml(&mut hinted);
+    assert!(hint_xml.contains("f:lastValue=\"keep\""), "{hint_xml}");
+    assert!(!hint_xml.contains("<w:lastValue"), "{hint_xml}");
+    let hints = attribute_bindings(&hint_xml, "lastValue");
+    assert!(
+        hints
+            .iter()
+            .any(|(uri, value)| uri == "urn:foreign" && value == "keep"),
+        "{hints:?}"
+    );
+    assert!(!hints.iter().any(|(uri, _)| uri == word), "{hints:?}");
+}
+
+fn review2_legacy_run(name: &str, value: &str) -> String {
+    format!(
+        r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="{name}"/><w:textInput><w:default w:val="{value}"/></w:textInput></w:ffData></w:fldChar></w:r><w:r><w:instrText> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>{value}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+    )
+}
+
+fn review2_issue<'a>(
+    issues: &'a [rdocx::FormValidationIssue],
+    tag: &str,
+) -> &'a rdocx::FormValidationIssue {
+    issues
+        .iter()
+        .find(|issue| issue.target == form_tag(tag))
+        .unwrap_or_else(|| panic!("missing issue for {tag}: {issues:?}"))
+}
+
+#[test]
+fn form_review2_owner_boundaries() {
+    let producer = r#"<p:note xmlns:p="urn:producer"><w:t>PRODUCER</w:t></p:note>"#;
+    let mut document = document_with_body_inner(&format!(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="name"/><w:id w:val="1"/><w:text/>{producer}</w:sdtPr><w:sdtContent><w:p><w:r><w:t>OLD</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+    ));
+    let rules = vec![form_rule(
+        form_tag("name"),
+        false,
+        rdocx::FormResetValue::Value(form_text("NEW")),
+    )];
+    let counts = document
+        .fill_form(
+            &rules,
+            &[form_assignment(form_tag("name"), form_text("NEW"))],
+        )
+        .unwrap();
+    assert_eq!(counts, vec![1]);
+    let xml = document_part_xml(&mut document);
+    assert!(xml.contains(producer), "{xml}");
+    assert!(xml.contains(">NEW<"), "{xml}");
+    assert!(!xml.contains(">OLD<"), "{xml}");
+    assert!(!xml.contains(">PRODUCERNEW<"), "{xml}");
+    let mut reopened = reopen_document(&mut document);
+    let reopened_xml = document_part_xml(&mut reopened);
+    assert!(reopened_xml.contains(producer), "{reopened_xml}");
+    assert!(reopened_xml.contains(">NEW<"), "{reopened_xml}");
+
+    let wrapper = r#"<x:wrap xmlns:x="urn:opaque"><w:t>WRAP</w:t></x:wrap>"#;
+    let mut wrapped = document_with_body_inner(&format!(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="wrap"/><w:id w:val="2"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r>{wrapper}<w:t>OLD</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+    ));
+    wrapped
+        .fill_form(
+            &[form_rule(
+                form_tag("wrap"),
+                false,
+                rdocx::FormResetValue::Value(form_text("NEW")),
+            )],
+            &[form_assignment(form_tag("wrap"), form_text("NEW"))],
+        )
+        .unwrap();
+    let wrapped_xml = document_part_xml(&mut wrapped);
+    assert!(wrapped_xml.contains(wrapper), "{wrapped_xml}");
+    assert!(wrapped_xml.contains(">NEW<"), "{wrapped_xml}");
+    assert!(!wrapped_xml.contains(">OLD<"), "{wrapped_xml}");
+}
+
+#[test]
+fn form_review2_owner_boundaries_legacy_ordinal() {
+    let decoy = review2_legacy_run("Decoy", "DECOY");
+    let live = review2_legacy_run("Live", "LIVE");
+    let mut document = document_with_body_inner(&format!(
+        r#"<w:p><w:r><w:t>before</w:t><x:wrap xmlns:x="urn:opaque">{decoy}</x:wrap></w:r></w:p><w:sdt><w:sdtPr><w:tag w:val="wrap"/><w:id w:val="8"/><w:richText/></w:sdtPr><w:sdtContent><w:p>{live}</w:p></w:sdtContent></w:sdt>"#
+    ));
+    let fields = document.legacy_form_fields().unwrap();
+    assert_eq!(fields.len(), 1, "{fields:?}");
+    assert_eq!(fields[0].ordinal, 0);
+    assert_eq!(fields[0].name.as_deref(), Some("Live"));
+    let legacy = rdocx::FormFieldTarget::Legacy {
+        source_part: fields[0].source_part.clone(),
+        ordinal: fields[0].ordinal,
+    };
+    let before = document.to_bytes().unwrap();
+    let error = document
+        .validate_form(&[
+            form_rule(
+                form_tag("wrap"),
+                false,
+                rdocx::FormResetValue::Value(form_text("W")),
+            ),
+            form_rule(
+                legacy.clone(),
+                false,
+                rdocx::FormResetValue::Value(form_text("LIVE")),
+            ),
+        ])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("overlapping"), "{error}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    document
+        .set_legacy_form_field_value(
+            &fields[0].source_part,
+            fields[0].ordinal,
+            rdocx::LegacyFormFieldValue::Text("SET".into()),
+        )
+        .unwrap();
+    let fresh = document.legacy_form_fields().unwrap();
+    assert_eq!(fresh.len(), 1, "{fresh:?}");
+    assert_eq!(fresh[0].ordinal, 0);
+    assert_eq!(
+        fresh[0].value,
+        rdocx::LegacyFormFieldValue::Text("SET".into())
+    );
+    let mut reopened = reopen_document(&mut document);
+    let reopened_fields = reopened.legacy_form_fields().unwrap();
+    assert_eq!(reopened_fields.len(), 1, "{reopened_fields:?}");
+    assert_eq!(reopened_fields[0].ordinal, 0);
+    assert_eq!(reopened_fields[0].name.as_deref(), Some("Live"));
+    assert_eq!(
+        reopened_fields[0].value,
+        rdocx::LegacyFormFieldValue::Text("SET".into())
+    );
+    let xml = document_part_xml(&mut reopened);
+    assert!(xml.contains(">SET<"), "{xml}");
+    assert!(xml.contains(">DECOY<"), "{xml}");
+    assert!(xml.contains("w:val=\"Decoy\""), "{xml}");
+    let overlap = reopened
+        .validate_form(&[
+            form_rule(
+                form_tag("wrap"),
+                false,
+                rdocx::FormResetValue::Value(form_text("W")),
+            ),
+            form_rule(
+                rdocx::FormFieldTarget::Legacy {
+                    source_part: reopened_fields[0].source_part.clone(),
+                    ordinal: reopened_fields[0].ordinal,
+                },
+                false,
+                rdocx::FormResetValue::Value(form_text("LIVE")),
+            ),
+        ])
+        .unwrap_err()
+        .to_string();
+    assert!(overlap.contains("overlapping"), "{overlap}");
+}
+
+#[test]
+fn form_review2_owner_boundaries_accepted_containers() {
+    let mut document = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="outer"/><w:id w:val="1"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:hyperlink w:anchor="top"><w:r><w:t>LINK</w:t></w:r></w:hyperlink><w:ins w:id="1" w:author="Ada" w:date="2026-10-24T00:00:00Z"><w:r><w:t>INS</w:t></w:r></w:ins><w:r><w:t>OWN</w:t></w:r><w:sdt><w:sdtPr><w:tag w:val="leaf"/><w:id w:val="2"/><w:text/></w:sdtPr><w:sdtContent><w:r><w:t>NEST</w:t></w:r></w:sdtContent></w:sdt></w:p></w:sdtContent></w:sdt>"#,
+    );
+    document
+        .fill_form(
+            &[form_rule(
+                form_tag("outer"),
+                false,
+                rdocx::FormResetValue::Value(form_text("NEW")),
+            )],
+            &[form_assignment(form_tag("outer"), form_text("NEW"))],
+        )
+        .unwrap();
+    let xml = document_part_xml(&mut document);
+    assert!(xml.contains(">NEW<"), "{xml}");
+    assert!(!xml.contains(">LINK<"), "{xml}");
+    assert!(!xml.contains(">INS<"), "{xml}");
+    assert!(!xml.contains(">OWN<"), "{xml}");
+    assert!(xml.contains(">NEST<"), "{xml}");
+
+    let linked = review2_legacy_run("Link", "KEEP");
+    let inserted = review2_legacy_run("Inserted", "STAY");
+    let mut owned = document_with_body_inner(&format!(
+        r#"<w:p><w:hyperlink w:anchor="top">{linked}</w:hyperlink><w:ins w:id="4" w:author="Ada" w:date="2026-10-24T00:00:00Z">{inserted}</w:ins><w:sdt><w:sdtPr><w:tag w:val="inline"/><w:id w:val="5"/><w:text/></w:sdtPr><w:sdtContent><w:r><w:t>INLINE</w:t></w:r></w:sdtContent></w:sdt></w:p>"#
+    ));
+    let fields = owned.legacy_form_fields().unwrap();
+    assert_eq!(fields.len(), 1, "{fields:?}");
+    assert_eq!(fields[0].ordinal, 0);
+    assert_eq!(fields[0].name.as_deref(), Some("Link"));
+    owned
+        .fill_form(
+            &[form_rule(
+                form_tag("inline"),
+                false,
+                rdocx::FormResetValue::Value(form_text("NEW")),
+            )],
+            &[form_assignment(form_tag("inline"), form_text("NEW"))],
+        )
+        .unwrap();
+    let owned_xml = document_part_xml(&mut owned);
+    assert!(owned_xml.contains(">NEW<"), "{owned_xml}");
+    assert!(owned_xml.contains(">KEEP<"), "{owned_xml}");
+    assert!(owned_xml.contains(">STAY<"), "{owned_xml}");
+
+    let mut boxed = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="live"/><w:id w:val="1"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>LIVE</w:t></w:r><w:r><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="100" cy="100"/><wp:wrapNone/><wp:docPr id="9" name="box"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:txbx><w:txbxContent><w:p><w:r><w:t>BOX</w:t></w:r></w:p><w:sdt><w:sdtPr><w:tag w:val="boxed"/><w:id w:val="3"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>INNER</w:t></w:r></w:p></w:sdtContent></w:sdt></w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    boxed
+        .fill_form(
+            &[form_rule(
+                form_tag("live"),
+                false,
+                rdocx::FormResetValue::Value(form_text("NEW")),
+            )],
+            &[form_assignment(form_tag("live"), form_text("NEW"))],
+        )
+        .unwrap();
+    boxed
+        .fill_form(
+            &[form_rule(
+                form_tag("boxed"),
+                false,
+                rdocx::FormResetValue::Value(form_text("BOXED")),
+            )],
+            &[form_assignment(form_tag("boxed"), form_text("BOXED"))],
+        )
+        .unwrap();
+    let boxed_xml = document_part_xml(&mut boxed);
+    assert!(boxed_xml.contains(">NEW<"), "{boxed_xml}");
+    assert!(boxed_xml.contains(">BOXED<"), "{boxed_xml}");
+    assert!(boxed_xml.contains(">BOX<"), "{boxed_xml}");
+    assert!(!boxed_xml.contains(">LIVE<"), "{boxed_xml}");
+    assert!(!boxed_xml.contains(">INNER<"), "{boxed_xml}");
+}
+
+#[test]
+fn form_review2_qualified_attribute_creation() {
+    let mut document = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="box"/><w:id w:val="1"/><checkbox xmlns="http://schemas.microsoft.com/office/word/2010/wordml"><checkedState val="2612" font="MS Gothic"/><uncheckedState val="2610" font="MS Gothic"/></checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t></w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let rules = vec![form_rule(
+        form_tag("box"),
+        false,
+        rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(false)),
+    )];
+    assert!(document.validate_form(&rules).unwrap().is_empty());
+    document
+        .fill_form(
+            &rules,
+            &[form_assignment(
+                form_tag("box"),
+                rdocx::FormFieldValue::Checked(false),
+            )],
+        )
+        .unwrap();
+    let mut reopened = reopen_document(&mut document);
+    let xml = document_part_xml(&mut reopened);
+    let values = attribute_bindings(&xml, "val");
+    assert!(
+        values.iter().any(|(uri, value)| {
+            uri == "http://schemas.microsoft.com/office/word/2010/wordml" && value == "0"
+        }),
+        "{values:?} {xml}"
+    );
+    assert!(
+        !xml.contains("<checked val=") && !xml.contains(" checked val="),
+        "{xml}"
+    );
+    assert!(reopened.validate_form(&rules).unwrap().is_empty(), "{xml}");
+}
+
+#[test]
+fn form_review2_qualified_attribute_creation_quoted_end() {
+    let mut document = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="box"/><w:id w:val="2"/><w14:checkbox><w14:checked w14:val="0" note="a>b"/><w14:checkedState w14:val="2612" w14:font="MS Gothic"/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>&#x2610;</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    document
+        .fill_form(
+            &[form_rule(
+                form_tag("box"),
+                false,
+                rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(true)),
+            )],
+            &[form_assignment(
+                form_tag("box"),
+                rdocx::FormFieldValue::Checked(true),
+            )],
+        )
+        .unwrap();
+    let xml = document_part_xml(&mut document);
+    assert!(xml.contains("note=\"a>b\""), "{xml}");
+    let values = attribute_bindings(&xml, "val");
+    assert!(
+        values.iter().any(|(uri, value)| {
+            uri == "http://schemas.microsoft.com/office/word/2010/wordml" && value == "1"
+        }),
+        "{values:?} {xml}"
+    );
+}
+
+#[test]
+fn form_review2_qualified_attribute_creation_free_prefix() {
+    let mut taken = String::new();
+    taken.push_str(r#" xmlns:w14="urn:taken""#);
+    for index in 2..=33 {
+        taken.push_str(&format!(r#" xmlns:w14{index}="urn:taken""#));
+    }
+    let mut document = document_with_body_inner(&format!(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="box"/><w:id w:val="3"/><checkbox xmlns="http://schemas.microsoft.com/office/word/2010/wordml"{taken}><checkedState val="2612" font="MS Gothic"/><uncheckedState val="2610" font="MS Gothic"/></checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t></w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+    ));
+    let before = document_part_xml(&mut document);
+    document
+        .fill_form(
+            &[form_rule(
+                form_tag("box"),
+                false,
+                rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(false)),
+            )],
+            &[form_assignment(
+                form_tag("box"),
+                rdocx::FormFieldValue::Checked(false),
+            )],
+        )
+        .unwrap();
+    let xml = document_part_xml(&mut document);
+    assert!(xml.contains(r#"xmlns:w1432="urn:taken""#), "{xml}");
+    assert!(xml.contains(r#"xmlns:w1433="urn:taken""#), "{xml}");
+    let values = attribute_bindings(&xml, "val");
+    assert!(
+        values.iter().any(|(uri, value)| {
+            uri == "http://schemas.microsoft.com/office/word/2010/wordml" && value == "0"
+        }),
+        "{values:?} {xml}"
+    );
+    assert!(
+        !xml.contains(r#"xmlns:w1432="http://schemas.microsoft.com/office/word/2010/wordml""#),
+        "{xml}"
+    );
+    assert!(before.contains(r#"xmlns:w1433="urn:taken""#));
+}
+
+#[test]
+fn form_review2_checkbox_state_policy() {
+    let mut document = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="ok"/><w:id w:val="1"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>Ready</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="bad"/><w:id w:val="2"/><w14:checkbox><w14:checked w14:val="1"/><w14:checkedState w14:val="0000" w14:font="MS Gothic"/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t></w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="font"/><w:id w:val="3"/><w14:checkbox><w14:checked w14:val="1"/><w14:checkedState w14:val="2612" w14:font=""/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t></w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    assert!(document.validate_form(&[]).unwrap().is_empty());
+    let ok_rules = vec![form_rule(
+        form_tag("ok"),
+        true,
+        rdocx::FormResetValue::Value(form_text("Ready")),
+    )];
+    assert!(document.validate_form(&ok_rules).unwrap().is_empty());
+    let bad_rules = vec![form_rule(
+        form_tag("bad"),
+        false,
+        rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(true)),
+    )];
+    let issues = document.validate_form(&bad_rules).unwrap();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0].message, "current form value is invalid");
+    let before = document.to_bytes().unwrap();
+    let error = document
+        .fill_form(
+            &bad_rules,
+            &[form_assignment(
+                form_tag("bad"),
+                rdocx::FormFieldValue::Checked(true),
+            )],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("glyph") || error.contains("XML") || error.contains("font"),
+        "{error}"
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let font_rules = vec![form_rule(
+        form_tag("font"),
+        false,
+        rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(true)),
+    )];
+    let font_issues = document.validate_form(&font_rules).unwrap();
+    assert_eq!(font_issues.len(), 1, "{font_issues:?}");
+    assert_eq!(font_issues[0].message, "current form value is invalid");
+    let before_font = document.to_bytes().unwrap();
+    assert!(
+        document
+            .fill_form(
+                &font_rules,
+                &[form_assignment(
+                    form_tag("font"),
+                    rdocx::FormFieldValue::Checked(true),
+                )],
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before_font);
+}
+
+#[test]
+fn form_review2_checkbox_state_policy_font() {
+    let mut document = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="box"/><w:id w:val="4"/><p:note xmlns:p="urn:producer" p:keep="yes"/><w14:checkbox><w14:checked w14:val="0"/><w14:checkedState w14:val="0041" w14:font="Courier New"/><w14:uncheckedState w14:val="0042" w14:font="Times New Roman"/></w14:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/></w:rPr><w:t>X</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let false_rules = vec![form_rule(
+        form_tag("box"),
+        false,
+        rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(false)),
+    )];
+    document
+        .fill_form(
+            &false_rules,
+            &[form_assignment(
+                form_tag("box"),
+                rdocx::FormFieldValue::Checked(false),
+            )],
+        )
+        .unwrap();
+    let xml = document_part_xml(&mut document);
+    assert!(xml.contains(">B<"), "{xml}");
+    assert!(xml.contains(r#"w:ascii="Times New Roman""#), "{xml}");
+    assert!(xml.contains(r#"w:hAnsi="Times New Roman""#), "{xml}");
+    assert!(xml.contains(r#"w:eastAsia="Times New Roman""#), "{xml}");
+    assert!(xml.contains(r#"w:cs="Times New Roman""#), "{xml}");
+    assert!(xml.contains(r#"p:keep="yes""#), "{xml}");
+    let layout = document.layout_deterministic().unwrap();
+    let mut positioned = false;
+    for page in &layout.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && run.text.contains('B')
+                && run.origin.x.is_finite()
+                && run.origin.y.is_finite()
+            {
+                positioned = true;
+            }
+        });
+    }
+    assert!(positioned, "unchecked glyph was not positioned");
+    document
+        .fill_form(
+            &[form_rule(
+                form_tag("box"),
+                false,
+                rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(true)),
+            )],
+            &[form_assignment(
+                form_tag("box"),
+                rdocx::FormFieldValue::Checked(true),
+            )],
+        )
+        .unwrap();
+    let checked = document_part_xml(&mut document);
+    assert!(checked.contains(">A<"), "{checked}");
+    assert!(checked.contains(r#"w:ascii="Courier New""#), "{checked}");
+    assert!(checked.contains(r#"p:keep="yes""#), "{checked}");
+    let again = document.to_bytes().unwrap();
+    document
+        .fill_form(
+            &[form_rule(
+                form_tag("box"),
+                false,
+                rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(true)),
+            )],
+            &[form_assignment(
+                form_tag("box"),
+                rdocx::FormFieldValue::Checked(true),
+            )],
+        )
+        .unwrap();
+    let noop = document_part_xml(&mut document);
+    assert!(noop.contains(">A<"), "{noop}");
+    assert!(noop.contains(r#"w:ascii="Courier New""#), "{noop}");
+    assert!(noop.contains(r#"p:keep="yes""#), "{noop}");
+    assert_eq!(document.to_bytes().unwrap(), again);
+}
+
+#[test]
+fn form_review2_checkbox_state_policy_placeholder() {
+    let mut document = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="box"/><w:id w:val="5"/><w:showingPlcHdr/><w14:checkbox><w14:checked w14:val="0"/><w14:checkedState w14:val="2612" w14:font="MS Gothic"/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t></w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let rules = vec![form_rule(
+        form_tag("box"),
+        true,
+        rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(false)),
+    )];
+    let issues = document.validate_form(&rules).unwrap();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0].message, "required value is empty");
+    document
+        .fill_form(
+            &rules,
+            &[form_assignment(
+                form_tag("box"),
+                rdocx::FormFieldValue::Checked(false),
+            )],
+        )
+        .unwrap();
+    let mut reopened = reopen_document(&mut document);
+    let xml = document_part_xml(&mut reopened);
+    assert!(
+        !xml.contains("<w:showingPlcHdr") && !xml.contains("<w:showingPlcHdr/>"),
+        "{xml}"
+    );
+    assert!(reopened.validate_form(&rules).unwrap().is_empty(), "{xml}");
+}
+
+#[test]
+fn form_review2_source_part_ordinals() {
+    let mut document = Document::new();
+    document.add_paragraph("Body");
+    let body = body_story(&document);
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "body",
+    );
+    let header = document
+        .create_section_story(0, rdocx::HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap();
+    insert_form_control(
+        &mut document,
+        &header,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "head",
+    );
+    let rules = vec![
+        form_rule(
+            form_tag("body"),
+            true,
+            rdocx::FormResetValue::Placeholder {
+                text: "Body".into(),
+            },
+        ),
+        form_rule(
+            form_tag("head"),
+            true,
+            rdocx::FormResetValue::Placeholder {
+                text: "Head".into(),
+            },
+        ),
+    ];
+    let issues = document.validate_form(&rules).unwrap();
+    assert_eq!(review2_issue(&issues, "body").ordinal, 0, "{issues:?}");
+    assert_eq!(review2_issue(&issues, "head").ordinal, 0, "{issues:?}");
+    assert_ne!(
+        review2_issue(&issues, "body").source_part,
+        review2_issue(&issues, "head").source_part
+    );
+}
+
+#[test]
+fn form_review2_source_part_ordinals_physical() {
+    let mut ordered = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:id w:val="1"/><w:group/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>S</w:t></w:r></w:p></w:sdtContent></w:sdt><w:tbl><w:tr><w:tc><w:p><w:sdt><w:sdtPr><w:tag w:val="cell"/><w:id w:val="2"/><w:showingPlcHdr/><w:text/></w:sdtPr><w:sdtContent><w:r><w:t></w:t></w:r></w:sdtContent></w:sdt></w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtPr><w:tag w:val="later"/><w:id w:val="3"/><w:showingPlcHdr/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t></w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let ordered_rules = vec![
+        form_rule(
+            form_tag("later"),
+            true,
+            rdocx::FormResetValue::Placeholder {
+                text: "Later".into(),
+            },
+        ),
+        form_rule(
+            form_tag("cell"),
+            true,
+            rdocx::FormResetValue::Placeholder {
+                text: "Cell".into(),
+            },
+        ),
+    ];
+    let ordered_issues = ordered.validate_form(&ordered_rules).unwrap();
+    assert_eq!(ordered_issues.len(), 2, "{ordered_issues:?}");
+    assert_eq!(ordered_issues[0].target, form_tag("later"));
+    assert_eq!(ordered_issues[1].target, form_tag("cell"));
+    assert_eq!(review2_issue(&ordered_issues, "cell").ordinal, 1);
+    assert_eq!(review2_issue(&ordered_issues, "later").ordinal, 2);
+    let counts = ordered
+        .fill_form(
+            &ordered_rules,
+            &[
+                form_assignment(form_tag("later"), form_text("L")),
+                form_assignment(form_tag("cell"), form_text("C")),
+            ],
+        )
+        .unwrap();
+    assert_eq!(counts, vec![1, 1]);
+    let filled = document_part_xml(&mut ordered);
+    assert!(filled.contains(">L<"), "{filled}");
+    assert!(filled.contains(">C<"), "{filled}");
+    assert!(filled.contains(">S<"), "{filled}");
+}
+
+#[test]
+fn form_review3_identical_opaque_field_cannot_capture_live_anchor() {
+    let field = review2_legacy_run("Live", "LIVE");
+    let mut document = document_with_body_inner(&format!(
+        r#"<w:p><w:r><w:t>before</w:t><x:wrap xmlns:x="urn:opaque">{field}</x:wrap></w:r></w:p><w:sdt><w:sdtPr><w:tag w:val="wrap"/><w:id w:val="8"/><w:richText/></w:sdtPr><w:sdtContent><w:p>{field}</w:p></w:sdtContent></w:sdt>"#
+    ));
+    let fields = document.legacy_form_fields().unwrap();
+    assert_eq!(fields.len(), 1, "{fields:?}");
+    assert_eq!(fields[0].ordinal, 0);
+    let before = document.to_bytes().unwrap();
+    let error = document
+        .validate_form(&[
+            form_rule(
+                form_tag("wrap"),
+                false,
+                rdocx::FormResetValue::Value(form_text("W")),
+            ),
+            form_rule(
+                rdocx::FormFieldTarget::Legacy {
+                    source_part: fields[0].source_part.clone(),
+                    ordinal: fields[0].ordinal,
+                },
+                false,
+                rdocx::FormResetValue::Value(form_text("LIVE")),
+            ),
+        ])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("overlapping"), "{error}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn form_review3_authored_legacy_under_control_before_save() {
+    let mut document = Document::new();
+    let body = body_story(&document);
+    insert_form_control(
+        &mut document,
+        &body,
+        rdocx_oxml::content_control::SdtType::RichText,
+        "wrap",
+    );
+    {
+        let mut paragraph = document
+            .paragraph_mut(0)
+            .expect("authored control paragraph");
+        paragraph
+            .add_run("")
+            .add_field_value(review3_authored_legacy("Live", "LIVE"))
+            .unwrap();
+    }
+    let fields = document.legacy_form_fields().unwrap();
+    assert_eq!(fields.len(), 1, "{fields:?}");
+    assert_eq!(fields[0].ordinal, 0);
+    assert_eq!(fields[0].name.as_deref(), Some("Live"));
+    let before = document.to_bytes().unwrap();
+    let error = document
+        .validate_form(&[
+            form_rule(
+                form_tag("wrap"),
+                false,
+                rdocx::FormResetValue::Value(form_text("W")),
+            ),
+            form_rule(
+                rdocx::FormFieldTarget::Legacy {
+                    source_part: fields[0].source_part.clone(),
+                    ordinal: fields[0].ordinal,
+                },
+                false,
+                rdocx::FormResetValue::Value(form_text("LIVE")),
+            ),
+        ])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("overlapping"), "{error}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let mut free = Document::new();
+    {
+        let mut paragraph = free.add_paragraph("");
+        paragraph
+            .add_run("")
+            .add_field_value(review3_authored_legacy("Free", "OLD"))
+            .unwrap();
+    }
+    let free_fields = free.legacy_form_fields().unwrap();
+    assert_eq!(free_fields.len(), 1, "{free_fields:?}");
+    assert_eq!(free_fields[0].ordinal, 0);
+    free.set_legacy_form_field_value(
+        &free_fields[0].source_part,
+        free_fields[0].ordinal,
+        rdocx::LegacyFormFieldValue::Text("SET".into()),
+    )
+    .unwrap();
+    let updated = free.legacy_form_fields().unwrap();
+    assert_eq!(updated.len(), 1, "{updated:?}");
+    assert_eq!(
+        updated[0].value,
+        rdocx::LegacyFormFieldValue::Text("SET".into())
+    );
+}
+
+#[test]
+fn form_review3_repeated_identical_fields_stay_distinct() {
+    let field = review2_legacy_run("Same", "LIVE");
+    let mut document = document_with_body_inner(&format!("<w:p>{field}</w:p><w:p>{field}</w:p>"));
+    let fields = document.legacy_form_fields().unwrap();
+    assert_eq!(fields.len(), 2, "{fields:?}");
+    assert_eq!(fields[0].ordinal, 0);
+    assert_eq!(fields[1].ordinal, 1);
+    assert_eq!(fields[0].name.as_deref(), Some("Same"));
+    assert_eq!(fields[1].name.as_deref(), Some("Same"));
+    document
+        .set_legacy_form_field_value(
+            &fields[1].source_part,
+            1,
+            rdocx::LegacyFormFieldValue::Text("SECOND".into()),
+        )
+        .unwrap();
+    let fresh = document.legacy_form_fields().unwrap();
+    assert_eq!(
+        fresh[0].value,
+        rdocx::LegacyFormFieldValue::Text("LIVE".into())
+    );
+    assert_eq!(
+        fresh[1].value,
+        rdocx::LegacyFormFieldValue::Text("SECOND".into())
+    );
+    let xml = document_part_xml(&mut document);
+    assert!(xml.contains(">LIVE<"), "{xml}");
+    assert!(xml.contains(">SECOND<"), "{xml}");
+}
+
+fn review3_authored_legacy(name: &str, value: &str) -> rdocx::Field {
+    rdocx::Field::from_legacy_form(
+        rdocx::LegacyFormFieldOptions {
+            name: Some(name.to_owned()),
+            ..rdocx::LegacyFormFieldOptions::default()
+        },
+        rdocx::LegacyFormFieldDefinition::TextInput {
+            input_type: rdocx::LegacyTextInputType::Regular,
+            default: Some(value.to_owned()),
+            value: value.to_owned(),
+            max_length: None,
+            format: None,
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn form_review3_default_namespace_inline_font_is_qualified() {
+    const WORD: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let mut document = document_with_body_inner(
+        r#"<w:p><w:sdt><w:sdtPr><w:tag w:val="box"/><w:id w:val="41"/><w14:checkbox><w14:checked w14:val="0"/><w14:checkedState w14:val="0041" w14:font="Courier New"/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox></w:sdtPr><w:sdtContent><r xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><t>X</t></r></w:sdtContent></w:sdt></w:p>"#,
+    );
+    document
+        .fill_form(
+            &[form_rule(
+                form_tag("box"),
+                false,
+                rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(true)),
+            )],
+            &[form_assignment(
+                form_tag("box"),
+                rdocx::FormFieldValue::Checked(true),
+            )],
+        )
+        .unwrap();
+    let xml = document_part_xml(&mut document);
+    assert_review3_courier_fonts(&xml, WORD);
+    assert_review3_positioned_courier(&document, 'A');
+    let mut reopened = reopen_document(&mut document);
+    let reopened_xml = document_part_xml(&mut reopened);
+    assert_review3_courier_fonts(&reopened_xml, WORD);
+
+    let mut missing = document_with_body_inner(
+        r#"<w:p><w:sdt><w:sdtPr><w:tag w:val="gap"/><w:id w:val="42"/><w14:checkbox><w14:checked w14:val="0"/><w14:checkedState w14:val="0041" w14:font="Courier New"/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r><w:rPr f:keep="yes" xmlns:f="urn:foreign"><w:sz w:val="24"/></w:rPr><w:t>X</w:t></w:r></w:sdtContent></w:sdt></w:p>"#,
+    );
+    fill_checked(&mut missing, "gap");
+    let gap = document_part_xml(&mut missing);
+    assert_review3_courier_fonts(&gap, WORD);
+    assert!(gap.contains(r#"f:keep="yes""#), "{gap}");
+    assert!(
+        gap.find("<w:rPr").unwrap() < gap.find("<w:t>").unwrap(),
+        "{gap}"
+    );
+
+    let mut fresh = document_with_body_inner(
+        r#"<w:p><w:sdt><w:sdtPr><w:tag w:val="new"/><w:id w:val="43"/><w14:checkbox><w14:checked w14:val="0"/><w14:checkedState w14:val="0041" w14:font="Courier New"/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox></w:sdtPr><sdtContent xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/></w:sdt></w:p>"#,
+    );
+    fill_checked(&mut fresh, "new");
+    let inserted = document_part_xml(&mut fresh);
+    assert_review3_courier_fonts(&inserted, WORD);
+    assert!(inserted.contains(">A<"), "{inserted}");
+
+    let mut qualified = document_with_body_inner(
+        r#"<w:p><w:sdt><w:sdtPr><w:tag w:val="keep"/><w:id w:val="44"/><w14:checkbox><w14:checked w14:val="0"/><w14:checkedState w14:val="0041" w14:font="Courier New"/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri" w:asciiTheme="minorHAnsi" f:keep="yes" xmlns:f="urn:foreign"/></w:rPr><w:t>X</w:t></w:r></w:sdtContent></w:sdt></w:p>"#,
+    );
+    fill_checked(&mut qualified, "keep");
+    let kept = document_part_xml(&mut qualified);
+    assert_review3_courier_fonts(&kept, WORD);
+    assert!(kept.contains(r#"f:keep="yes""#), "{kept}");
+    let themes = attribute_bindings(&kept, "asciiTheme");
+    assert!(
+        !themes.iter().any(|(uri, _)| uri == WORD),
+        "{themes:?} {kept}"
+    );
+    assert_review3_positioned_courier(&qualified, 'A');
+}
+
+#[test]
+fn form_review4_inherited_checkbox_namespace_context() {
+    const WORD: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const W14: &str = "http://schemas.microsoft.com/office/word/2010/wordml";
+    let mut document = document_with_body_inner(&format!(
+        r#"<w:sdt xmlns:rdocxWord="{WORD}"><w:sdtPr xmlns="{W14}"><w:tag w:val="inherit"/><w:id w:val="51"/><checkbox xmlns:w="urn:shadow"><checked w14:val="0"/><checkedState w14:val="0041" w14:font="Courier New"/><uncheckedState w14:val="0042" w14:font="Times New Roman"/><kept xmlns="urn:override"/></checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>B</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+    ));
+    let rules = vec![form_rule(
+        form_tag("inherit"),
+        false,
+        rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(false)),
+    )];
+    let issues = document.validate_form(&rules).unwrap();
+    assert!(issues.is_empty(), "{issues:?}");
+    document
+        .fill_form(
+            &rules,
+            &[form_assignment(
+                form_tag("inherit"),
+                rdocx::FormFieldValue::Checked(true),
+            )],
+        )
+        .unwrap();
+    let filled = document_part_xml(&mut document);
+    assert_review4_state_font(&filled, WORD, "Courier New");
+    assert!(filled.contains(">A<"), "{filled}");
+    assert!(filled.contains(r#"xmlns:w="urn:shadow""#), "{filled}");
+    assert!(filled.contains(r#"xmlns="urn:override""#), "{filled}");
+    assert!(filled.contains("<checkbox"), "{filled}");
+    document.reset_form(&rules).unwrap();
+    let reset = document_part_xml(&mut document);
+    assert_review4_state_font(&reset, WORD, "Times New Roman");
+    assert!(reset.contains(">B<"), "{reset}");
+    assert!(reset.contains(r#"xmlns:w="urn:shadow""#), "{reset}");
+    assert!(reset.contains(r#"xmlns="urn:override""#), "{reset}");
+    let mut reopened = reopen_document(&mut document);
+    let again = document_part_xml(&mut reopened);
+    assert_review4_state_font(&again, WORD, "Times New Roman");
+    assert!(again.contains(">B<"), "{again}");
+    assert!(
+        reopened.validate_form(&rules).unwrap().is_empty(),
+        "{again}"
+    );
+}
+
+#[test]
+fn form_empty_display_insertion_preserves_opaque_property_owner() {
+    let property = r#"<p:note><w:p><w:r><w:t>PRODUCER</w:t></w:r></w:p></p:note>"#;
+    let mut document = document_with_body_inner(&format!(
+        r#"<w:p><w:r><w:t>OTHER</w:t></w:r></w:p><w:sdt><w:sdtPr><w:tag w:val="name"/><w:id w:val="81"/><w:text/>{property}</w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="keep"/><w:id w:val="82"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>UNSELECTED</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+    ));
+    let rules = vec![form_rule(
+        form_tag("name"),
+        true,
+        rdocx::FormResetValue::Value(form_text("BACK")),
+    )];
+    let before = document_part_xml(&mut document);
+    assert!(before.contains(property), "{before}");
+    document
+        .fill_form(
+            &rules,
+            &[form_assignment(form_tag("name"), form_text("NEW"))],
+        )
+        .unwrap();
+    let filled = document_part_xml(&mut document);
+    let property_at = filled
+        .find(property)
+        .unwrap_or_else(|| panic!("property changed: {filled}"));
+    assert_eq!(filled.matches(property).count(), 1, "{filled}");
+    assert!(
+        filled[property_at..]
+            .contains("<w:sdtContent><w:p><w:r><w:t>NEW</w:t></w:r></w:p></w:sdtContent>"),
+        "{filled}"
+    );
+    assert!(filled.contains(">UNSELECTED<"), "{filled}");
+    assert!(filled.contains(">OTHER<"), "{filled}");
+    assert!(
+        document.validate_form(&rules).unwrap().is_empty(),
+        "{filled}"
+    );
+    let rendered = document
+        .render_page_to_svg_deterministic(0)
+        .unwrap()
+        .expect("page");
+    assert!(rendered.svg.contains("NEW"), "{}", rendered.svg);
+    document.reset_form(&rules).unwrap();
+    let reset = document_part_xml(&mut document);
+    assert!(reset.contains(property), "{reset}");
+    assert!(
+        reset.contains("<w:sdtContent><w:p><w:r><w:t>BACK</w:t></w:r></w:p></w:sdtContent>"),
+        "{reset}"
+    );
+    assert!(reset.contains(">UNSELECTED<"), "{reset}");
+    assert!(
+        document.validate_form(&rules).unwrap().is_empty(),
+        "{reset}"
+    );
+}
+
+fn tagged_control_text(document: &Document, tag: &str) -> String {
+    document
+        .content_controls()
+        .into_iter()
+        .find(|control| control.tag() == Some(tag))
+        .unwrap_or_else(|| panic!("missing content control {tag}"))
+        .text()
+}
+
+fn tagged_sdt<'a>(xml: &'a str, tag: &str) -> &'a str {
+    let needle = format!(r#"w:val="{tag}""#);
+    let tag_at = xml
+        .find(&needle)
+        .unwrap_or_else(|| panic!("missing tag {tag} in {xml}"));
+    let start = xml[..tag_at]
+        .rfind("<w:sdt")
+        .unwrap_or_else(|| panic!("missing sdt for {tag} in {xml}"));
+    let end = xml[tag_at..]
+        .find("</w:sdt>")
+        .unwrap_or_else(|| panic!("missing sdt end for {tag} in {xml}"))
+        + tag_at
+        + "</w:sdt>".len();
+    &xml[start..end]
+}
+
+#[test]
+fn form_owned_tab_display_is_replaced() {
+    let mut document = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="name"/><w:id w:val="81"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>A</w:t><w:tab/><w:t>B</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let rules = vec![form_rule(
+        form_tag("name"),
+        false,
+        rdocx::FormResetValue::Value(form_text("BACK")),
+    )];
+    assert_eq!(tagged_control_text(&document, "name"), "A\tB");
+    document
+        .fill_form(
+            &rules,
+            &[form_assignment(form_tag("name"), form_text("NEW"))],
+        )
+        .unwrap();
+    assert_eq!(tagged_control_text(&document, "name"), "NEW");
+    let filled = document_part_xml(&mut document);
+    assert!(!tagged_sdt(&filled, "name").contains("<w:tab"), "{filled}");
+    assert_owned_display_rendered(&document, "NEW", "VALUE");
+    document.reset_form(&rules).unwrap();
+    assert_eq!(tagged_control_text(&document, "name"), "BACK");
+    let reopened = reopen_document(&mut document);
+    assert_eq!(tagged_control_text(&reopened, "name"), "BACK");
+}
+
+#[test]
+fn form_owned_break_display_is_replaced() {
+    let mut document = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="name"/><w:id w:val="82"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>A</w:t><w:br/><w:t>B</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let rules = vec![form_rule(
+        form_tag("name"),
+        false,
+        rdocx::FormResetValue::Value(form_text("BACK")),
+    )];
+    assert_eq!(tagged_control_text(&document, "name"), "A\nB");
+    document
+        .fill_form(
+            &rules,
+            &[form_assignment(form_tag("name"), form_text("NEW"))],
+        )
+        .unwrap();
+    assert_eq!(tagged_control_text(&document, "name"), "NEW");
+    let filled = document_part_xml(&mut document);
+    assert!(!tagged_sdt(&filled, "name").contains("<w:br"), "{filled}");
+    assert_owned_display_rendered(&document, "NEW", "VALUE");
+    document.reset_form(&rules).unwrap();
+    assert_eq!(tagged_control_text(&document, "name"), "BACK");
+    let reopened = reopen_document(&mut document);
+    assert_eq!(tagged_control_text(&reopened, "name"), "BACK");
+}
+
+#[test]
+fn form_owned_simple_field_display_is_validated() {
+    let mut document = document_with_body_inner(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="name"/><w:id w:val="83"/></w:sdtPr><w:sdtContent><w:p><w:fldSimple w:instr="MERGEFIELD visible"><w:r><w:t>VALUE</w:t></w:r></w:fldSimple></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let rules = vec![form_rule(
+        form_tag("name"),
+        true,
+        rdocx::FormResetValue::Value(form_text("BACK")),
+    )];
+    assert!(
+        document.validate_form(&rules).unwrap().is_empty(),
+        "required simple field cache was treated as empty"
+    );
+    // The old content-control getter walks run text and does not project a
+    // simple-field cache. Empty here is that legacy getter, not a display contract.
+    assert_eq!(tagged_control_text(&document, "name"), "");
+    assert_eq!(document.text_report().text, "VALUE\n");
+    document
+        .fill_form(
+            &rules,
+            &[form_assignment(form_tag("name"), form_text("NEW"))],
+        )
+        .unwrap();
+    assert_eq!(tagged_control_text(&document, "name"), "");
+    assert_eq!(document.text_report().text, "NEW\n");
+    assert!(!document.text_report().text.contains("VALUE"));
+    let filled = document_part_xml(&mut document);
+    let selected = tagged_sdt(&filled, "name");
+    assert!(
+        selected.contains(r#"w:instr="MERGEFIELD visible""#),
+        "{filled}"
+    );
+    assert!(selected.contains(">NEW<"), "{filled}");
+    assert!(!selected.contains(">VALUE<"), "{filled}");
+    assert_owned_display_rendered(&document, "NEW", "VALUE");
+    document.reset_form(&rules).unwrap();
+    assert_eq!(tagged_control_text(&document, "name"), "");
+    assert_eq!(document.text_report().text, "BACK\n");
+    assert!(!document.text_report().text.contains("VALUE"));
+    let mut reopened = reopen_document(&mut document);
+    assert_eq!(reopened.text_report().text, "BACK\n");
+    assert!(!reopened.text_report().text.contains("VALUE"));
+    let reopened_xml = document_part_xml(&mut reopened);
+    assert!(
+        tagged_sdt(&reopened_xml, "name").contains(r#"w:instr="MERGEFIELD visible""#),
+        "{reopened_xml}"
+    );
+}
+
+#[test]
+fn form_owned_display_keeps_alias_opaque_nested_and_textbox() {
+    // w:alias is the content-control alias Person, not a namespace alias.
+    // A direct w:txbxContent under w:r is retained opaque invalid drawing
+    // markup. It is not an authentic independent textbox, and this fixture
+    // does not claim Word parity. Existing text box tests cover that path.
+    let opaque = r#"<p:note><w:p><w:r><w:t>OPAQUE</w:t><w:tab/><w:br/></w:r></w:p></p:note>"#;
+    let mut document = document_with_body_inner(&format!(
+        r#"<w:sdt><w:sdtPr><w:alias w:val="Person"/><w:tag w:val="name"/><w:id w:val="84"/>{opaque}</w:sdtPr><w:sdtContent><w:p><w:fldSimple w:instr="MERGEFIELD visible"><w:r><w:t>VALUE</w:t><w:tab/><w:br/></w:r></w:fldSimple></w:p><w:sdt><w:sdtPr><w:tag w:val="inner"/><w:id w:val="85"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>NESTED</w:t><w:tab/></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:txbxContent><w:p><w:r><w:t>BOXED</w:t><w:br/></w:r></w:p></w:txbxContent></w:r></w:p></w:sdtContent></w:sdt>"#
+    ));
+    let rules = vec![form_rule(
+        form_tag("name"),
+        true,
+        rdocx::FormResetValue::Value(form_text("BACK")),
+    )];
+    assert!(document.validate_form(&rules).unwrap().is_empty());
+    assert!(document.text_report().text.contains("VALUE"));
+    document
+        .fill_form(
+            &rules,
+            &[form_assignment(form_tag("name"), form_text("NEW"))],
+        )
+        .unwrap();
+    let shown = document.text_report().text;
+    assert!(shown.contains("NEW"), "{shown}");
+    assert!(!shown.contains("VALUE"), "{shown}");
+    assert_eq!(tagged_control_text(&document, "inner"), "NESTED\t");
+    assert_owned_display_rendered(&document, "NEW", "VALUE");
+    let filled = document_part_xml(&mut document);
+    assert!(filled.contains(r#"w:val="Person""#), "{filled}");
+    assert!(filled.contains(opaque), "{filled}");
+    assert!(
+        filled.contains(r#"w:instr="MERGEFIELD visible""#),
+        "{filled}"
+    );
+    assert!(filled.contains(">NESTED<"), "{filled}");
+    assert!(filled.contains("<w:tab"), "{filled}");
+    assert!(filled.contains(">BOXED<"), "{filled}");
+    assert!(filled.contains("<w:br"), "{filled}");
+    assert!(!filled.contains(">VALUE<"), "{filled}");
+}
+
+fn assert_owned_display_rendered(document: &Document, shown: &str, hidden: &str) {
+    let rendered = document
+        .render_page_to_svg_deterministic(0)
+        .unwrap()
+        .expect("page");
+    assert!(rendered.svg.contains(shown), "{}", rendered.svg);
+    assert!(!rendered.svg.contains(hidden), "{}", rendered.svg);
+    let layout = document.layout_deterministic().unwrap();
+    let mut finite = false;
+    for page in &layout.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && run.text.contains(shown)
+                && run.origin.x.is_finite()
+                && run.origin.y.is_finite()
+            {
+                finite = true;
+            }
+        });
+    }
+    assert!(finite, "missing positioned {shown}");
+}
+
+fn assert_review4_state_font(xml: &str, word: &str, font: &str) {
+    for local in ["ascii", "hAnsi", "eastAsia", "cs"] {
+        let bindings = attribute_bindings(xml, local);
+        assert!(
+            bindings
+                .iter()
+                .any(|(uri, value)| uri == word && value == font),
+            "{local} {font} {bindings:?} {xml}"
+        );
+    }
+}
+
+fn fill_checked(document: &mut Document, tag: &str) {
+    document
+        .fill_form(
+            &[form_rule(
+                form_tag(tag),
+                false,
+                rdocx::FormResetValue::Value(rdocx::FormFieldValue::Checked(true)),
+            )],
+            &[form_assignment(
+                form_tag(tag),
+                rdocx::FormFieldValue::Checked(true),
+            )],
+        )
+        .unwrap();
+}
+
+fn assert_review3_positioned_courier(document: &Document, glyph: char) {
+    let layout = document.layout_deterministic().unwrap();
+    let mut families = Vec::new();
+    for page in &layout.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && run.text.contains(glyph)
+                && run.origin.x.is_finite()
+                && run.origin.y.is_finite()
+                && let Some(font) = layout
+                    .layout
+                    .fonts
+                    .iter()
+                    .find(|font| font.id == run.font_id)
+            {
+                families.push(font.family.clone());
+            }
+        });
+    }
+    assert!(
+        families.iter().any(|family| family == "Liberation Mono"),
+        "positioned {glyph} did not use the deterministic Courier New face: {families:?}"
+    );
+}
+
+fn assert_review3_courier_fonts(xml: &str, word: &str) {
+    for local in ["ascii", "hAnsi", "eastAsia", "cs"] {
+        let bindings = attribute_bindings(xml, local);
+        assert!(
+            bindings
+                .iter()
+                .any(|(uri, value)| uri == word && value == "Courier New"),
+            "{local} {bindings:?} {xml}"
+        );
+        assert!(
+            bindings
+                .iter()
+                .all(|(uri, value)| value != "Courier New" || uri == word),
+            "{local} unqualified {bindings:?} {xml}"
+        );
+    }
 }

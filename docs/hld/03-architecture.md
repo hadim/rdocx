@@ -174,6 +174,8 @@ Word font CLI mutation preflight composes identity and file-kind checks with
 nonreplacement availability and staged publication. These checks preserve
 source bytes and captured authority on refusal.
 
+Modern form fill, reset, protect, protection set, and protection remove clone one package candidate, validate it, allocate returned results, and publish once. Read, no-op, and refusal leave the source scope unchanged. A changed owner follows the ordinary staleness policy and is not revived. Private `WordPublication::ModernFormValues` is only that new path. Content-control binding, the legacy form setter, and signing keep their existing publication. `localScopeCommit` keeps the document epoch, so only unproved states retire. Exact `stories` and `story_item_snapshots` stay. The proof serializes and validates the whole package. It does not claim part-local or constant-time publication, and it keeps no second model or retained history.
+
 ## Three families, one workspace
 
 ```
@@ -1578,6 +1580,8 @@ relationship-resolved part and ID allocation. Rich edits use the same checked
 story operations as footnotes, then reopen the candidate package before
 publication.
 
+High-level form rules stay caller state on the `rdocx` facade. They are not a package schema and they are not stored on save. One open package remains authoritative. The private inventory walks the current physical owner of each part in deterministic preorder, then applies the tag filter. Dedup is only the same part and span. An exact tag reaches every currently authorable internal story. Overlap, a duplicate, the wrong kind, a schema or reset binding conflict, or missing store ownership is one atomic error. One current invalid state is one owned issue per physical target. A package or XML failure is an error. An empty rule list discovers nothing. A partial fill may leave an unassigned required control empty. Legacy reset uses the F-288 default or fallback pair and does not add a second default authority. Repeat counts stay, and repeat still clones the first item and refuses removal of the last item.
+
 ## Versioning
 
 The 15 shared and PowerPoint publication candidates use the explicit common
@@ -2381,6 +2385,8 @@ Every consuming formatting builder on `Paragraph`, `Run`, `Table`, `Row`, and
 cannot back a Python property setter. The 61 consuming builders delegate to
 their setter twins, so Rust callers retain chaining while borrowed handles and
 Python properties use in-place mutation.
+
+The Word facade exports `validate_form`, `fill_form`, `reset_form`, and `protect_form` on the approved carriers. Python exposes the same four operations, the protection getter, set, and remove, and story permission insertion. WASM and CLI gain no new authoring method. Existing readers keep preservation and current-value behavior. A candidate that is byte-equivalent to the source is a no-op. Typed equality is not that shortcut. Returned issues, counts, and revision tokens are allocated before publication.
 
 ## Shared Word document operations
 
