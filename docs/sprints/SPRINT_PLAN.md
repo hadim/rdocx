@@ -2856,7 +2856,10 @@ F-X268. Codex root approved that design on 2026-10-24. The estimate recorded
 at that approval is a provisional 7 to 12 developer-days and stays historical.
 The later refresh2 amendment revises the combined scope to a provisional
 10 to 17 developer-days. Codex root approved that extension. The approved
-refresh3 extension keeps that figure and adds no promise. That figure is not a measurement.
+refresh3 extension keeps that figure and adds no promise. That 10 to 17
+figure stays historical for the scope before PR422. The approved refresh4
+extension records a provisional 12 to 21 developer-days. That figure is a
+planning judgment, not a measurement.
 Those figures are estimates, not measurements, and they are not a capacity
 promise. The visible over-two-week scope is approved intake. The clock has
 not started. F-X267 is the largest repair. No timing is invented here.
@@ -3132,6 +3135,22 @@ New pull request, still an unmerged candidate and not accepted code. F-X268 take
 PR421 checks were incomplete at this cutoff. No acceptance is inferred. Donor 57 and 18 timings, README package text, an M5 Max figure, and an allow-dirty note are not copied. The source is `/private/tmp/s95.4-refresh3-summary.txt`, `/private/tmp/s95.4-refresh3-intake.json`, and `/private/tmp/s95.4-refresh3/pr-421-own-increment.diff`.
 
 Codex root approved the refresh3 extension on 2026-10-24 after reading the full corrected contract and the four-file delta. The canonical HEAD is `d6cefc239ab7de0d4dae63e13d730da558d3a3a5`, plus the working draft. The extension is the seventh mechanism on the same F-X268 story. It adds A10 and C7. The new helpers stay the captured signatures. The staging counter stays six units. The 73 flat calls, the 5 linear calls, and the 252-call catalogue stay the same. Nine named calls are counted-work obligations and are not a new timing gate. Q22 covers the added cache layers. No new question is opened and no timing promise is added. The prior approved scope stays approved. PR421 stays an unmerged candidate and is not accepted code. This record is that Root review. It is not a self-review. The combined-scope estimate stays a provisional 10 to 17 developer-days. Reassess it after decomposition. It is not a new promise and actual work is unknown. Eight stories stay. Formal dependencies stay F-X266 and F-X267. F-X268 stays serial after F-289 and F-290. No story is marked done. Implementation of F-X268 has not started. No gate pass is claimed.
+
+##### S95.4 issue and PR refresh, 2026-10-24T23:05:39Z
+
+Receipt cutoff 2026-10-24T23:05:39Z. The refresh lists 11 open issues and 14 open pull requests. No issue changed. Nothing closed or merged. The earlier intake sections stay the historical record, including every pin for PR409 through PR421 and the answered text of Q1 through Q23. This section does not replace them and it does not add a tracker or an F-ID.
+
+Heads 409 through 421 are unchanged. PR421 stays `ab038a21bb88a38d46c8f640587c3a20b57f6770`. Its parent PR420 stays `37851676af3e82a0500c4743ef86da417950d2c3`.
+
+New pull request, still an unmerged candidate and not accepted code. F-X268 takes the own increment, not the stack against main:
+
+| PR | Story | Head SHA | What changed |
+|---|---|---|---|
+| [422](https://github.com/tensorbee/rdocx/pull/422) | F-X268 | `cf7bf55edfab1e0617f6fe35810355cb02126018` | 5 own commits after PR421 `ab038a21bb88a38d46c8f640587c3a20b57f6770`. Ahead 5 and behind 0. Merge base is that PR421 head. 5 paths. Own diff is 60325 bytes. SHA-256 `ee0a8ce239fafea714c7bc1a49601fab4f2c864c3931b8ff4c98c3fb9dce189c`. |
+
+Comments and reviews are 0. Nineteen donor check runs completed with success or skip conclusions, and the donor CI gate succeeded. The legacy combined status endpoint records `pending`. That field is literal. It is not a claim that CI is incomplete and it is not acceptance. Donor CI is not our pass. Donor counts, timings, package bytes, an M5 Max figure, and an allow-dirty note are not copied. The source is `/private/tmp/s95.4-refresh4-intake.json` and `/private/tmp/s95.4-refresh4/pr-422-own-increment.diff`.
+
+Codex root approved the refresh4 extension on 2026-10-25 after reading the reconciled four-file delta. The user answered Q24 the same day with `Require all 79 flat-cost gates (Recommended)`. The baseline is `d1f42516eb3747442fe4304a6331eab946dc9a0e`. The extension is the eighth mechanism on the same F-X268 story. It adds A11 and C8 and extends A10 counted work from 9 calls to 14. A10 stays independent of the timing gate. It adds no ninth story, no stable public API, no dependency, and no module. The current flat set is 79, which is 76 catalogue keys plus 3 XML reads, under the same bound of 100 at most 1.5 times 25 plus 5 ms. The six additions are `Paragraph.replace_text`, `Cell.replace_text`, `Document.replace_text_at`, `Document.add_picture`, `Cell.add_picture`, and `Document.add_hyperlink_to_story`. The historical Q23 set of 73 stays historical. The 5 linear calls stay, including the 2 that overlap the 79. The 252-call catalogue, the original 407 gate, and the F-X267 248-call run stay. Current residuals from the old trio are `Run.add_picture` and `Cell.merge`. The prior approved scope stays approved. The combined planning judgment is a provisional 12 to 21 developer-days. The 10 to 17 figure stays historical and is not added to the seven-story 27 to 41 figure. Eight stories stay. Formal dependencies stay F-X266 and F-X267. F-X268 stays serial after F-289 and F-290 and stays unclaimed. F-290 is unaffected. No story is marked done. Implementation has not started. No gate pass is claimed. This record is that Root approval. It is not a self-review.
 
 #### Sprint S96, Fillable PDF forms
 

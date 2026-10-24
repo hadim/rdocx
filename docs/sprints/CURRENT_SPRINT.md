@@ -18,18 +18,20 @@ outcome. It is not the current whole-feature result. Final Word 16.114 A7, a
 fresh final CLI, the full workspace, full verify, the full hash suite, WASM,
 publish dry-run, strict installed mypy, and stubtest stay pending. F-289 is
 not done.
-F-290 is claimed for parallel work, owner grok, and stays in progress. The claim is not implementation.
-F-X268 is pending, owner `-`. Its design is approved and it is not claimed.
-Codex root approved the 2026-10-24 refresh2 extension. Codex root approved
-the 2026-10-24 refresh3 extension after reading the full corrected contract
-and the four-file delta. It does not change
-that earlier approval. No implementation
-has started and no gate pass is claimed. It follows F-289 and F-290, and it also waits for actual completion of the
+F-290 is claimed for parallel work, owner grok, and stays in progress. The implementation is under Root review. The D1 repair is pending. No complete claim is made.
+F-X268 is pending, owner `-`. The design is approved, including the
+2026-10-25 refresh4 extension, and the story is not claimed. Codex root
+approved the 2026-10-24 refresh2 extension. Codex root approved the
+2026-10-24 refresh3 extension. Codex root approved the refresh4 mechanism 8
+contract on 2026-10-25 after the user answered Q24. The baseline is
+`d1f42516eb3747442fe4304a6331eab946dc9a0e`. Those approvals do not change
+one another. No implementation has started and no gate pass is claimed. It follows F-289 and F-290, and it also waits for actual completion of the
 approved F-X266 and F-X267 local provider checkpoints. That completion has
 not been performed. It is not product implementation. The
 repairs do not replace the original authoring contract. The sprint now has
 eight stories. The previously authorized full run remains authorized. This
-approval does not ask for a new permission. No product choice is unanswered.
+approval does not ask for a new permission. Q1 through Q24 stay answered.
+No product choice is unanswered.
 
 **Estimated effort**: the 12 to 17 developer-day figure applies only to the
 original three Rust and Python authoring stories, F-288, F-289 and F-290.
@@ -40,10 +42,11 @@ seven stories. That figure stays historical. The approved F-X268 contract
 recorded a provisional 7 to 12 developer-days. That figure stays historical.
 The 2026-10-24 refresh2 amendment revises the combined scope to a provisional
 10 to 17 developer-days. Codex root approved that extension. The approved
-refresh3 extension keeps that same provisional figure, to be reassessed after decomposition.
-It adds no promise. Actual work is unknown. It is
-not a measurement and not a capacity promise. It is not added to the historical
-27 to 41. These figures are estimates, not measurements, and they are not
+refresh3 extension keeps that same provisional figure. That 10 to 17 figure
+stays historical for the scope before PR422. The approved refresh4
+extension records a provisional 12 to 21 developer-days. That figure is a
+planning judgment, not a measurement, not a capacity promise, and not actual
+work. It is not added to the historical 27 to 41. Actual work is unknown. These figures are estimates, not measurements, and they are not
 a capacity promise. The visible over-two-week
 scope is an approved intake. The sprint clock started with F-X264
 `/start-feature`. F-289 is integrated locally and stays in progress. The
@@ -59,7 +62,8 @@ consumed local evidence is not a full gate. F-X267 remains the largest repair.
   The 2026-10-24 refresh is a later section in the same file.
   The 2026-10-24T13:49:35Z refresh is appended to that same intake.
   The 2026-10-24T17:02:28Z refresh is appended to that same intake.
-  Eight designs are approved. F-X268 stays pending and unclaimed. Codex root approved the refresh3 extension on 2026-10-24.
+  The 2026-10-24T23:05:39Z refresh is appended to that same intake.
+  The scope approved through refresh3 stays approved. F-X268 stays pending and unclaimed. Codex root approved the refresh4 extension on 2026-10-25. Q24 is answered.
 - `docs/hld/03-architecture.md`, the existing legacy form, field, content-control,
   protection and mail-merge ownership contracts settle reuse of the document
   model, staging and publication boundaries.
@@ -109,7 +113,7 @@ It is not the current whole-feature result. Pass 5 does not approve completion.
 F-289 has not passed a full gate. Final Word 16.114 A7, a fresh final CLI, the
 full workspace, full verify, the full hash suite, WASM, publish dry-run, strict
 installed mypy, and stubtest stay pending. F-290
-is claimed for parallel work, owner grok, and stays in progress. The claim is not implementation. The consumed
+is claimed for parallel work, owner grok, and stays in progress. The implementation is under Root review. The D1 repair is pending. No complete claim is made. The consumed
 local gate
 includes every named native group, A7 and the render fallback, the affected
 Python checks, a clean microscope, and that integrated ancestor. Reviewed
@@ -255,3 +259,9 @@ Q22 is "Apply the measured-memory policy (Recommended)". Q23 is "Use the added f
 Receipt cutoff 2026-10-24T17:02:28Z. The same S95.4 intake in `docs/sprints/SPRINT_PLAN.md` records 11 open issues and 13 open pull requests. No issue changed. Nothing closed or merged. Heads 409 through 418 and 420 are unchanged. The PR419 head stays `9916bcdc01bc4acc065ae45afa8bd8ae07a2d30c`. PR421 is the only new pull request and stays an unmerged candidate. It is not accepted code. F-X268 stays pending, owner `-`, and unclaimed. Eight stories stay. The prior approved scope stays approved. Codex root approved the refresh3 extension on 2026-10-24 after reading the full corrected contract and the four-file delta. The canonical HEAD is `d6cefc239ab7de0d4dae63e13d730da558d3a3a5`, plus the working draft. The extension is the same F-X268 story and its seventh mechanism. It adds A10 and C7. The new helpers stay the captured signatures. The staging counter stays six units. The 73 flat calls, the 5 linear calls, and the 252-call catalogue stay the same. Q22 covers the added cache layers. No new question is opened and no timing promise is added. This record is that Root review. It is not a self-review. No implementation has started. No gate pass is claimed.
 
 Q1 through Q23 stay answered. No new question is opened. Q22 covers the added cache layers. The combined-scope estimate stays a provisional 10 to 17 developer-days. Reassess it after decomposition. It is not a new promise and actual work is unknown. The earlier 7 to 12 figure and the seven-story 27 to 41 figure stay historical. Formal dependencies stay F-X266 and F-X267. Serial order still places F-X268 after F-289 and F-290. This checkpoint does not claim a feature, commit, push, reset run state, or mark a story done.
+
+## Resume checkpoint, refresh4 approval on 2026-10-25
+
+Receipt cutoff 2026-10-24T23:05:39Z. The same S95.4 intake in `docs/sprints/SPRINT_PLAN.md` records 11 open issues and 14 open pull requests. No issue changed. Nothing closed or merged. Heads 409 through 421 are unchanged. PR422 is the only new pull request and stays an unmerged candidate. It is not accepted code. F-X268 stays pending, owner `-`, and unclaimed. Eight stories stay. The prior approved scope stays approved. Codex root approved the refresh4 mechanism 8 contract on 2026-10-25. The baseline is `d1f42516eb3747442fe4304a6331eab946dc9a0e`. F-290 stays in progress under its existing approved implementation and review. This checkpoint does not edit run state, `AS_BUILT.md`, or `SPRINT_TRACKER.md`.
+
+Q1 through Q23 stay answered. Q24, answered 2026-10-25 by the user, is `Require all 79 flat-cost gates (Recommended)`. The current flat set is 79, which is 76 catalogue keys plus 3 XML reads, under the same bound of 100 at most 1.5 times 25 plus 5 ms. The historical Q23 set of 73 stays historical. The five A9 linear calls stay, including the two that also sit in the 79. The 252 catalogue, the original 407 gate, and the PowerPoint 248-call run stay. A10 counted work is 14 calls and is independent of that timing gate. A11 and C8 are approved. The combined planning judgment is a provisional 12 to 21 developer-days. The 10 to 17 figure stays historical for the scope before PR422. It is not added to the seven-story 27 to 41 figure. Formal dependencies stay F-X266 and F-X267. Serial order still places F-X268 after F-289 and F-290. This checkpoint does not claim a feature, commit, push, or mark a story done.
