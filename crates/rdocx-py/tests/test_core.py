@@ -11822,7 +11822,12 @@ def test_staging_reads_the_main_part_once_while_it_keeps_its_opened_bytes(edit):
             call()
             sample.append(list(work()))
         counts.append(sample)
-    assert counts[0] == counts[1] == [[0, 0, 0, 0], [0, 0, 0, 0]], counts
+    assert counts[0] == counts[1], counts
+    if edit in ("Document.add_bullet_list_item", "Document.add_numbered_list_item"):
+        # A list item changes the model, which serializes and reads only the blocks it adds.
+        assert all(sample[:4] == [0] * 4 for sample in counts[0]), counts
+    else:
+        assert counts[0] == [[0] * 6, [0] * 6], counts
 
 
 def _reopen_work():
@@ -11984,3 +11989,117 @@ def test_story_lookups_scan_only_the_body_children_an_edit_changed(call):
         counts.append(scans() - before)
     # Each call scans again the children it changed, at least one, as many at both sizes.
     assert 1 <= counts[0] == counts[1] <= 4, (call, counts)
+
+
+def _producer_document(paragraphs, root_prefix=None):
+    """The staging document with its main part as another producer may write it, which the model serializes
+    otherwise: a line break after the body start, and the root named with `root_prefix` bound to the Word namespace
+    when given."""
+    import io
+    import zipfile
+
+    import rdocx
+
+    _staging_document(paragraphs)
+    written = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(_STAGING_DOCUMENTS[paragraphs])) as source, zipfile.ZipFile(written, "w") as copy:
+        for entry in source.infolist():
+            data = source.read(entry)
+            if entry.filename == "word/document.xml":
+                data = data.replace(b"<w:body>", b"<w:body>\n", 1)
+                if root_prefix:
+                    namespace = b'="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+                    data = data.replace(b"<w:document ", b"<%s:document xmlns:%s%s " % (
+                        root_prefix.encode(), root_prefix.encode(), namespace), 1)
+                    data = data.replace(b"</w:document>", b"</%s:document>" % root_prefix.encode(), 1)
+            copy.writestr(entry, data)
+    return rdocx.Document.from_bytes(written.getvalue())
+
+
+def _block_edits():
+    """Edits that change the main part of a document and commit it, each given the document and a fresh k and
+    returning the call that makes the edit. Document.import_fragment splices the main part as the package holds it,
+    and is made on a document whose main part another producer wrote."""
+    import rdocx
+
+    def run_text(doc, k):
+        run = [paragraph for paragraph in doc.paragraphs if paragraph.text.startswith("end")][-1].runs[0]
+        return lambda: setattr(run, "text", f"end {k}")
+
+    def footnote(doc, k):
+        paragraph = [paragraph for paragraph in doc.paragraphs if paragraph.text == "spot"][-1]
+        return lambda: doc.add_footnote(paragraph, f"note {k}")
+
+    def import_fragment(doc, k):
+        source = rdocx.Document()
+        source.add_paragraph(f"imported {k}")
+        source.add_paragraph("second")
+        story = next(story for story in source.stories if story.kind == "body")
+        fragment = rdocx.DocumentFragment.from_range(
+            source, rdocx.ContentLocation(story, "paragraph", [0]), rdocx.ContentLocation(story, "paragraph", [1]))
+        body = next(story for story in doc.stories if story.kind == "body")
+        return lambda: doc.import_fragment(rdocx.ContentLocation.end(body), fragment)
+
+    return {
+        "Table.add_row": lambda doc, k: doc.tables[-1].add_row,
+        "Cell.text": lambda doc, k: lambda: setattr(doc.tables[-1].cell(0, 1), "text", f"cell {k}"),
+        "Run.text": run_text,
+        "Document.add_bullet_list_item": lambda doc, k: lambda: doc.add_bullet_list_item(f"item {k}"),
+        "Document.insert_section": lambda doc, k: lambda: doc.insert_section(len(doc.sections)),
+        "Document.insert_html": lambda doc, k: lambda: doc.insert_html(
+            f"<p>inserted {k}</p>", after=[paragraph for paragraph in doc.paragraphs if paragraph.text == "spot"][-1]),
+        "Document.add_footnote": footnote,
+        "Document.import_fragment": import_fragment,
+        "SectionHandle.set_page_border": lambda doc, k: lambda: doc.section(0).set_page_border(
+            ("top", "left", "bottom", "right")[k]),
+    }
+
+
+@pytest.mark.parametrize("edit", sorted(_block_edits()))
+def test_staging_writes_and_reads_only_the_main_part_blocks_an_edit_changes(edit):
+    # Staging serializes the main part from the blocks kept for the body children an edit leaves equal, and reads in
+    # their bytes what it read once: after two edits, a later one does none of the whole main part work and serializes
+    # and reads as many blocks in a body of 20 paragraphs as in one four times as large. The reopen of its commit
+    # parses none of the main part whole and scans for identifiers only the blocks no earlier reading parsed. Debug
+    # builds check every block read against the whole work, and every reopen against a read of the ZIP.
+    work = _staging_work()
+    reopen = _reopen_work()
+    make = _block_edits()[edit]
+    counts = []
+    reopens = []
+    for paragraphs in (20, 80):
+        doc = (_producer_document if edit == "Document.import_fragment" else _staging_document)(paragraphs)
+        for k in (0, 1):
+            make(doc, k)()
+        sample = []
+        for k in (2, 3):
+            call = make(doc, k)
+            work()
+            reopen()
+            call()
+            sample.append(list(work()))
+            reopens.append(list(reopen()))
+        counts.append(sample)
+    # An import also reads the small document of its fragment whole and reopens its package, alike at both sizes.
+    imported = edit == "Document.import_fragment"
+    assert counts[0] == counts[1], counts
+    assert all(sample[:4] == [0] * 4 or imported for sample in counts[0]), counts
+    assert all(sample[:2] == [0, int(imported)] for sample in reopens), reopens
+    # An identifier written into a changed block may take one more digit in the larger document.
+    assert all(abs(large[2] - small[2]) <= 16 for small, large in zip(reopens[:2], reopens[2:])), reopens
+
+
+def test_a_fragment_imports_into_a_main_part_whose_root_has_another_word_prefix():
+    # A producer may name the root with another prefix bound to the Word namespace. A body child of such a main part
+    # read alone would be closed with w:document, so a fragment spliced into it parses the part whole, as before.
+    # Debug builds check every block read against the whole one.
+    import rdocx
+
+    doc = _producer_document(20, "x")
+    texts = [paragraph.text for paragraph in doc.paragraphs]
+    make = _block_edits()["Document.import_fragment"]
+    for k in range(3):
+        make(doc, k)()
+    assert [paragraph.text for paragraph in doc.paragraphs] == texts + [f"imported {k}" for k in range(3)]
+    reopened = rdocx.Document.from_bytes(doc.to_bytes())
+    assert [paragraph.text for paragraph in reopened.paragraphs] == [paragraph.text for paragraph in doc.paragraphs]

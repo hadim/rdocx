@@ -1721,6 +1721,10 @@ pub struct BodyItemOwners {
     /// by table within the item, and whether it routed every table cell
     /// owner of the item, or `None` where it fails.
     pub cell_paragraphs: Option<(HashMap<(usize, usize, usize), Vec<ContentLocation>>, bool)>,
+    /// Whether the item's bytes hold a field. A field compares equal to one
+    /// whose source form or run span differs, which its bytes and owners
+    /// follow, so an equal item need not read the same.
+    pub holds_field: bool,
 }
 
 /// What [`Document::body_item_owners`] reads besides the item, as
@@ -2944,7 +2948,7 @@ struct NestedNamespaceOwner {
     same_namespace_structural_alternate: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ModeledOwnerSpan {
     local_name: String,
     start: usize,
@@ -3817,9 +3821,17 @@ fn marker_multiset_matches(
 }
 
 fn nested_modeled_namespace_owners(xml: &[u8]) -> Result<Vec<NestedNamespaceOwner>> {
-    let spans = modeled_owner_spans(xml)?;
+    nested_modeled_namespace_owners_in(xml, &modeled_owner_spans(xml)?)
+}
+
+/// The nested namespace owners of `xml` among its modeled owner `spans`,
+/// which hold, in order, every span named as one that declares a namespace.
+fn nested_modeled_namespace_owners_in(
+    xml: &[u8],
+    spans: &[ModeledOwnerSpan],
+) -> Result<Vec<NestedNamespaceOwner>> {
     let mut owners = Vec::new();
-    for span in &spans {
+    for span in spans {
         let mut declarations = span.declarations.clone();
         if declarations.is_empty() {
             continue;
@@ -4023,10 +4035,27 @@ fn replay_nested_namespace_declarations(
     xml: &[u8],
     owners: &[NestedNamespaceOwner],
 ) -> Result<Vec<u8>> {
+    replay_nested_namespace_declarations_in(xml, owners, None)
+}
+
+/// Replays the declarations of `owners` on `xml` with its modeled owner
+/// `spans` named as an owner, in order, when known.
+fn replay_nested_namespace_declarations_in(
+    xml: &[u8],
+    owners: &[NestedNamespaceOwner],
+    spans: Option<&[ModeledOwnerSpan]>,
+) -> Result<Vec<u8>> {
     if owners.is_empty() {
         return Ok(xml.to_vec());
     }
-    let spans = modeled_owner_spans(xml)?;
+    let scanned;
+    let spans = match spans {
+        Some(spans) => spans,
+        None => {
+            scanned = modeled_owner_spans(xml)?;
+            &scanned
+        }
+    };
     let mut targets: Vec<(usize, &NestedNamespaceOwner)> = Vec::new();
     for owner in owners {
         let mut candidates = Vec::new();
@@ -4960,12 +4989,17 @@ pub(crate) struct DocumentIdentifiers {
 
 impl DocumentIdentifiers {
     fn scan(package: &OpcPackage) -> Result<Self> {
-        Self::scan_reusing(package, None)
+        Self::scan_reusing(package, None, None)
     }
 
     /// The identifiers [`DocumentIdentifiers::scan`] gives for `package`,
-    /// reading again only the parts whose bytes `earlier` did not scan.
-    fn scan_reusing(package: &OpcPackage, earlier: Option<&Self>) -> Result<Self> {
+    /// reading again only the parts whose bytes neither `earlier` nor
+    /// `scanned`, what was read in one part, scanned.
+    fn scan_reusing(
+        package: &OpcPackage,
+        earlier: Option<&Self>,
+        scanned: Option<&ScannedIdentifierPart>,
+    ) -> Result<Self> {
         let mut identifiers = Self {
             relationship_ids: HashMap::new(),
             bookmark_ids: HashSet::new(),
@@ -5037,10 +5071,7 @@ impl DocumentIdentifiers {
             identity_parts
                 .entry(part_name_identity(&main_part))
                 .or_default()
-                .extend([
-                    IdentifierXmlCategory::Bookmark,
-                    IdentifierXmlCategory::Drawing,
-                ]);
+                .extend(main_part_identifier_categories());
             if let Some(relationships) = package.get_part_rels(&main_part) {
                 for relationship in &relationships.items {
                     let categories: &[IdentifierXmlCategory] = match relationship.rel_type.as_str()
@@ -5087,12 +5118,14 @@ impl DocumentIdentifiers {
             // A part still holding the bytes an earlier scan read gives the
             // definitions read there. Applying them raises the duplicate a
             // scan of the part raises, and in the same order.
+            let read_in = |scanned: &&ScannedIdentifierPart| {
+                scanned.categories == *categories
+                    && (Arc::ptr_eq(&scanned.bytes, bytes) || scanned.bytes == *bytes)
+            };
             let earlier = earlier
                 .and_then(|earlier| earlier.scanned_parts.get(part_name))
-                .filter(|scanned| {
-                    scanned.categories == *categories
-                        && (Arc::ptr_eq(&scanned.bytes, bytes) || scanned.bytes == *bytes)
-                });
+                .filter(read_in)
+                .or(scanned.filter(read_in));
             let (definitions, unreadable) = match earlier {
                 Some(scanned) => (scanned.definitions.clone(), None),
                 None => {
@@ -5924,6 +5957,13 @@ fn intersect_relationship_registry(
         .collect()
 }
 
+/// Whether `xml` may hold a simple or complex field: it names a
+/// `fldSimple` or `fldChar` element, or holds those words.
+fn xml_holds_field(xml: &[u8]) -> bool {
+    xml.windows(9).any(|bytes| bytes == b"fldSimple")
+        || xml.windows(7).any(|bytes| bytes == b"fldChar")
+}
+
 fn identifier_xml_is_well_formed(xml: &[u8]) -> bool {
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
@@ -5934,6 +5974,29 @@ fn identifier_xml_is_well_formed(xml: &[u8]) -> bool {
             Err(_) => return false,
         }
     }
+}
+
+/// The categories the identifier scan of a package reads in its main part.
+fn main_part_identifier_categories() -> HashSet<IdentifierXmlCategory> {
+    HashSet::from([
+        IdentifierXmlCategory::Bookmark,
+        IdentifierXmlCategory::Drawing,
+    ])
+}
+
+/// The identifiers of [`main_part_identifier_categories`] that `xml`
+/// defines, in order, or `None` when the scan skips `xml`, which is not
+/// well-formed, or fails in it.
+fn main_part_identifier_definitions(xml: &[u8]) -> Option<Vec<IdentifierDefinition>> {
+    let mut definitions = Vec::new();
+    (identifier_xml_is_well_formed(xml)
+        && DocumentIdentifiers::scan_xml_definitions(
+            xml,
+            &main_part_identifier_categories(),
+            &mut definitions,
+        )
+        .is_ok())
+    .then_some(definitions)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -6108,12 +6171,15 @@ pub(crate) fn xml_relationship_ids_in_order(xml: &[u8]) -> Result<Vec<String>> {
     xml_relationship_ids_in_order_with_bindings(xml, &[])
 }
 
+/// The ids of `relationship_ids` in the order `xml` first names them, read
+/// in `blocks`, the blocks `xml` is made of as a main part, when given.
 fn authored_relationship_ids_in_source_order(
     xml: &[u8],
+    blocks: Option<&MainPartBlocks>,
     relationship_ids: &HashSet<String>,
 ) -> Option<Vec<String>> {
     let mut seen = HashSet::new();
-    let all = xml_relationship_ids_in_order(xml).ok()?;
+    let all = relationship_ids_by_blocks(xml, blocks, &[]).ok()?;
     let ordered = all
         .iter()
         .filter(|id| relationship_ids.contains(*id) && seen.insert((*id).clone()))
@@ -6242,17 +6308,35 @@ fn authored_drawing_slots_in_source_order(
     modeled_ids: &[u32],
     nested_image_relationship_ids: &HashSet<String>,
 ) -> Result<Vec<(AuthoredMainDrawing, Range<usize>, u32)>> {
+    let (drawings, error) = drawing_occurrences(xml);
+    select_authored_drawing_slots(&drawings, error, modeled_ids, nested_image_relationship_ids)
+}
+
+/// One outermost `wp:inline` or `wp:anchor` drawing of a story's XML.
+#[derive(Debug, Clone)]
+struct DrawingOccurrence {
+    /// The id of the last `wp:docPr` in the drawing, and the span of its
+    /// value.
+    doc_pr: Option<(u32, Range<usize>)>,
+    /// The `r:embed` relationship ids of its `a:blip`s.
+    embeds: Vec<String>,
+}
+
+/// The outermost drawings of `xml` in order, and the error their scan stops
+/// at, with the drawings before it.
+fn drawing_occurrences(xml: &[u8]) -> (Vec<DrawingOccurrence>, Option<Error>) {
+    let mut drawings = Vec::new();
+    let error = drawing_occurrences_into(xml, &mut drawings).err();
+    (drawings, error)
+}
+
+fn drawing_occurrences_into(xml: &[u8], drawings: &mut Vec<DrawingOccurrence>) -> Result<()> {
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
-    let mut modeled_remaining = HashMap::new();
-    for id in modeled_ids {
-        *modeled_remaining.entry(*id).or_insert(0usize) += 1;
-    }
     let mut depth = 0usize;
     let mut current_depth = None;
     let mut current_doc_pr = None;
-    let mut current_is_nested = false;
-    let mut ordered = Vec::new();
+    let mut current_embeds = Vec::new();
     loop {
         let before = reader.buffer_position() as usize;
         let event = reader
@@ -6326,9 +6410,7 @@ fn authored_drawing_slots_in_source_order(
                                             "invalid story relationship id: {error}"
                                         ))
                                     })?;
-                                if nested_image_relationship_ids.contains(id.as_ref()) {
-                                    current_is_nested = true;
-                                }
+                                current_embeds.push(id.into_owned());
                             }
                         }
                     }
@@ -6346,30 +6428,57 @@ fn authored_drawing_slots_in_source_order(
                     && current_depth == Some(depth)
                 {
                     current_depth = None;
-                    let Some((id, span)) = current_doc_pr.take() else {
-                        if current_is_nested {
-                            return Err(Error::Other(
-                                "authored picture has no wp:docPr identity".to_owned(),
-                            ));
-                        }
-                        buffer.clear();
-                        continue;
-                    };
-                    if current_is_nested {
-                        ordered.push((AuthoredMainDrawing::Nested, span, id));
-                    } else if let Some(remaining) = modeled_remaining.get_mut(&id)
-                        && *remaining > 0
-                    {
-                        *remaining -= 1;
-                        ordered.push((AuthoredMainDrawing::Modeled, span, id));
-                    }
-                    current_is_nested = false;
+                    drawings.push(DrawingOccurrence {
+                        doc_pr: current_doc_pr.take(),
+                        embeds: std::mem::take(&mut current_embeds),
+                    });
                 }
             }
-            Event::Eof => break,
+            Event::Eof => return Ok(()),
             _ => {}
         }
         buffer.clear();
+    }
+}
+
+/// The authored drawings among `drawings`, read up to the scan `error`, in
+/// order: those whose image is a nested story relationship, and those whose
+/// id `modeled_ids` holds, once for each time it holds it.
+fn select_authored_drawing_slots(
+    drawings: &[DrawingOccurrence],
+    error: Option<Error>,
+    modeled_ids: &[u32],
+    nested_image_relationship_ids: &HashSet<String>,
+) -> Result<Vec<(AuthoredMainDrawing, Range<usize>, u32)>> {
+    let mut modeled_remaining = HashMap::new();
+    for id in modeled_ids {
+        *modeled_remaining.entry(*id).or_insert(0usize) += 1;
+    }
+    let mut ordered = Vec::new();
+    for drawing in drawings {
+        let nested = drawing
+            .embeds
+            .iter()
+            .any(|id| nested_image_relationship_ids.contains(id));
+        let Some((id, span)) = drawing.doc_pr.clone() else {
+            if nested {
+                return Err(Error::Other(
+                    "authored picture has no wp:docPr identity".to_owned(),
+                ));
+            }
+            continue;
+        };
+        if nested {
+            ordered.push((AuthoredMainDrawing::Nested, span, id));
+        } else if let Some(remaining) = modeled_remaining.get_mut(&id)
+            && *remaining > 0
+        {
+            *remaining -= 1;
+            ordered.push((AuthoredMainDrawing::Modeled, span, id));
+        }
+    }
+    if let Some(error) = error {
+        return Err(error);
     }
     if modeled_remaining.values().any(|remaining| *remaining != 0) {
         return Err(Error::Other(
@@ -6857,10 +6966,1039 @@ impl Parsed {
     }
 }
 
-/// Whole main part work that staging and comparing saves did on this thread,
-/// in bytes of the main part: parsed again, scanned for nested namespace
-/// owners, canonicalized whole, and written as a ZIP to compare saves. Debug
-/// builds count it.
+/// A main part as the model serializes it, or as a flush wrote it, made of
+/// the kept scans of its body children between `head` and `tail`
+/// (tensorbee/rdocx#403). A body child equal to a kept child that holds no
+/// field serializes to its bytes, so staging writes and reads only the
+/// children an edit changed. When a flush wrote the main part from them,
+/// they are its provenance.
+#[derive(Clone)]
+struct MainPartBlocks {
+    /// The bytes before the first block: the declaration, the root with the
+    /// `w14` declaration the whole part gives it, the backgrounds and the
+    /// body start.
+    head: Vec<u8>,
+    /// The root start tag in `head`.
+    root: Range<usize>,
+    /// The bytes after the last block.
+    tail: Vec<u8>,
+    blocks: Vec<Arc<BodyBlockScan>>,
+    /// The main part, when a flush wrote it from these blocks.
+    part: Option<Arc<Vec<u8>>>,
+    /// `head` and `tail` parsed as a part, or `None` when they do not parse.
+    frame: OnceLock<Option<CT_Document>>,
+    /// The nested namespace owners of `part`, or `None` when the blocks do
+    /// not give them.
+    nested_namespace_owners: OnceLock<Option<Vec<NestedNamespaceOwner>>>,
+}
+
+impl BodyBlockScan {
+    /// The spans, and for each whether its bindings are those of the body,
+    /// left out.
+    fn spans(&self, root: &[u8]) -> Option<&[(ModeledOwnerSpan, bool)]> {
+        self.staging
+            .spans
+            .get_or_init(|| {
+                let (part, start) = self.alone(root);
+                let body = document_namespace_scopes(&part).ok()?.body_bindings;
+                let spans = modeled_owner_spans(&part).ok()?;
+                Some(
+                    spans
+                        .into_iter()
+                        .map(|mut span| {
+                            span.start -= start;
+                            span.end -= start;
+                            let inherited = span.bindings == body;
+                            if inherited {
+                                span.bindings = Vec::new();
+                            }
+                            (span, inherited)
+                        })
+                        .collect(),
+                )
+            })
+            .as_deref()
+    }
+
+    fn relationship_ids(&self, root: &[u8], bindings: &[(String, String)]) -> Option<Vec<String>> {
+        let scan = || {
+            let (part, _) = self.alone(root);
+            xml_relationship_ids_in_order_with_bindings(&part, bindings).ok()
+        };
+        if bindings.is_empty() {
+            return self.staging.relationship_ids.get_or_init(scan).clone();
+        }
+        match self
+            .staging
+            .bound_relationship_ids
+            .get_or_init(|| (bindings.to_vec(), scan()))
+        {
+            (kept, ids) if kept == bindings => ids.clone(),
+            _ => scan(),
+        }
+    }
+
+    fn drawings(&self, root: &[u8]) -> &(Vec<DrawingOccurrence>, Option<String>) {
+        self.staging.drawings.get_or_init(|| {
+            let (part, start) = self.alone(root);
+            let (mut drawings, error) = drawing_occurrences(&part);
+            for drawing in &mut drawings {
+                if let Some((_, span)) = &mut drawing.doc_pr {
+                    *span = span.start - start..span.end - start;
+                }
+            }
+            (drawings, error.map(|error| error.to_string()))
+        })
+    }
+
+    fn drawing_ids(&self, root: &[u8]) -> Option<&HashSet<u32>> {
+        self.staging
+            .drawing_ids
+            .get_or_init(|| drawing_ids_in_xml(&self.alone(root).0).ok())
+            .as_ref()
+    }
+
+    fn numbering(&self, root: &[u8]) -> Option<&[CT_PPr]> {
+        self.staging
+            .numbering
+            .get_or_init(|| {
+                let (part, _) = self.alone(root);
+                identifier_xml_is_well_formed(&part)
+                    .then(|| xml_paragraph_numbering_properties(&part).ok())
+                    .flatten()
+            })
+            .as_deref()
+    }
+}
+
+impl MainPartBlocks {
+    /// Serializes `frame` with the body children `content` as
+    /// [`CT_Document::to_xml`] serializes `frame` holding them, taking the
+    /// bytes of each child that a kept child of `kept_blocks`, read under
+    /// the root `kept_root`, stands for, and returns the bytes with the
+    /// blocks they are made of. `None` when the frame or a child raises,
+    /// which the whole serialization raises too.
+    fn serialize(
+        frame: &CT_Document,
+        content: &[&BodyContent],
+        kept_root: &[u8],
+        kept_blocks: &[Arc<BodyBlockScan>],
+    ) -> Option<(Vec<u8>, Self)> {
+        // Children equal to kept ones keep their place: the common prefix
+        // and suffix of the body. Those that hold no field keep their bytes.
+        let aligned =
+            |item: &BodyContent, block: &BodyBlockScan| block.value.as_ref() == Some(item);
+        let prefix = content
+            .iter()
+            .zip(kept_blocks)
+            .take_while(|(item, block)| aligned(item, block))
+            .count();
+        let suffix = content[prefix..]
+            .iter()
+            .rev()
+            .zip(kept_blocks[prefix..].iter().rev())
+            .take_while(|(item, block)| aligned(item, block))
+            .count();
+        let kept = kept_blocks[..prefix]
+            .iter()
+            .map(Some)
+            .chain(std::iter::repeat_n(None, content.len() - prefix - suffix))
+            .chain(kept_blocks[kept_blocks.len() - suffix..].iter().map(Some));
+        let mut blocks = Vec::with_capacity(content.len());
+        let mut reused = false;
+        for (item, block) in content.iter().zip(kept) {
+            match block.filter(|block| block.reusable_for(item)) {
+                Some(block) => {
+                    reused = true;
+                    blocks.push(Arc::clone(block));
+                }
+                None => {
+                    let xml = frame.body_item_xml(item).ok()?;
+                    note_staging_work(|work| work.serialized += 1);
+                    blocks.push(Arc::new(BodyBlockScan::serialized((*item).clone(), xml)));
+                }
+            }
+        }
+        match Self::assemble(frame, blocks, reused.then_some(kept_root)) {
+            // What a block reads depends on the root it is read under.
+            None if reused => Self::serialize(frame, content, &[], &[]),
+            assembled => assembled,
+        }
+    }
+
+    /// The bytes of `blocks` between the frame `frame` writes, as
+    /// [`CT_Document::to_xml`] writes `frame` holding the body children of
+    /// the blocks, with the blocks. `None` when the frame raises, or when
+    /// the root differs from `kept_root`, the root some of `blocks` were
+    /// read under.
+    fn assemble(
+        frame: &CT_Document,
+        blocks: Vec<Arc<BodyBlockScan>>,
+        kept_root: Option<&[u8]>,
+    ) -> Option<(Vec<u8>, Self)> {
+        let (head, tail) = frame.body_frame_xml().ok()?;
+        let root = root_start_tag(&head)?;
+        let mut xml = Vec::with_capacity(
+            head.len() + blocks.iter().map(|block| block.bytes.len()).sum::<usize>() + tail.len(),
+        );
+        xml.extend_from_slice(&head);
+        for block in &blocks {
+            xml.extend_from_slice(&block.bytes);
+        }
+        xml.extend_from_slice(&tail);
+        let written = xml.len();
+        declare_w14_on_part_root(&mut xml).ok()?;
+        let declared = xml.len() - written;
+        let head = xml[..head.len() + declared].to_vec();
+        let root = root.start..root.end + declared;
+        if kept_root.is_some_and(|kept| kept != &head[root.clone()]) {
+            return None;
+        }
+        Some((
+            xml,
+            Self {
+                head,
+                root,
+                tail,
+                blocks,
+                part: None,
+                frame: OnceLock::new(),
+                nested_namespace_owners: OnceLock::new(),
+            },
+        ))
+    }
+
+    fn root(&self) -> &[u8] {
+        &self.head[self.root.clone()]
+    }
+
+    /// Where the children start and end in the part.
+    fn content(&self) -> Range<usize> {
+        self.head.len()
+            ..self.head.len()
+                + self
+                    .blocks
+                    .iter()
+                    .map(|block| block.bytes.len())
+                    .sum::<usize>()
+    }
+
+    /// Where each child lies in the part.
+    fn children(&self) -> Vec<Range<usize>> {
+        self.starts()
+            .into_iter()
+            .zip(&self.blocks)
+            .map(|(start, block)| start..start + block.bytes.len())
+            .collect()
+    }
+
+    /// Where each block starts in the part.
+    fn starts(&self) -> Vec<usize> {
+        let mut start = self.head.len();
+        self.blocks
+            .iter()
+            .map(|block| {
+                let at = start;
+                start += block.bytes.len();
+                at
+            })
+            .collect()
+    }
+
+    /// The head alone as a part, and the tail alone in the body of a part.
+    fn frame_parts(&self) -> (Vec<u8>, Vec<u8>) {
+        let mut head = self.head.clone();
+        head.extend_from_slice(MAIN_PART_BODY_END);
+        let mut tail = self.root().to_vec();
+        tail.extend_from_slice(MAIN_PART_BODY_START);
+        tail.extend_from_slice(&self.tail);
+        (head, tail)
+    }
+
+    /// Whether the part these blocks make parses to `document`, as
+    /// `CT_Document::from_xml(part) == Ok(document)` tells, or `None` when a
+    /// block does not parse back to itself or the frame does not parse, or
+    /// parses to body children.
+    fn parses_to(&self, document: &CT_Document) -> Option<bool> {
+        let frame = self.frame()?;
+        if !frame.body.content.is_empty()
+            || !self
+                .blocks
+                .iter()
+                .all(|block| block.parses_back(self.root()))
+        {
+            return None;
+        }
+        Some(
+            frame.extra_namespaces == document.extra_namespaces
+                && frame.background_xml == document.background_xml
+                && frame.background_extra_xml == document.background_extra_xml
+                && frame.root_attributes == document.root_attributes
+                && frame.body.sect_pr == document.body.sect_pr
+                && self.blocks.len() == document.body.content.len()
+                && self
+                    .blocks
+                    .iter()
+                    .zip(&document.body.content)
+                    .all(|(block, item)| block.value.as_ref() == Some(item)),
+        )
+    }
+
+    /// The relationship ids of the part, as
+    /// [`xml_relationship_ids_in_order_with_bindings`] reads them in `xml`,
+    /// the bytes of these blocks.
+    fn relationship_ids(&self, xml: &[u8], bindings: &[(String, String)]) -> Option<Vec<String>> {
+        let (head, tail) = self.frame_parts();
+        let mut ids = xml_relationship_ids_in_order_with_bindings(&head, bindings).ok()?;
+        for block_ids in self
+            .blocks
+            .iter()
+            .map(|block| block.relationship_ids(self.root(), bindings))
+            .chain([xml_relationship_ids_in_order_with_bindings(&tail, bindings).ok()])
+        {
+            for id in block_ids? {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            Some(&ids),
+            xml_relationship_ids_in_order_with_bindings(xml, bindings)
+                .ok()
+                .as_ref(),
+            "the relationship ids of the blocks differ from a scan of the part"
+        );
+        let _ = xml;
+        Some(ids)
+    }
+
+    /// The modeled owner spans of the part named as `named` accepts, in
+    /// order, as [`modeled_owner_spans`] reads them in `xml`, the bytes of
+    /// these blocks.
+    fn spans(&self, xml: &[u8], named: impl Fn(&str) -> bool) -> Option<Vec<ModeledOwnerSpan>> {
+        let (head, tail) = self.frame_parts();
+        if [head, tail]
+            .iter()
+            .any(|part| modeled_owner_spans(part).map_or(true, |spans| !spans.is_empty()))
+        {
+            return None;
+        }
+        let mut body = self.root().to_vec();
+        body.extend_from_slice(MAIN_PART_BODY_START);
+        let body = document_namespace_scopes(&body).ok()?.body_bindings;
+        let mut spans = Vec::new();
+        for (block, start) in self.blocks.iter().zip(self.starts()) {
+            spans.extend(
+                block
+                    .spans(self.root())?
+                    .iter()
+                    .filter(|(span, _)| named(&span.local_name))
+                    .map(|(span, inherited)| ModeledOwnerSpan {
+                        start: span.start + start,
+                        end: span.end + start,
+                        bindings: if *inherited {
+                            body.clone()
+                        } else {
+                            span.bindings.clone()
+                        },
+                        ..span.clone()
+                    }),
+            );
+        }
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            format!("{:?}", Some(&spans)),
+            format!(
+                "{:?}",
+                modeled_owner_spans(xml).ok().map(|spans| spans
+                    .into_iter()
+                    .filter(|span| named(&span.local_name))
+                    .collect::<Vec<_>>())
+            ),
+            "the modeled owner spans of the blocks differ from a scan of the part"
+        );
+        let _ = xml;
+        Some(spans)
+    }
+
+    /// `head` and `tail` parsed as a part.
+    fn frame(&self) -> Option<&CT_Document> {
+        self.frame
+            .get_or_init(|| {
+                let mut part = self.head.clone();
+                part.extend_from_slice(&self.tail);
+                note_staging_work(|work| work.blocks_read += 1);
+                CT_Document::from_xml(&part).ok()
+            })
+            .as_ref()
+    }
+
+    /// The blocks of `part`, a main part whose body children parse to
+    /// `content`, each child with the bytes before it. Each parses alone to
+    /// its value, since the body parser reads each child alone under the
+    /// root and a plain body start, and takes only the first section
+    /// properties for the body's, which [`body_children`] finds last. `None`
+    /// when it does not find the children, or as many as `content` holds.
+    fn read(part: &Arc<Vec<u8>>, content: &[BodyContent]) -> Option<Self> {
+        let (head, children, tail) = body_children(part)?;
+        if children.len() != content.len() {
+            return None;
+        }
+        let head = part[..head].to_vec();
+        let blocks = children
+            .into_iter()
+            .zip(content)
+            .map(|(child, item)| {
+                Arc::new(BodyBlockScan {
+                    parsed: true,
+                    ..BodyBlockScan::of(part[child].to_vec(), Some(item.clone()))
+                })
+            })
+            .collect();
+        Some(Self {
+            root: root_start_tag(&head)?,
+            head,
+            tail: part[tail..].to_vec(),
+            blocks,
+            part: Some(Arc::clone(part)),
+            frame: OnceLock::new(),
+            nested_namespace_owners: OnceLock::new(),
+        })
+    }
+
+    /// What [`CT_Document::from_xml`] gives for the part these blocks are,
+    /// whose body parser reads each child alone under the root and the
+    /// plain body start the frame writes: the frame, with the value of each
+    /// block whose bytes parse back alone to it, field for field, and the
+    /// parse alone of the others. `None` when the frame does not parse, a
+    /// block does not parse alone to one body child, or parsing the blocks
+    /// alone, each under the root, reads more bytes than the whole part, as
+    /// after a first serialization.
+    fn parsed_document(&self) -> Option<CT_Document> {
+        let kept = |block: &BodyBlockScan| {
+            block.parsed || block.fieldless && block.staging.parses_back.get() == Some(&true)
+        };
+        let around = self.root().len() + MAIN_PART_BODY_START.len() + MAIN_PART_BODY_END.len();
+        let read = self
+            .blocks
+            .iter()
+            .filter(|block| !kept(block))
+            .map(|block| around + block.bytes.len())
+            .sum::<usize>();
+        if read >= self.head.len() + self.content().len() + self.tail.len() {
+            return None;
+        }
+        let mut document = self.frame()?.clone();
+        for block in &self.blocks {
+            let item = match block.value.as_ref().filter(|_| kept(block)) {
+                Some(value) => value.clone(),
+                None => {
+                    let item = block.reparsed(self.root())?;
+                    let _ = block
+                        .staging
+                        .parses_back
+                        .set(block.value.as_ref() == Some(&item));
+                    item
+                }
+            };
+            document.body.content.push(item);
+        }
+        Some(document)
+    }
+
+    /// What the identifier scan of a package reads in the part these blocks
+    /// are, read block by block, or `None` when the frame or a block is not
+    /// well-formed alone or fails the scan.
+    fn identifiers(&self) -> Option<ScannedIdentifierPart> {
+        let part = self.part.as_ref()?;
+        let (head, tail) = self.frame_parts();
+        note_reopen_work(|work| work.scanned += head.len() + tail.len());
+        let mut definitions = main_part_identifier_definitions(&head)?;
+        for block in &self.blocks {
+            definitions.extend_from_slice(block.definitions(self.root())?);
+        }
+        definitions.extend(main_part_identifier_definitions(&tail)?);
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            Some(&definitions),
+            main_part_identifier_definitions(part).as_ref(),
+            "the identifiers of the blocks differ from a scan of the part"
+        );
+        Some(ScannedIdentifierPart {
+            bytes: Arc::clone(part),
+            categories: main_part_identifier_categories(),
+            definitions: Some(definitions),
+        })
+    }
+
+    /// Gives `document`, which these blocks serialize, what parsing their
+    /// bytes with the `edits` made gives, a drawing id value replaced at each
+    /// span, sorted: the frame and the blocks parsed again where edited.
+    /// `false`, leaving `document` as it is, when an edit spans blocks or a
+    /// block does not parse back alone.
+    fn reparse_edited(
+        &self,
+        document: &mut CT_Document,
+        edits: &[(usize, usize, Vec<u8>)],
+    ) -> bool {
+        let Some(frame) = self.frame() else {
+            return false;
+        };
+        let mut edits = edits.iter().peekable();
+        let mut edited = Vec::new();
+        for (index, (block, start)) in self.blocks.iter().zip(self.starts()).enumerate() {
+            let end = start + block.bytes.len();
+            let mut xml = None;
+            while let Some((edit_start, edit_end, value)) =
+                edits.next_if(|(edit_start, _, _)| *edit_start < end)
+            {
+                if *edit_start < start || *edit_end > end {
+                    return false;
+                }
+                xml.get_or_insert_with(Vec::new).push((
+                    edit_start - start,
+                    edit_end - start,
+                    value,
+                ));
+            }
+            match xml {
+                Some(block_edits) => {
+                    let mut xml = block.bytes.clone();
+                    for (edit_start, edit_end, value) in block_edits.into_iter().rev() {
+                        xml.splice(edit_start..edit_end, value.iter().copied());
+                    }
+                    let mut part = self.root().to_vec();
+                    part.extend_from_slice(MAIN_PART_BODY_START);
+                    part.extend_from_slice(&xml);
+                    part.extend_from_slice(MAIN_PART_BODY_END);
+                    note_staging_work(|work| work.blocks_read += 1);
+                    let Ok(mut parsed) = CT_Document::from_xml(&part) else {
+                        return false;
+                    };
+                    if parsed.body.sect_pr.is_some() || parsed.body.content.len() != 1 {
+                        return false;
+                    }
+                    edited.push((index, parsed.body.content.remove(0)));
+                }
+                // The bytes of a block with a field say more than its value.
+                None if block.fieldless && block.parses_back(self.root()) => {}
+                None => match block.reparsed(self.root()).filter(|_| !block.fieldless) {
+                    Some(item) => edited.push((index, item)),
+                    None => return false,
+                },
+            }
+        }
+        if edits.next().is_some() {
+            return false;
+        }
+        document
+            .extra_namespaces
+            .clone_from(&frame.extra_namespaces);
+        document.background_xml.clone_from(&frame.background_xml);
+        document
+            .background_extra_xml
+            .clone_from(&frame.background_extra_xml);
+        document.root_attributes.clone_from(&frame.root_attributes);
+        document.body.sect_pr.clone_from(&frame.body.sect_pr);
+        for (index, item) in edited {
+            document.body.content[index] = item;
+        }
+        true
+    }
+
+    /// These blocks for `document`, reopened from the part they are, or
+    /// kept for their values alone when its main part holds other bytes.
+    /// When the parse of the reopen holds as many body children as there
+    /// are blocks, each one element, each block parses back alone where its
+    /// value equals the child at its place.
+    fn reopened(&self, document: &Document) -> Arc<Self> {
+        let current = self.part.as_deref().and_then(|part| {
+            let current = document.package.get_part(&document.doc_part_name)?;
+            if part.as_slice() != current {
+                return None;
+            }
+            document
+                .package
+                .parts
+                .values()
+                .find(|bytes| std::ptr::eq(bytes.as_slice(), current))
+        });
+        let Some(current) = current else {
+            return Arc::new(Self {
+                part: None,
+                ..self.clone()
+            });
+        };
+        let content = &document.document.body.content;
+        if self
+            .blocks
+            .iter()
+            .any(|block| block.staging.parses_back.get().is_none())
+            && self.blocks.len() == content.len()
+            && self.blocks.iter().all(|block| {
+                !matches!(block.value, Some(BodyContent::RawXml(_))) || single_element(&block.bytes)
+            })
+        {
+            for (block, item) in self.blocks.iter().zip(content) {
+                let _ = block
+                    .staging
+                    .parses_back
+                    .set(block.value.as_ref() == Some(item));
+            }
+        }
+        Arc::new(Self {
+            part: Some(Arc::clone(current)),
+            ..self.clone()
+        })
+    }
+
+    /// The nested namespace owners of the part these blocks are, as
+    /// [`nested_modeled_namespace_owners`] finds them. A block that parses
+    /// back alone, and so is well-formed, and holds no namespace declaration
+    /// declares on no owner.
+    fn nested_namespace_owners(&self) -> Option<&[NestedNamespaceOwner]> {
+        self.nested_namespace_owners
+            .get_or_init(|| {
+                let part = self.part.as_deref()?;
+                let mut owned = HashSet::new();
+                for block in &self.blocks {
+                    if (block.parsed || block.staging.parses_back.get() == Some(&true))
+                        && !block.bytes.windows(5).any(|bytes| bytes == b"xmlns")
+                    {
+                        continue;
+                    }
+                    for (span, _) in block.spans(self.root())? {
+                        if !span.declarations.is_empty() {
+                            owned.insert(span.local_name.clone());
+                        }
+                    }
+                }
+                let spans = if owned.is_empty() {
+                    let (head, tail) = self.frame_parts();
+                    if [head, tail].iter().any(|part| {
+                        modeled_owner_spans(part).map_or(true, |spans| !spans.is_empty())
+                    }) {
+                        return None;
+                    }
+                    Vec::new()
+                } else {
+                    self.spans(part, |name| owned.contains(name))?
+                };
+                let owners = nested_modeled_namespace_owners_in(part, &spans);
+                // A scan of the part fails where the blocks do.
+                #[cfg(debug_assertions)]
+                assert_eq!(
+                    format!("{owners:?}"),
+                    format!("{:?}", nested_modeled_namespace_owners(part)),
+                    "the nested namespace owners of the blocks differ from a scan of the part"
+                );
+                owners.ok()
+            })
+            .as_deref()
+    }
+
+    /// The outermost drawings of the part and the error their scan stops at,
+    /// as [`drawing_occurrences`] reads them in `xml`, the bytes of these
+    /// blocks, or `None` when the frame holds a drawing.
+    fn drawings(&self, xml: &[u8]) -> Option<(Vec<DrawingOccurrence>, Option<Error>)> {
+        let (head, tail) = self.frame_parts();
+        if [head, tail].iter().any(|part| {
+            let (drawings, error) = drawing_occurrences(part);
+            !drawings.is_empty() || error.is_some()
+        }) {
+            return None;
+        }
+        let mut drawings = Vec::new();
+        let mut stop = None;
+        for (block, start) in self.blocks.iter().zip(self.starts()) {
+            let (block_drawings, error) = block.drawings(self.root());
+            drawings.extend(block_drawings.iter().map(|drawing| {
+                DrawingOccurrence {
+                    doc_pr: drawing
+                        .doc_pr
+                        .as_ref()
+                        .map(|(id, span)| (*id, span.start + start..span.end + start)),
+                    embeds: drawing.embeds.clone(),
+                }
+            }));
+            if let Some(error) = error {
+                stop = Some(Error::Other(error.clone()));
+                break;
+            }
+        }
+        #[cfg(debug_assertions)]
+        {
+            let (scanned, error) = drawing_occurrences(xml);
+            assert_eq!(
+                format!("{drawings:?} {:?}", stop.as_ref().map(Error::to_string)),
+                format!("{scanned:?} {:?}", error.as_ref().map(Error::to_string)),
+                "the drawings of the blocks differ from a scan of the part"
+            );
+        }
+        let _ = xml;
+        Some((drawings, stop))
+    }
+
+    /// The drawing ids of the part, or `None` where [`drawing_ids_in_xml`]
+    /// fails on `xml`, the bytes of these blocks.
+    fn drawing_ids(&self, xml: &[u8]) -> Option<HashSet<u32>> {
+        let (head, tail) = self.frame_parts();
+        let mut ids = drawing_ids_in_xml(&head).ok()?;
+        ids.extend(drawing_ids_in_xml(&tail).ok()?);
+        for block in &self.blocks {
+            ids.extend(block.drawing_ids(self.root())?);
+        }
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            Some(&ids),
+            drawing_ids_in_xml(xml).ok().as_ref(),
+            "the drawing ids of the blocks differ from a scan of the part"
+        );
+        let _ = xml;
+        Some(ids)
+    }
+
+    /// The paragraph numbering properties of the part, as
+    /// [`xml_paragraph_numbering_properties`] reads them in `xml`, the bytes
+    /// of these blocks, or `None` when the frame holds a paragraph or a
+    /// block does not read whole.
+    fn numbering(&self, xml: &[u8]) -> Option<Vec<CT_PPr>> {
+        let (head, tail) = self.frame_parts();
+        if [head, tail].iter().any(|part| {
+            !identifier_xml_is_well_formed(part)
+                || xml_paragraph_numbering_properties(part).map_or(true, |found| !found.is_empty())
+        }) {
+            return None;
+        }
+        let mut properties = Vec::new();
+        for block in &self.blocks {
+            properties.extend_from_slice(block.numbering(self.root())?);
+        }
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            Some(&properties),
+            identifier_xml_is_well_formed(xml)
+                .then(|| xml_paragraph_numbering_properties(xml).ok())
+                .flatten()
+                .as_ref(),
+            "the numbering properties of the blocks differ from a scan of the part"
+        );
+        let _ = xml;
+        Some(properties)
+    }
+}
+
+/// The relationship ids of `xml`, the main part as the model serializes it,
+/// as [`xml_relationship_ids_in_order_with_bindings`] reads them, read in
+/// `blocks`, the blocks it is made of, when given and they read whole.
+fn relationship_ids_by_blocks(
+    xml: &[u8],
+    blocks: Option<&MainPartBlocks>,
+    bindings: &[(String, String)],
+) -> Result<Vec<String>> {
+    match blocks.and_then(|blocks| blocks.relationship_ids(xml, bindings)) {
+        Some(ids) => Ok(ids),
+        None => {
+            note_staging_work(|work| work.scanned += xml.len());
+            xml_relationship_ids_in_order_with_bindings(xml, bindings)
+        }
+    }
+}
+
+/// [`authored_drawing_slots_in_source_order`] for `xml`, the main part as
+/// the model serializes it, read in `blocks`, the blocks it is made of, when
+/// given and they read whole.
+fn authored_drawing_slots_by_blocks(
+    xml: &[u8],
+    blocks: Option<&MainPartBlocks>,
+    modeled_ids: &[u32],
+    nested_image_relationship_ids: &HashSet<String>,
+) -> Result<Vec<(AuthoredMainDrawing, Range<usize>, u32)>> {
+    match blocks.and_then(|blocks| blocks.drawings(xml)) {
+        Some((drawings, error)) => select_authored_drawing_slots(
+            &drawings,
+            error,
+            modeled_ids,
+            nested_image_relationship_ids,
+        ),
+        None => {
+            note_staging_work(|work| work.scanned += xml.len());
+            authored_drawing_slots_in_source_order(xml, modeled_ids, nested_image_relationship_ids)
+        }
+    }
+}
+
+/// The drawing ids of `xml`, the main part as the model serializes it, or
+/// `None` where [`drawing_ids_in_xml`] fails, read in `blocks`, the blocks
+/// it is made of, when given.
+fn drawing_ids_by_blocks(xml: &[u8], blocks: Option<&MainPartBlocks>) -> Option<HashSet<u32>> {
+    match blocks {
+        Some(blocks) => blocks.drawing_ids(xml),
+        None => {
+            note_staging_work(|work| work.scanned += xml.len());
+            drawing_ids_in_xml(xml).ok()
+        }
+    }
+}
+
+/// Replays the declarations of `owners` on `xml`, the main part as the model
+/// serializes it, with its modeled owner spans read in `blocks`, the blocks
+/// it is made of, when given and they read whole.
+fn replay_by_blocks(
+    xml: &[u8],
+    owners: &[NestedNamespaceOwner],
+    blocks: Option<&MainPartBlocks>,
+) -> Result<Vec<u8>> {
+    if owners.is_empty() {
+        return Ok(xml.to_vec());
+    }
+    let named = owners
+        .iter()
+        .map(|owner| owner.local_name.as_str())
+        .collect::<HashSet<_>>();
+    let spans = blocks.and_then(|blocks| blocks.spans(xml, |name| named.contains(name)));
+    if spans.is_none() {
+        note_staging_work(|work| work.scanned += xml.len());
+    }
+    replay_nested_namespace_declarations_in(xml, owners, spans.as_deref())
+}
+
+/// The relationships `remap` renames that `item` names where masking a
+/// modeled relationship renames one, in a drawing, a hyperlink or a
+/// paragraph section reference, with their new names, sorted.
+fn renamed_relationships(
+    item: &BodyContent,
+    remap: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let item = std::slice::from_ref(item);
+    let mut renamed = Vec::new();
+    let mut rename = |id: &String| {
+        if let Some(updated) = remap.get(id) {
+            renamed.push((id.clone(), updated.clone()));
+        }
+    };
+    visit_authored_drawings(item, &mut |drawing| {
+        let (embed_id, chart_rel_id) = match (&drawing.inline, &drawing.anchor) {
+            (Some(inline), _) => (&inline.embed_id, &inline.chart_rel_id),
+            (None, Some(anchor)) => (&anchor.embed_id, &anchor.chart_rel_id),
+            (None, None) => return,
+        };
+        rename(embed_id);
+        if let Some(id) = chart_rel_id {
+            rename(id);
+        }
+    });
+    visit_body_paragraphs(item, false, &mut |paragraph| {
+        for id in paragraph
+            .hyperlinks
+            .iter()
+            .filter_map(|hyperlink| hyperlink.rel_id.as_ref())
+        {
+            rename(id);
+        }
+        if let Some(section) = paragraph
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.sect_pr.as_ref())
+        {
+            for reference in section.header_refs.iter().chain(&section.footer_refs) {
+                rename(&reference.rel_id);
+            }
+        }
+    });
+    renamed.sort();
+    renamed.dedup();
+    renamed
+}
+
+/// Renames the relationships `remap` renames where a modeled relationship
+/// is named in `content`: its authored drawings, hyperlinks and paragraph
+/// section references.
+fn mask_relationships(content: &mut [BodyContent], remap: &HashMap<String, String>) {
+    visit_authored_drawings_mut(content, &mut |drawing| {
+        if let Some(mut drawing) = drawing
+            .inline
+            .as_mut()
+            .map(DrawingMut::Inline)
+            .or_else(|| drawing.anchor.as_mut().map(DrawingMut::Anchor))
+        {
+            drawing.remap_relationship(remap);
+        }
+    });
+    visit_body_paragraphs_mut(content, &mut |paragraph| {
+        for hyperlink in &mut paragraph.hyperlinks {
+            if let Some(id) = &mut hyperlink.rel_id
+                && let Some(updated) = remap.get(id)
+            {
+                id.clone_from(updated);
+            }
+        }
+        if let Some(section) = paragraph
+            .properties
+            .as_mut()
+            .and_then(|properties| properties.sect_pr.as_mut())
+        {
+            for reference in section
+                .header_refs
+                .iter_mut()
+                .chain(&mut section.footer_refs)
+            {
+                if let Some(updated) = remap.get(&reference.rel_id) {
+                    reference.rel_id.clone_from(updated);
+                }
+            }
+        }
+    });
+}
+
+/// `block` with the relationships `remap` renames masked, serialized in
+/// `frame` and kept with the block for the renames it makes, or `None` when
+/// the masked block raises.
+fn masked_block(
+    block: &Arc<BodyBlockScan>,
+    frame: &CT_Document,
+    remap: &HashMap<String, String>,
+) -> Option<Arc<BodyBlockScan>> {
+    let value = block.value.as_ref()?;
+    let renamed = renamed_relationships(value, remap);
+    if renamed.is_empty() {
+        return Some(Arc::clone(block));
+    }
+    if let Some((kept, masked)) = block.staging.masked.get()
+        && *kept == renamed
+    {
+        return Some(Arc::clone(masked));
+    }
+    let mut item = [value.clone()];
+    mask_relationships(&mut item, remap);
+    let [item] = item;
+    let xml = frame.body_item_xml(&item).ok()?;
+    note_staging_work(|work| work.serialized += 1);
+    let masked = Arc::new(BodyBlockScan::serialized(item, xml));
+    let _ = block.staging.masked.set((renamed, Arc::clone(&masked)));
+    Some(masked)
+}
+
+/// Whether `xml` is one element and nothing else, other than section
+/// properties, which a parse of the body takes for the body's first.
+fn single_element(xml: &[u8]) -> bool {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut closed = false;
+    loop {
+        let Ok(event) = reader.read_event_into(&mut buffer) else {
+            return false;
+        };
+        match event {
+            Event::Eof => return closed,
+            _ if closed => return false,
+            Event::Start(ref element) | Event::Empty(ref element)
+                if depth == 0 && element.local_name().as_ref() == b"sectPr" =>
+            {
+                return false;
+            }
+            Event::Start(_) => depth += 1,
+            Event::Empty(_) if depth == 0 => closed = true,
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                closed = depth == 0;
+            }
+            _ if depth == 0 => return false,
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+/// The span of the first start tag of `xml`, the part root.
+fn root_start_tag(xml: &[u8]) -> Option<Range<usize>> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        let start = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buffer).ok()? {
+            Event::Start(_) => return Some(start..reader.buffer_position() as usize),
+            Event::Eof | Event::Empty(_) => return None,
+            _ => buffer.clear(),
+        }
+    }
+}
+
+/// Where the body children of the main part `xml` lie: the end of its body
+/// start tag, a plain `<w:body>` in a `w:document` root, which a child read
+/// alone is closed with, each direct child of the body with the bytes
+/// before it since the previous child, and the start of the bytes after the
+/// children, which hold section properties when they are the last child.
+/// `None` when section properties are another child, the root or the body
+/// starts otherwise, or `xml` does not read.
+fn body_children(xml: &[u8]) -> Option<(usize, Vec<Range<usize>>, usize)> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut body = None;
+    let mut children = Vec::new();
+    let mut from = 0;
+    let mut section = None;
+    loop {
+        let at = reader.buffer_position() as usize;
+        let event = reader.read_event_into(&mut buffer).ok()?;
+        let after = reader.buffer_position() as usize;
+        let closed = match &event {
+            Event::Start(element) | Event::Empty(element) => {
+                if depth == 0
+                    && !(xml[at..].starts_with(b"<w:document")
+                        && matches!(xml.get(at + 11), Some(b'>' | b' ' | b'\t' | b'\r' | b'\n')))
+                {
+                    return None;
+                }
+                if depth == 1 && body.is_none() && element.local_name().as_ref() == b"body" {
+                    if &xml[at..after] != b"<w:body>" {
+                        return None;
+                    }
+                    body = Some(after);
+                    from = after;
+                } else if depth == 2 && body.is_some() {
+                    if section.is_some() {
+                        return None;
+                    }
+                    if element.local_name().as_ref() == b"sectPr" {
+                        section = Some(from);
+                    }
+                }
+                let closed = depth == 2 && matches!(event, Event::Empty(_));
+                depth += usize::from(matches!(event, Event::Start(_)));
+                closed
+            }
+            Event::End(_) => {
+                depth = depth.checked_sub(1)?;
+                if depth == 1
+                    && let Some(body) = body
+                {
+                    return Some((body, children, section.unwrap_or(from)));
+                }
+                depth == 2
+            }
+            Event::Eof => return None,
+            _ => false,
+        };
+        if closed && body.is_some() {
+            if section.is_none() {
+                children.push(from..after);
+            }
+            from = after;
+        }
+        buffer.clear();
+    }
+}
+
+/// Main part work that staging and comparing saves did on this thread: in
+/// bytes of the main part, parsed again, scanned for nested namespace owners,
+/// canonicalized whole as the retained source of a story picture insertion,
+/// and written as a ZIP to compare saves, then in body children, serialized
+/// and read alone as kept blocks. Debug builds count it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(not(debug_assertions), allow(dead_code))]
 struct StagingWork {
@@ -6868,12 +8006,21 @@ struct StagingWork {
     scanned: usize,
     canonicalized: usize,
     zip_written: usize,
+    serialized: usize,
+    blocks_read: usize,
 }
 
 #[cfg(debug_assertions)]
 thread_local! {
     static STAGING_WORK: std::cell::Cell<StagingWork> = const {
-        std::cell::Cell::new(StagingWork { parsed: 0, scanned: 0, canonicalized: 0, zip_written: 0 })
+        std::cell::Cell::new(StagingWork {
+            parsed: 0,
+            scanned: 0,
+            canonicalized: 0,
+            zip_written: 0,
+            serialized: 0,
+            blocks_read: 0,
+        })
     };
     static STAGING_WORK_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -6889,20 +8036,23 @@ fn note_staging_work(count: impl FnOnce(&mut StagingWork)) {
     let _ = count;
 }
 
-/// Debug builds only: the whole main part work staging and comparing saves
-/// did on this thread since the previous call, in bytes of the main part
-/// parsed again, scanned for nested namespace owners, canonicalized whole and
-/// written as a ZIP, so that tests can compare documents of N and 4N
-/// paragraphs.
+/// Debug builds only: the main part work staging and comparing saves did on
+/// this thread since the previous call, in bytes of the main part parsed
+/// again, scanned for nested namespace owners, canonicalized whole as a
+/// retained source and written as a ZIP, then in body children serialized
+/// and read alone as kept blocks, so that tests can compare documents of N
+/// and 4N paragraphs.
 #[doc(hidden)]
 #[cfg(debug_assertions)]
-pub fn take_staging_work() -> [usize; 4] {
+pub fn take_staging_work() -> [usize; 6] {
     let work = STAGING_WORK.replace(StagingWork::default());
     [
         work.parsed,
         work.scanned,
         work.canonicalized,
         work.zip_written,
+        work.serialized,
+        work.blocks_read,
     ]
 }
 
@@ -6914,36 +8064,52 @@ fn without_staging_work<T>(run: impl FnOnce() -> T) -> T {
     result
 }
 
-/// Asserts that canonicalizing beside an unchanged main part gave what the
-/// whole canonicalization gives: the same error, or the same model, package
-/// and identifiers.
+/// Asserts that `what` the main part from what a document keeps of it gave
+/// what doing it the whole way on a copy that keeps nothing gives: the same
+/// error, or the same model, package, identifiers and namespace facts.
 #[cfg(debug_assertions)]
-fn assert_same_canonicalization(
+fn assert_same_main_part(
     document: &Document,
     result: &Result<()>,
     full: &Document,
     full_result: &Result<()>,
+    what: &str,
 ) {
     match (result, full_result) {
         (Ok(()), Ok(())) => {}
         (Err(error), Err(full_error)) => assert_eq!(error.to_string(), full_error.to_string()),
         (result, full_result) => panic!(
-            "canonicalizing beside the unchanged main part gives {result:?} where the whole \
-             canonicalization gives {full_result:?}"
+            "{what} the main part from what is kept of it gives {result:?} where the whole way \
+             gives {full_result:?}"
         ),
     }
     assert!(
         document.document == full.document
             && document.document.to_xml().ok() == full.document.to_xml().ok(),
-        "canonicalizing beside the unchanged main part changes the model otherwise"
+        "{what} the main part from what is kept of it changes the model otherwise"
     );
     assert!(
         document.package.same_package_as(&full.package),
-        "canonicalizing beside the unchanged main part changes the package otherwise"
+        "{what} the main part from what is kept of it changes the package otherwise"
     );
     assert!(
         document.identifiers == full.identifiers,
-        "canonicalizing beside the unchanged main part changes the identifiers otherwise"
+        "{what} the main part from what is kept of it changes the identifiers otherwise"
+    );
+    let facts = |document: &Document| {
+        format!(
+            "{:?} {:?} {:?} {} {:?}",
+            document.root_namespace_declarations,
+            document.body_namespace_declarations,
+            document.body_namespace_bindings,
+            document.plain_local_edit_blocked,
+            document.nested_owner_replay.get()
+        )
+    };
+    assert_eq!(
+        facts(document),
+        facts(full),
+        "{what} the main part from what is kept of it changes the namespace facts otherwise"
     );
 }
 
@@ -7497,37 +8663,180 @@ impl StoryItemSpan {
 
 /// The scans of the main part's direct body children that
 /// [`Document::main_story_layout`] reuses while a child's bytes, and the
-/// bytes of the part before and after the children, stay the same. They
-/// keep a copy of each child's bytes, so they hold about the part's size.
+/// part root, stay the same, and that serializing the main part reuses for
+/// equal children (see [`MainPartBlocks`]). They keep a copy of each
+/// child's bytes and of the child itself, so they hold about the part's
+/// size and the size of its body model.
 #[derive(Default)]
 struct MainBodyScans {
     head: Vec<u8>,
     tail: Vec<u8>,
     frame: Option<Arc<BodyBlockScan>>,
+    /// The part root start tag the children are read alone under.
+    root: Vec<u8>,
+    /// The children of the last serialization or lookup of the part.
     blocks: Vec<Arc<BodyBlockScan>>,
     /// The body owner's fingerprint, when a scan of the whole part with
     /// these children gave it.
     fingerprint: Option<u64>,
+    /// The main part a flush last wrote from kept children, with them.
+    written: Option<Arc<MainPartBlocks>>,
 }
 
-/// The story owners and body story items of one direct body child, read
-/// as the whole part's scans give them, with offsets from the child's first
-/// byte. The frame, scanned without any child, holds the body owner and the
-/// items after the children, with offsets in head and tail joined.
+/// One direct body child of the main part: its bytes, the body child they
+/// stand for when known, and what story lookups and staging read in them,
+/// each found once and kept while the bytes are, with offsets from the
+/// child's first byte. They are read alone in the body of a part with the
+/// root they were written under, as the whole part's scans give them. The
+/// frame, scanned without any child, holds the body owner and the items
+/// after the children, with offsets in head and tail joined.
+#[derive(Clone)]
 struct BodyBlockScan {
     bytes: Vec<u8>,
-    owners: Vec<StoryOwnerSpan>,
+    /// The body child: what the model serialized `bytes` from, where
+    /// `serialized`, or what they parse to alone, where `parsed`.
+    value: Option<BodyContent>,
+    /// Whether `bytes` are what the model serializes `value` to.
+    serialized: bool,
+    /// Whether `value` is what `bytes` parse to alone, field for field.
+    parsed: bool,
+    /// Whether `bytes` hold no field. A field compares equal to one whose
+    /// source form or run span differs, which the bytes follow, so only a
+    /// child without one is kept for its value.
+    fieldless: bool,
+    owners: OnceLock<Vec<StoryOwnerSpan>>,
     /// The body story items, once a lookup that reads items asked for them.
-    items: Option<Vec<StoryItemSpan>>,
+    items: OnceLock<Vec<StoryItemSpan>>,
+    staging: BlockStagingReads,
 }
 
+/// What staging reads in the bytes of a [`BodyBlockScan`], each found once.
+/// `None` stands for a scan that fails.
+#[allow(clippy::type_complexity)] // Each read with what it was read for.
+#[derive(Clone, Default)]
+struct BlockStagingReads {
+    /// Whether the bytes parse back, alone in the body, to the value.
+    parses_back: OnceLock<bool>,
+    /// The modeled owner spans, each without its bindings when they are
+    /// those of the body, which every span would otherwise copy.
+    spans: OnceLock<Option<Vec<(ModeledOwnerSpan, bool)>>>,
+    relationship_ids: OnceLock<Option<Vec<String>>>,
+    /// The relationship ids read with the inherited bindings they hold.
+    bound_relationship_ids: OnceLock<(Vec<(String, String)>, Option<Vec<String>>)>,
+    /// The drawings, and the error their scan stops at.
+    drawings: OnceLock<(Vec<DrawingOccurrence>, Option<String>)>,
+    drawing_ids: OnceLock<Option<HashSet<u32>>>,
+    /// The paragraph numbering properties, or `None` when the bytes are not
+    /// well-formed or their scan fails.
+    numbering: OnceLock<Option<Vec<CT_PPr>>>,
+    /// The child with modeled relationships masked, for the renames made.
+    masked: OnceLock<(Vec<(String, String)>, Arc<BodyBlockScan>)>,
+    /// The identifiers defined, as [`main_part_identifier_definitions`]
+    /// reads them.
+    definitions: OnceLock<Option<Vec<IdentifierDefinition>>>,
+}
+
+/// What a main part holds around its body children, read alone.
+const MAIN_PART_BODY_START: &[u8] = b"<w:body>";
+const MAIN_PART_BODY_END: &[u8] = b"</w:body></w:document>";
+
 impl BodyBlockScan {
+    /// The scan of `bytes`, with its owners and, when read, its items.
+    fn scanned(
+        bytes: Vec<u8>,
+        owners: Vec<StoryOwnerSpan>,
+        items: Option<Vec<StoryItemSpan>>,
+    ) -> Self {
+        let scan = Self::of(bytes, None);
+        let _ = scan.owners.set(owners);
+        if let Some(items) = items {
+            let _ = scan.items.set(items);
+        }
+        scan
+    }
+
+    /// The bytes `bytes` of the body child `value`, which the model
+    /// serializes to them, with nothing read in them yet.
+    fn serialized(value: BodyContent, bytes: Vec<u8>) -> Self {
+        Self {
+            serialized: true,
+            ..Self::of(bytes, Some(value))
+        }
+    }
+
+    fn of(bytes: Vec<u8>, value: Option<BodyContent>) -> Self {
+        Self {
+            fieldless: !xml_holds_field(&bytes),
+            bytes,
+            value,
+            serialized: false,
+            parsed: false,
+            owners: OnceLock::new(),
+            items: OnceLock::new(),
+            staging: BlockStagingReads::default(),
+        }
+    }
+
+    /// The story owners, which every child holds in a layout.
+    fn owners(&self) -> &[StoryOwnerSpan] {
+        self.owners
+            .get()
+            .expect("a layout holds the owners of every child")
+    }
+
     /// The body story items, which every child holds in a layout built for
     /// a lookup that reads items.
     fn items(&self) -> &[StoryItemSpan] {
         self.items
-            .as_deref()
+            .get()
             .expect("a layout built to read items holds them")
+    }
+
+    /// Whether `item` serializes to `bytes`: it equals `value`, which the
+    /// model serializes to `bytes` and which holds no field.
+    fn reusable_for(&self, item: &BodyContent) -> bool {
+        self.serialized && self.fieldless && self.value.as_ref() == Some(item)
+    }
+
+    /// The body child `bytes` parse to alone, `None` when they do not parse
+    /// to one.
+    fn reparsed(&self, root: &[u8]) -> Option<BodyContent> {
+        let (part, _) = self.alone(root);
+        let mut parsed = CT_Document::from_xml(&part).ok()?;
+        (parsed.body.sect_pr.is_none() && parsed.body.content.len() == 1)
+            .then(|| parsed.body.content.remove(0))
+    }
+
+    /// `bytes` alone in the body of a part with the root start tag `root`,
+    /// and where they start there.
+    fn alone(&self, root: &[u8]) -> (Vec<u8>, usize) {
+        let mut part = Vec::with_capacity(
+            root.len() + MAIN_PART_BODY_START.len() + self.bytes.len() + MAIN_PART_BODY_END.len(),
+        );
+        part.extend_from_slice(root);
+        part.extend_from_slice(MAIN_PART_BODY_START);
+        let start = part.len();
+        part.extend_from_slice(&self.bytes);
+        part.extend_from_slice(MAIN_PART_BODY_END);
+        note_staging_work(|work| work.blocks_read += 1);
+        (part, start)
+    }
+
+    fn parses_back(&self, root: &[u8]) -> bool {
+        self.parsed
+            || *self.staging.parses_back.get_or_init(|| {
+                self.value.is_some() && self.reparsed(root).as_ref() == self.value.as_ref()
+            })
+    }
+
+    fn definitions(&self, root: &[u8]) -> Option<&[IdentifierDefinition]> {
+        self.staging
+            .definitions
+            .get_or_init(|| {
+                note_reopen_work(|work| work.scanned += self.bytes.len());
+                main_part_identifier_definitions(&self.alone(root).0)
+            })
+            .as_deref()
     }
 }
 
@@ -7566,7 +8875,7 @@ impl MainStoryLayout {
     /// The frame's owners before the children and after them, in the part.
     fn frame_owners(&self) -> (Vec<StoryOwnerSpan>, Vec<StoryOwnerSpan>) {
         self.frame
-            .owners
+            .owners()
             .iter()
             .map(|owner| StoryOwnerSpan {
                 full: self.frame_offset(owner.full.start, false)
@@ -7581,7 +8890,7 @@ impl MainStoryLayout {
         let (head, tail) = self.frame_owners();
         let mut owners = head;
         for (start, block) in &self.blocks {
-            owners.extend(block.owners.iter().map(|owner| StoryOwnerSpan {
+            owners.extend(block.owners().iter().map(|owner| StoryOwnerSpan {
                 full: owner.full.start + start..owner.full.end + start,
                 ..owner.clone()
             }));
@@ -7612,7 +8921,7 @@ impl MainStoryLayout {
     fn owner(&self, xml: &[u8], kind: StoryKind, index: usize) -> Result<Option<StoryOwnerSpan>> {
         let (head, tail) = self.frame_owners();
         let blocks = self.blocks.iter().flat_map(|(start, block)| {
-            block.owners.iter().map(move |owner| StoryOwnerSpan {
+            block.owners().iter().map(move |owner| StoryOwnerSpan {
                 full: owner.full.start + start..owner.full.end + start,
                 ..owner.clone()
             })
@@ -7678,7 +8987,7 @@ impl MainStoryLayout {
         }
         for (start, block) in &self.blocks {
             let overlaps = *start < range.end && range.start < start + block.bytes.len();
-            for owner in &block.owners {
+            for owner in block.owners() {
                 visit(owner, overlaps.then_some(*start));
             }
         }
@@ -11467,7 +12776,64 @@ pub(crate) fn set_story_source_xml(
         let mut xml = xml;
         declare_w14_on_part_root(&mut xml)?;
         let namespace_scopes = document_namespace_scopes(&xml)?;
-        document.document = CT_Document::from_xml(&xml)?;
+        // A source whose bytes outside some body children are the blocks of
+        // the model is parsed only where it differs from them.
+        let xml = Arc::new(xml);
+        let blocks = match document.source_blocks(&xml) {
+            Some((mut blocks, replaced, items, reparsed, serialized)) => {
+                let frame = blocks.frame().expect("parsed source frame");
+                let model = &mut document.document;
+                model.extra_namespaces.clone_from(&frame.extra_namespaces);
+                model.background_xml.clone_from(&frame.background_xml);
+                model
+                    .background_extra_xml
+                    .clone_from(&frame.background_extra_xml);
+                model.root_attributes.clone_from(&frame.root_attributes);
+                model.body.sect_pr.clone_from(&frame.body.sect_pr);
+                for (index, item) in reparsed {
+                    model.body.content[index] = item;
+                }
+                model.body.content.splice(replaced, items);
+                blocks.part = Some(Arc::clone(&xml));
+                // Debug builds, which run the binding tests, parse it whole.
+                #[cfg(debug_assertions)]
+                {
+                    let whole = without_staging_work(|| CT_Document::from_xml(&xml));
+                    assert!(
+                        whole.as_ref().ok() == Some(&document.document)
+                            && whole.ok().and_then(|whole| whole.to_xml().ok())
+                                == document.document.to_xml().ok(),
+                        "the blocks of a story source parse to another model than the source"
+                    );
+                }
+                Some((blocks, serialized))
+            }
+            None => {
+                note_staging_work(|work| work.parsed += xml.len());
+                document.document = CT_Document::from_xml(&xml)?;
+                None
+            }
+        };
+        let owners = OnceLock::new();
+        match blocks
+            .as_ref()
+            .and_then(|(blocks, _)| blocks.nested_namespace_owners())
+        {
+            Some(found) => {
+                let _ = owners.set(Some(found.to_vec()));
+            }
+            None => note_staging_work(|work| work.scanned += xml.len()),
+        }
+        if let Some((blocks, serialized)) = blocks {
+            let mut scans = document.lock_main_body_scans();
+            // Blocks read against the bytes the package held are not those
+            // of a serialization.
+            if serialized {
+                scans.blocks.clone_from(&blocks.blocks);
+                scans.fingerprint = None;
+            }
+            scans.written = Some(Arc::new(blocks));
+        }
         (
             document.plain_local_edit_blocked,
             document.nested_owner_replay,
@@ -11475,7 +12841,7 @@ pub(crate) fn set_story_source_xml(
             &namespace_scopes.root_declarations,
             &namespace_scopes.body_declarations,
             &xml,
-            &OnceLock::new(),
+            &owners,
         );
         document.package.set_part(part_name, xml);
         document.root_namespace_declarations = namespace_scopes.root_declarations;
@@ -13284,11 +14650,7 @@ fn scan_body_block(
         .then(|| scan_story_items(&xml, body, None))
         .transpose()?;
     let Some(block) = block else {
-        return Ok(BodyBlockScan {
-            bytes: Vec::new(),
-            owners,
-            items: body_items,
-        });
+        return Ok(BodyBlockScan::scanned(Vec::new(), owners, body_items));
     };
     let range = head.len()..head.len() + block.len();
     Ok(child_scan(&range, block, &owners, body_items.as_deref()))
@@ -13305,9 +14667,9 @@ fn child_scan(
 ) -> BodyBlockScan {
     let within = |span: &Range<usize>| range.start <= span.start && span.end <= range.end;
     let first = owners.partition_point(|owner| owner.full.start < range.start);
-    BodyBlockScan {
-        bytes: bytes.to_vec(),
-        owners: owners[first..]
+    BodyBlockScan::scanned(
+        bytes.to_vec(),
+        owners[first..]
             .iter()
             .take_while(|owner| owner.full.start < range.end)
             .filter(|owner| owner.kind != StoryKind::Body && within(&owner.full))
@@ -13316,7 +14678,7 @@ fn child_scan(
                 ..owner.clone()
             })
             .collect(),
-        items: items.map(|items| {
+        items.map(|items| {
             let first = items.partition_point(|item| item.full.start < range.start);
             items[first..]
                 .iter()
@@ -13325,7 +14687,7 @@ fn child_scan(
                 .map(|item| item.moved(|at, _| at - range.start))
                 .collect()
         }),
-    }
+    )
 }
 
 /// The scans of the main part's body children `todo`, read from one scan of
@@ -19285,49 +20647,24 @@ impl Document {
         // typed story can inventory its exact retained source, including opaque
         // property-root attributes that canonical serialization cannot replay.
         // Dirty stories and modeled relationships still need the checked mask.
-        // A main part that holds the bytes it was opened with is compared
-        // with, and scanned as, what that opening parsed.
+        // A main part that holds the bytes a flush wrote from the kept blocks
+        // is compared with, and scanned as, those blocks, and one that holds
+        // the bytes it was opened with as what that opening parsed.
         let kept = self.kept_main_part();
         if modeled_relationships.is_empty()
             && let Some(source) = self.package.get_part(&self.doc_part_name)
-            && match kept.as_deref() {
-                Some(kept) => kept.main_document() == Some(&self.document),
-                None => {
-                    #[cfg(test)]
-                    eprintln!("FX211_DRAWING_STAGE opaque-reparse-before");
-                    note_staging_work(|work| work.parsed += source.len());
-                    let matches =
-                        CT_Document::from_xml(source).ok().as_ref() == Some(&self.document);
-                    #[cfg(test)]
-                    eprintln!("FX211_DRAWING_STAGE opaque-reparse-after");
-                    matches
-                }
-            }
+            && self.main_part_parses_to_model(kept.as_deref())
         {
-            return xml_relationship_ids_in_order(source);
+            return relationship_ids_by_blocks(source, self.main_part_blocks().as_deref(), &[]);
         }
-        let scanned;
-        let nested_namespace_owners =
-            match kept.as_deref().and_then(Parsed::nested_namespace_owners) {
-                Some(owners) => owners,
-                None => {
-                    let source = self.package.get_part(&self.doc_part_name);
-                    note_staging_work(|work| work.scanned += source.map_or(0, <[u8]>::len));
-                    scanned = source
-                        .map(nested_modeled_namespace_owners)
-                        .transpose()?
-                        .unwrap_or_default();
-                    &scanned
-                }
-            };
-        let serialize = |document: &CT_Document| -> Result<Vec<u8>> {
-            let xml = document.to_xml()?;
-            replay_nested_namespace_declarations(&xml, nested_namespace_owners)
-        };
-
-        let current_xml = serialize(&self.document)?;
-        let current_relationships = xml_relationship_ids_in_order(&current_xml)?;
-        let mut masked = self.document.clone();
+        let nested_namespace_owners = self.main_part_nested_namespace_owners(kept.as_deref())?;
+        let (current, blocks) = self.serialized_main_part()?;
+        let current_xml = replay_by_blocks(&current, &nested_namespace_owners, blocks.as_ref())?;
+        let current_relationships = relationship_ids_by_blocks(
+            &current_xml,
+            blocks.as_ref().filter(|_| current_xml == current),
+            &[],
+        )?;
         let mut masked_values = HashSet::new();
         let mut remap = HashMap::new();
         for (index, relationship_id) in modeled_relationships.iter().enumerate() {
@@ -19348,40 +20685,16 @@ impl Document {
             remap.insert(relationship_id.clone(), sentinel);
         }
 
-        visit_authored_drawings_mut(&mut masked.body.content, &mut |drawing| {
-            if let Some(mut drawing) = drawing
-                .inline
-                .as_mut()
-                .map(DrawingMut::Inline)
-                .or_else(|| drawing.anchor.as_mut().map(DrawingMut::Anchor))
-            {
-                drawing.remap_relationship(&remap);
-            }
-        });
-        visit_body_paragraphs_mut(&mut masked.body.content, &mut |paragraph| {
-            for hyperlink in &mut paragraph.hyperlinks {
-                if let Some(id) = &mut hyperlink.rel_id
-                    && let Some(updated) = remap.get(id)
-                {
-                    id.clone_from(updated);
-                }
-            }
-            if let Some(section) = paragraph
-                .properties
-                .as_mut()
-                .and_then(|properties| properties.sect_pr.as_mut())
-            {
-                for reference in section
-                    .header_refs
-                    .iter_mut()
-                    .chain(&mut section.footer_refs)
-                {
-                    if let Some(updated) = remap.get(&reference.rel_id) {
-                        reference.rel_id.clone_from(updated);
-                    }
-                }
-            }
-        });
+        let mut masked = CT_Document {
+            body: CT_Body {
+                content: Vec::new(),
+                sect_pr: self.document.body.sect_pr.clone(),
+            },
+            extra_namespaces: self.document.extra_namespaces.clone(),
+            background_xml: self.document.background_xml.clone(),
+            background_extra_xml: self.document.background_extra_xml.clone(),
+            root_attributes: self.document.root_attributes.clone(),
+        };
         if let Some(section) = &mut masked.body.sect_pr {
             for reference in section
                 .header_refs
@@ -19393,12 +20706,51 @@ impl Document {
                 }
             }
         }
-
-        let masked_xml = serialize(&masked)?;
-        Ok(xml_relationship_ids_in_order(&masked_xml)?
-            .into_iter()
-            .filter(|id| !masked_values.contains(id) && current_relationships.contains(id))
-            .collect())
+        // Only the body children that name a modeled relationship change
+        // when masked, so the others keep their blocks.
+        let by_blocks = blocks.as_ref().and_then(|blocks| {
+            let masked_blocks = blocks
+                .blocks
+                .iter()
+                .map(|block| masked_block(block, &masked, &remap))
+                .collect::<Option<Vec<_>>>()?;
+            MainPartBlocks::assemble(&masked, masked_blocks, Some(blocks.root()))
+        });
+        let (masked_xml, masked_blocks) = match by_blocks {
+            Some((xml, blocks)) => {
+                // Debug builds mask and serialize the whole body too.
+                #[cfg(debug_assertions)]
+                {
+                    let mut whole = masked.clone();
+                    whole.body.content = self.document.body.content.clone();
+                    mask_relationships(&mut whole.body.content, &remap);
+                    assert!(
+                        whole.to_xml().ok().as_ref() == Some(&xml),
+                        "the kept blocks serialize the masked main part otherwise"
+                    );
+                }
+                (xml, Some(blocks))
+            }
+            None => {
+                masked.body.content = self.document.body.content.clone();
+                mask_relationships(&mut masked.body.content, &remap);
+                note_staging_work(|work| work.serialized += masked.body.content.len());
+                (masked.to_xml()?, None)
+            }
+        };
+        let replayed = replay_by_blocks(
+            &masked_xml,
+            &nested_namespace_owners,
+            masked_blocks.as_ref(),
+        )?;
+        Ok(relationship_ids_by_blocks(
+            &replayed,
+            masked_blocks.as_ref().filter(|_| replayed == masked_xml),
+            &[],
+        )?
+        .into_iter()
+        .filter(|id| !masked_values.contains(id) && current_relationships.contains(id))
+        .collect())
     }
 
     /// Keep a main-part relationship id from staging renumbering until the
@@ -19420,7 +20772,17 @@ impl Document {
     /// it the first time stands for it.
     fn canonicalize_drawing_ids(&mut self) -> Result<()> {
         let Some(kept) = self.unchanged_main_part() else {
-            return self.canonicalize_all_drawing_ids();
+            // Debug builds canonicalize a copy that keeps no scan and forgets
+            // the opening, the whole way, and compare.
+            #[cfg(debug_assertions)]
+            let mut full = self.forgetting_main_part();
+            let result = self.canonicalize_all_drawing_ids();
+            #[cfg(debug_assertions)]
+            {
+                let full_result = without_staging_work(|| full.canonicalize_all_drawing_ids());
+                assert_same_main_part(self, &result, &full, &full_result, "canonicalizing");
+            }
+            return result;
         };
         let unchanged = kept
             .unchanged_main_part
@@ -19428,18 +20790,14 @@ impl Document {
             .and_then(Option::as_ref)
             .expect("checked unchanged main part");
         // Debug builds, which run the binding tests, canonicalize a copy that
-        // forgets the opening, the whole way, and compare.
+        // keeps no blocks and forgets the opening, the whole way, and compare.
         #[cfg(debug_assertions)]
-        let mut full = self.clone_for_staging();
-        #[cfg(debug_assertions)]
-        {
-            full.parsed = None;
-        }
+        let mut full = self.forgetting_main_part();
         let result = self.canonicalize_beside_unchanged_main_part(unchanged);
         #[cfg(debug_assertions)]
         {
             let full_result = without_staging_work(|| full.canonicalize_all_drawing_ids());
-            assert_same_canonicalization(self, &result, &full, &full_result);
+            assert_same_main_part(self, &result, &full, &full_result, "canonicalizing");
         }
         result
     }
@@ -19499,7 +20857,7 @@ impl Document {
         visit_authored_drawings(&self.document.body.content, &mut |_| {
             authored_drawing = true;
         });
-        if authored_drawing || kept.main_document() != Some(&self.document) {
+        if authored_drawing || !self.main_part_parses_to_model(Some(&kept)) {
             return None;
         }
         let unchanged = kept
@@ -19507,7 +20865,7 @@ impl Document {
             .get_or_init(|| self.unchanged_main_part_checks().ok())
             .as_ref()?;
         if unchanged.body_namespace_bindings != self.body_namespace_bindings
-            || self.document.to_xml().ok()? != unchanged.xml
+            || self.serialized_main_part().ok()?.0 != unchanged.xml
         {
             return None;
         }
@@ -19519,12 +20877,6 @@ impl Document {
     /// there: the part as the model serializes it and its drawing
     /// identifiers.
     fn unchanged_main_part_checks(&self) -> Result<UnchangedMainPart> {
-        note_staging_work(|work| {
-            work.canonicalized += self
-                .package
-                .get_part(&self.doc_part_name)
-                .map_or(0, <[u8]>::len);
-        });
         let mut modeled_story_relationships = Vec::new();
         collect_relationship_ids(
             &self.document.body.content,
@@ -19538,11 +20890,11 @@ impl Document {
             }
         }
         self.opaque_relationship_ids_from_serialized_story(&modeled_story_relationships)?;
-        let xml = self.document.to_xml()?;
-        xml_relationship_ids_in_order_with_bindings(&xml, &self.body_namespace_bindings)?;
-        authored_drawing_slots_in_source_order(&xml, &[], &HashSet::new())?;
-        let drawing_ids = drawing_ids_in_xml(&xml).ok();
-        xml_relationship_ids_in_order(&xml)?;
+        let (xml, blocks) = self.serialized_main_part()?;
+        relationship_ids_by_blocks(&xml, blocks.as_ref(), &self.body_namespace_bindings)?;
+        authored_drawing_slots_by_blocks(&xml, blocks.as_ref(), &[], &HashSet::new())?;
+        let drawing_ids = drawing_ids_by_blocks(&xml, blocks.as_ref());
+        relationship_ids_by_blocks(&xml, blocks.as_ref(), &[])?;
         Ok(UnchangedMainPart {
             xml,
             body_namespace_bindings: self.body_namespace_bindings.clone(),
@@ -19586,11 +20938,9 @@ impl Document {
     fn canonicalize_all_drawing_ids(&mut self) -> Result<()> {
         let owner = self.doc_part_name.clone();
         let owner_identity = relationship_owner_identity(&owner);
-        note_staging_work(|work| {
-            work.canonicalized += self.package.get_part(&owner).map_or(0, <[u8]>::len);
-        });
         // Story picture insertion keeps current producer XML. Patch its
-        // canonical relationship and drawing IDs into that retained source.
+        // canonical relationship and drawing IDs into that retained source,
+        // which is canonicalized whole.
         let retained_main_xml = self
             .package
             .get_part(&owner)
@@ -19599,7 +20949,10 @@ impl Document {
                     .authored_nested_story_relationship_ids
                     .get(&owner_identity)
                     .is_some_and(|ids| !ids.is_empty())
-                    && CT_Document::from_xml(xml).ok().as_ref() == Some(&self.document)
+                    && {
+                        note_staging_work(|work| work.canonicalized += xml.len());
+                        CT_Document::from_xml(xml).ok().as_ref() == Some(&self.document)
+                    }
                     && self.document.to_xml().ok().as_deref() != Some(*xml)
             })
             .map(|xml| xml.to_vec());
@@ -19940,14 +21293,15 @@ impl Document {
             })
             .map(|relationship| relationship.id.clone())
             .collect::<HashSet<_>>();
-        let current_document_xml = self.document.to_xml()?;
-        let authored_drawing_slots = authored_drawing_slots_in_source_order(
+        let (current_document_xml, blocks) = self.serialized_main_part()?;
+        let authored_drawing_slots = authored_drawing_slots_by_blocks(
             &current_document_xml,
+            blocks.as_ref(),
             &modeled_drawing_ids,
             &nested_image_relationship_ids,
         )?;
         let mut occupied_drawings = self.identifiers.preserved_drawing_ids.clone();
-        if let Ok(live_ids) = drawing_ids_in_xml(&current_document_xml) {
+        if let Some(live_ids) = drawing_ids_by_blocks(&current_document_xml, blocks.as_ref()) {
             occupied_drawings.extend(live_ids);
         }
         for (_, _, id) in &authored_drawing_slots {
@@ -19973,12 +21327,18 @@ impl Document {
             drawing_edits.push((span.start, span.end, id.to_string().into_bytes()));
         }
         if !drawing_edits.is_empty() {
-            let mut updated = current_document_xml;
             drawing_edits.sort_by_key(|(start, _, _)| *start);
-            for (start, end, replacement) in drawing_edits.into_iter().rev() {
-                updated.splice(start..end, replacement);
+            if !blocks
+                .as_ref()
+                .is_some_and(|blocks| blocks.reparse_edited(&mut self.document, &drawing_edits))
+            {
+                let mut updated = current_document_xml;
+                for (start, end, replacement) in drawing_edits.into_iter().rev() {
+                    updated.splice(start..end, replacement);
+                }
+                note_staging_work(|work| work.parsed += updated.len());
+                self.document = CT_Document::from_xml(&updated)?;
             }
-            self.document = CT_Document::from_xml(&updated)?;
         }
         if let Some(retained_main_xml) = retained_main_xml {
             let mut retained = remap_xml_relationship_ids(&retained_main_xml, &relationship_remap)?;
@@ -20037,9 +21397,9 @@ impl Document {
         registered: &HashSet<String>,
         relationship_remap: &HashMap<String, String>,
     ) -> Result<bool> {
-        let xml = self.document.to_xml()?;
+        let (xml, blocks) = self.serialized_main_part()?;
         let occurrences =
-            xml_relationship_ids_in_order_with_bindings(&xml, &self.body_namespace_bindings)?;
+            relationship_ids_by_blocks(&xml, blocks.as_ref(), &self.body_namespace_bindings)?;
         let live = registered
             .iter()
             .filter(|id| occurrences.contains(id))
@@ -20111,8 +21471,9 @@ impl Document {
             .cloned()
             .chain(nested.iter().cloned())
             .collect::<HashSet<_>>();
-        if let Ok(xml) = self.document.to_xml()
-            && let Some(ordered) = authored_relationship_ids_in_source_order(&xml, &semantic)
+        if let Ok((xml, blocks)) = self.serialized_main_part()
+            && let Some(ordered) =
+                authored_relationship_ids_in_source_order(&xml, blocks.as_ref(), &semantic)
         {
             return ordered;
         }
@@ -20341,7 +21702,8 @@ impl Document {
         let main_ids = if main_moves_nothing {
             Vec::new()
         } else {
-            xml_relationship_ids_in_order(&self.document.to_xml()?)?
+            let (xml, blocks) = self.serialized_main_part()?;
+            relationship_ids_by_blocks(&xml, blocks.as_ref(), &[])?
         };
         let mut owners = vec![(self.doc_part_name.clone(), main_ids)];
         for owner in self.related_story_parts() {
@@ -20586,16 +21948,18 @@ impl Document {
 
     /// Opens `package` as [`Document::from_opened_package`] does, reading
     /// again only what `staged` did not: the identifiers of the staged
-    /// document the package was reread from, and what its last opening
-    /// parsed. A main part that holds the bytes it was opened with is that
-    /// opening's parse and nested namespace owners, and an identifier part
-    /// whose bytes the scan of those identifiers read gives the definitions
-    /// read there. A reopened document keeps its main part parsed for its
-    /// next staging.
+    /// document the package was reread from, what its last opening parsed,
+    /// and the blocks its flush wrote the main part from, if it did. A main
+    /// part that holds the bytes it was opened with is that opening's parse
+    /// and nested namespace owners, one that holds the bytes of the blocks
+    /// is read block by block, parsing and scanning only the blocks no
+    /// earlier reading parsed, and an identifier part whose bytes the scan
+    /// of those identifiers read gives the definitions read there. A
+    /// reopened document keeps its main part parsed for its next staging.
     fn from_package_reusing(
         package: OpcPackage,
         read_from_bytes: bool,
-        staged: Option<(&DocumentIdentifiers, &Parsed)>,
+        staged: Option<(&DocumentIdentifiers, &Parsed, Option<&MainPartBlocks>)>,
     ) -> Result<Self> {
         let (doc_part_name, _) = validated_word_package_class(&package)?;
 
@@ -20603,12 +21967,22 @@ impl Document {
             .get_part(&doc_part_name)
             .ok_or(Error::NoDocumentPart)?;
         let namespace_scopes = document_namespace_scopes(doc_xml)?;
-        let kept = staged.map(|(_, parsed)| parsed).filter(|parsed| {
+        let kept = staged.map(|(_, parsed, _)| parsed).filter(|parsed| {
             parsed.main_part == doc_part_name
                 && parsed
                     .main_part_xml()
                     .is_some_and(|kept| std::ptr::eq(kept, doc_xml) || kept == doc_xml)
         });
+        let written = staged
+            .and_then(|(_, _, written)| written)
+            .filter(|written| {
+                kept.is_none()
+                    && written
+                        .part
+                        .as_deref()
+                        .is_some_and(|part| std::ptr::eq(part.as_slice(), doc_xml))
+            });
+        let written_document = written.and_then(MainPartBlocks::parsed_document);
         // A reopened document keeps what parsing and scanning its main part
         // gives. What canonicalizing drawing identifiers found in the main
         // part (`unchanged_main_part`) is a function of the part as its model
@@ -20637,6 +22011,12 @@ impl Document {
                 parsed.unchanged_main_part = OnceLock::from(unchanged.clone());
             }
         }
+        if let Some(owners) = written
+            .filter(|_| written_document.is_some())
+            .and_then(MainPartBlocks::nested_namespace_owners)
+        {
+            parsed.nested_namespace_owners = OnceLock::from(Some(owners.to_vec()));
+        }
         let (plain_local_edit_blocked, nested_owner_replay) = plain_local_edit_facts(
             &namespace_scopes.root_declarations,
             &namespace_scopes.body_declarations,
@@ -20649,9 +22029,10 @@ impl Document {
             }
             kept.main_document()
         });
-        let document = match kept_document {
-            Some(document) => document.clone(),
-            None => {
+        let document = match (kept_document, written_document) {
+            (Some(document), _) => document.clone(),
+            (None, Some(document)) => document,
+            (None, None) => {
                 note_reopen_work(|work| work.main_parses += 1);
                 CT_Document::from_xml(doc_xml)?
             }
@@ -20809,7 +22190,8 @@ impl Document {
             crate::embedded::known_invalid_package_signature_on_open(&package);
         let identifiers = DocumentIdentifiers::scan_reusing(
             &package,
-            staged.map(|(identifiers, _)| identifiers),
+            staged.map(|(identifiers, _, _)| identifiers),
+            written.and_then(MainPartBlocks::identifiers).as_ref(),
         )?;
         let parsed = Some(Arc::new(parsed));
         let document = Document {
@@ -21075,16 +22457,13 @@ impl Document {
             }
         })();
         // Debug builds, which run the binding tests, compare the bytes the
-        // two documents save once they forget their opening.
+        // two documents save once they keep no blocks and forget their
+        // opening.
         #[cfg(debug_assertions)]
         {
-            let forgetting = |document: &Document| {
-                let mut copy = document.clone_for_staging();
-                copy.parsed = None;
-                copy
-            };
             let bytes = without_staging_work(|| -> Result<bool> {
-                Ok(forgetting(self).to_bytes()? == forgetting(other).to_bytes()?)
+                Ok(self.forgetting_main_part().to_bytes()?
+                    == other.forgetting_main_part().to_bytes()?)
             });
             match (&same, bytes) {
                 (Ok(same), Ok(bytes)) => assert_eq!(*same, bytes, "saves_as differs from to_bytes"),
@@ -21289,6 +22668,7 @@ impl Document {
         let through_zip = in_memory.then(|| {
             let mut copy = self.clone_for_staging();
             copy.parsed = None;
+            copy.main_body_scans = Arc::default();
             copy
         });
         let reopened = self.reopen_staged(in_memory, limits);
@@ -21315,11 +22695,12 @@ impl Document {
         let embedded_invalidated_signatures = self.embedded_invalidated_signatures.clone();
         let package_signatures_invalidated = self.package_signatures_invalidated;
         let opened = self.parsed.as_deref().filter(|_| in_memory);
+        let written = self.main_part_blocks();
         let mut reopened = match opened {
             Some(opened) => Self::from_package_reusing(
                 self.package.reread(&opened.package)?,
                 true,
-                Some((&provenance, opened)),
+                Some((&provenance, opened, written.as_deref())),
             )?,
             None => {
                 note_reopen_work(|work| work.zip_writes += 1);
@@ -21335,6 +22716,9 @@ impl Document {
             .identifiers
             .reject_new_repeated_drawing_ids(&provenance)?;
         reopened.identifiers.reconcile_provenance(&provenance);
+        // The children a staged flush wrote the main part from are the part
+        // the reopen read.
+        reopened.reopen_written_main_part();
         reopened.custom_properties_owned = custom_properties_owned;
         reopened.settings_owned = settings_owned;
         if let Some(settings) = owned_settings {
@@ -21693,84 +23077,32 @@ impl Document {
     }
 
     fn flush_document_to_package(&mut self) -> Result<()> {
+        // Debug builds, which run the binding tests, flush a copy that keeps
+        // no blocks and forgets the opening, the whole way, and compare.
+        #[cfg(debug_assertions)]
+        let mut full = self.forgetting_main_part();
+        let result = self.flush_main_part();
+        #[cfg(debug_assertions)]
+        {
+            let full_result = without_staging_work(|| full.flush_main_part());
+            assert_same_main_part(self, &result, &full, &full_result, "flushing");
+        }
+        result
+    }
+
+    fn flush_main_part(&mut self) -> Result<()> {
         // A read-only save with unsafe retained namespace shadows keeps the
         // producer's complete scopes and every retained raw subtree byte for
         // byte. A modified document fails closed when canonical serialization
         // could change the meaning or bytes of retained content.
         //
-        // A main part that holds the bytes it was opened with is compared
-        // with, and scanned as, what that opening parsed, found once.
+        // A main part that holds the bytes a flush wrote from the kept blocks
+        // is compared with, and scanned as, those blocks, and one that holds
+        // the bytes it was opened with as what that opening parsed.
         let kept = self.kept_main_part();
+        let typed_document_is_unchanged = self.main_part_parses_to_model(kept.as_deref());
+        let nested_namespace_owners = self.main_part_nested_namespace_owners(kept.as_deref())?;
         let existing_document_xml = self.package.get_part(&self.doc_part_name);
-        let typed_document_is_unchanged = match kept.as_deref() {
-            Some(kept) => kept.main_document() == Some(&self.document),
-            None => {
-                #[cfg(test)]
-                eprintln!("FX211_FLUSH_STAGE reparse-before");
-                note_staging_work(|work| {
-                    work.parsed += existing_document_xml.map_or(0, <[u8]>::len);
-                });
-                let parsed = existing_document_xml.and_then(|xml| CT_Document::from_xml(xml).ok());
-                #[cfg(test)]
-                eprintln!("FX211_FLUSH_STAGE reparse-after");
-                #[cfg(test)]
-                eprintln!("FX211_FLUSH_STAGE equality-before");
-                let unchanged = parsed.as_ref() == Some(&self.document);
-                #[cfg(test)]
-                eprintln!("FX211_FLUSH_STAGE equality-after");
-                #[cfg(test)]
-                eprintln!("FX211_FLUSH_STAGE temporary-drop-before");
-                drop(parsed);
-                #[cfg(test)]
-                eprintln!("FX211_FLUSH_STAGE temporary-drop-after");
-                unchanged
-            }
-        };
-        // Debug builds, which run the binding tests, parse the part again.
-        #[cfg(debug_assertions)]
-        if kept.is_some() {
-            assert_eq!(
-                typed_document_is_unchanged,
-                existing_document_xml
-                    .and_then(|xml| CT_Document::from_xml(xml).ok())
-                    .as_ref()
-                    == Some(&self.document),
-                "the kept main part parse decides another change than a parse"
-            );
-        }
-        #[cfg(test)]
-        eprintln!("FX211_FLUSH_STAGE nested-scopes-before");
-        let scanned;
-        let nested_namespace_owners =
-            match kept.as_deref().and_then(Parsed::nested_namespace_owners) {
-                Some(owners) => {
-                    #[cfg(debug_assertions)]
-                    assert_eq!(
-                        format!("{owners:?}"),
-                        format!(
-                            "{:?}",
-                            existing_document_xml
-                                .map(nested_modeled_namespace_owners)
-                                .transpose()
-                                .ok()
-                                .flatten()
-                                .unwrap_or_default()
-                        ),
-                        "the kept nested namespace owners differ from a scan"
-                    );
-                    owners
-                }
-                None => {
-                    note_staging_work(|work| {
-                        work.scanned += existing_document_xml.map_or(0, <[u8]>::len);
-                    });
-                    scanned = existing_document_xml
-                        .map(nested_modeled_namespace_owners)
-                        .transpose()?
-                        .unwrap_or_default();
-                    &scanned
-                }
-            };
         #[cfg(test)]
         eprintln!("FX211_FLUSH_STAGE nested-scopes-after");
         let unsafe_prefix = unsafe_serializer_namespace_prefix(
@@ -21778,7 +23110,7 @@ impl Document {
             &self.body_namespace_declarations,
             existing_document_xml,
         )
-        .or_else(|| unsafe_nested_namespace_prefix(nested_namespace_owners));
+        .or_else(|| unsafe_nested_namespace_prefix(&nested_namespace_owners));
         // An unchanged part keeps its bytes.
         let doc_xml = if typed_document_is_unchanged {
             None
@@ -21790,22 +23122,31 @@ impl Document {
             }
             #[cfg(test)]
             eprintln!("FX211_FLUSH_STAGE serialize-before");
-            let serialized = self.document.to_xml()?;
+            let (serialized, blocks) = self.serialized_main_part()?;
             #[cfg(test)]
             eprintln!("FX211_FLUSH_STAGE serialize-after");
-            Some(replay_nested_namespace_declarations(
-                &serialized,
-                nested_namespace_owners,
-            )?)
+            let replayed =
+                replay_by_blocks(&serialized, &nested_namespace_owners, blocks.as_ref())?;
+            // The blocks are the part while the replay leaves their bytes.
+            let unchanged = replayed == serialized;
+            Some((replayed, blocks, unchanged))
         };
         let namespace_scopes = document_namespace_scopes(
             doc_xml
-                .as_deref()
+                .as_ref()
+                .map(|(xml, _, _)| xml.as_slice())
                 .or(existing_document_xml)
                 .expect("compared existing document XML"),
         )?;
-        if let Some(doc_xml) = doc_xml {
-            self.package.set_part(&self.doc_part_name, doc_xml);
+        if let Some((doc_xml, blocks, provenance)) = doc_xml {
+            let part = Arc::new(doc_xml);
+            self.package
+                .set_part(&self.doc_part_name, Arc::clone(&part));
+            self.lock_main_body_scans().written =
+                blocks.filter(|_| provenance).map(|mut blocks| {
+                    blocks.part = Some(part);
+                    Arc::new(blocks)
+                });
         }
         self.root_namespace_declarations = namespace_scopes.root_declarations;
         self.body_namespace_declarations = namespace_scopes.body_declarations;
@@ -21817,6 +23158,392 @@ impl Document {
             self.nested_owner_replay = OnceLock::from(NestedOwnerReplayFacts::default());
         }
         Ok(())
+    }
+
+    /// Whether the main part parses to the model, as comparing the model
+    /// with a parse of the part tells: read from the kept blocks while the
+    /// part holds the bytes a flush wrote from them, from `kept`, what the
+    /// last opening parsed, while it holds the opened bytes, or else from a
+    /// parse of the part.
+    fn main_part_parses_to_model(&self, kept: Option<&Parsed>) -> bool {
+        let existing = self.package.get_part(&self.doc_part_name);
+        let by_blocks = self
+            .main_part_blocks()
+            .and_then(|blocks| blocks.parses_to(&self.document));
+        let same = match (by_blocks, kept) {
+            (Some(same), _) => same,
+            (None, Some(kept)) => kept.main_document() == Some(&self.document),
+            (None, None) => {
+                #[cfg(test)]
+                eprintln!("FX211_FLUSH_STAGE reparse-before");
+                note_staging_work(|work| work.parsed += existing.map_or(0, <[u8]>::len));
+                let parsed = existing.and_then(|xml| CT_Document::from_xml(xml).ok());
+                #[cfg(test)]
+                eprintln!("FX211_FLUSH_STAGE reparse-after");
+                return parsed.as_ref() == Some(&self.document);
+            }
+        };
+        // Debug builds, which run the binding tests, parse the part again.
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            same,
+            existing
+                .and_then(|xml| CT_Document::from_xml(xml).ok())
+                .as_ref()
+                == Some(&self.document),
+            "the kept main part decides another change than a parse"
+        );
+        same
+    }
+
+    /// The nested namespace owners of the main part: found in the kept
+    /// blocks while the part holds the bytes a flush wrote from them, kept by
+    /// `kept`, what the last opening parsed, while it holds the opened bytes,
+    /// or else scanned again.
+    fn main_part_nested_namespace_owners<'a>(
+        &'a self,
+        kept: Option<&'a Parsed>,
+    ) -> Result<Cow<'a, [NestedNamespaceOwner]>> {
+        let existing = self.package.get_part(&self.doc_part_name);
+        #[cfg(test)]
+        eprintln!("FX211_FLUSH_STAGE nested-scopes-before");
+        let written = self.main_part_blocks();
+        let owners = match written
+            .as_deref()
+            .and_then(MainPartBlocks::nested_namespace_owners)
+            .or_else(|| kept.and_then(Parsed::nested_namespace_owners))
+        {
+            Some(owners) => owners,
+            None => {
+                note_staging_work(|work| work.scanned += existing.map_or(0, <[u8]>::len));
+                return Ok(Cow::Owned(
+                    existing
+                        .map(nested_modeled_namespace_owners)
+                        .transpose()?
+                        .unwrap_or_default(),
+                ));
+            }
+        };
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            format!("{owners:?}"),
+            format!(
+                "{:?}",
+                existing
+                    .map(nested_modeled_namespace_owners)
+                    .transpose()
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
+            ),
+            "the kept nested namespace owners differ from a scan"
+        );
+        Ok(Cow::Owned(owners.to_vec()))
+    }
+
+    /// The blocks `xml` is made of, a main part story source: the main part
+    /// as the model serializes it, or else as the package holds it while
+    /// its blocks hold the body children of the model, with the bytes of
+    /// some body children replaced. Also returns whether the source was
+    /// read against the serialization.
+    #[allow(clippy::type_complexity)] // The blocks, what they replace and read again, the base.
+    fn source_blocks(
+        &self,
+        xml: &[u8],
+    ) -> Option<(
+        MainPartBlocks,
+        Range<usize>,
+        Vec<BodyContent>,
+        Vec<(usize, BodyContent)>,
+        bool,
+    )> {
+        let (current, blocks) = self.serialized_main_part().ok()?;
+        let found = blocks.and_then(|blocks| self.source_blocks_in(&current, blocks, xml));
+        if let Some((blocks, replaced, items, reparsed)) = found {
+            return Some((blocks, replaced, items, reparsed, true));
+        }
+        let held = self.package_main_part_blocks()?;
+        let content = &self.document.body.content;
+        if held.blocks.len() != content.len()
+            || held
+                .blocks
+                .iter()
+                .zip(content)
+                .any(|(block, item)| block.value.as_ref() != Some(item))
+        {
+            return None;
+        }
+        let blocks = MainPartBlocks {
+            part: None,
+            nested_namespace_owners: OnceLock::new(),
+            ..(*held).clone()
+        };
+        let (blocks, replaced, items, reparsed) =
+            self.source_blocks_in(held.part.as_deref()?, blocks, xml)?;
+        Some((blocks, replaced, items, reparsed, false))
+    }
+
+    /// The blocks `xml` is made of: `current`, made of `blocks`, with the
+    /// bytes of some body children replaced. The bytes the source keeps are
+    /// the blocks, and the bytes it replaces are parsed alone, element by
+    /// element. Returns the blocks, the body children replaced and those
+    /// the replacing bytes parse to. `None` when the replacing bytes reach
+    /// the frame or are not whole elements, or a block or element does not
+    /// parse back alone. A kept block with a field is parsed again too, and
+    /// returned with its index.
+    #[allow(clippy::type_complexity)] // The blocks and what they replace and read again.
+    fn source_blocks_in(
+        &self,
+        current: &[u8],
+        blocks: MainPartBlocks,
+        xml: &[u8],
+    ) -> Option<(
+        MainPartBlocks,
+        Range<usize>,
+        Vec<BodyContent>,
+        Vec<(usize, BodyContent)>,
+    )> {
+        // Bytes the source shares past the children are the tail's, and an
+        // unchanged source replaces nothing, after the last child.
+        let same = current
+            .iter()
+            .zip(xml)
+            .take_while(|(a, b)| a == b)
+            .count()
+            .min(current.len() - blocks.tail.len());
+        let same_end = current[same..]
+            .iter()
+            .rev()
+            .zip(xml[same..].iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        if same < blocks.head.len() || same_end < blocks.tail.len() {
+            return None;
+        }
+        // The blocks the replaced bytes reach, and the bytes replacing them.
+        let starts = blocks.starts();
+        let ends = blocks
+            .blocks
+            .iter()
+            .zip(&starts)
+            .map(|(block, start)| start + block.bytes.len());
+        let first = ends.clone().take_while(|end| *end <= same).count();
+        let last = first.max(
+            starts
+                .iter()
+                .take_while(|start| **start < current.len() - same_end)
+                .count(),
+        );
+        let start = starts
+            .get(first)
+            .copied()
+            .unwrap_or(current.len() - blocks.tail.len());
+        let end = starts
+            .get(last)
+            .copied()
+            .unwrap_or(current.len() - blocks.tail.len());
+        let replacing = &xml[start..end + xml.len() - current.len()];
+        // The bytes of a block with a field say more than its value.
+        let mut reparsed = Vec::new();
+        for (index, block) in blocks.blocks.iter().enumerate() {
+            if (first..last).contains(&index) {
+                continue;
+            }
+            if !block.fieldless {
+                reparsed.push((index, block.reparsed(blocks.root())?));
+            } else if !block.parses_back(blocks.root()) {
+                return None;
+            }
+        }
+        blocks.frame()?;
+        let mut reader = quick_xml::Reader::from_reader(replacing);
+        let mut buffer = Vec::new();
+        let mut depth = 0usize;
+        let mut element = 0;
+        let mut read = Vec::new();
+        loop {
+            let at = reader.buffer_position() as usize;
+            let event = reader.read_event_into(&mut buffer).ok()?;
+            let after = reader.buffer_position() as usize;
+            match event {
+                Event::Eof if depth == 0 => break,
+                Event::Eof => return None,
+                Event::Start(_) => {
+                    if depth == 0 {
+                        element = at;
+                    }
+                    depth += 1;
+                }
+                Event::End(_) if depth > 0 => {
+                    depth -= 1;
+                    if depth == 0 {
+                        read.push(element..after);
+                    }
+                }
+                Event::Empty(_) if depth == 0 => read.push(at..after),
+                _ if depth == 0 => return None,
+                _ => {}
+            }
+            buffer.clear();
+        }
+        let mut items = Vec::new();
+        let mut kept = blocks.blocks[..first].to_vec();
+        for range in read {
+            let bytes = replacing[range].to_vec();
+            let mut part = blocks.root().to_vec();
+            part.extend_from_slice(MAIN_PART_BODY_START);
+            part.extend_from_slice(&bytes);
+            part.extend_from_slice(MAIN_PART_BODY_END);
+            note_staging_work(|work| work.blocks_read += 1);
+            let mut parsed = CT_Document::from_xml(&part).ok()?;
+            if parsed.body.sect_pr.is_some() || parsed.body.content.len() != 1 {
+                return None;
+            }
+            let item = parsed.body.content.remove(0);
+            let block = BodyBlockScan {
+                serialized: self.document.body_item_xml(&item).ok().as_ref() == Some(&bytes),
+                parsed: true,
+                ..BodyBlockScan::of(bytes, Some(item.clone()))
+            };
+            kept.push(Arc::new(block));
+            items.push(item);
+        }
+        kept.extend(blocks.blocks[last..].iter().cloned());
+        Some((
+            MainPartBlocks {
+                blocks: kept,
+                ..blocks
+            },
+            first..last,
+            items,
+            reparsed,
+        ))
+    }
+
+    fn lock_main_body_scans(&self) -> std::sync::MutexGuard<'_, MainBodyScans> {
+        self.main_body_scans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The children a flush wrote the main part from, while the part holds
+    /// the bytes it wrote.
+    fn main_part_blocks(&self) -> Option<Arc<MainPartBlocks>> {
+        let written = self.lock_main_body_scans().written.clone()?;
+        let part = written.part.as_deref()?;
+        let current = self.package.get_part(&self.doc_part_name)?;
+        std::ptr::eq(part.as_slice(), current).then_some(written)
+    }
+
+    /// The blocks of the main part as the package holds it: those a flush
+    /// or a story source wrote it from, or, while it holds the bytes the
+    /// document was opened with and the opening parsed them, its body
+    /// children read once with their values in that parse, which the
+    /// scans then keep as written.
+    fn package_main_part_blocks(&self) -> Option<Arc<MainPartBlocks>> {
+        if let Some(written) = self.main_part_blocks() {
+            return Some(written);
+        }
+        let kept = self.kept_main_part()?;
+        let opened = kept.main_document.get()?.as_ref()?;
+        let current = self.package.get_part(&self.doc_part_name)?;
+        let part = self
+            .package
+            .parts
+            .values()
+            .find(|bytes| std::ptr::eq(bytes.as_slice(), current))?;
+        let blocks = MainPartBlocks::read(part, &opened.body.content)
+            .filter(|blocks| blocks.parses_to(opened) == Some(true))?;
+        // Debug builds, which run the binding tests, parse each child alone.
+        #[cfg(debug_assertions)]
+        without_staging_work(|| {
+            assert!(
+                blocks
+                    .blocks
+                    .iter()
+                    .all(|block| block.reparsed(blocks.root()) == block.value),
+                "a body child of the opened main part parses alone to another value"
+            )
+        });
+        let blocks = Arc::new(blocks);
+        self.lock_main_body_scans().written = Some(Arc::clone(&blocks));
+        Some(blocks)
+    }
+
+    /// The main part as the model serializes it, from the bytes of the kept
+    /// children that equal body children stand for, with the blocks of this
+    /// serialization, which the scans keep for the next. Serialized whole,
+    /// without blocks, when a body child raises, which the whole
+    /// serialization raises too.
+    fn serialized_main_part(&self) -> Result<(Vec<u8>, Option<MainPartBlocks>)> {
+        let content = self.document.body.content.iter().collect::<Vec<_>>();
+        let serialized = {
+            let mut scans = self.lock_main_body_scans();
+            let serialized =
+                MainPartBlocks::serialize(&self.document, &content, &scans.root, &scans.blocks);
+            if let Some((_, blocks)) = &serialized {
+                if scans.root != blocks.root() {
+                    scans.root = blocks.root().to_vec();
+                    scans.frame = None;
+                    scans.head.clear();
+                    scans.tail.clear();
+                }
+                // The body's fingerprint is known while its children are.
+                if scans.blocks.len() != blocks.blocks.len()
+                    || scans
+                        .blocks
+                        .iter()
+                        .zip(&blocks.blocks)
+                        .any(|(kept, block)| !Arc::ptr_eq(kept, block))
+                {
+                    scans.fingerprint = None;
+                }
+                scans.blocks.clone_from(&blocks.blocks);
+            }
+            serialized
+        };
+        if let Some((xml, blocks)) = serialized {
+            #[cfg(debug_assertions)]
+            assert!(
+                without_staging_work(|| self.document.to_xml_with_body_spans())
+                    .ok()
+                    .as_ref()
+                    == Some(&(xml.clone(), blocks.content(), blocks.children())),
+                "the kept children serialize the main part otherwise"
+            );
+            return Ok((xml, Some(blocks)));
+        }
+        note_staging_work(|work| work.serialized += self.document.body.content.len());
+        Ok((self.document.to_xml()?, None))
+    }
+
+    /// The main part as [`CT_Document::to_xml_with_body_spans`] gives it,
+    /// written from the kept children.
+    #[allow(clippy::type_complexity)] // The bytes, the children's range and each child's range.
+    fn main_part_with_body_spans(&self) -> Result<(Vec<u8>, Range<usize>, Vec<Range<usize>>)> {
+        match self.serialized_main_part()? {
+            (xml, Some(blocks)) => Ok((xml, blocks.content(), blocks.children())),
+            (_, None) => Ok(self.document.to_xml_with_body_spans()?),
+        }
+    }
+
+    /// Marks the children a staged flush wrote the main part from, when the
+    /// reopened part holds their bytes, as what the reopen parsed.
+    fn reopen_written_main_part(&mut self) {
+        let mut scans = self.lock_main_body_scans();
+        if let Some(written) = scans.written.take() {
+            scans.written = Some(written.reopened(self));
+        }
+    }
+
+    /// A copy that keeps no scan and forgets its opening, which reads the
+    /// main part whole, as debug builds compare.
+    #[cfg(debug_assertions)]
+    fn forgetting_main_part(&self) -> Self {
+        let mut copy = self.clone_for_staging();
+        copy.main_body_scans = Arc::default();
+        copy.parsed = None;
+        copy
     }
 
     /// What the last opening parsed, while the main part holds the bytes it
@@ -22403,7 +24130,7 @@ impl Document {
     ) -> Result<(Vec<StorySource<'_>>, Range<usize>, Vec<Range<usize>>)> {
         #[cfg(test)]
         STORY_SOURCE_BUILDS.set(STORY_SOURCE_BUILDS.get() + 1);
-        let (main, content, children) = self.document.to_xml_with_body_spans()?;
+        let (main, content, children) = self.main_part_with_body_spans()?;
         let mut sources = vec![StorySource {
             root_kind: StoryKind::Body,
             part_name: self.doc_part_name.clone(),
@@ -22611,6 +24338,7 @@ impl Document {
         items: bool,
     ) -> Result<MainStoryLayout> {
         let (head, tail) = (&xml[..content.start], &xml[content.end..]);
+        let root = root_start_tag(head).map_or(&[][..], |root| &head[root]);
         let mut scans = self
             .main_body_scans
             .lock()
@@ -22618,15 +24346,17 @@ impl Document {
         let frame = match &scans.frame {
             Some(frame) if scans.head == head && scans.tail == tail => Arc::clone(frame),
             _ => {
-                *scans = MainBodyScans::default();
                 let frame = Arc::new(uncounted_scan(|| scan_body_block(head, None, tail, true))?);
-                *scans = MainBodyScans {
-                    head: head.to_vec(),
-                    tail: tail.to_vec(),
-                    frame: Some(Arc::clone(&frame)),
-                    blocks: Vec::new(),
-                    fingerprint: None,
-                };
+                // The children are read alone under the part root, so bytes
+                // around them that keep the root keep their scans.
+                if scans.root != root {
+                    scans.blocks.clear();
+                    scans.root = root.to_vec();
+                }
+                scans.head = head.to_vec();
+                scans.tail = tail.to_vec();
+                scans.frame = Some(Arc::clone(&frame));
+                scans.fingerprint = None;
                 frame
             }
         };
@@ -22654,30 +24384,35 @@ impl Document {
             .iter()
             .enumerate()
             .map(|(index, range)| {
-                let kept = if index < prefix {
-                    Some(&old[index])
+                if index < prefix {
+                    Some(Arc::clone(&old[index]))
                 } else if index >= children.len() - suffix {
-                    Some(&old[old.len() - (children.len() - index)])
+                    Some(Arc::clone(&old[old.len() - (children.len() - index)]))
                 } else {
-                    moved.get(&xml[range.clone()]).copied()
-                };
-                // A kept child read without items reads them now if asked.
-                kept.filter(|scan| !items || scan.items.is_some())
-                    .map(Arc::clone)
+                    moved.get(&xml[range.clone()]).copied().map(Arc::clone)
+                }
             })
             .collect::<Vec<_>>();
         drop(moved);
+        // A kept child not read for its owners, or for its items when asked,
+        // is read now.
         let todo = blocks
             .iter()
             .enumerate()
-            .filter(|(_, scan)| scan.is_none())
+            .filter(|(_, scan)| {
+                scan.as_ref().is_none_or(|scan| {
+                    scan.owners.get().is_none() || items && scan.items.get().is_none()
+                })
+            })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
         #[cfg(any(test, debug_assertions))]
         MAIN_BODY_BLOCK_SCANS.set(MAIN_BODY_BLOCK_SCANS.get() + todo.len());
+        let mut alone_head = root.to_vec();
+        alone_head.extend_from_slice(MAIN_PART_BODY_START);
         let alone = todo
             .iter()
-            .map(|index| head.len() + children[*index].len() + tail.len())
+            .map(|index| alone_head.len() + children[*index].len() + MAIN_PART_BODY_END.len())
             .sum::<usize>();
         // The body's fingerprint stays known while its bytes stay the same.
         if prefix != children.len() || prefix != old.len() {
@@ -22688,7 +24423,9 @@ impl Document {
             todo.iter()
                 .map(|index| {
                     let bytes = &xml[children[*index].clone()];
-                    uncounted_scan(|| scan_body_block(head, Some(bytes), tail, true))
+                    uncounted_scan(|| {
+                        scan_body_block(&alone_head, Some(bytes), MAIN_PART_BODY_END, true)
+                    })
                 })
                 .collect::<Result<Vec<_>>>()?
         } else {
@@ -22698,7 +24435,17 @@ impl Document {
             scanned
         };
         for (index, scan) in todo.into_iter().zip(scanned) {
-            blocks[index] = Some(Arc::new(scan));
+            match &blocks[index] {
+                Some(block) => {
+                    if let Some(owners) = scan.owners.into_inner() {
+                        let _ = block.owners.set(owners);
+                    }
+                    if let Some(items) = scan.items.into_inner() {
+                        let _ = block.items.set(items);
+                    }
+                }
+                None => blocks[index] = Some(Arc::new(scan)),
+            }
         }
         let blocks = blocks.into_iter().flatten().collect::<Vec<_>>();
         scans.blocks = blocks.clone();
@@ -26837,6 +28584,7 @@ impl Document {
             tables: alone.tables().count(),
             cell_paragraphs: cell_paragraph_routes(&mut alone, &part, &owners, &self.doc_part_name)
                 .ok(),
+            holds_field: xml_holds_field(&part),
         })
     }
 
@@ -29968,7 +31716,7 @@ impl Document {
             .table(table)
             .and_then(|table| table.cell(row, cell).map(|cell| cell.inner as *const CT_Tc))
             .ok_or_else(|| Error::Other("cell index is out of range".to_owned()))?;
-        let (xml, content, children) = candidate.document.to_xml_with_body_spans()?;
+        let (xml, content, children) = candidate.main_part_with_body_spans()?;
         let layout = candidate
             .main_story_layout(&xml, &content, &children, true)
             .ok();
@@ -30034,7 +31782,7 @@ impl Document {
     /// direct child, read from the body child that holds it.
     #[doc(hidden)]
     pub fn direct_body_item_location(&self, slot: usize) -> Result<Option<ContentLocation>> {
-        let (xml, content, children) = self.document.to_xml_with_body_spans()?;
+        let (xml, content, children) = self.main_part_with_body_spans()?;
         let Ok(layout) = self.main_story_layout(&xml, &content, &children, true) else {
             return Ok(self
                 .story_item_snapshots()?
@@ -33794,17 +35542,23 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
         let mut references = Vec::new();
-        for xml in candidate
-            .word_story_part_names()
-            .into_iter()
-            .filter_map(|part_name| {
-                candidate
-                    .package
-                    .get_part(&part_name)
-                    .filter(|bytes| identifier_xml_is_well_formed(bytes))
-            })
-        {
-            for direct in xml_paragraph_numbering_properties(xml)? {
+        for part_name in candidate.word_story_part_names() {
+            let Some(xml) = candidate.package.get_part(&part_name) else {
+                continue;
+            };
+            // A main part a flush wrote from the kept blocks is read in them.
+            let by_blocks = (part_name == candidate.doc_part_name)
+                .then(|| candidate.main_part_blocks())
+                .flatten()
+                .and_then(|blocks| blocks.numbering(xml));
+            let properties = match by_blocks {
+                Some(properties) => properties,
+                None if identifier_xml_is_well_formed(xml) => {
+                    xml_paragraph_numbering_properties(xml)?
+                }
+                None => continue,
+            };
+            for direct in properties {
                 let style_id = direct.style_id.as_deref().or_else(|| {
                     candidate
                         .styles
@@ -38793,7 +40547,7 @@ impl Document {
                     .ok_or_else(|| {
                         Error::Other(format!("cell {table}:{row}:{cell} is out of range"))
                     })?;
-                let (xml, content, children) = candidate.document.to_xml_with_body_spans()?;
+                let (xml, content, children) = candidate.main_part_with_body_spans()?;
                 let layout = candidate
                     .main_story_layout(&xml, &content, &children, true)
                     .ok();
@@ -48014,7 +49768,7 @@ mod tests {
         let relationship_ids = HashSet::from(["rId1".to_owned(), "rId2".to_owned()]);
 
         assert_eq!(
-            authored_relationship_ids_in_source_order(xml.as_bytes(), &relationship_ids),
+            authored_relationship_ids_in_source_order(xml.as_bytes(), None, &relationship_ids),
             Some(vec!["rId2".to_owned(), "rId1".to_owned()])
         );
     }
@@ -48147,7 +49901,7 @@ mod tests {
         take_reopen_work();
         // The bytes of the parts read again.
         let scans = |package: &OpcPackage| {
-            let reused = DocumentIdentifiers::scan_reusing(package, Some(&earlier))
+            let reused = DocumentIdentifiers::scan_reusing(package, Some(&earlier), None)
                 .map_err(|error| error.to_string());
             #[cfg(debug_assertions)]
             let scans = take_reopen_work()[2];
@@ -60427,6 +62181,7 @@ mod tests {
             let mut paragraphs = Vec::new();
             let mut cell_paragraphs = HashMap::new();
             let mut sample = Vec::new();
+            let mut holding_fields = Vec::new();
             for (slot, item) in document.document.body.content.iter().enumerate() {
                 STORY_SOURCE_BUILDS.set(0);
                 STORY_OWNER_SCANS.set(0);
@@ -60488,7 +62243,13 @@ mod tests {
                     .count();
                 cells += owners.cell_stories;
                 tables += owners.tables;
+                if owners.holds_field {
+                    holding_fields.push(slot);
+                }
             }
+            // Only the paragraph of the simple PAGE and complex DATE fields
+            // holds one.
+            assert_eq!(holding_fields, [count + 2]);
             let expected = document
                 .paragraph_story_locations()
                 .unwrap()
@@ -60551,13 +62312,17 @@ mod tests {
                 .unwrap();
             let mut document = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
             take_staging_work();
-            // The first staging parses and checks the main part once. The
-            // opening kept the scan of its nested namespace owners.
+            // The first staging parses and checks the main part once, the
+            // relationships it names read in it, and its children by block.
+            // The opening kept the scan of its nested namespace owners.
             let candidate = edit(&document, 0);
             assert!(!document.saves_as(&candidate).unwrap());
             document = candidate;
             let first = take_staging_work();
-            assert!(first[0] > 0 && first[1] == 0 && first[2] > 0, "{first:?}");
+            assert!(
+                first[0] > 0 && first[2] == 0 && first[4] > 0 && first[5] > 0,
+                "{first:?}"
+            );
             let mut sample = Vec::new();
             for k in 1..3 {
                 let candidate = edit(&document, k);
@@ -60569,16 +62334,24 @@ mod tests {
             // A copy that forgets its opening reads the whole part again.
             let mut copy = document.clone_for_staging();
             copy.parsed = None;
+            copy.main_body_scans = Arc::default();
             let candidate = edit(&copy, 3);
             assert!(!copy.saves_as(&candidate).unwrap());
             forgetting.push(take_staging_work());
         }
         // Later edits read none of it again, in a body four times as large
-        // too.
+        // too, and serialize only the child that holds fields, by itself.
         assert_eq!(work[0], work[1]);
-        assert!(work[0].iter().all(|sample| *sample == [0; 4]), "{work:?}");
         assert!(
-            (0..4).all(|work| forgetting[1][work] > forgetting[0][work]),
+            work[0]
+                .iter()
+                .all(|sample| sample[..4] == [0; 4] && sample[5] == 0),
+            "{work:?}"
+        );
+        assert!(
+            [0, 1, 3, 4, 5]
+                .iter()
+                .all(|work| forgetting[1][*work] > forgetting[0][*work]),
             "{forgetting:?}"
         );
     }
@@ -60682,7 +62455,7 @@ mod tests {
         // The same reopen work in a body four times as large: no ZIP, no
         // parse of the main part, and only the bytes of the other parts the
         // edits change scanned for identifiers.
-        let reopen = |work: &[(&'static str, [usize; 3], [usize; 4])]| {
+        let reopen = |work: &[(&'static str, [usize; 3], [usize; 6])]| {
             work.iter()
                 .map(|(name, reopen, _)| (*name, *reopen))
                 .collect::<Vec<_>>()
@@ -60698,7 +62471,7 @@ mod tests {
                 match index {
                     0 => {}
                     4 => assert_eq!(staging[..2], [0, 0], "{name} {work:?}"),
-                    _ => assert_eq!(staging, &[0; 4], "{name} {work:?}"),
+                    _ => assert_eq!(staging[..5], [0; 5], "{name} {work:?}"),
                 }
             }
         }
@@ -60766,7 +62539,7 @@ mod tests {
             // canonicalize a copy the whole way at each such staging and
             // compare.
             if index > 0 {
-                assert_eq!(staging, [0; 4], "{index}");
+                assert_eq!(staging, [0; 6], "{index}");
             }
             assert!(
                 document
@@ -60782,6 +62555,81 @@ mod tests {
         }
         take_staging_work();
         assert_eq!(document.to_bytes().unwrap(), forgetting.to_bytes().unwrap());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn staging_reads_only_the_main_part_blocks_an_edit_changes() {
+        // Edits that change the main part and commit, on bodies of N and 4N
+        // paragraphs with pictures, a nested namespace owner and a numbering
+        // part read from bytes: a table row, a section, a list item checked
+        // against the numbering graph.
+        #[allow(clippy::type_complexity)] // Each edit with its name.
+        let edits: [(&str, fn(&mut Document, usize)); 3] = [
+            ("table row", |document, _| {
+                let table = document.tables().len() - 1;
+                document.add_empty_table_row(table).unwrap();
+            }),
+            ("section", |document, _| {
+                let count = document.section_count();
+                document.insert_section(count).unwrap();
+            }),
+            ("list item", |document, k| {
+                document.add_bullet_list_item(&format!("item {k}"), 0);
+            }),
+        ];
+        for (name, edit) in edits {
+            let mut work = Vec::new();
+            let mut forgetting = Vec::new();
+            for count in [50usize, 200] {
+                let body = format!("{}{}", issue407_runs(count), issue407_varied_body(""));
+                let mut source = issue407_document(&body, false);
+                for _ in 0..count / 10 {
+                    source.add_picture(
+                        super::watermark_tests::PNG,
+                        "pixel.png",
+                        Length::pt(12.0),
+                        Length::pt(12.0),
+                    );
+                }
+                source
+                    .add_numbering_definition(&[ListLevel::decimal()])
+                    .unwrap();
+                let mut document = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+                // The first edit serializes every block once, the next one
+                // reads once what its staging reads in every block.
+                edit(&mut document, 0);
+                edit(&mut document, 1);
+                take_staging_work();
+                take_reopen_work();
+                let mut sample = Vec::new();
+                for k in 2..4 {
+                    edit(&mut document, k);
+                    sample.push((take_staging_work(), take_reopen_work()));
+                }
+                work.push(sample);
+                // A copy that keeps no blocks reads the whole part again.
+                let mut copy = document.clone_for_staging();
+                copy.main_body_scans = Arc::default();
+                copy.parsed = None;
+                edit(&mut copy, 4);
+                forgetting.push(take_staging_work());
+            }
+            // Later edits serialize and read only the blocks they change, as
+            // many in a body four times as large, and nothing whole, and the
+            // reopens of their commits parse and scan only those blocks.
+            assert_eq!(work[0], work[1], "{name}");
+            assert!(
+                work[0]
+                    .iter()
+                    .all(|(staging, reopen)| staging[..4] == [0; 4] && reopen[..2] == [0; 2]),
+                "{name} {work:?}"
+            );
+            assert!(
+                forgetting[1][4] > forgetting[0][4] && forgetting[1][0] > forgetting[0][0],
+                "{name} {forgetting:?}"
+            );
+        }
     }
 }
 
