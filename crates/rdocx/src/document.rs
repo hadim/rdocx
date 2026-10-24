@@ -6532,6 +6532,42 @@ fn drawing_ids_in_xml(xml: &[u8]) -> Result<HashSet<u32>> {
     }
 }
 
+/// The retained main part `retained` that a story picture insertion keeps,
+/// with its relationships renamed by `remap` and then its authored drawings
+/// given `canonical_drawing_ids`, and its parse. `None` when its authored
+/// drawings are not those, which leaves it.
+fn canonical_retained_main_part(
+    retained: &[u8],
+    remap: &HashMap<String, String>,
+    modeled_drawing_ids: &[u32],
+    nested_image_relationship_ids: &HashSet<String>,
+    canonical_drawing_ids: &[(u32, u32)],
+) -> Result<Option<(Vec<u8>, CT_Document)>> {
+    let mut retained = remap_xml_relationship_ids(retained, remap)?;
+    let slots = authored_drawing_slots_in_source_order(
+        &retained,
+        modeled_drawing_ids,
+        nested_image_relationship_ids,
+    )?;
+    if slots.len() != canonical_drawing_ids.len()
+        || slots
+            .iter()
+            .zip(canonical_drawing_ids)
+            .any(|((_, _, old), (expected, _))| old != expected)
+    {
+        return Ok(None);
+    }
+    for ((_, span, _), (_, id)) in slots
+        .into_iter()
+        .rev()
+        .zip(canonical_drawing_ids.iter().rev())
+    {
+        retained.splice(span, id.to_string().into_bytes());
+    }
+    let document = CT_Document::from_xml(&retained)?;
+    Ok(Some((retained, document)))
+}
+
 pub(crate) fn remap_xml_relationship_ids(
     xml: &[u8],
     remap: &HashMap<String, String>,
@@ -6630,6 +6666,24 @@ fn remap_xml_relationship_ids_with_bindings(
     if remap.is_empty() {
         return Ok(xml.to_vec());
     }
+    let mut updated = xml.to_vec();
+    for (start, end, replacement) in relationship_remap_edits(xml, remap, inherited_bindings)?
+        .into_iter()
+        .rev()
+    {
+        updated.splice(start..end, replacement);
+    }
+    Ok(updated)
+}
+
+/// The edits [`remap_xml_relationship_ids_with_bindings`] makes in `xml`, in
+/// order: the span of each relationship attribute value `remap` renames,
+/// with the new value.
+fn relationship_remap_edits(
+    xml: &[u8],
+    remap: &HashMap<String, String>,
+    inherited_bindings: &[(String, String)],
+) -> Result<Vec<(usize, usize, Vec<u8>)>> {
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
     let mut edits = Vec::new();
@@ -6686,12 +6740,8 @@ fn remap_xml_relationship_ids_with_bindings(
         }
         buffer.clear();
     }
-    let mut updated = xml.to_vec();
     edits.sort_by_key(|(start, _, _)| *start);
-    for (start, end, replacement) in edits.into_iter().rev() {
-        updated.splice(start..end, replacement);
-    }
-    Ok(updated)
+    Ok(edits)
 }
 
 fn story_attribute_value_span(element: &[u8], attribute_name: &[u8]) -> Option<(usize, usize)> {
@@ -7434,64 +7484,33 @@ impl MainPartBlocks {
     }
 
     /// Gives `document`, which these blocks serialize, what parsing their
-    /// bytes with the `edits` made gives, a drawing id value replaced at each
-    /// span, sorted: the frame and the blocks parsed again where edited.
-    /// `false`, leaving `document` as it is, when an edit spans blocks or a
-    /// block does not parse back alone.
+    /// bytes with the `edits` made gives, a value replaced at each span,
+    /// sorted: the frame, and the blocks parsed again where edited, where
+    /// they hold a field or where they do not parse back to their value.
+    /// `false`, leaving `document` as it is, when
+    /// [`MainPartBlocks::edited`] cannot make the edits or a block does not
+    /// parse alone to one body child.
     fn reparse_edited(
         &self,
         document: &mut CT_Document,
         edits: &[(usize, usize, Vec<u8>)],
     ) -> bool {
-        let Some(frame) = self.frame() else {
+        let Some(edited) = self.edited(edits) else {
             return false;
         };
-        let mut edits = edits.iter().peekable();
-        let mut edited = Vec::new();
-        for (index, (block, start)) in self.blocks.iter().zip(self.starts()).enumerate() {
-            let end = start + block.bytes.len();
-            let mut xml = None;
-            while let Some((edit_start, edit_end, value)) =
-                edits.next_if(|(edit_start, _, _)| *edit_start < end)
-            {
-                if *edit_start < start || *edit_end > end {
-                    return false;
-                }
-                xml.get_or_insert_with(Vec::new).push((
-                    edit_start - start,
-                    edit_end - start,
-                    value,
-                ));
-            }
-            match xml {
-                Some(block_edits) => {
-                    let mut xml = block.bytes.clone();
-                    for (edit_start, edit_end, value) in block_edits.into_iter().rev() {
-                        xml.splice(edit_start..edit_end, value.iter().copied());
-                    }
-                    let mut part = self.root().to_vec();
-                    part.extend_from_slice(MAIN_PART_BODY_START);
-                    part.extend_from_slice(&xml);
-                    part.extend_from_slice(MAIN_PART_BODY_END);
-                    note_staging_work(|work| work.blocks_read += 1);
-                    let Ok(mut parsed) = CT_Document::from_xml(&part) else {
-                        return false;
-                    };
-                    if parsed.body.sect_pr.is_some() || parsed.body.content.len() != 1 {
-                        return false;
-                    }
-                    edited.push((index, parsed.body.content.remove(0)));
-                }
-                // The bytes of a block with a field say more than its value.
-                None if block.fieldless && block.parses_back(self.root()) => {}
-                None => match block.reparsed(self.root()).filter(|_| !block.fieldless) {
-                    Some(item) => edited.push((index, item)),
-                    None => return false,
-                },
-            }
-        }
-        if edits.next().is_some() {
+        let Some(frame) = edited.frame() else {
             return false;
+        };
+        let mut items = Vec::new();
+        for (index, (block, kept)) in edited.blocks.iter().zip(&self.blocks).enumerate() {
+            // The bytes of a block with a field say more than its value.
+            if Arc::ptr_eq(block, kept) && block.fieldless && block.parses_back(self.root()) {
+                continue;
+            }
+            match block.reparsed(self.root()) {
+                Some(item) => items.push((index, item)),
+                None => return false,
+            }
         }
         document
             .extra_namespaces
@@ -7502,10 +7521,161 @@ impl MainPartBlocks {
             .clone_from(&frame.background_extra_xml);
         document.root_attributes.clone_from(&frame.root_attributes);
         document.body.sect_pr.clone_from(&frame.body.sect_pr);
-        for (index, item) in edited {
+        for (index, item) in items {
             document.body.content[index] = item;
         }
+        // Debug builds, which run the binding tests, parse the edited part
+        // whole too.
+        #[cfg(debug_assertions)]
+        {
+            let whole = CT_Document::from_xml(&edited.bytes());
+            assert!(
+                whole.as_ref().ok() == Some(&*document)
+                    && whole.ok().and_then(|whole| whole.to_xml().ok()) == document.to_xml().ok(),
+                "the edited blocks parse to another model than the edited part"
+            );
+        }
         true
+    }
+
+    /// These blocks with `edits`, (start, end, bytes) in the part, sorted and
+    /// apart, made in the bytes of the blocks and the tail: an edited block
+    /// holds its new bytes and nothing read in them yet. `None` when an edit
+    /// reaches the head or spans the edge of a block.
+    fn edited(&self, edits: &[(usize, usize, Vec<u8>)]) -> Option<Self> {
+        let starts = self.starts();
+        let children = self.content();
+        let mut edited = Self {
+            part: None,
+            nested_namespace_owners: OnceLock::new(),
+            ..self.clone()
+        };
+        for (start, end, value) in edits.iter().rev() {
+            if *start >= children.end {
+                edited.tail.splice(
+                    start - children.end..end - children.end,
+                    value.iter().copied(),
+                );
+                edited.frame = OnceLock::new();
+                continue;
+            }
+            let index = starts.partition_point(|at| at <= start).checked_sub(1)?;
+            let at = starts[index];
+            if *end > at + self.blocks[index].bytes.len() {
+                return None;
+            }
+            let mut bytes = edited.blocks[index].bytes.clone();
+            bytes.splice(start - at..end - at, value.iter().copied());
+            edited.blocks[index] = Arc::new(BodyBlockScan::of(bytes, None));
+        }
+        Some(edited)
+    }
+
+    /// The part these blocks are.
+    fn bytes(&self) -> Vec<u8> {
+        let mut xml = self.head.clone();
+        for block in &self.blocks {
+            xml.extend_from_slice(&block.bytes);
+        }
+        xml.extend_from_slice(&self.tail);
+        xml
+    }
+
+    /// The edits [`relationship_remap_edits`] finds in the part these blocks
+    /// are, read alone in the tail and in the blocks whose relationship ids
+    /// `remap` names. `None` when the head holds a relationship id, or the
+    /// head, a block or the tail does not read or decode, where the whole
+    /// scan raises.
+    fn relationship_remap_edits(
+        &self,
+        remap: &HashMap<String, String>,
+        bindings: &[(String, String)],
+    ) -> Option<Vec<(usize, usize, Vec<u8>)>> {
+        let (head, tail) = self.frame_parts();
+        if !xml_decodes(&head)
+            || xml_relationship_ids_in_order_with_bindings(&head, bindings)
+                .map_or(true, |ids| !ids.is_empty())
+        {
+            return None;
+        }
+        let mut edits = Vec::new();
+        let mut read = |part: &[u8], at: usize, len: usize, start: usize| -> Option<()> {
+            for (edit_start, edit_end, value) in
+                relationship_remap_edits(part, remap, bindings).ok()?
+            {
+                if edit_start < at || edit_end > at + len {
+                    return None;
+                }
+                edits.push((edit_start - at + start, edit_end - at + start, value));
+            }
+            Some(())
+        };
+        for (block, start) in self.blocks.iter().zip(self.starts()) {
+            if block
+                .relationship_ids(self.root(), bindings)?
+                .iter()
+                .any(|id| remap.contains_key(id))
+            {
+                let (part, at) = block.alone(self.root());
+                read(&part, at, block.bytes.len(), start)?;
+            } else if !block.decodes(self.root()) {
+                // The whole scan decodes every attribute value, and raises
+                // on the first it cannot.
+                return None;
+            }
+        }
+        let at = tail.len() - self.tail.len();
+        read(&tail, at, self.tail.len(), self.content().end)?;
+        Some(edits)
+    }
+
+    /// The retained main part these blocks are, canonicalized as
+    /// `canonicalize_all_drawing_ids` canonicalizes it whole: its
+    /// relationships renamed by `remap`, then its authored drawings given
+    /// `canonical_drawing_ids`, with its blocks and its parse.
+    /// `Some(None)` when its authored drawings are not those, which leaves
+    /// it, and `None` when the blocks do not tell.
+    #[allow(clippy::type_complexity)] // The part, its blocks and its parse.
+    fn canonical_retained(
+        &self,
+        remap: &HashMap<String, String>,
+        modeled_drawing_ids: &[u32],
+        nested_image_relationship_ids: &HashSet<String>,
+        canonical_drawing_ids: &[(u32, u32)],
+    ) -> Option<Option<(Vec<u8>, Self, CT_Document)>> {
+        let remapped = self.edited(&self.relationship_remap_edits(remap, &[])?)?;
+        let slots = authored_drawing_slots_by_blocks(
+            &remapped.bytes(),
+            Some(&remapped),
+            modeled_drawing_ids,
+            nested_image_relationship_ids,
+        )
+        .ok()?;
+        if slots.len() != canonical_drawing_ids.len()
+            || slots
+                .iter()
+                .zip(canonical_drawing_ids)
+                .any(|((_, _, old), (expected, _))| old != expected)
+        {
+            return Some(None);
+        }
+        let edits = slots
+            .into_iter()
+            .zip(canonical_drawing_ids)
+            .map(|((_, span, _), (_, id))| (span.start, span.end, id.to_string().into_bytes()))
+            .collect::<Vec<_>>();
+        let mut canonical = remapped.edited(&edits)?;
+        let document = canonical.parsed_document()?;
+        // An edited block holds the value its bytes parse to.
+        for (block, item) in canonical.blocks.iter_mut().zip(&document.body.content) {
+            if block.value.is_none() {
+                *block = Arc::new(BodyBlockScan {
+                    parsed: true,
+                    ..BodyBlockScan::of(block.bytes.clone(), Some(item.clone()))
+                });
+            }
+        }
+        Some(Some((canonical.bytes(), canonical, document)))
     }
 
     /// These blocks for `document`, reopened from the part they are, or
@@ -8734,6 +8904,8 @@ struct BlockStagingReads {
     /// The identifiers defined, as [`main_part_identifier_definitions`]
     /// reads them.
     definitions: OnceLock<Option<Vec<IdentifierDefinition>>>,
+    /// Whether [`xml_decodes`] reads the bytes.
+    decodes: OnceLock<bool>,
 }
 
 /// What a main part holds around its body children, read alone.
@@ -8829,6 +9001,13 @@ impl BodyBlockScan {
             })
     }
 
+    fn decodes(&self, root: &[u8]) -> bool {
+        *self
+            .staging
+            .decodes
+            .get_or_init(|| xml_decodes(&self.alone(root).0))
+    }
+
     fn definitions(&self, root: &[u8]) -> Option<&[IdentifierDefinition]> {
         self.staging
             .definitions
@@ -8883,6 +9062,16 @@ impl MainStoryLayout {
                 ..owner.clone()
             })
             .partition(|owner| owner.full.start < self.content.start)
+    }
+
+    /// The kind of each owner of [`Self::owners`], in order.
+    fn owner_kinds(&self) -> Vec<StoryKind> {
+        let (head, tail) = self.frame_owners();
+        head.iter()
+            .chain(self.blocks.iter().flat_map(|(_, block)| block.owners()))
+            .chain(&tail)
+            .map(|owner| owner.kind)
+            .collect()
     }
 
     /// [`scan_story_owners`] of the part `xml` as the body story's root.
@@ -9483,6 +9672,92 @@ struct XmlElementFrame {
     word_prefixes: Vec<String>,
     opaque: bool,
     typed_sdt_content_seen: bool,
+}
+
+/// Whether every event of `xml` reads, and every attribute of its elements
+/// parses and decodes, so that a whole scan of a part that reads and
+/// decodes them raises nothing in these bytes.
+fn xml_decodes(xml: &[u8]) -> bool {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element) | Event::Empty(element)) => {
+                for attribute in element.attributes() {
+                    let Ok(attribute) = attribute else {
+                        return false;
+                    };
+                    if attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .is_err()
+                        || attribute
+                            .key
+                            .as_ref()
+                            .strip_prefix(b"xmlns:")
+                            .is_some_and(|prefix| std::str::from_utf8(prefix).is_err())
+                    {
+                        return false;
+                    }
+                }
+            }
+            Ok(Event::Eof) => return true,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+        buffer.clear();
+    }
+}
+
+/// The marker of the scoped proof: the first that neither `original` nor
+/// `restored` holds.
+fn scoped_proof_marker(original: &[u8], restored: &[u8]) -> Result<String> {
+    let mut identity = 0usize;
+    loop {
+        let marker = format!("rdocxScopedPositionProof{identity}");
+        if !original
+            .windows(marker.len())
+            .any(|bytes| bytes == marker.as_bytes())
+            && !restored
+                .windows(marker.len())
+                .any(|bytes| bytes == marker.as_bytes())
+        {
+            return Ok(marker);
+        }
+        identity = identity
+            .checked_add(1)
+            .ok_or_else(|| Error::Other("scoped source proof identity exhausted".into()))?;
+    }
+}
+
+/// The block of the scoped proof that holds `marker` in place of
+/// `selected_closed`, a qualified Word block with its namespaces closed.
+fn scoped_proof_sentinel(selected_closed: &[u8], marker: &str) -> Result<String> {
+    let mut reader = NsReader::from_reader(selected_closed);
+    let (namespace, event) = reader
+        .read_resolved_event()
+        .map_err(|error| Error::Other(error.to_string()))?;
+    let root = match event {
+        Event::Start(element) | Event::Empty(element) => element,
+        _ => return Err(Error::Other("scoped source proof has no root".into())),
+    };
+    if !word_element(&namespace) {
+        return Err(Error::Other(
+            "scoped source proof needs a qualified Word block".into(),
+        ));
+    }
+    let paragraph =
+        format!(r#"<w:p xmlns:w="{WORD_NAMESPACE}"><w:r><w:t>{marker}</w:t></w:r></w:p>"#);
+    Ok(match root.local_name().as_ref() {
+        b"p" => paragraph,
+        b"tbl" => format!(
+            r#"<w:tbl xmlns:w="{WORD_NAMESPACE}"><w:tr><w:tc>{paragraph}</w:tc></w:tr></w:tbl>"#
+        ),
+        b"tc" => format!(r#"<w:tc xmlns:w="{WORD_NAMESPACE}">{paragraph}</w:tc>"#),
+        b"sdt" => format!(
+            r#"<w:sdt xmlns:w="{WORD_NAMESPACE}"><w:sdtPr/><w:sdtContent>{paragraph}</w:sdtContent></w:sdt>"#
+        ),
+        _ => return Err(Error::Other("unsupported scoped source proof kind".into())),
+    })
 }
 
 fn word_element(namespace: &ResolveResult<'_>) -> bool {
@@ -11276,8 +11551,17 @@ fn content_fragment_root_is_section_properties(xml: &[u8], item: &StoryItemSpan)
 }
 
 fn direct_story_content_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemSpan>> {
+    direct_story_content_items_in(xml, owner, scan_story_items(xml, owner, None)?)
+}
+
+/// The direct content items of `owner` in `xml` among its story `items`.
+fn direct_story_content_items_in(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    story_items: Vec<StoryItemSpan>,
+) -> Result<Vec<StoryItemSpan>> {
     let mut items = Vec::new();
-    for item in scan_story_items(xml, owner, None)? {
+    for item in story_items {
         if !item.direct_owner_child {
             continue;
         }
@@ -20940,7 +21224,7 @@ impl Document {
         let owner_identity = relationship_owner_identity(&owner);
         // Story picture insertion keeps current producer XML. Patch its
         // canonical relationship and drawing IDs into that retained source,
-        // which is canonicalized whole.
+        // in the blocks it is made of when they tell, or else whole.
         let retained_main_xml = self
             .package
             .get_part(&owner)
@@ -20949,13 +21233,13 @@ impl Document {
                     .authored_nested_story_relationship_ids
                     .get(&owner_identity)
                     .is_some_and(|ids| !ids.is_empty())
-                    && {
-                        note_staging_work(|work| work.canonicalized += xml.len());
-                        CT_Document::from_xml(xml).ok().as_ref() == Some(&self.document)
-                    }
-                    && self.document.to_xml().ok().as_deref() != Some(*xml)
+                    && self.main_part_parses_to_model(self.kept_main_part().as_deref())
+                    && self
+                        .serialized_main_part()
+                        .ok()
+                        .is_none_or(|(serialized, _)| serialized != *xml)
             })
-            .map(|xml| xml.to_vec());
+            .map(|xml| (xml.to_vec(), self.package_main_part_blocks()));
         if let Some(section) = &mut self.document.body.sect_pr {
             section
                 .header_refs
@@ -21340,28 +21624,67 @@ impl Document {
                 self.document = CT_Document::from_xml(&updated)?;
             }
         }
-        if let Some(retained_main_xml) = retained_main_xml {
-            let mut retained = remap_xml_relationship_ids(&retained_main_xml, &relationship_remap)?;
-            let slots = authored_drawing_slots_in_source_order(
-                &retained,
-                &modeled_drawing_ids,
-                &nested_image_relationship_ids,
-            )?;
-            if slots.len() == canonical_drawing_ids.len()
-                && slots
-                    .iter()
-                    .zip(&canonical_drawing_ids)
-                    .all(|((_, _, old), (expected, _))| old == expected)
-            {
-                for ((_, span, _), (_, id)) in slots
-                    .into_iter()
-                    .rev()
-                    .zip(canonical_drawing_ids.iter().rev())
-                {
-                    retained.splice(span, id.to_string().into_bytes());
+        if let Some((retained, blocks)) = retained_main_xml {
+            let canonical = blocks.as_deref().and_then(|blocks| {
+                blocks.canonical_retained(
+                    &relationship_remap,
+                    &modeled_drawing_ids,
+                    &nested_image_relationship_ids,
+                    &canonical_drawing_ids,
+                )
+            });
+            // Debug builds, which run the binding tests, canonicalize it
+            // whole too.
+            #[cfg(debug_assertions)]
+            if let Some(canonical) = &canonical {
+                let whole = without_staging_work(|| {
+                    canonical_retained_main_part(
+                        &retained,
+                        &relationship_remap,
+                        &modeled_drawing_ids,
+                        &nested_image_relationship_ids,
+                        &canonical_drawing_ids,
+                    )
+                });
+                assert!(
+                    whole
+                        .as_ref()
+                        .ok()
+                        .map(|whole| whole.as_ref().map(|(xml, document)| (xml, document)))
+                        == Some(canonical.as_ref().map(|(xml, _, document)| (xml, document))),
+                    "the blocks canonicalize the retained main part otherwise"
+                );
+            }
+            let canonical = match canonical {
+                Some(canonical) => {
+                    canonical.map(|(xml, blocks, document)| (xml, Some(blocks), document))
                 }
-                self.document = CT_Document::from_xml(&retained)?;
-                self.package.set_part(&owner, retained);
+                None => {
+                    note_staging_work(|work| work.canonicalized += retained.len());
+                    canonical_retained_main_part(
+                        &retained,
+                        &relationship_remap,
+                        &modeled_drawing_ids,
+                        &nested_image_relationship_ids,
+                        &canonical_drawing_ids,
+                    )?
+                    .map(|(xml, document)| (xml, None, document))
+                }
+            };
+            if let Some((xml, blocks, document)) = canonical {
+                self.document = document;
+                // A part already canonical keeps its bytes, and the blocks
+                // the scans, shared with the staged copies, keep for them.
+                if xml != retained {
+                    let xml = Arc::new(xml);
+                    self.package.set_part(&owner, Arc::clone(&xml));
+                    if let Some(blocks) = blocks {
+                        self.lock_main_body_scans().written = Some(Arc::new(MainPartBlocks {
+                            part: Some(xml),
+                            ..blocks
+                        }));
+                    }
+                }
             }
         }
         if canonical_nested_drawing_ids.is_empty() {
@@ -21406,12 +21729,36 @@ impl Document {
             .cloned()
             .collect::<HashSet<_>>();
         if !relationship_remap.is_empty() && !live.is_empty() {
-            let updated = remap_xml_relationship_ids_with_bindings(
-                &xml,
-                relationship_remap,
-                &self.body_namespace_bindings,
-            )?;
-            self.document = CT_Document::from_xml(&updated)?;
+            // The blocks that hold a renamed relationship are parsed again,
+            // or else the whole part.
+            let remap_whole = || {
+                remap_xml_relationship_ids_with_bindings(
+                    &xml,
+                    relationship_remap,
+                    &self.body_namespace_bindings,
+                )
+            };
+            let by_blocks = blocks.as_ref().is_some_and(|blocks| {
+                blocks
+                    .relationship_remap_edits(relationship_remap, &self.body_namespace_bindings)
+                    .is_some_and(|edits| blocks.reparse_edited(&mut self.document, &edits))
+            });
+            // Debug builds, which run the binding tests, parse it whole too.
+            #[cfg(debug_assertions)]
+            if by_blocks {
+                let whole = remap_whole().and_then(|updated| Ok(CT_Document::from_xml(&updated)?));
+                assert!(
+                    whole.as_ref().ok() == Some(&self.document)
+                        && whole.ok().and_then(|whole| whole.to_xml().ok())
+                            == self.document.to_xml().ok(),
+                    "the blocks rename the relationships of the main part otherwise"
+                );
+            }
+            if !by_blocks {
+                let updated = remap_whole()?;
+                note_staging_work(|work| work.parsed += updated.len());
+                self.document = CT_Document::from_xml(&updated)?;
+            }
         }
         if live.is_empty() {
             self.identifiers
@@ -24579,6 +24926,17 @@ impl Document {
         &'a self,
         story: &StoryId,
     ) -> Result<(StorySource<'a>, StoryOwnerSpan)> {
+        let (source, owner, _) = self.fragment_story_source_owner_and_owners(story)?;
+        Ok((source, owner))
+    }
+
+    /// [`Self::fragment_story_source_and_owner`], with every owner of the
+    /// source part, in order.
+    #[allow(clippy::type_complexity)] // The source, the owner and the source's owners.
+    fn fragment_story_source_owner_and_owners<'a>(
+        &'a self,
+        story: &StoryId,
+    ) -> Result<(StorySource<'a>, StoryOwnerSpan, Vec<StoryOwnerSpan>)> {
         let (canonical, _) = self.story_source_and_owner(story)?;
         let xml = self.package.get_part(&canonical.part_name).ok_or_else(|| {
             Error::Other(format!(
@@ -24586,9 +24944,11 @@ impl Document {
                 canonical.part_name
             ))
         })?;
-        let owner = scan_story_owners(xml, canonical.root_kind)?
-            .into_iter()
+        let owners = scan_story_owners(xml, canonical.root_kind)?;
+        let owner = owners
+            .iter()
             .find(|owner| owner.kind == story.kind && owner.owner_index == story.owner_index)
+            .cloned()
             .ok_or_else(|| StoryError::OwnerNotFound {
                 story: story.clone(),
             })?;
@@ -24598,6 +24958,7 @@ impl Document {
                 ..canonical
             },
             owner,
+            owners,
         ))
     }
 
@@ -26490,8 +26851,8 @@ impl Document {
         // use the retained main part when it still describes the current model.
         if part_name == candidate.doc_part_name
             && let Some(retained) = candidate.package.get_part(&part_name)
-            && CT_Document::from_xml(retained).ok().as_ref() == Some(&candidate.document)
             && retained != source_xml
+            && candidate.main_part_parses_to_model(candidate.kept_main_part().as_deref())
         {
             source_xml = retained.to_vec();
             story_owner = scan_story_owners(&source_xml, StoryKind::Body)?
@@ -40584,17 +40945,33 @@ impl Document {
         };
         // Flush only the private candidate before choosing the preserved physical span.
         candidate.prepare_staged_package()?;
-        let (canonical, canonical_owner) = candidate.story_source_and_owner(&story)?;
-        let (source, owner) = candidate.fragment_story_source_and_owner(&story)?;
-        let canonical_owners = scan_story_owners(&canonical.xml, canonical.root_kind)?;
-        let actual_owners = scan_story_owners(&source.xml, source.root_kind)?;
+        // The canonical owners and items are read in the body children that
+        // hold them.
+        let (canonical, canonical_owner, layout) =
+            candidate.story_source_owner_and_layout(&story, path.is_some())?;
+        let (source, owner, actual_owners) =
+            candidate.fragment_story_source_owner_and_owners(&story)?;
+        let canonical_owners = match &layout {
+            Some(layout) => layout.owner_kinds(),
+            None => scan_story_owners(&canonical.xml, canonical.root_kind)?
+                .iter()
+                .map(|owner| owner.kind)
+                .collect(),
+        };
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            Some(&canonical_owners),
+            scan_story_owners(&canonical.xml, canonical.root_kind)
+                .ok()
+                .map(|owners| owners.iter().map(|owner| owner.kind).collect::<Vec<_>>())
+                .as_ref(),
+            "the canonical owners of the children differ from a scan"
+        );
+        // Owners are numbered by kind in order, so equal kinds number alike.
         if canonical_owners
-            .iter()
-            .map(|o| (o.kind, o.owner_index))
-            .collect::<Vec<_>>()
             != actual_owners
                 .iter()
-                .map(|o| (o.kind, o.owner_index))
+                .map(|owner| owner.kind)
                 .collect::<Vec<_>>()
         {
             return Err(Error::Other(
@@ -40602,7 +40979,10 @@ impl Document {
             ));
         }
         let (canonical_span, span) = if let Some(location) = path {
-            let canonical_items = scan_story_items(&canonical.xml, &canonical_owner, None)?;
+            let canonical_items = match &layout {
+                Some(layout) => layout.owner_items(&canonical.xml, &canonical_owner)?,
+                None => scan_story_items(&canonical.xml, &canonical_owner, None)?,
+            };
             let index = location.index_path[0];
             let selected = canonical_items.get(index).ok_or(StoryError::OutOfBounds {
                 index,
@@ -40613,7 +40993,11 @@ impl Document {
                     "scoped replacement requires a block owner item".into(),
                 ));
             }
-            let canonical_direct = direct_story_content_items(&canonical.xml, &canonical_owner)?;
+            let canonical_direct = direct_story_content_items_in(
+                &canonical.xml,
+                &canonical_owner,
+                canonical_items.clone(),
+            )?;
             let actual_direct = direct_story_content_items(&source.xml, &owner)?;
             let slot = canonical_direct
                 .iter()
@@ -40730,6 +41114,212 @@ impl Document {
         original: &[u8],
         retained_span: Range<usize>,
     ) -> Result<()> {
+        if self.scoped_main_source_by_blocks(canonical, &canonical_span, original, &retained_span) {
+            // Debug builds, which run the binding tests, prove it whole too.
+            #[cfg(debug_assertions)]
+            without_staging_work(|| {
+                self.prove_whole_scoped_main_source(
+                    canonical,
+                    canonical_span,
+                    original,
+                    retained_span,
+                )
+            })
+            .expect("the body children prove a scoped source the whole proof refuses");
+            return Ok(());
+        }
+        note_staging_work(|work| work.parsed += original.len());
+        self.prove_whole_scoped_main_source(canonical, canonical_span, original, retained_span)
+    }
+
+    /// Whether [`Document::prove_whole_scoped_main_source`] holds, told by the
+    /// body children of `canonical`, the main part as the model serializes
+    /// it, and of `original`, the main part the package holds, without
+    /// parsing either whole. When every nested namespace owner of the
+    /// original is redundant in the canonical source, the restored source is
+    /// the canonical one. When the frames of both parse back to the model's,
+    /// and the children of both to its body children, both normalize alike.
+    /// A child that holds a field, or does not parse back, is normalized
+    /// alone on each side. The probes differ only in the child that holds
+    /// both spans, which is normalized alone with the sentinel on each side.
+    /// `false` when the children do not tell, and the whole proof decides.
+    fn scoped_main_source_by_blocks(
+        &self,
+        canonical: &[u8],
+        canonical_span: &Range<usize>,
+        original: &[u8],
+        retained_span: &Range<usize>,
+    ) -> bool {
+        let Some(held) = self.package_main_part_blocks() else {
+            return false;
+        };
+        let Ok((xml, Some(serialized))) = self.serialized_main_part() else {
+            return false;
+        };
+        let model = &self.document;
+        if !held
+            .part
+            .as_deref()
+            .is_some_and(|part| std::ptr::eq(part.as_slice(), original))
+            || xml != canonical
+            || held.parses_to(model) != Some(true)
+            || !serialized.frame().is_some_and(|frame| {
+                frame.body.content.is_empty()
+                    && frame.extra_namespaces == model.extra_namespaces
+                    && frame.background_xml == model.background_xml
+                    && frame.background_extra_xml == model.background_extra_xml
+                    && frame.root_attributes == model.root_attributes
+                    && frame.body.sect_pr == model.body.sect_pr
+            })
+        {
+            return false;
+        }
+        // The whole proof reads both parts from their start, so no child or
+        // frame of either may hold what it cannot read.
+        let reads = |blocks: &MainPartBlocks| {
+            let (head, tail) = blocks.frame_parts();
+            xml_decodes(&head)
+                && xml_decodes(&tail)
+                && blocks
+                    .blocks
+                    .iter()
+                    .all(|block| block.decodes(blocks.root()))
+        };
+        if !reads(&held) || !reads(&serialized) {
+            return false;
+        }
+        let child = |blocks: &MainPartBlocks, span: &Range<usize>| {
+            let starts = blocks.starts();
+            let index = blocks
+                .blocks
+                .iter()
+                .zip(&starts)
+                .position(|(block, start)| holds(*start, block, span))?;
+            Some((index, starts[index]))
+        };
+        // A fragment closed with the namespaces in scope where it starts.
+        let closed = |blocks: &MainPartBlocks, span: &Range<usize>, xml: &[u8]| {
+            let (index, start) = child(blocks, span)?;
+            let (alone, at) = blocks.blocks[index].alone(blocks.root());
+            story_namespace_scope_at(&alone, at + span.start - start)
+                .and_then(|scope| close_content_fragment_namespaces(&xml[span.clone()], &scope))
+                .ok()
+        };
+        let Some(owners) = held.nested_namespace_owners() else {
+            return false;
+        };
+        for owner in owners {
+            let (Some(original_owner), Some(targets)) = (
+                closed(&held, &owner.source, original),
+                serialized.spans(&xml, |name| name == owner.local_name),
+            ) else {
+                return false;
+            };
+            let mut redundant = 0;
+            for target in targets.iter().filter(|target| {
+                owner
+                    .declarations
+                    .iter()
+                    .all(|declaration| target.declarations.contains(declaration))
+            }) {
+                let Some(target_owner) = closed(&serialized, &(target.start..target.end), &xml)
+                else {
+                    return false;
+                };
+                match comment_namespace_source_boundaries(&original_owner, &target_owner) {
+                    Ok(Some((_, changed))) if changed.is_empty() => redundant += 1,
+                    Ok(_) => {}
+                    Err(_) => return false,
+                }
+            }
+            if redundant != 1 {
+                return false;
+            }
+        }
+        let Ok(marker) = scoped_proof_marker(original, canonical) else {
+            return false;
+        };
+        let occurrences = |xml: &[u8]| {
+            xml.windows(marker.len())
+                .filter(|bytes| *bytes == marker.as_bytes())
+                .count()
+        };
+        // A whole normalization declares `w14` on the root when it is used.
+        let normal_root = serialized.root();
+        let declares_w14 = normal_root.windows(10).any(|bytes| bytes == b"xmlns:w14=");
+        let normalized = |root: &[u8], bytes: Vec<u8>| -> Option<(BodyContent, Vec<u8>)> {
+            let item = BodyBlockScan::of(bytes, None).reparsed(root)?;
+            let written = model.body_item_xml(&item).ok()?;
+            if !declares_w14
+                && written.windows(5).any(|window| {
+                    matches!(window[0], b'<' | b'/' | b' ' | b'\t' | b'\r' | b'\n')
+                        && &window[1..] == b"w14:"
+                })
+            {
+                return None;
+            }
+            let item = BodyBlockScan::of(written, None).reparsed(normal_root)?;
+            let rewritten = model.body_item_xml(&item).ok()?;
+            Some((item, rewritten))
+        };
+        for (block, kept) in held.blocks.iter().zip(&serialized.blocks) {
+            if !(block.fieldless && kept.fieldless && kept.parses_back(normal_root)) {
+                match (
+                    normalized(held.root(), block.bytes.clone()),
+                    normalized(normal_root, kept.bytes.clone()),
+                ) {
+                    (Some((item, xml)), Some((kept_item, kept_xml)))
+                        if item == kept_item && occurrences(&xml) + occurrences(&kept_xml) == 0 => {
+                    }
+                    _ => return false,
+                }
+            }
+        }
+        let (Some((index, start)), Some((retained_index, retained_start))) = (
+            child(&serialized, canonical_span),
+            child(&held, retained_span),
+        ) else {
+            return false;
+        };
+        let Some(sentinel) = (index == retained_index)
+            .then(|| closed(&serialized, canonical_span, canonical))
+            .flatten()
+            .and_then(|closed| scoped_proof_sentinel(&closed, &marker).ok())
+        else {
+            return false;
+        };
+        let probe = |block: &BodyBlockScan, span: &Range<usize>, start: usize, root: &[u8]| {
+            let mut bytes = block.bytes.clone();
+            bytes.splice(span.start - start..span.end - start, sentinel.bytes());
+            normalized(root, bytes)
+        };
+        let (Some((checked, checked_xml)), Some((retained, retained_xml))) = (
+            probe(
+                &serialized.blocks[index],
+                canonical_span,
+                start,
+                normal_root,
+            ),
+            probe(
+                &held.blocks[index],
+                retained_span,
+                retained_start,
+                held.root(),
+            ),
+        ) else {
+            return false;
+        };
+        // Neither source holds the marker, so no other child does.
+        checked == retained && occurrences(&checked_xml) == 1 && occurrences(&retained_xml) == 1
+    }
+
+    fn prove_whole_scoped_main_source(
+        &self,
+        canonical: &[u8],
+        canonical_span: Range<usize>,
+        original: &[u8],
+        retained_span: Range<usize>,
+    ) -> Result<()> {
         let restored = self.namespace_restored_main_source()?;
         let (boundaries, _) = comment_namespace_source_boundaries(canonical, &restored)?
             .ok_or_else(|| {
@@ -40754,50 +41344,10 @@ impl Document {
                 "scoped source has no equivalent checked model projection".into(),
             ));
         }
-        let mut identity = 0usize;
-        let marker = loop {
-            let marker = format!("rdocxScopedPositionProof{identity}");
-            if !original
-                .windows(marker.len())
-                .any(|bytes| bytes == marker.as_bytes())
-                && !restored
-                    .windows(marker.len())
-                    .any(|bytes| bytes == marker.as_bytes())
-            {
-                break marker;
-            }
-            identity = identity
-                .checked_add(1)
-                .ok_or_else(|| Error::Other("scoped source proof identity exhausted".into()))?;
-        };
+        let marker = scoped_proof_marker(original, &restored)?;
         let scope = story_namespace_scope_at(&restored, start)?;
         let selected_closed = close_content_fragment_namespaces(&restored[start..end], &scope)?;
-        let mut reader = NsReader::from_reader(selected_closed.as_slice());
-        let (namespace, event) = reader
-            .read_resolved_event()
-            .map_err(|error| Error::Other(error.to_string()))?;
-        let root = match event {
-            Event::Start(element) | Event::Empty(element) => element,
-            _ => return Err(Error::Other("scoped source proof has no root".into())),
-        };
-        if !word_element(&namespace) {
-            return Err(Error::Other(
-                "scoped source proof needs a qualified Word block".into(),
-            ));
-        }
-        let paragraph =
-            format!(r#"<w:p xmlns:w="{WORD_NAMESPACE}"><w:r><w:t>{marker}</w:t></w:r></w:p>"#);
-        let sentinel = match root.local_name().as_ref() {
-            b"p" => paragraph,
-            b"tbl" => format!(
-                r#"<w:tbl xmlns:w="{WORD_NAMESPACE}"><w:tr><w:tc>{paragraph}</w:tc></w:tr></w:tbl>"#
-            ),
-            b"tc" => format!(r#"<w:tc xmlns:w="{WORD_NAMESPACE}">{paragraph}</w:tc>"#),
-            b"sdt" => format!(
-                r#"<w:sdt xmlns:w="{WORD_NAMESPACE}"><w:sdtPr/><w:sdtContent>{paragraph}</w:sdtContent></w:sdt>"#
-            ),
-            _ => return Err(Error::Other("unsupported scoped source proof kind".into())),
-        };
+        let sentinel = scoped_proof_sentinel(&selected_closed, &marker)?;
         let mut checked_probe = restored;
         checked_probe.splice(start..end, sentinel.bytes());
         let mut retained_probe = original.to_vec();
@@ -62555,6 +63105,108 @@ mod tests {
         }
         take_staging_work();
         assert_eq!(document.to_bytes().unwrap(), forgetting.to_bytes().unwrap());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn scoped_replacements_and_story_pictures_read_only_the_children_they_change() {
+        // On a main part another producer wrote, with a line break after the
+        // body start, of N and 4N paragraphs: a scoped replacement in a
+        // paragraph and in a table cell, back and forth, and a picture added
+        // to the body story, which keeps the part's bytes.
+        #[allow(clippy::type_complexity)] // Each edit with its name.
+        let edits: [(&str, fn(&mut Document, usize)); 3] = [
+            ("paragraph replacement", |document, k| {
+                let (from, to) = if k % 2 == 0 {
+                    ("alpha", "omega")
+                } else {
+                    ("omega", "alpha")
+                };
+                let index = document
+                    .paragraphs()
+                    .iter()
+                    .position(|paragraph| paragraph.text() == from)
+                    .unwrap();
+                let location = document.paragraph_story_location(index).unwrap().unwrap();
+                let replaced = document.try_replace_text_at(&location, from, to, Some(1));
+                assert_eq!(replaced.unwrap().unwrap(), 1);
+            }),
+            ("cell replacement", |document, k| {
+                let (from, to) = if k % 2 == 0 {
+                    ("alpha", "omega")
+                } else {
+                    ("omega", "alpha")
+                };
+                let table = document.tables().len() - 1;
+                let replaced =
+                    document.try_replace_text_in_cell((table, 0, 0), None, from, to, Some(1));
+                assert_eq!(replaced.unwrap().unwrap(), 1);
+            }),
+            ("story picture", |document, _| {
+                let body = document
+                    .stories()
+                    .unwrap()
+                    .into_iter()
+                    .find(|story| story.kind == StoryKind::Body)
+                    .unwrap();
+                document
+                    .insert_picture_to_story_with_options(
+                        &body,
+                        None,
+                        super::watermark_tests::PNG,
+                        "pixel.png",
+                        Some(Length::pt(12.0)),
+                        Some(Length::pt(12.0)),
+                        None,
+                    )
+                    .unwrap();
+            }),
+        ];
+        for (name, edit) in edits {
+            let mut work = Vec::new();
+            for count in [50usize, 200] {
+                let body = format!("{}{}", issue407_runs(count), issue407_varied_body(""));
+                let mut source = issue407_document(&body, false);
+                source.add_paragraph("alpha");
+                let table = source.tables().len() - 1;
+                source.try_set_cell_text(table, 0, 0, "alpha").unwrap();
+                let mut opened = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+                let part = opened.doc_part_name.clone();
+                let xml = opened.package.get_part(&part).unwrap().to_vec();
+                let at = xml
+                    .windows(8)
+                    .position(|bytes| bytes == b"<w:body>")
+                    .unwrap()
+                    + 8;
+                let mut produced = xml[..at].to_vec();
+                produced.push(b'\n');
+                produced.extend_from_slice(&xml[at..]);
+                opened.package.set_part(&part, produced);
+                let mut written = std::io::Cursor::new(Vec::new());
+                opened.package.write_to(&mut written).unwrap();
+                let mut document = Document::from_bytes(written.get_ref()).unwrap();
+                edit(&mut document, 0);
+                edit(&mut document, 1);
+                take_staging_work();
+                take_reopen_work();
+                let mut sample = Vec::new();
+                for k in 2..4 {
+                    edit(&mut document, k);
+                    sample.push((take_staging_work(), take_reopen_work()));
+                }
+                work.push(sample);
+            }
+            // The proof, the canonicalization and the reopen read only the
+            // children the edits change, as many in a body four times as
+            // large, and nothing whole.
+            assert_eq!(work[0], work[1], "{name}");
+            assert!(
+                work[0]
+                    .iter()
+                    .all(|(staging, reopen)| staging[..4] == [0; 4] && reopen[..2] == [0; 2]),
+                "{name} {work:?}"
+            );
+        }
     }
 
     #[cfg(debug_assertions)]

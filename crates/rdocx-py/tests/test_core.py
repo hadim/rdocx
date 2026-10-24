@@ -11991,10 +11991,10 @@ def test_story_lookups_scan_only_the_body_children_an_edit_changed(call):
     assert 1 <= counts[0] == counts[1] <= 4, (call, counts)
 
 
-def _producer_document(paragraphs, root_prefix=None):
+def _producer_document(paragraphs, root_prefix=None, run_sibling=None):
     """The staging document with its main part as another producer may write it, which the model serializes
-    otherwise: a line break after the body start, and the root named with `root_prefix` bound to the Word namespace
-    when given."""
+    otherwise: a line break after the body start, the root named with `root_prefix` bound to the Word namespace when
+    given, and `run_sibling` after the first run of the body when given."""
     import io
     import zipfile
 
@@ -12007,6 +12007,8 @@ def _producer_document(paragraphs, root_prefix=None):
             data = source.read(entry)
             if entry.filename == "word/document.xml":
                 data = data.replace(b"<w:body>", b"<w:body>\n", 1)
+                if run_sibling:
+                    data = data.replace(b"</w:r>", b"</w:r>" + run_sibling, 1)
                 if root_prefix:
                     namespace = b'="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
                     data = data.replace(b"<w:document ", b"<%s:document xmlns:%s%s " % (
@@ -12018,8 +12020,8 @@ def _producer_document(paragraphs, root_prefix=None):
 
 def _block_edits():
     """Edits that change the main part of a document and commit it, each given the document and a fresh k and
-    returning the call that makes the edit. Document.import_fragment splices the main part as the package holds it,
-    and is made on a document whose main part another producer wrote."""
+    returning the call that makes the edit. The fragment imports, the scoped text replacements and the pictures edit
+    the main part as the package holds it, and are made on a document whose main part another producer wrote."""
     import rdocx
 
     def run_text(doc, k):
@@ -12040,6 +12042,17 @@ def _block_edits():
         body = next(story for story in doc.stories if story.kind == "body")
         return lambda: doc.import_fragment(rdocx.ContentLocation.end(body), fragment)
 
+    def replace_text_at(doc, k):
+        index = doc.find_content_index(doc.add_paragraph(f"alpha {k}"))
+        item = next(item for item in doc.story_items if item.story.kind == "body" and item.kind == "paragraph"
+                    and item.direct_body_index == index)
+        return lambda: doc.replace_text_at(item, "alpha", "omega")
+
+    def cell_replace_text(doc, k):
+        cell = doc.tables[-1].cell(0, 0)
+        cell.text = f"alpha {k}"
+        return lambda: cell.replace_text("alpha", "omega")
+
     return {
         "Table.add_row": lambda doc, k: doc.tables[-1].add_row,
         "Cell.text": lambda doc, k: lambda: setattr(doc.tables[-1].cell(0, 1), "text", f"cell {k}"),
@@ -12050,6 +12063,14 @@ def _block_edits():
             f"<p>inserted {k}</p>", after=[paragraph for paragraph in doc.paragraphs if paragraph.text == "spot"][-1]),
         "Document.add_footnote": footnote,
         "Document.import_fragment": import_fragment,
+        "Paragraph.replace_text": lambda doc, k: (lambda paragraph: lambda: paragraph.replace_text("alpha", "omega"))(
+            doc.add_paragraph(f"alpha {k}")),
+        "Cell.replace_text": cell_replace_text,
+        "Document.replace_text_at": replace_text_at,
+        "Document.add_picture": lambda doc, k: lambda: doc.add_picture(
+            _one_pixel_png(bytes([k, k, k])), f"p{k}.png", 12700, 12700),
+        "Cell.add_picture": lambda doc, k: (lambda cell: lambda: cell.add_picture(
+            _one_pixel_png(bytes([k, k, k])), f"c{k}.png", 12700, 12700))(doc.tables[-1].cell(0, 0)),
         "SectionHandle.set_page_border": lambda doc, k: lambda: doc.section(0).set_page_border(
             ("top", "left", "bottom", "right")[k]),
     }
@@ -12068,7 +12089,9 @@ def test_staging_writes_and_reads_only_the_main_part_blocks_an_edit_changes(edit
     counts = []
     reopens = []
     for paragraphs in (20, 80):
-        doc = (_producer_document if edit == "Document.import_fragment" else _staging_document)(paragraphs)
+        producer = edit in ("Document.import_fragment", "Paragraph.replace_text", "Cell.replace_text",
+                            "Document.replace_text_at", "Document.add_picture", "Cell.add_picture")
+        doc = (_producer_document if producer else _staging_document)(paragraphs)
         for k in (0, 1):
             make(doc, k)()
         sample = []
@@ -12103,3 +12126,18 @@ def test_a_fragment_imports_into_a_main_part_whose_root_has_another_word_prefix(
     assert [paragraph.text for paragraph in doc.paragraphs] == texts + [f"imported {k}" for k in range(3)]
     reopened = rdocx.Document.from_bytes(doc.to_bytes())
     assert [paragraph.text for paragraph in reopened.paragraphs] == [paragraph.text for paragraph in doc.paragraphs]
+
+
+def test_story_pictures_raise_where_the_relationship_rename_cannot_decode_the_main_part():
+    # A foreign attribute value holding an undefined entity, in one body child of a main part another producer wrote.
+    # Renaming the relationships of the part decodes every attribute value and raises on that one, so every story
+    # picture raises, at every call, though the children the rename reads hold no such value.
+    import rdocx
+
+    for add in (lambda doc, k: doc.add_picture(_one_pixel_png(bytes([k, k, k])), f"p{k}.png", 12700, 12700),
+                lambda doc, k: doc.tables[-1].cell(0, 0).add_picture(
+                    _one_pixel_png(bytes([k, k, k])), f"c{k}.png", 12700, 12700)):
+        doc = _producer_document(20, run_sibling=b'<x:foo xmlns:x="urn:x" x:a="&bogus;"/>')
+        for k in range(3):
+            with pytest.raises(rdocx.RdocxError, match="invalid story relationship id.*bogus"):
+                add(doc, k)
