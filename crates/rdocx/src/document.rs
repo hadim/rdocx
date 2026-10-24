@@ -7,7 +7,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
-#[cfg(test)]
+#[cfg(any(test, debug_assertions))]
 use std::cell::Cell;
 
 use oxml_chart::{CT_ChartSpace, ChartData, ChartKind};
@@ -2931,7 +2931,7 @@ fn namespace_prefix(declaration_name: &str) -> String {
         .to_owned()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct NestedNamespaceOwner {
     source: Range<usize>,
     local_name: String,
@@ -3943,7 +3943,7 @@ fn unsafe_nested_namespace_prefix(owners: &[NestedNamespaceOwner]) -> Option<Str
 /// What the retained nested namespace owners of a main document part leave
 /// to a body edit, from one replay of their declarations on the body as a
 /// save would serialize it.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 struct NestedOwnerReplayFacts {
     /// A plain paragraph removal may stay local.
     plain_removal_allowed: bool,
@@ -3959,10 +3959,13 @@ struct NestedOwnerReplayFacts {
 /// Returns whether a plain local edit is blocked, and the replay facts when
 /// they are known without the replay: no owners, a scan error, or a
 /// shadowed serializer prefix, which fails every save of a changed body.
+/// `nested_namespace_owners` holds the scan of `document_xml`, made here
+/// when it is needed and not known yet.
 fn plain_local_edit_facts(
     root_declarations: &[(String, String)],
     body_declarations: &[(String, String)],
     document_xml: &[u8],
+    nested_namespace_owners: &OnceLock<Option<Vec<NestedNamespaceOwner>>>,
 ) -> (bool, OnceLock<NestedOwnerReplayFacts>) {
     let shadowed = |prefix: String| NestedOwnerReplayFacts {
         plain_removal_allowed: false,
@@ -3975,15 +3978,16 @@ fn plain_local_edit_facts(
     {
         return (true, OnceLock::from(shadowed(prefix)));
     }
-    match nested_modeled_namespace_owners(document_xml) {
-        Ok(owners) if owners.is_empty() => {
+    match nested_namespace_owners.get_or_init(|| nested_modeled_namespace_owners(document_xml).ok())
+    {
+        Some(owners) if owners.is_empty() => {
             (false, OnceLock::from(NestedOwnerReplayFacts::default()))
         }
-        Ok(owners) => match unsafe_nested_namespace_prefix(&owners) {
+        Some(owners) => match unsafe_nested_namespace_prefix(owners) {
             Some(prefix) => (true, OnceLock::from(shadowed(prefix))),
             None => (true, OnceLock::new()),
         },
-        Err(_) => (true, OnceLock::from(NestedOwnerReplayFacts::default())),
+        None => (true, OnceLock::from(NestedOwnerReplayFacts::default())),
     }
 }
 
@@ -4944,10 +4948,19 @@ pub(crate) struct DocumentIdentifiers {
     authored_nested_story_drawing_ids: HashMap<String, HashSet<u32>>,
     authored_bundle_relationship_ids: HashMap<String, HashSet<String>>,
     provisional_relationship_ids: HashMap<String, HashSet<String>>,
+    /// What the scan read in each identifier part, by part name, which the
+    /// scan of a reopened package takes for the parts whose bytes it holds.
+    scanned_parts: Arc<HashMap<String, ScannedIdentifierPart>>,
 }
 
 impl DocumentIdentifiers {
     fn scan(package: &OpcPackage) -> Result<Self> {
+        Self::scan_reusing(package, None)
+    }
+
+    /// The identifiers [`DocumentIdentifiers::scan`] gives for `package`,
+    /// reading again only the parts whose bytes `earlier` did not scan.
+    fn scan_reusing(package: &OpcPackage, earlier: Option<&Self>) -> Result<Self> {
         let mut identifiers = Self {
             relationship_ids: HashMap::new(),
             bookmark_ids: HashSet::new(),
@@ -4991,6 +5004,7 @@ impl DocumentIdentifiers {
             authored_nested_story_drawing_ids: HashMap::new(),
             authored_bundle_relationship_ids: HashMap::new(),
             provisional_relationship_ids: HashMap::new(),
+            scanned_parts: Arc::default(),
         };
         identifiers.part_names.extend(
             package
@@ -5059,13 +5073,42 @@ impl DocumentIdentifiers {
 
         let mut parts = package.parts.iter().collect::<Vec<_>>();
         parts.sort_by_key(|(part_name, _)| part_name.as_str());
+        let mut scanned_parts = HashMap::new();
         for (part_name, bytes) in parts {
-            if let Some(categories) = identity_parts.get(&part_name_identity(part_name))
-                && identifier_xml_is_well_formed(bytes)
-            {
+            let Some(categories) = identity_parts.get(&part_name_identity(part_name)) else {
+                continue;
+            };
+            // A part still holding the bytes an earlier scan read gives the
+            // definitions read there. Applying them raises the duplicate a
+            // scan of the part raises, and in the same order.
+            let earlier = earlier
+                .and_then(|earlier| earlier.scanned_parts.get(part_name))
+                .filter(|scanned| {
+                    scanned.categories == *categories
+                        && (Arc::ptr_eq(&scanned.bytes, bytes) || scanned.bytes == *bytes)
+                });
+            let (definitions, unreadable) = match earlier {
+                Some(scanned) => (scanned.definitions.clone(), None),
+                None => {
+                    note_reopen_work(|work| work.scanned += bytes.len());
+                    if identifier_xml_is_well_formed(bytes) {
+                        let mut definitions = Vec::new();
+                        let unreadable =
+                            Self::scan_xml_definitions(bytes, categories, &mut definitions).err();
+                        (Some(definitions), unreadable)
+                    } else {
+                        (None, None)
+                    }
+                }
+            };
+            if let Some(definitions) = &definitions {
                 let mut part_drawing_ids = HashMap::new();
-                identifiers
-                    .scan_xml_definitions(bytes, categories, &mut part_drawing_ids)
+                definitions
+                    .iter()
+                    .try_for_each(|definition| {
+                        identifiers.define(*definition, &mut part_drawing_ids)
+                    })
+                    .and_then(|()| unreadable.map_or(Ok(()), Err))
                     .map_err(|error| {
                         Error::Other(format!(
                             "cannot scan identifiers in XML part {part_name}: {error}"
@@ -5083,7 +5126,16 @@ impl DocumentIdentifiers {
                 }
                 identifiers.drawing_ids.extend(part_drawing_ids.into_keys());
             }
+            scanned_parts.insert(
+                part_name.clone(),
+                ScannedIdentifierPart {
+                    bytes: Arc::clone(bytes),
+                    categories: categories.clone(),
+                    definitions,
+                },
+            );
         }
+        identifiers.scanned_parts = Arc::new(scanned_parts);
         identifiers.preserved_relationship_ids = identifiers.relationship_ids.clone();
         identifiers.preserved_bookmark_ids = identifiers.bookmark_ids.clone();
         identifiers.preserved_comment_ids = identifiers.comment_ids.clone();
@@ -5123,11 +5175,14 @@ impl DocumentIdentifiers {
         Ok(())
     }
 
+    /// Collects, in document order, the definitions of `categories` that
+    /// `xml` holds. At an element or a value it cannot read, it stops with
+    /// that error and keeps the definitions before it, so that applying those
+    /// first raises any duplicate a scan of the part meets before the error.
     fn scan_xml_definitions(
-        &mut self,
         xml: &[u8],
         categories: &HashSet<IdentifierXmlCategory>,
-        part_drawing_ids: &mut HashMap<u32, usize>,
+        definitions: &mut Vec<IdentifierDefinition>,
     ) -> Result<()> {
         let mut reader = NsReader::from_reader(xml);
         let mut buffer = Vec::new();
@@ -5162,8 +5217,10 @@ impl DocumentIdentifiers {
                     } else {
                         None
                     };
-                    if let Some(category) = category.filter(|value| categories.contains(value)) {
-                        self.scan_xml_id(&reader, element, category, part_drawing_ids)?;
+                    if let Some(category) = category.filter(|value| categories.contains(value))
+                        && let Some(definition) = Self::scan_xml_id(&reader, element, category)?
+                    {
+                        definitions.push(definition);
                     }
                 }
                 Event::Eof => return Ok(()),
@@ -5174,12 +5231,10 @@ impl DocumentIdentifiers {
     }
 
     fn scan_xml_id(
-        &mut self,
         reader: &NsReader<&[u8]>,
         element: &BytesStart<'_>,
         category: IdentifierXmlCategory,
-        part_drawing_ids: &mut HashMap<u32, usize>,
-    ) -> Result<()> {
+    ) -> Result<Option<IdentifierDefinition>> {
         for attribute in element.attributes() {
             let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
             let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
@@ -5206,49 +5261,62 @@ impl DocumentIdentifiers {
             let value = attribute
                 .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
                 .map_err(|error| Error::Other(error.to_string()))?;
-            match category {
-                IdentifierXmlCategory::Drawing => {
-                    let value = value
-                        .parse::<u32>()
-                        .map_err(|_| Error::Other(format!("invalid drawing id {value}")))?;
-                    *part_drawing_ids.entry(value).or_default() += 1;
-                }
-                IdentifierXmlCategory::Bookmark => {
-                    let value = value
-                        .parse::<i32>()
-                        .map_err(|_| Error::Other(format!("invalid bookmark id {value}")))?;
-                    Self::insert_unique(&mut self.bookmark_ids, value, "bookmark")?;
-                }
-                IdentifierXmlCategory::Comment => {
-                    let value = value
-                        .parse::<i32>()
-                        .map_err(|_| Error::Other(format!("invalid comment id {value}")))?;
-                    Self::insert_unique(&mut self.comment_ids, value, "comment")?;
-                }
-                IdentifierXmlCategory::AbstractNumbering => {
-                    let value = value.parse::<u32>().map_err(|_| {
-                        Error::Other(format!("invalid abstract numbering id {value}"))
-                    })?;
-                    Self::insert_unique(
-                        &mut self.abstract_numbering_ids,
-                        value,
-                        "abstract numbering",
-                    )?;
-                }
-                IdentifierXmlCategory::NumberingInstance => {
-                    let value = value.parse::<u32>().map_err(|_| {
-                        Error::Other(format!("invalid numbering instance id {value}"))
-                    })?;
-                    Self::insert_unique(
-                        &mut self.numbering_instance_ids,
-                        value,
-                        "numbering instance",
-                    )?;
-                }
-            }
-            break;
+            let definition = match category {
+                IdentifierXmlCategory::Drawing => value
+                    .parse::<u32>()
+                    .map(IdentifierDefinition::Drawing)
+                    .map_err(|_| Error::Other(format!("invalid drawing id {value}"))),
+                IdentifierXmlCategory::Bookmark => value
+                    .parse::<i32>()
+                    .map(IdentifierDefinition::Bookmark)
+                    .map_err(|_| Error::Other(format!("invalid bookmark id {value}"))),
+                IdentifierXmlCategory::Comment => value
+                    .parse::<i32>()
+                    .map(IdentifierDefinition::Comment)
+                    .map_err(|_| Error::Other(format!("invalid comment id {value}"))),
+                IdentifierXmlCategory::AbstractNumbering => value
+                    .parse::<u32>()
+                    .map(IdentifierDefinition::AbstractNumbering)
+                    .map_err(|_| Error::Other(format!("invalid abstract numbering id {value}"))),
+                IdentifierXmlCategory::NumberingInstance => value
+                    .parse::<u32>()
+                    .map(IdentifierDefinition::NumberingInstance)
+                    .map_err(|_| Error::Other(format!("invalid numbering instance id {value}"))),
+            };
+            return definition.map(Some);
         }
-        Ok(())
+        Ok(None)
+    }
+
+    /// Adds one definition of a part to these sets, or to the drawing ids of
+    /// the part, refusing a duplicate in a scope that forbids it.
+    fn define(
+        &mut self,
+        definition: IdentifierDefinition,
+        part_drawing_ids: &mut HashMap<u32, usize>,
+    ) -> Result<()> {
+        match definition {
+            IdentifierDefinition::Drawing(value) => {
+                *part_drawing_ids.entry(value).or_default() += 1;
+                Ok(())
+            }
+            IdentifierDefinition::Bookmark(value) => {
+                Self::insert_unique(&mut self.bookmark_ids, value, "bookmark")
+            }
+            IdentifierDefinition::Comment(value) => {
+                Self::insert_unique(&mut self.comment_ids, value, "comment")
+            }
+            IdentifierDefinition::AbstractNumbering(value) => Self::insert_unique(
+                &mut self.abstract_numbering_ids,
+                value,
+                "abstract numbering",
+            ),
+            IdentifierDefinition::NumberingInstance(value) => Self::insert_unique(
+                &mut self.numbering_instance_ids,
+                value,
+                "numbering instance",
+            ),
+        }
     }
 
     /// Refuse a `wp:docPr/@id` occurrence that a staged edit added to an id
@@ -5858,13 +5926,33 @@ fn identifier_xml_is_well_formed(xml: &[u8]) -> bool {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum IdentifierXmlCategory {
     Drawing,
     Bookmark,
     Comment,
     AbstractNumbering,
     NumberingInstance,
+}
+
+/// One identifier an XML part defines.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum IdentifierDefinition {
+    Drawing(u32),
+    Bookmark(i32),
+    Comment(i32),
+    AbstractNumbering(u32),
+    NumberingInstance(u32),
+}
+
+/// What the identifier scan of a package read in one of its parts: the
+/// bytes, the categories scanned for, and the definitions in document order,
+/// or `None` for a part that is not well-formed XML, which the scan skips.
+#[derive(Clone, Debug, PartialEq)]
+struct ScannedIdentifierPart {
+    bytes: Arc<Vec<u8>>,
+    categories: HashSet<IdentifierXmlCategory>,
+    definitions: Option<Vec<IdentifierDefinition>>,
 }
 
 fn reserve_lowest_i32(occupied: &mut HashSet<i32>, minimum: i32, category: &str) -> Result<i32> {
@@ -6704,6 +6792,7 @@ struct Parsed {
 
 /// What canonicalizing drawing identifiers reads in a main part it has
 /// nothing to renumber in, found with the checks it makes, which all passed.
+#[derive(Clone, PartialEq)]
 struct UnchangedMainPart {
     /// The main part as the typed model serializes it.
     xml: Vec<u8>,
@@ -6941,6 +7030,158 @@ thread_local! {
     static FX211_PROFILE_CONTEXT: Cell<usize> = const { Cell::new(0) };
     static FX260_BODY_VISITS: Cell<usize> = const { Cell::new(0) };
     static STANDALONE_BODY_ITEM_BYTES: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Work that reopening a staged document did on this thread, whose amount
+/// could follow the document: packages written as a ZIP and read back, main
+/// document parts parsed, and bytes of identifier parts scanned. Debug
+/// builds count it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+struct ReopenWork {
+    zip_writes: usize,
+    main_parses: usize,
+    scanned: usize,
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    static REOPEN_WORK: Cell<ReopenWork> = const {
+        Cell::new(ReopenWork { zip_writes: 0, main_parses: 0, scanned: 0 })
+    };
+    static REOPEN_WORK_PAUSED: Cell<bool> = const { Cell::new(false) };
+}
+
+fn note_reopen_work(count: impl FnOnce(&mut ReopenWork)) {
+    #[cfg(debug_assertions)]
+    if !REOPEN_WORK_PAUSED.get() {
+        let mut work = REOPEN_WORK.get();
+        count(&mut work);
+        REOPEN_WORK.set(work);
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = count;
+}
+
+/// Debug builds only: the work opening and reopening documents did on this
+/// thread since the previous call, as packages written as a ZIP, main
+/// document parts parsed and bytes of identifier parts scanned, so that the
+/// binding tests can compare documents of N and 4N paragraphs.
+#[doc(hidden)]
+#[cfg(debug_assertions)]
+pub fn take_reopen_work() -> [usize; 3] {
+    let work = REOPEN_WORK.replace(ReopenWork::default());
+    [work.zip_writes, work.main_parses, work.scanned]
+}
+
+#[cfg(debug_assertions)]
+fn without_reopen_work<T>(run: impl FnOnce() -> T) -> T {
+    let paused = REOPEN_WORK_PAUSED.replace(true);
+    let result = run();
+    REOPEN_WORK_PAUSED.set(paused);
+    result
+}
+
+/// Asserts that a reopen gives what the reopen through the ZIP gives: the
+/// same error, or the same package, main document model, namespace facts,
+/// identifiers, related models and saved package.
+#[cfg(debug_assertions)]
+fn assert_same_reopen(reopened: &Result<Document>, through_zip: &Result<Document>) {
+    let (reopened, expected) = match (reopened, through_zip) {
+        (Ok(reopened), Ok(expected)) => (reopened, expected),
+        (Err(reopened), Err(expected)) => {
+            assert_eq!(
+                (reopened.to_string(), format!("{reopened:?}")),
+                (expected.to_string(), format!("{expected:?}")),
+                "the in-memory reopen raised another error than the ZIP"
+            );
+            return;
+        }
+        (reopened, expected) => panic!(
+            "the in-memory reopen gave {:?}, the ZIP {:?}",
+            reopened.as_ref().err(),
+            expected.as_ref().err()
+        ),
+    };
+    assert!(
+        reopened.package.same_package_as(&expected.package),
+        "the in-memory reopen gave another package than the ZIP"
+    );
+    assert!(
+        reopened.document == expected.document
+            && reopened.document.to_xml().ok() == expected.document.to_xml().ok(),
+        "the in-memory reopen gave another main document than the ZIP"
+    );
+    let facts = |document: &Document| {
+        (
+            document.root_namespace_declarations.clone(),
+            document.body_namespace_declarations.clone(),
+            document.body_namespace_bindings.clone(),
+            document.plain_local_edit_blocked,
+            document.nested_owner_replay.get().cloned(),
+        )
+    };
+    assert_eq!(facts(reopened), facts(expected), "namespace facts");
+    assert!(
+        reopened.identifiers == expected.identifiers,
+        "the in-memory reopen gave other identifiers than the ZIP"
+    );
+    // What the reopened document keeps as parsed is what parsing and
+    // scanning its main part give.
+    if let Some(parsed) = reopened.parsed.as_deref() {
+        assert!(parsed.package.same_package_as(&reopened.package));
+        if let Some(main) = parsed.main_document.get() {
+            assert!(
+                main.as_ref() == Some(&expected.document)
+                    && main.as_ref().and_then(|main| main.to_xml().ok())
+                        == expected.document.to_xml().ok(),
+                "the reopened document keeps another main part parse than a parse"
+            );
+        }
+        if let Some(owners) = parsed.nested_namespace_owners.get() {
+            let scanned = expected
+                .package
+                .get_part(&expected.doc_part_name)
+                .and_then(|xml| nested_modeled_namespace_owners(xml).ok());
+            assert_eq!(
+                format!("{owners:?}"),
+                format!("{scanned:?}"),
+                "the reopened document keeps other nested namespace owners than a scan"
+            );
+        }
+    }
+    let models = |document: &Document| {
+        (
+            document.styles.clone(),
+            document.numbering.clone(),
+            document.settings.clone(),
+            document.web_settings.clone(),
+            document.theme.clone(),
+            document.font_table.clone(),
+            document.core_properties.clone(),
+            document.application_properties.clone(),
+            document.custom_properties.clone(),
+            document.footnotes.clone(),
+            document.comments.clone(),
+            document.comments_extended.clone(),
+        )
+    };
+    assert!(
+        models(reopened) == models(expected),
+        "the in-memory reopen gave other related models than the ZIP"
+    );
+    // The saves forget the opening, so that they leave nothing in the record
+    // the reopened document keeps for its next staging.
+    let saved = |document: &Document| {
+        let mut copy = document.clone_for_staging();
+        copy.parsed = None;
+        without_reopen_work(|| without_staging_work(|| copy.to_bytes()))
+            .map_err(|error| error.to_string())
+    };
+    assert!(
+        saved(reopened) == saved(expected),
+        "the in-memory reopen saves another package than the ZIP"
+    );
 }
 
 fn note_fx260_body(count: usize) {
@@ -10695,6 +10936,7 @@ pub(crate) fn set_story_source_xml(
             &namespace_scopes.root_declarations,
             &namespace_scopes.body_declarations,
             &xml,
+            &OnceLock::new(),
         );
         document.package.set_part(part_name, xml);
         document.root_namespace_declarations = namespace_scopes.root_declarations;
@@ -19345,18 +19587,84 @@ impl Document {
     /// Open a document from `package`, read from bytes when
     /// `read_from_bytes`, which [`OpcPackage::reread`] requires.
     fn from_opened_package(package: OpcPackage, read_from_bytes: bool) -> Result<Self> {
+        Self::from_package_reusing(package, read_from_bytes, None)
+    }
+
+    /// Opens `package` as [`Document::from_opened_package`] does, reading
+    /// again only what `staged` did not: the identifiers of the staged
+    /// document the package was reread from, and what its last opening
+    /// parsed. A main part that holds the bytes it was opened with is that
+    /// opening's parse and nested namespace owners, and an identifier part
+    /// whose bytes the scan of those identifiers read gives the definitions
+    /// read there. A reopened document keeps its main part parsed for its
+    /// next staging.
+    fn from_package_reusing(
+        package: OpcPackage,
+        read_from_bytes: bool,
+        staged: Option<(&DocumentIdentifiers, &Parsed)>,
+    ) -> Result<Self> {
         let (doc_part_name, _) = validated_word_package_class(&package)?;
 
         let doc_xml = package
             .get_part(&doc_part_name)
             .ok_or(Error::NoDocumentPart)?;
         let namespace_scopes = document_namespace_scopes(doc_xml)?;
+        let kept = staged.map(|(_, parsed)| parsed).filter(|parsed| {
+            parsed.main_part == doc_part_name
+                && parsed
+                    .main_part_xml()
+                    .is_some_and(|kept| std::ptr::eq(kept, doc_xml) || kept == doc_xml)
+        });
+        // A reopened document keeps what parsing and scanning its main part
+        // gives. What canonicalizing drawing identifiers found in the main
+        // part (`unchanged_main_part`) is a function of the part as its model
+        // serializes it, of the nested namespace owners of its bytes and of
+        // its body namespace bindings: its checks read no relationship,
+        // identifier registry or other part, which
+        // `Document::unchanged_main_part` checks again at every staging, with
+        // the serialization and the bindings. It carries over, a failed check
+        // included, while the main part holds the bytes it was found with and
+        // the relationships of the opening it belongs to. Otherwise the new
+        // record leaves it to be found again.
+        let mut parsed = Parsed::of(&package, &doc_part_name, read_from_bytes);
+        if let Some(kept) = kept {
+            if let Some(owners) = kept.nested_namespace_owners.get() {
+                parsed.nested_namespace_owners = OnceLock::from(owners.clone());
+            }
+            if let Some(unchanged) = kept.unchanged_main_part.get()
+                && package
+                    .get_part_rels(&doc_part_name)
+                    .map(|relationships| &relationships.items)
+                    == kept
+                        .package
+                        .get_part_rels(&doc_part_name)
+                        .map(|relationships| &relationships.items)
+            {
+                parsed.unchanged_main_part = OnceLock::from(unchanged.clone());
+            }
+        }
         let (plain_local_edit_blocked, nested_owner_replay) = plain_local_edit_facts(
             &namespace_scopes.root_declarations,
             &namespace_scopes.body_declarations,
             doc_xml,
+            &parsed.nested_namespace_owners,
         );
-        let document = CT_Document::from_xml(doc_xml)?;
+        let kept_document = kept.and_then(|kept| {
+            if kept.main_document.get().is_none() {
+                note_reopen_work(|work| work.main_parses += 1);
+            }
+            kept.main_document()
+        });
+        let document = match kept_document {
+            Some(document) => document.clone(),
+            None => {
+                note_reopen_work(|work| work.main_parses += 1);
+                CT_Document::from_xml(doc_xml)?
+            }
+        };
+        if staged.is_some() {
+            parsed.main_document = OnceLock::from(Some(document.clone()));
+        }
 
         // Resolve the part a relationship of the given type points at.
         let resolve_part = |rel_type: &str| -> Option<String> {
@@ -19505,13 +19813,12 @@ impl Document {
 
         let package_signatures_invalidated =
             crate::embedded::known_invalid_package_signature_on_open(&package);
-        let identifiers = DocumentIdentifiers::scan(&package)?;
-        let parsed = Some(Arc::new(Parsed::of(
+        let identifiers = DocumentIdentifiers::scan_reusing(
             &package,
-            &doc_part_name,
-            read_from_bytes,
-        )));
-        Ok(Document {
+            staged.map(|(identifiers, _)| identifiers),
+        )?;
+        let parsed = Some(Arc::new(parsed));
+        let document = Document {
             package,
             document,
             root_namespace_declarations: namespace_scopes.root_declarations,
@@ -19565,7 +19872,23 @@ impl Document {
             normal_layout_engine: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
             bundled_fallback_layout_engine: Mutex::new(None),
-        })
+        };
+        // Debug builds, which run the binding tests, check a carried record
+        // of the unchanged main part against the checks made again on the
+        // reopened document.
+        #[cfg(debug_assertions)]
+        if let Some(carried) = document
+            .parsed
+            .as_deref()
+            .and_then(|parsed| parsed.unchanged_main_part.get())
+        {
+            let found = without_staging_work(|| document.unchanged_main_part_checks().ok());
+            assert!(
+                *carried == found,
+                "the carried record of the unchanged main part differs from its checks"
+            );
+        }
+        Ok(document)
     }
 
     /// Clear layouts derived from the current document state.
@@ -19952,10 +20275,40 @@ impl Document {
         self.reopen_prepared_staged_with_limits(PackageReadLimits::UNBOUNDED)
     }
 
+    /// Opens the staged package again, as writing it and reading the bytes
+    /// back does. A document read from bytes rereads its package in memory
+    /// against the package it was opened with, and reuses what that opening
+    /// parsed and what the scan of its identifiers read in each part whose
+    /// bytes the package still holds. A document built in memory, or a
+    /// reopen under read limits, goes through the ZIP.
+    ///
+    /// Debug builds, which run the binding tests, reopen a copy through the
+    /// ZIP too, as every reopen did before, and assert that both give the
+    /// same document or the same error.
     pub(crate) fn reopen_prepared_staged_with_limits(
         self,
         limits: PackageReadLimits,
     ) -> Result<Self> {
+        let in_memory = limits == PackageReadLimits::UNBOUNDED && self.read_package().is_some();
+        #[cfg(debug_assertions)]
+        let through_zip = in_memory.then(|| {
+            let mut copy = self.clone_for_staging();
+            copy.parsed = None;
+            copy
+        });
+        let reopened = self.reopen_staged(in_memory, limits);
+        #[cfg(debug_assertions)]
+        if let Some(copy) = through_zip {
+            let expected =
+                without_reopen_work(|| without_staging_work(|| copy.reopen_staged(false, limits)));
+            assert_same_reopen(&reopened, &expected);
+        }
+        reopened
+    }
+
+    /// Reopens the staged package, in memory against the package it was
+    /// opened from when `in_memory`, or else through the ZIP.
+    fn reopen_staged(self, in_memory: bool, limits: PackageReadLimits) -> Result<Self> {
         let provenance = self.identifiers.clone();
         let custom_properties_owned = self.custom_properties_owned;
         let settings_owned = self.settings_owned;
@@ -19966,9 +20319,20 @@ impl Document {
         let comments_extended_owned = self.comments_extended_owned;
         let embedded_invalidated_signatures = self.embedded_invalidated_signatures.clone();
         let package_signatures_invalidated = self.package_signatures_invalidated;
-        let mut output = std::io::Cursor::new(Vec::new());
-        self.package.write_to(&mut output)?;
-        let mut reopened = Self::from_bytes_with_limits(output.get_ref(), limits)?;
+        let opened = self.parsed.as_deref().filter(|_| in_memory);
+        let mut reopened = match opened {
+            Some(opened) => Self::from_package_reusing(
+                self.package.reread(&opened.package)?,
+                true,
+                Some((&provenance, opened)),
+            )?,
+            None => {
+                note_reopen_work(|work| work.zip_writes += 1);
+                let mut output = std::io::Cursor::new(Vec::new());
+                self.package.write_to(&mut output)?;
+                Self::from_bytes_with_limits(output.get_ref(), limits)?
+            }
+        };
         reopened
             .identifiers
             .reject_new_repeated_drawing_ids(&provenance)?;
@@ -46313,6 +46677,85 @@ mod tests {
     }
 
     #[test]
+    fn identifier_scan_reads_again_only_the_parts_whose_bytes_changed() {
+        let story = |body: &str| {
+            format!(
+                r#"<w:document xmlns:w="{WORD_NAMESPACE}" xmlns:wp="{}"><w:body>{body}</w:body></w:document>"#,
+                drawing_ns::WP,
+            )
+            .into_bytes()
+        };
+        let mut package =
+            OpcPackage::with_main_part("word/document.xml", content_types::WORD_DOCUMENT);
+        package.set_part(
+            "/word/document.xml",
+            story(r#"<w:bookmarkStart w:id="1"/><wp:docPr id="1"/><wp:docPr id="1"/>"#),
+        );
+        package.set_part(
+            "/word/header1.xml",
+            story(r#"<w:bookmarkStart w:id="2"/><wp:docPr id="2"/>"#),
+        );
+        package.set_part("/word/header2.xml", b"<w:hdr".to_vec());
+        for target in ["header1.xml", "header2.xml"] {
+            package
+                .get_or_create_part_rels("/word/document.xml")
+                .add(rel_types::HEADER, target);
+        }
+        let earlier = DocumentIdentifiers::scan(&package).unwrap();
+        #[cfg(debug_assertions)]
+        take_reopen_work();
+        // The bytes of the parts read again.
+        let scans = |package: &OpcPackage| {
+            let reused = DocumentIdentifiers::scan_reusing(package, Some(&earlier))
+                .map_err(|error| error.to_string());
+            #[cfg(debug_assertions)]
+            let scans = take_reopen_work()[2];
+            #[cfg(not(debug_assertions))]
+            let scans = 0;
+            let scanned = DocumentIdentifiers::scan(package).map_err(|error| error.to_string());
+            #[cfg(debug_assertions)]
+            take_reopen_work();
+            assert_eq!(reused, scanned);
+            scans
+        };
+        // Equal bytes in another buffer are not read again.
+        let mut copied = package.clone();
+        copied.set_part(
+            "/word/document.xml",
+            package.get_part("/word/document.xml").unwrap().to_vec(),
+        );
+        assert_eq!(scans(&package), 0);
+        assert_eq!(scans(&copied), 0);
+        for header in [
+            r#"<w:bookmarkStart w:id="3"/><wp:docPr id="1"/>"#,
+            // A duplicate before an unreadable id raises the duplicate.
+            r#"<w:bookmarkStart w:id="1"/><w:bookmarkStart w:id="x"/>"#,
+            r#"<w:bookmarkStart w:id="x"/><w:bookmarkStart w:id="1"/>"#,
+        ] {
+            let mut edited = package.clone();
+            edited.set_part("/word/header1.xml", story(header));
+            #[cfg(debug_assertions)]
+            assert_eq!(scans(&edited), story(header).len(), "{header}");
+            #[cfg(not(debug_assertions))]
+            scans(&edited);
+        }
+        // A part scanned for other categories is read again.
+        let mut retyped = package.clone();
+        retyped
+            .get_part_rels_mut("/word/document.xml")
+            .unwrap()
+            .items[0]
+            .rel_type = rel_types::COMMENTS.to_owned();
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            scans(&retyped),
+            package.get_part("/word/header1.xml").unwrap().len()
+        );
+        #[cfg(not(debug_assertions))]
+        scans(&retyped);
+    }
+
+    #[test]
     fn default_namespace_use_respects_element_scope() {
         let root = "urn:root-default";
         let declarations = vec![("xmlns".to_owned(), root.to_owned())];
@@ -58505,12 +58948,13 @@ mod tests {
                 .unwrap();
             let mut document = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
             take_staging_work();
-            // The first staging parses, scans and checks the main part once.
+            // The first staging parses and checks the main part once. The
+            // opening kept the scan of its nested namespace owners.
             let candidate = edit(&document, 0);
             assert!(!document.saves_as(&candidate).unwrap());
             document = candidate;
             let first = take_staging_work();
-            assert!(first[..3].iter().all(|bytes| *bytes > 0), "{first:?}");
+            assert!(first[0] > 0 && first[1] == 0 && first[2] > 0, "{first:?}");
             let mut sample = Vec::new();
             for k in 1..3 {
                 let candidate = edit(&document, k);
@@ -58534,6 +58978,207 @@ mod tests {
             (0..4).all(|work| forgetting[1][work] > forgetting[0][work]),
             "{forgetting:?}"
         );
+    }
+
+    /// A document read from bytes, of `paragraphs` paragraphs with a picture
+    /// after every 10th, a header, a footnote and a hyperlink, and the id of
+    /// its footnote.
+    #[cfg(debug_assertions)]
+    fn issue403_read_document(paragraphs: usize) -> (Document, i32) {
+        let mut document = Document::new();
+        for index in 0..paragraphs {
+            document.add_paragraph(&format!("paragraph {index}"));
+            if index % 10 == 9 {
+                document.add_picture(
+                    super::watermark_tests::PNG,
+                    "pixel.png",
+                    Length::inches(1.0),
+                    Length::inches(1.0),
+                );
+            }
+        }
+        document.set_header("header");
+        let footnote = document.add_footnote("note");
+        document.add_paragraph("noted").add_footnote_ref(footnote);
+        let body = document.stories().unwrap().remove(0);
+        document
+            .add_hyperlink_to_story(&body, "link", "https://example.com/a")
+            .unwrap();
+        (
+            Document::from_bytes(&document.to_bytes().unwrap()).unwrap(),
+            footnote,
+        )
+    }
+
+    /// Commits of tensorbee/rdocx#403 that leave the main part as read, the
+    /// last two changing its relationships.
+    #[cfg(debug_assertions)]
+    #[allow(clippy::type_complexity)]
+    fn issue403_main_part_keeping_edits() -> Vec<(&'static str, fn(&mut Document, i32))> {
+        fn paragraph(text: &str) -> ContentFragment {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(text);
+            ContentFragment::paragraph(paragraph).unwrap()
+        }
+        vec![
+            ("header paragraph", |document, _| {
+                let header = document
+                    .stories()
+                    .unwrap()
+                    .into_iter()
+                    .find(|story| story.kind() == StoryKind::Header)
+                    .unwrap();
+                document
+                    .insert_content(&ContentLocation::end(header), paragraph("x"))
+                    .unwrap();
+            }),
+            ("footnote paragraph", |document, footnote| {
+                let note = document.footnote_story(footnote).unwrap().unwrap();
+                document
+                    .insert_content(&ContentLocation::end(note), paragraph("x"))
+                    .unwrap();
+            }),
+            ("replace image", |document, _| {
+                let image = document.images().remove(0).embed_id;
+                let replaced = [super::watermark_tests::PNG, b"\0"].concat();
+                document.replace_image(&image, &replaced).unwrap();
+            }),
+            ("hyperlink url", |document, _| {
+                let body = document.stories().unwrap().remove(0);
+                document
+                    .set_hyperlink_url(&body, 0, "https://example.com/b")
+                    .unwrap();
+            }),
+            ("custom XML store", |document, _| {
+                document.add_custom_xml_store(b"<data/>", &[]).unwrap();
+            }),
+        ]
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn issue403_commits_that_keep_the_main_part_reopen_in_memory_at_n_and_4n_paragraphs() {
+        let work = |paragraphs, forget: bool| {
+            let (mut document, footnote) = issue403_read_document(paragraphs);
+            take_reopen_work();
+            take_staging_work();
+            let counts = issue403_main_part_keeping_edits()
+                .into_iter()
+                .map(|(name, edit)| {
+                    if forget {
+                        document.parsed = None;
+                    }
+                    edit(&mut document, footnote);
+                    (name, take_reopen_work(), take_staging_work())
+                })
+                .collect::<Vec<_>>();
+            (document, counts)
+        };
+        let (mut small, small_work) = work(25, false);
+        let (_, large_work) = work(100, false);
+        // The same reopen work in a body four times as large: no ZIP, no
+        // parse of the main part, and only the bytes of the other parts the
+        // edits change scanned for identifiers.
+        let reopen = |work: &[(&'static str, [usize; 3], [usize; 4])]| {
+            work.iter()
+                .map(|(name, reopen, _)| (*name, *reopen))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(reopen(&small_work), reopen(&large_work));
+        for work in [&small_work, &large_work] {
+            for (index, (name, [zip_writes, main_parses, _], staging)) in work.iter().enumerate() {
+                assert_eq!((zip_writes, main_parses), (&0, &0), "{name}");
+                // The first staging parses the main part as opened. A
+                // reopened document keeps it parsed and scanned for the next
+                // ones, and what canonicalizing found in it while its
+                // relationships stay as they were.
+                match index {
+                    0 => {}
+                    4 => assert_eq!(staging[..2], [0, 0], "{name} {work:?}"),
+                    _ => assert_eq!(staging, &[0; 4], "{name} {work:?}"),
+                }
+            }
+        }
+        // Forgetting what the opening parsed, the same edits write the ZIP
+        // and parse the main part again, and save the same document.
+        let (mut through_zip, zip_work) = work(25, true);
+        for (name, [zip_writes, main_parses, _], _) in &zip_work {
+            assert!(*zip_writes > 0 && *main_parses > 0, "{name} {zip_work:?}");
+        }
+        assert_eq!(small.to_bytes().unwrap(), through_zip.to_bytes().unwrap());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn issue403_a_carried_main_part_record_stages_header_drawings_and_links_as_the_whole_way() {
+        fn header(document: &Document) -> StoryId {
+            document
+                .stories()
+                .unwrap()
+                .into_iter()
+                .find(|story| story.kind() == StoryKind::Header)
+                .unwrap()
+        }
+        fn header_paragraph(document: &mut Document) {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run("x");
+            let end = ContentLocation::end(header(document));
+            document
+                .insert_content(&end, ContentFragment::paragraph(paragraph).unwrap())
+                .unwrap();
+        }
+        // Commits that leave the main part and its relationships as they
+        // were, among them a header picture, which takes a drawing id, a
+        // header relationship and a medium, and a header hyperlink.
+        let edits: [fn(&mut Document); 4] = [
+            header_paragraph,
+            |document| {
+                let header = header(document);
+                document
+                    .add_picture_to_story(
+                        &header,
+                        super::watermark_tests::PNG,
+                        "header.png",
+                        Length::pt(12.0),
+                        Length::pt(12.0),
+                    )
+                    .unwrap();
+            },
+            |document| {
+                let header = header(document);
+                document
+                    .add_hyperlink_to_story(&header, "link", "https://example.com/h")
+                    .unwrap();
+            },
+            header_paragraph,
+        ];
+        let (mut document, _) = issue403_read_document(25);
+        let (mut forgetting, _) = issue403_read_document(25);
+        take_staging_work();
+        for (index, edit) in edits.iter().enumerate() {
+            edit(&mut document);
+            let staging = take_staging_work();
+            // After the first commit, the record the reopen carried stands
+            // for the main part: no staging reads it again, and debug builds
+            // canonicalize a copy the whole way at each such staging and
+            // compare.
+            if index > 0 {
+                assert_eq!(staging, [0; 4], "{index}");
+            }
+            assert!(
+                document
+                    .parsed
+                    .as_deref()
+                    .and_then(|parsed| parsed.unchanged_main_part.get())
+                    .is_some_and(Option::is_some),
+                "{index}"
+            );
+            forgetting.parsed = None;
+            edit(&mut forgetting);
+            take_staging_work();
+        }
+        take_staging_work();
+        assert_eq!(document.to_bytes().unwrap(), forgetting.to_bytes().unwrap());
     }
 }
 

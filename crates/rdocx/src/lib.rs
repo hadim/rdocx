@@ -66,6 +66,9 @@ pub use content_control::{
 };
 #[cfg(debug_assertions)]
 #[doc(hidden)]
+pub use document::take_reopen_work;
+#[cfg(debug_assertions)]
+#[doc(hidden)]
 pub use document::take_staging_work;
 pub use document::{
     AccessibilityIssue, BodyContentRef, BodyItemContext, BodyItemOwners, BodyItemRef,
