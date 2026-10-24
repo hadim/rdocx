@@ -6523,6 +6523,42 @@ fn drawing_ids_in_xml(xml: &[u8]) -> Result<HashSet<u32>> {
     }
 }
 
+/// The retained main part `retained` that a story picture insertion keeps,
+/// with its relationships renamed by `remap` and then its authored drawings
+/// given `canonical_drawing_ids`, and its parse. `None` when its authored
+/// drawings are not those, which leaves it.
+fn canonical_retained_main_part(
+    retained: &[u8],
+    remap: &HashMap<String, String>,
+    modeled_drawing_ids: &[u32],
+    nested_image_relationship_ids: &HashSet<String>,
+    canonical_drawing_ids: &[(u32, u32)],
+) -> Result<Option<(Vec<u8>, CT_Document)>> {
+    let mut retained = remap_xml_relationship_ids(retained, remap)?;
+    let slots = authored_drawing_slots_in_source_order(
+        &retained,
+        modeled_drawing_ids,
+        nested_image_relationship_ids,
+    )?;
+    if slots.len() != canonical_drawing_ids.len()
+        || slots
+            .iter()
+            .zip(canonical_drawing_ids)
+            .any(|((_, _, old), (expected, _))| old != expected)
+    {
+        return Ok(None);
+    }
+    for ((_, span, _), (_, id)) in slots
+        .into_iter()
+        .rev()
+        .zip(canonical_drawing_ids.iter().rev())
+    {
+        retained.splice(span, id.to_string().into_bytes());
+    }
+    let document = CT_Document::from_xml(&retained)?;
+    Ok(Some((retained, document)))
+}
+
 pub(crate) fn remap_xml_relationship_ids(
     xml: &[u8],
     remap: &HashMap<String, String>,
@@ -6621,6 +6657,24 @@ fn remap_xml_relationship_ids_with_bindings(
     if remap.is_empty() {
         return Ok(xml.to_vec());
     }
+    let mut updated = xml.to_vec();
+    for (start, end, replacement) in relationship_remap_edits(xml, remap, inherited_bindings)?
+        .into_iter()
+        .rev()
+    {
+        updated.splice(start..end, replacement);
+    }
+    Ok(updated)
+}
+
+/// The edits [`remap_xml_relationship_ids_with_bindings`] makes in `xml`, in
+/// order: the span of each relationship attribute value `remap` renames,
+/// with the new value.
+fn relationship_remap_edits(
+    xml: &[u8],
+    remap: &HashMap<String, String>,
+    inherited_bindings: &[(String, String)],
+) -> Result<Vec<(usize, usize, Vec<u8>)>> {
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
     let mut edits = Vec::new();
@@ -6677,12 +6731,8 @@ fn remap_xml_relationship_ids_with_bindings(
         }
         buffer.clear();
     }
-    let mut updated = xml.to_vec();
     edits.sort_by_key(|(start, _, _)| *start);
-    for (start, end, replacement) in edits.into_iter().rev() {
-        updated.splice(start..end, replacement);
-    }
-    Ok(updated)
+    Ok(edits)
 }
 
 fn story_attribute_value_span(element: &[u8], attribute_name: &[u8]) -> Option<(usize, usize)> {
@@ -7425,64 +7475,33 @@ impl MainPartBlocks {
     }
 
     /// Gives `document`, which these blocks serialize, what parsing their
-    /// bytes with the `edits` made gives, a drawing id value replaced at each
-    /// span, sorted: the frame and the blocks parsed again where edited.
-    /// `false`, leaving `document` as it is, when an edit spans blocks or a
-    /// block does not parse back alone.
+    /// bytes with the `edits` made gives, a value replaced at each span,
+    /// sorted: the frame, and the blocks parsed again where edited, where
+    /// they hold a field or where they do not parse back to their value.
+    /// `false`, leaving `document` as it is, when
+    /// [`MainPartBlocks::edited`] cannot make the edits or a block does not
+    /// parse alone to one body child.
     fn reparse_edited(
         &self,
         document: &mut CT_Document,
         edits: &[(usize, usize, Vec<u8>)],
     ) -> bool {
-        let Some(frame) = self.frame() else {
+        let Some(edited) = self.edited(edits) else {
             return false;
         };
-        let mut edits = edits.iter().peekable();
-        let mut edited = Vec::new();
-        for (index, (block, start)) in self.blocks.iter().zip(self.starts()).enumerate() {
-            let end = start + block.bytes.len();
-            let mut xml = None;
-            while let Some((edit_start, edit_end, value)) =
-                edits.next_if(|(edit_start, _, _)| *edit_start < end)
-            {
-                if *edit_start < start || *edit_end > end {
-                    return false;
-                }
-                xml.get_or_insert_with(Vec::new).push((
-                    edit_start - start,
-                    edit_end - start,
-                    value,
-                ));
-            }
-            match xml {
-                Some(block_edits) => {
-                    let mut xml = block.bytes.clone();
-                    for (edit_start, edit_end, value) in block_edits.into_iter().rev() {
-                        xml.splice(edit_start..edit_end, value.iter().copied());
-                    }
-                    let mut part = self.root().to_vec();
-                    part.extend_from_slice(MAIN_PART_BODY_START);
-                    part.extend_from_slice(&xml);
-                    part.extend_from_slice(MAIN_PART_BODY_END);
-                    note_staging_work(|work| work.blocks_read += 1);
-                    let Ok(mut parsed) = CT_Document::from_xml(&part) else {
-                        return false;
-                    };
-                    if parsed.body.sect_pr.is_some() || parsed.body.content.len() != 1 {
-                        return false;
-                    }
-                    edited.push((index, parsed.body.content.remove(0)));
-                }
-                // The bytes of a block with a field say more than its value.
-                None if block.fieldless && block.parses_back(self.root()) => {}
-                None => match block.reparsed(self.root()).filter(|_| !block.fieldless) {
-                    Some(item) => edited.push((index, item)),
-                    None => return false,
-                },
-            }
-        }
-        if edits.next().is_some() {
+        let Some(frame) = edited.frame() else {
             return false;
+        };
+        let mut items = Vec::new();
+        for (index, (block, kept)) in edited.blocks.iter().zip(&self.blocks).enumerate() {
+            // The bytes of a block with a field say more than its value.
+            if Arc::ptr_eq(block, kept) && block.fieldless && block.parses_back(self.root()) {
+                continue;
+            }
+            match block.reparsed(self.root()) {
+                Some(item) => items.push((index, item)),
+                None => return false,
+            }
         }
         document
             .extra_namespaces
@@ -7493,10 +7512,144 @@ impl MainPartBlocks {
             .clone_from(&frame.background_extra_xml);
         document.root_attributes.clone_from(&frame.root_attributes);
         document.body.sect_pr.clone_from(&frame.body.sect_pr);
-        for (index, item) in edited {
+        for (index, item) in items {
             document.body.content[index] = item;
         }
         true
+    }
+
+    /// These blocks with `edits`, (start, end, bytes) in the part, sorted and
+    /// apart, made in the bytes of the blocks and the tail: an edited block
+    /// holds its new bytes and nothing read in them yet. `None` when an edit
+    /// reaches the head or spans the edge of a block.
+    fn edited(&self, edits: &[(usize, usize, Vec<u8>)]) -> Option<Self> {
+        let starts = self.starts();
+        let children = self.content();
+        let mut edited = Self {
+            part: None,
+            nested_namespace_owners: OnceLock::new(),
+            ..self.clone()
+        };
+        for (start, end, value) in edits.iter().rev() {
+            if *start >= children.end {
+                edited.tail.splice(
+                    start - children.end..end - children.end,
+                    value.iter().copied(),
+                );
+                edited.frame = OnceLock::new();
+                continue;
+            }
+            let index = starts.partition_point(|at| at <= start).checked_sub(1)?;
+            let at = starts[index];
+            if *end > at + self.blocks[index].bytes.len() {
+                return None;
+            }
+            let mut bytes = edited.blocks[index].bytes.clone();
+            bytes.splice(start - at..end - at, value.iter().copied());
+            edited.blocks[index] = Arc::new(BodyBlockScan::of(bytes, None));
+        }
+        Some(edited)
+    }
+
+    /// The part these blocks are.
+    fn bytes(&self) -> Vec<u8> {
+        let mut xml = self.head.clone();
+        for block in &self.blocks {
+            xml.extend_from_slice(&block.bytes);
+        }
+        xml.extend_from_slice(&self.tail);
+        xml
+    }
+
+    /// The edits [`relationship_remap_edits`] finds in the part these blocks
+    /// are, read alone in the tail and in the blocks whose relationship ids
+    /// `remap` names. `None` when the head holds a relationship id, or a
+    /// block or the tail does not read.
+    fn relationship_remap_edits(
+        &self,
+        remap: &HashMap<String, String>,
+        bindings: &[(String, String)],
+    ) -> Option<Vec<(usize, usize, Vec<u8>)>> {
+        let (head, tail) = self.frame_parts();
+        if xml_relationship_ids_in_order_with_bindings(&head, bindings)
+            .map_or(true, |ids| !ids.is_empty())
+        {
+            return None;
+        }
+        let mut edits = Vec::new();
+        let mut read = |part: &[u8], at: usize, len: usize, start: usize| -> Option<()> {
+            for (edit_start, edit_end, value) in
+                relationship_remap_edits(part, remap, bindings).ok()?
+            {
+                if edit_start < at || edit_end > at + len {
+                    return None;
+                }
+                edits.push((edit_start - at + start, edit_end - at + start, value));
+            }
+            Some(())
+        };
+        for (block, start) in self.blocks.iter().zip(self.starts()) {
+            if block
+                .relationship_ids(self.root(), bindings)?
+                .iter()
+                .any(|id| remap.contains_key(id))
+            {
+                let (part, at) = block.alone(self.root());
+                read(&part, at, block.bytes.len(), start)?;
+            }
+        }
+        let at = tail.len() - self.tail.len();
+        read(&tail, at, self.tail.len(), self.content().end)?;
+        Some(edits)
+    }
+
+    /// The retained main part these blocks are, canonicalized as
+    /// `canonicalize_all_drawing_ids` canonicalizes it whole: its
+    /// relationships renamed by `remap`, then its authored drawings given
+    /// `canonical_drawing_ids`, with its blocks and its parse.
+    /// `Some(None)` when its authored drawings are not those, which leaves
+    /// it, and `None` when the blocks do not tell.
+    #[allow(clippy::type_complexity)] // The part, its blocks and its parse.
+    fn canonical_retained(
+        &self,
+        remap: &HashMap<String, String>,
+        modeled_drawing_ids: &[u32],
+        nested_image_relationship_ids: &HashSet<String>,
+        canonical_drawing_ids: &[(u32, u32)],
+    ) -> Option<Option<(Vec<u8>, Self, CT_Document)>> {
+        let remapped = self.edited(&self.relationship_remap_edits(remap, &[])?)?;
+        let slots = authored_drawing_slots_by_blocks(
+            &remapped.bytes(),
+            Some(&remapped),
+            modeled_drawing_ids,
+            nested_image_relationship_ids,
+        )
+        .ok()?;
+        if slots.len() != canonical_drawing_ids.len()
+            || slots
+                .iter()
+                .zip(canonical_drawing_ids)
+                .any(|((_, _, old), (expected, _))| old != expected)
+        {
+            return Some(None);
+        }
+        let edits = slots
+            .into_iter()
+            .zip(canonical_drawing_ids)
+            .map(|((_, span, _), (_, id))| (span.start, span.end, id.to_string().into_bytes()))
+            .collect::<Vec<_>>();
+        let mut canonical = remapped.edited(&edits)?;
+        let document = canonical.parsed_document()?;
+        // An edited block holds the value its bytes parse to.
+        for (block, item) in canonical.blocks.iter_mut().zip(&document.body.content) {
+            if block.value.is_none() {
+                *block = Arc::new(BodyBlockScan {
+                    parsed: true,
+                    ..BodyBlockScan::of(block.bytes.clone(), Some(item.clone()))
+                });
+            }
+        }
+        Some(Some((canonical.bytes(), canonical, document)))
     }
 
     /// These blocks for `document`, reopened from the part they are, or
@@ -20990,7 +21143,7 @@ impl Document {
         let owner_identity = relationship_owner_identity(&owner);
         // Story picture insertion keeps current producer XML. Patch its
         // canonical relationship and drawing IDs into that retained source,
-        // which is canonicalized whole.
+        // in the blocks it is made of when they tell, or else whole.
         let retained_main_xml = self
             .package
             .get_part(&owner)
@@ -20999,13 +21152,13 @@ impl Document {
                     .authored_nested_story_relationship_ids
                     .get(&owner_identity)
                     .is_some_and(|ids| !ids.is_empty())
-                    && {
-                        note_staging_work(|work| work.canonicalized += xml.len());
-                        CT_Document::from_xml(xml).ok().as_ref() == Some(&self.document)
-                    }
-                    && self.document.to_xml().ok().as_deref() != Some(*xml)
+                    && self.main_part_parses_to_model(self.kept_main_part().as_deref())
+                    && self
+                        .serialized_main_part()
+                        .ok()
+                        .is_none_or(|(serialized, _)| serialized != *xml)
             })
-            .map(|xml| xml.to_vec());
+            .map(|xml| (xml.to_vec(), self.package_main_part_blocks()));
         if let Some(section) = &mut self.document.body.sect_pr {
             section
                 .header_refs
@@ -21373,28 +21526,67 @@ impl Document {
                 self.document = CT_Document::from_xml(&updated)?;
             }
         }
-        if let Some(retained_main_xml) = retained_main_xml {
-            let mut retained = remap_xml_relationship_ids(&retained_main_xml, &relationship_remap)?;
-            let slots = authored_drawing_slots_in_source_order(
-                &retained,
-                &modeled_drawing_ids,
-                &nested_image_relationship_ids,
-            )?;
-            if slots.len() == canonical_drawing_ids.len()
-                && slots
-                    .iter()
-                    .zip(&canonical_drawing_ids)
-                    .all(|((_, _, old), (expected, _))| old == expected)
-            {
-                for ((_, span, _), (_, id)) in slots
-                    .into_iter()
-                    .rev()
-                    .zip(canonical_drawing_ids.iter().rev())
-                {
-                    retained.splice(span, id.to_string().into_bytes());
+        if let Some((retained, blocks)) = retained_main_xml {
+            let canonical = blocks.as_deref().and_then(|blocks| {
+                blocks.canonical_retained(
+                    &relationship_remap,
+                    &modeled_drawing_ids,
+                    &nested_image_relationship_ids,
+                    &canonical_drawing_ids,
+                )
+            });
+            // Debug builds, which run the binding tests, canonicalize it
+            // whole too.
+            #[cfg(debug_assertions)]
+            if let Some(canonical) = &canonical {
+                let whole = without_staging_work(|| {
+                    canonical_retained_main_part(
+                        &retained,
+                        &relationship_remap,
+                        &modeled_drawing_ids,
+                        &nested_image_relationship_ids,
+                        &canonical_drawing_ids,
+                    )
+                });
+                assert!(
+                    whole
+                        .as_ref()
+                        .ok()
+                        .map(|whole| whole.as_ref().map(|(xml, document)| (xml, document)))
+                        == Some(canonical.as_ref().map(|(xml, _, document)| (xml, document))),
+                    "the blocks canonicalize the retained main part otherwise"
+                );
+            }
+            let canonical = match canonical {
+                Some(canonical) => {
+                    canonical.map(|(xml, blocks, document)| (xml, Some(blocks), document))
                 }
-                self.document = CT_Document::from_xml(&retained)?;
-                self.package.set_part(&owner, retained);
+                None => {
+                    note_staging_work(|work| work.canonicalized += retained.len());
+                    canonical_retained_main_part(
+                        &retained,
+                        &relationship_remap,
+                        &modeled_drawing_ids,
+                        &nested_image_relationship_ids,
+                        &canonical_drawing_ids,
+                    )?
+                    .map(|(xml, document)| (xml, None, document))
+                }
+            };
+            if let Some((xml, blocks, document)) = canonical {
+                self.document = document;
+                // A part already canonical keeps its bytes, and the blocks
+                // the scans, shared with the staged copies, keep for them.
+                if xml != retained {
+                    let xml = Arc::new(xml);
+                    self.package.set_part(&owner, Arc::clone(&xml));
+                    if let Some(blocks) = blocks {
+                        self.lock_main_body_scans().written = Some(Arc::new(MainPartBlocks {
+                            part: Some(xml),
+                            ..blocks
+                        }));
+                    }
+                }
             }
         }
         if canonical_nested_drawing_ids.is_empty() {
@@ -21439,12 +21631,36 @@ impl Document {
             .cloned()
             .collect::<HashSet<_>>();
         if !relationship_remap.is_empty() && !live.is_empty() {
-            let updated = remap_xml_relationship_ids_with_bindings(
-                &xml,
-                relationship_remap,
-                &self.body_namespace_bindings,
-            )?;
-            self.document = CT_Document::from_xml(&updated)?;
+            // The blocks that hold a renamed relationship are parsed again,
+            // or else the whole part.
+            let remap_whole = || {
+                remap_xml_relationship_ids_with_bindings(
+                    &xml,
+                    relationship_remap,
+                    &self.body_namespace_bindings,
+                )
+            };
+            let by_blocks = blocks.as_ref().is_some_and(|blocks| {
+                blocks
+                    .relationship_remap_edits(relationship_remap, &self.body_namespace_bindings)
+                    .is_some_and(|edits| blocks.reparse_edited(&mut self.document, &edits))
+            });
+            // Debug builds, which run the binding tests, parse it whole too.
+            #[cfg(debug_assertions)]
+            if by_blocks {
+                let whole = remap_whole().and_then(|updated| Ok(CT_Document::from_xml(&updated)?));
+                assert!(
+                    whole.as_ref().ok() == Some(&self.document)
+                        && whole.ok().and_then(|whole| whole.to_xml().ok())
+                            == self.document.to_xml().ok(),
+                    "the blocks rename the relationships of the main part otherwise"
+                );
+            }
+            if !by_blocks {
+                let updated = remap_whole()?;
+                note_staging_work(|work| work.parsed += updated.len());
+                self.document = CT_Document::from_xml(&updated)?;
+            }
         }
         if live.is_empty() {
             self.identifiers
@@ -26503,8 +26719,8 @@ impl Document {
         // use the retained main part when it still describes the current model.
         if part_name == candidate.doc_part_name
             && let Some(retained) = candidate.package.get_part(&part_name)
-            && CT_Document::from_xml(retained).ok().as_ref() == Some(&candidate.document)
             && retained != source_xml
+            && candidate.main_part_parses_to_model(candidate.kept_main_part().as_deref())
         {
             source_xml = retained.to_vec();
             story_owner = scan_story_owners(&source_xml, StoryKind::Body)?
