@@ -9498,7 +9498,7 @@ impl PyDocument {
         let this = slf.borrow();
         let mut anchors = this
             .inner
-            .comment_anchor_snapshots()
+            .comment_anchor_snapshot_results()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         let mut items = this
             .inner
@@ -9512,24 +9512,37 @@ impl PyDocument {
             .comments()
             .into_iter()
             .map(|comment| {
-                let (range, anchor_text) = anchors.remove(&comment.id()).ok_or_else(|| {
+                let snapshot = anchors.remove(&comment.id()).ok_or_else(|| {
                     PyValueError::new_err(
                         "comment snapshot is missing its checked ownership record",
                     )
                 })?;
-                let anchor = range
-                    .map(|range| -> PyResult<PyStoryRunRange> {
-                        Ok(PyStoryRunRange {
-                            start: this.comment_story_position(
-                                py,
-                                &range.start,
-                                &mut items,
-                                &owner,
-                            )?,
-                            end: this.comment_story_position(py, &range.end, &mut items, &owner)?,
-                        })
-                    })
-                    .transpose()?;
+                // A comment whose anchor cannot be read or placed keeps its
+                // record. The reason is that comment's issue.
+                let (anchor, anchor_text, anchor_issue) = match snapshot
+                    .map_err(|error| error.to_string())
+                    .and_then(|(range, text)| {
+                        range
+                            .map(|range| -> PyResult<PyStoryRunRange> {
+                                Ok(PyStoryRunRange {
+                                    start: this.comment_story_position(
+                                        py,
+                                        &range.start,
+                                        &mut items,
+                                        &owner,
+                                    )?,
+                                    end: this.comment_story_position(
+                                        py, &range.end, &mut items, &owner,
+                                    )?,
+                                })
+                            })
+                            .transpose()
+                            .map(|anchor| (anchor, text))
+                            .map_err(|error| error.to_string())
+                    }) {
+                    Ok((anchor, text)) => (anchor, text, None),
+                    Err(issue) => (None, None, Some(issue)),
+                };
                 Ok(PyComment {
                     id: comment.id(),
                     author: comment.author().map(str::to_owned),
@@ -9540,6 +9553,7 @@ impl PyDocument {
                     resolved: comment.resolved(),
                     anchor_text,
                     anchor,
+                    anchor_issue,
                 })
             })
             .collect::<PyResult<Vec<_>>>()?;

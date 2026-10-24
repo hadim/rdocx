@@ -13254,7 +13254,16 @@ fn ref_bookmark_runs(document: &Document, target: &str) -> Result<Option<RefBook
         }
         return Ok(Some(cache));
     }
-    let range = document.story_ranges()?.into_iter().find(|range| matches!(range.kind(), crate::StoryRangeKind::Bookmark { name, .. } if name == target));
+    let (ranges, across) = document.story_range_inventory()?;
+    if across
+        .iter()
+        .any(|kind| matches!(kind, crate::StoryRangeKind::Bookmark { name, .. } if name == target))
+    {
+        return Err(Error::Other(
+            "REF f target bookmark runs across story owners".into(),
+        ));
+    }
+    let range = ranges.into_iter().find(|range| matches!(range.kind(), crate::StoryRangeKind::Bookmark { name, .. } if name == target));
     let Some(range) = range else {
         return Ok(None);
     };
@@ -13345,6 +13354,9 @@ struct Evaluator<'a> {
     document: &'a Document,
     context: &'a FieldEvaluationContext,
     bookmarks: BTreeMap<String, BookmarkValue>,
+    // Related-story bookmarks whose two markers are in two owners. A REF to
+    // one refuses by name instead of reading as missing.
+    cross_owner_bookmarks: HashSet<String>,
     numbering_layout: Option<Arc<rdocx_layout::WordLayoutResult>>,
     numbering_nodes: HashMap<rdocx_layout::WordSourcePath, rdocx_layout::SourceNodeId>,
     navigation_styles: HashMap<String, Vec<rdocx_layout::SourceNodeId>>,
@@ -13401,52 +13413,45 @@ impl<'a> Evaluator<'a> {
                 ))
             })
             .collect();
-        // Main bookmark ranges keep their established accepted projection.
-        // Related ranges are admitted only by the checked physical inventory.
-        // One paragraph inventory serves the ranges and the name counts.
-        let paragraphs = document.story_range_paragraphs().ok();
-        if let Some(Ok(ranges)) = paragraphs.as_deref().map(Document::story_ranges_in) {
-            for range in ranges {
-                let crate::StoryRangeKind::Bookmark { name, .. } = range.kind() else {
-                    continue;
-                };
-                if bookmarks.contains_key(name)
-                    || range.range().start.location.story().kind() == StoryKind::Body
-                {
-                    continue;
-                }
-                if let Ok(Some(cache)) = ref_bookmark_runs(document, name) {
-                    bookmarks.insert(
-                        name.clone(),
-                        BookmarkValue {
-                            text: cache.runs.iter().map(CT_R::text).collect(),
-                            range: None,
-                        },
-                    );
-                }
-            }
-        }
-        if let Some(paragraphs) = paragraphs {
-            let mut names = HashMap::<String, usize>::new();
-            for (_, xml) in paragraphs {
-                if let Ok(paragraph) = CT_P::from_xml_fragment(&xml) {
-                    for marker in paragraph
-                        .bookmark_markers
-                        .iter()
-                        .filter(|marker| marker.is_start())
+        // Paragraph inventory keeps the legacy body map and its name filter.
+        // Pairing failure blocks only extra related admission.
+        let mut cross_owner_bookmarks = HashSet::new();
+        if let Ok((paired, name_counts)) = document.story_range_metadata() {
+            if let Ok((ranges, across)) = paired {
+                for kind in across {
+                    if let crate::StoryRangeKind::Bookmark { name, .. } = kind
+                        && !bookmarks.contains_key(&name)
                     {
-                        if let Some(name) = marker.name() {
-                            *names.entry(name.to_owned()).or_default() += 1;
-                        }
+                        cross_owner_bookmarks.insert(name);
+                    }
+                }
+                for range in ranges {
+                    let crate::StoryRangeKind::Bookmark { name, .. } = range.kind() else {
+                        continue;
+                    };
+                    if bookmarks.contains_key(name)
+                        || range.range().start.location.story().kind() == StoryKind::Body
+                    {
+                        continue;
+                    }
+                    if let Ok(Some(cache)) = ref_bookmark_runs(document, name) {
+                        bookmarks.insert(
+                            name.clone(),
+                            BookmarkValue {
+                                text: cache.runs.iter().map(CT_R::text).collect(),
+                                range: None,
+                            },
+                        );
                     }
                 }
             }
-            bookmarks.retain(|name, _| names.get(name).is_some_and(|count| *count == 1));
+            bookmarks.retain(|name, _| name_counts.get(name).is_some_and(|count| *count == 1));
         }
         Self {
             document,
             context,
             bookmarks,
+            cross_owner_bookmarks,
             numbering_layout: None,
             numbering_nodes: HashMap::new(),
             navigation_styles: HashMap::new(),
@@ -14119,6 +14124,9 @@ impl<'a> Evaluator<'a> {
                     value.push_str(&position);
                 }
                 FieldOutcome::Resolved(value)
+            }
+            None if self.cross_owner_bookmarks.contains(target) => {
+                keep(&format!("REF target {target} runs across story owners"))
             }
             None => keep(&format!("REF target {target} was not found")),
         }
