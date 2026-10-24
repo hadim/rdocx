@@ -4187,7 +4187,11 @@ impl Presentation {
         )?;
         // The owners of a slide part take their contexts from that slide
         // alone, so only that slide is measured.
-        let slide_part: Option<&str> = None;
+        let slide_part = self
+            .slides
+            .iter()
+            .any(|slide| slide.part_name == location.owner_part)
+            .then_some(location.owner_part.as_str());
         let mut owner = autofit_inventory(self, &package, slide_part)?
             .into_iter()
             .find(|owner| owner.update.location == *location)
