@@ -219,6 +219,14 @@ Publishers are append and conservative splice, plus the fallback rebuild. The fa
 
 The timed calls are `Paragraph.xml`, `insert_paragraph(10, "x")` and `remove_content(10)`. Native counters do not replace that measurement. The mean of 3 and the median of 7 stay separate.
 
+## F-X268 local provider checkpoint
+
+Codex root approved this checkpoint on 2026-10-24 for use by F-X268. It does not mark F-X266 done. The story stays in progress and reviewed, owner grok, until the checkpoint is actually satisfied. Final Word, the full suite, the hash harness, and the release performance gate stay mandatory and unrun. `AS_BUILT.md` and `SPRINT_TRACKER.md` stay unchanged.
+
+The checkpoint consumes all 9 existing local scoped rows: `direct_routes_match_full_body_bytes`, `append_keeps_eligible_owners`, `conservative_retires_all_scopes`, `failed_splice_publishes_nothing`, `fragment_omits_unused_w14`, `owner_scope_precedence_unchanged`, `held_fresh_reopen_match_old_semantics`, `body_work_counters_follow_owners`, and `missing_run_path_refuses`. It also consumes genuine RED, GREEN, and negative proof, the scoped checks, clean Root microscopes, and the integrated source ancestor. Map each name to the command and outcome already in the progress record. Do not invent a combined pass. Rerun only an input a later change invalidates. Rebuild the current import where binding evidence is affected.
+
+Source head `9c6ef377971182a73b2e3cef07ccedde579d2f37` is integrated at `9ee48bf0902d976de016553b1dd0c79fed856612`. The saved source artifact `b2c` is earlier native and Python call proof. It is not the latest union build. That limitation stays. This section does not weaken the final performance, hash, or Word riders above.
+
 The closure generic has two actual callback instantiations from the patch: direct paragraph, and direct run, table and cell. The private splice types are justified by the direct-body fast path and the existing rebuild fallback. Both exist as soon as this story lands.
 
 The linear visit bound is specified and is part of the chosen implementation budget. Local test `body_work_counters_follow_owners` must prove it during implementation. That proof was not a design block. If the landed loops miss the bound, report that during implementation. Do not invent a passing counter. The contract is approved and the proof stays pending.

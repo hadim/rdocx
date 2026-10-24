@@ -2850,7 +2850,9 @@ Also admit the incoming Word and PowerPoint correctness and performance repairs.
 The original three authoring stories keep the 12 to 17 developer-day planning
 estimate. The earlier 8 to 11 figure is only the pre-Python native basis for
 those three stories. The four repair drafts add a provisional 15 to 24
-developer-days. The expanded planning total is 27 to 41 developer-days.
+developer-days. The expanded planning total is 27 to 41 developer-days for those original
+seven stories. That figure stays historical. The 2026-10-24 refresh adds
+F-X268. Codex root approved that design on 2026-10-24. Its additional estimate is a provisional 7 to 12 developer-days. That figure is not a measurement.
 Those figures are estimates, not measurements, and they are not a capacity
 promise. The visible over-two-week scope is approved intake. The clock has
 not started. F-X267 is the largest repair. No timing is invented here.
@@ -2864,6 +2866,7 @@ not started. F-X267 is the largest repair. No timing is invented here.
 | F-X265 | Preserve fragment relationship targets and duplicate styles | M |
 | F-X266 | Bound Word body reads and structural edit cost | L |
 | F-X267 | Bound PowerPoint mutation cost across public publishers | L |
+| F-X268 | Bound Word owner inventory and unchanged package staging | L |
 
 Complete and integrate F-288 through its scoped dependency-prefix checkpoint
 before F-289. Its F-285 through F-287 prerequisites complete in S95.3. F-290
@@ -3060,6 +3063,33 @@ Excluded open issues from the same receipt, with the same body digest rule:
 | [414](https://github.com/tensorbee/rdocx/pull/414) | F-X264 | `hadim` | `3d3d42db0f9c66f26efb4ab32f37864d8bfb131e` | `a57be36578b1b419b87986b1accbcfca481277ce` | JSON base is sprint head. |
 | [415](https://github.com/tensorbee/rdocx/pull/415) | F-X266 | `hadim` | `0fbf3e96709198dbd01b9e810181109d106d9f68` | `a57be36578b1b419b87986b1accbcfca481277ce` | JSON base is sprint head. |
 | [416](https://github.com/tensorbee/rdocx/pull/416) | F-X267 | `hadim` | `768f8c109bd43fb9c1f6ecdfe2d913382bcc0368` | `a57be36578b1b419b87986b1accbcfca481277ce` | Stacked after PR413 head bdf22890de1762d025b89b83b549c56941ef7199. Incremental only once. JSON base_sha stays a57be36578b1b419b87986b1accbcfca481277ce. |
+
+##### S95.4 issue and PR refresh, 2026-10-24
+
+Receipt cutoff 2026-10-24T11:33:08Z. The refresh lists 11 open issues and 10 open pull requests. No issue changed. Nothing closed or merged. The 2026-10-23 intake above stays the historical record, including every old pin. This section does not replace it.
+
+Changed and new pull requests, all still unmerged candidates and not accepted code:
+
+| PR | Story | Head SHA | What changed |
+|---|---|---|---|
+| [415](https://github.com/tensorbee/rdocx/pull/415) | F-X268 for the new increment. Reviewed F-X266 keeps the 2026-10-23 pin. | `2839e22c14f96aeaeab5245581b5681509774559` | Head moved from `0fbf3e96709198dbd01b9e810181109d106d9f68`. The tips diverged. The endpoint tree diff is 9 paths. The three-dot diff against main is not that increment. |
+| [417](https://github.com/tensorbee/rdocx/pull/417) | F-X268 | `bdf49f0005d1d15078b76b5da83c5f3e2b8cce12` | Six own commits after the new PR415 head. |
+| [418](https://github.com/tensorbee/rdocx/pull/418) | F-X268 | `dba496fcd8b4d482995a23ab81d27ad2bfcbf5e7` | Six own commits after merge `0912a40e19950b223745ef83e8164266b4c36b66`. That merge joins PR417 with PR416 head `768f8c109bd43fb9c1f6ecdfe2d913382bcc0368`. |
+
+Every refresh increment maps to pending F-X268. Reviewed integrated F-X266 and F-X267 stay as they are. Their product scope is not amended here. Donor patches are candidates. They are not accepted code and they do not roll back the reviewed repairs.
+
+The Word catalogue pin is external [hadim/rdocx-skills](https://github.com/hadim/rdocx-skills) branch `main` at `4646db50ed783ddf4a2220f4b95a15ad7a225944`. The static catalogue is 252 calls: 216 literal timed calls, 15 CoreProperties calls, 13 Section calls, 6 App calls, and 2 reads. GROWING is 145. A narrative count of 253 is not a static fact. The default `release` branch has no scaling test file. The older PowerPoint pin `3374348a48164f198ef077af46df485d0a1c469d` remains the F-X267 pin in the 2026-10-23 section.
+
+Raw artifacts stay at `/private/tmp/s95.4-refresh-intake.json` and `/private/tmp/s95.4-refresh-increments/`. The pins in this section are the durable copy.
+
+User answers on 2026-10-24, with the recorded choice text:
+
+- Q18 is "Allow caching with measured memory use (Recommended)". A retained cache requires actual memory measurements, documented fallback cost, and unchanged correctness. The donor 68 MiB extra at 6 MiB main XML is unverified.
+- Q19 is "Refuse atomically in Rust and Python (Recommended)". Affected body insertions refuse before mutation when a retained namespace owner would make saving fail. Valid documents keep working. The behavior change is a separate labelled commit.
+- Q20 is "Use these bounds and report residuals (Recommended)". Every targeted call at 100 paragraphs is at most 1.5 times the 25-paragraph time plus 5 ms. The full pinned 252-call catalogue is measured and residuals stay individual. The original Issue 407 gate of 100 versus 1000 paragraphs remains.
+- Q21 is "Add checked Rust methods (Recommended)". This refines Q19. The four existing infallible Rust methods keep their legacy behavior. The new methods are `try_add_paragraph(&mut self, text: &str) -> Result<Paragraph<'_>>`, `try_insert_paragraph(&mut self, index: usize, text: &str) -> Result<Paragraph<'_>>`, `try_add_table(&mut self, rows: usize, cols: usize) -> Result<Table<'_>>`, and `try_insert_table(&mut self, index: usize, rows: usize, cols: usize) -> Result<Table<'_>>`. Python uses a checked path for every affected alias. Old signatures do not change to `Result`. The later design names existing index and error behavior and the namespace guard. There is no general XML framework.
+
+F-X268 is pending and unclaimed. Codex root approved `.claude/plans/F-X268-design.md` on 2026-10-24. The eight-story inventory is F-288, F-289, F-290, F-X264, F-X265, F-X266, F-X267, and F-X268. The additional estimate is a provisional 7 to 12 developer-days. It is not a measurement and not a capacity promise. The original seven-story estimate of 27 to 41 developer-days stays historical. No story is marked done. `AS_BUILT.md` and `SPRINT_TRACKER.md` are unchanged. Implementation of F-X268 has not started.
 
 #### Sprint S96, Fillable PDF forms
 

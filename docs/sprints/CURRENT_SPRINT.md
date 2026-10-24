@@ -6,29 +6,45 @@
 Also admit the incoming Word and PowerPoint correctness and performance repairs.
 Provide public creation of legacy form fields, build modern forms on the existing
 content-control model, and author mail-merge packages with offline diagnostics.
-The seven designs are approved. F-X264, F-X265, F-X266 and F-X267 are reviewed
+Eight designs are approved. F-X264, F-X265, F-X266 and F-X267 are reviewed
 and integrated, and their final sprint gates are still pending. F-288 has its
 approved local provider prefix. Its final Word and sprint gates stay pending.
-F-289 is claimed. F-290 stays pending and unclaimed. F-289 implementation has
-not started. The repairs do not replace the original authoring contract.
+F-289 is claimed. Its native increment has five named tests and a passing
+native check. Sixty-four existing regressions pass. One CLI path fails with
+NotFound and stays pending. The native interim microscope pass 1 records 8
+defects, 0 smells, and 0 nitpicks. It is not clean. The next work is that
+repair, then Python and the HLD updates, which stay pending. F-289 is not
+complete and has not passed a full gate. F-290 stays pending and unclaimed.
+F-X268 is pending, owner `-`. Its design is approved and it is not claimed.
+It follows F-289 and F-290, and it also waits for the actual F-X266 and
+F-X267 local prefix. It is not product implementation. The repairs do not
+replace the original authoring contract. The sprint now has eight stories.
+The previously authorized full run remains authorized. This approval does
+not ask for a new permission. No product choice is unanswered.
 
 **Estimated effort**: the 12 to 17 developer-day figure applies only to the
 original three Rust and Python authoring stories, F-288, F-289 and F-290.
 The earlier 8 to 11 figure is the pre-Python native basis for those same three
 stories. The four repair designs add a provisional 15 to 24 developer-days.
-The expanded planning total is 27 to 41 developer-days. Those figures are
-estimates, not measurements, and they are not a capacity promise. The visible
-over-two-week scope is an approved intake. The sprint clock started with
-F-X264 `/start-feature`. F-289 is claimed and its implementation has not
-started. F-X267 remains the largest repair.
+The expanded planning total is 27 to 41 developer-days for those original
+seven stories. That figure stays historical. The F-X268 draft records a
+provisional 7 to 12 developer-days. That figure is a planning estimate, not
+a measurement and not a capacity promise. It is not added to the historical
+27 to 41. These figures are estimates, not measurements, and they are not
+a capacity promise. The visible over-two-week
+scope is an approved intake. The sprint clock started with F-X264
+`/start-feature`. F-289 is claimed. The native evidence named above is not a
+full gate. F-X267 remains the largest repair.
 
 ## Spec references
 
 - `docs/hld/14-development-backlog.md`, sections F-288, F-289 and F-290 define
   supported authoring behavior, dependencies and each story's acceptance gate.
   Sections F-X264, F-X265, F-X266 and F-X267 define the admitted repair scope.
+  Section F-X268 defines the pending story. Its design is approved and the story is unclaimed.
   The durable issue and PR mapping is the S95.4 issue and PR intake, 2026-10-23 section in `docs/sprints/SPRINT_PLAN.md`.
-  The seven designs are approved.
+  The 2026-10-24 refresh is a later section in the same file.
+  Eight designs are approved. F-X268 stays pending and unclaimed.
 - `docs/hld/03-architecture.md`, the existing legacy form, field, content-control,
   protection and mail-merge ownership contracts settle reuse of the document
   model, staging and publication boundaries.
@@ -53,6 +69,7 @@ started. F-X267 remains the largest repair.
 | F-X265 | Preserve fragment relationship targets and duplicate styles | M | in-progress | grok |
 | F-X266 | Bound Word body reads and structural edit cost | L | in-progress | grok |
 | F-X267 | Bound PowerPoint mutation cost across public publishers | L | in-progress | grok |
+| F-X268 | Bound Word owner inventory and unchanged package staging | L | pending | - |
 
 ## Sequencing note
 
@@ -69,8 +86,13 @@ distinct. Shared facade, binding or HLD files require serial ownership.
 All seven stories started pending and unclaimed. The seven designs are now
 approved. F-X264, F-X265, F-X266 and F-X267 are reviewed and integrated, with
 their final sprint gates pending. F-288 local prefix is recorded at
-`96718dadf6840fe6ff73663dff3cd2b286418844`. F-289 is claimed and its
-implementation has not started. F-290 stays pending and unclaimed. The consumed
+`96718dadf6840fe6ff73663dff3cd2b286418844`. F-289 is claimed. Its native
+checkpoint has five named tests and a passing native check. Sixty-four
+existing regressions pass. One CLI path fails with NotFound and stays
+pending. Python and the HLD updates stay pending. The native interim
+microscope pass 1 records 8 defects, 0 smells, and 0 nitpicks. It is not
+clean and it does not approve completion. F-289 is not complete and has not
+passed a full gate. F-290 stays pending and unclaimed. The consumed
 local gate
 includes every named native group, A7 and the render fallback, the affected
 Python checks, a clean microscope, and that integrated ancestor. Reviewed
@@ -87,9 +109,12 @@ F-X266, and F-X260 and F-X262 for F-X267.
 
 Proposed serial integration, because leases overlap, is F-X264, F-X265,
 F-X266, F-X267, then F-288, then its verified local provider prefix, then
-F-289, then F-290. That order is not a set of invented formal dependencies.
-Preserve the F-288 verified local provider prefix before F-289. Final Word
-qualification of that prefix stays pending.
+F-289, then F-290. F-X268 follows F-289 and F-290, and it also waits for an
+approved local provider prefix of integrated F-X266 and F-X267. Those two
+providers are not done and are not final-accepted. F-X268 is not claimed.
+That order is not a set of invented formal dependencies. Formal dependencies
+for F-X268 are F-X266 and F-X267. Preserve the F-288 verified local provider
+prefix before F-289. Final Word qualification of that prefix stays pending.
 
 ## Definition of done for this sprint
 
@@ -192,3 +217,11 @@ Q17 is answered by the user on 2026-10-23 for F-X265 A2 only. The recorded words
 A2 now requires the actual available unused-relationship reproducer. Exact inserted picture byte identity holds through policies, save and reopen, including the best available copied-target and body-replaced scenario. Local RED then GREEN on those available cases is mandatory. Donor image 9 and image 10 remain a reconstructed additional case and are not claimed equivalent. The exact original stays unverified. That follow-up is not a final acceptance blocker, and no original-input requirement blocks sprint closure. Every other unrun final gate stays pending.
 
 The user authorizes a reporter comment only after an actual tested fix is available on a reviewed sprint ref, or in the proper close phase. The note invites a test of the original image and a reopen if it still fails. This checkpoint does not send the comment, close Issue 404, fetch, push, or record a fix. The exact note is drafted later with the real head and the real test details. No feature is completed by this amendment.
+
+## Resume checkpoint, refresh intake on 2026-10-24
+
+The user adds the 2026-10-24T11:33:08Z refresh to active S95.4. The durable mapping is the S95.4 issue and PR refresh, 2026-10-24 section in `docs/sprints/SPRINT_PLAN.md`. F-X268 is pending, owner `-`, and unclaimed. No F-X268 design file is written in this checkpoint. Answered Q18, Q19, Q20, and Q21 do not approve a design. No product choice is unanswered.
+
+Existing status and owners stay. F-288 stays done, with its recorded local prefix. F-289 stays claimed and in progress. Its native increment has five named tests and a passing native check. Sixty-four existing regressions pass. One CLI path fails with NotFound and stays pending. Python, HLD, and review stay pending. This checkpoint does not mark F-289 complete and does not claim a full gate. F-290 stays pending and unclaimed. F-X264, F-X265, F-X266, and F-X267 stay in progress and reviewed. Their final gates stay pending. Run state is not edited. `AS_BUILT.md` and `SPRINT_TRACKER.md` gain no row.
+
+The original seven-story estimate of 27 to 41 developer-days stays historical. The F-X268 estimate is unknown. The previously authorized full run remains authorized after Root approves the F-X268 design. This checkpoint does not ask for a new permission, claim a feature, commit, or push. F-X268 is not product implementation.

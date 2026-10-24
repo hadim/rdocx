@@ -264,3 +264,11 @@ Trusted reread requires a baseline that is still unmodified and read-equivalent.
 A1's 248 count is 212 literal keys plus 36 dynamic keys, with Core 15 inside the 36. It is not a claim that the suite was executed.
 
 HLD impact is 03, 04, 06, 10, 12 and 14. HLD 15 is absent. No version statement is added. The M21 digest is measured here. Word 49 is expected unchanged. A10 is accounting only.
+
+## F-X268 local provider checkpoint
+
+Codex root approved this checkpoint on 2026-10-24 for use by F-X268. It does not mark F-X267 done. The story stays in progress and reviewed, owner grok, until the checkpoint is actually satisfied. Final Word, the full suite, the hash harness, the release 248-call run, and the new 65-call, 252-call, and memory riders that belong to F-X268 stay mandatory and unrun. `AS_BUILT.md` and `SPRINT_TRACKER.md` stay unchanged.
+
+The checkpoint consumes all 13 existing local scoped rows: `remove_part_returns_shared_bytes`, `reread_matches_write_and_read`, `reread_matches_shared_zip_name_limits`, `hand_built_baseline_uses_fallback`, `untouched_slide_bytes_stay`, `fit_text_ignores_unrelated_broken_slide`, `fit_text_at_selects_size_valid_in_distinct_shared_contexts`, `footer_proof_is_part_local`, `parsed_baseline_tracks_real_edits`, `fx211b_native_opaque_root_edit_retains_invalidated_signature`, `embedded_replace_counts_commit_zip_write`, `unnormalized_opaque_part_counts_reread_zip_fallback`, and `commit_counters_follow_real_work`. It also consumes genuine RED, GREEN, and negative proof, the scoped checks, clean Root microscopes, and the integrated source ancestor. Map each name to the command and outcome already in the progress record. Do not invent a combined pass. Rerun only an input a later change invalidates. Rebuild the current import where binding evidence is affected.
+
+Source head `70573c91030be7073d29e3451383060eb207207a` is integrated at `d0f17a6ac7ef675d0ed2a86cea641ce21d65bfdd`. The earlier `.so` artifact `1fe91` is earlier fast-path proof. It is not a fresh D2 or D3 qualification of this source head. That limitation stays. This section does not weaken the final performance, hash, or Word riders above.

@@ -320,6 +320,14 @@ Tests land in the existing integration entrypoint. No new test binary.
 
 Expected unchanged for existing fixtures. New tests use new inputs. No baseline re-recording. If a shared setter behaviour from F-288 moves an existing hash, that delta belongs to the F-288 behaviour commit, not to a silent F-289 fixture edit.
 
+## Current readiness and private provider lease
+
+This section does not change the public contract. The current native increment is 3 files, with 5 named groups and a passing native check. Sixty-four existing regressions pass. One CLI path fails with NotFound and stays pending. Codex root native interim microscope pass 1 is `work/f-289-grok` file `.claude/reviews/F-289-native-pass-1.md`. The verdict is 8 defects, 0 smells, and 0 nitpicks. It is not clean. Python, HLD, and the full gate stay pending. This is not completion.
+
+If D1 cannot be fixed without a second grammar, do not add one. The exclusive implementation lease may include the existing `crates/rdocx/src/document.rs` accepted story-owner and span provider, and the existing `crates/rdocx/src/field.rs` accepted F-288 legacy inventory span provider, only as needed for that fix. Any helper stays a native private internal interface. No public API change, no new source file, module, trait, generic, or dependency. The existing five HLD impact files and the body-only old APIs stay unchanged.
+
+The running worker must acknowledge this canonical revision before the affected repair. Preserve base `c0b58c7fa8e4e919b9bfe5c02932f74827cea36b`, the worker source, and the progress record. This amendment does not edit the worker.
+
 ## Exclusive resources
 
 Product source and test files already named in this plan stay the product lease. This amendment adds one existing file:
