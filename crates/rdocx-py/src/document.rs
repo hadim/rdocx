@@ -100,6 +100,17 @@ pub(crate) fn word_piece_work() -> usize {
     WORD_PIECE_READS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The whole main part work staging and comparing saves did on this thread
+/// since the previous call, in bytes of the main part parsed again, scanned
+/// for nested namespace owners, canonicalized whole and written as a ZIP.
+/// Debug builds only.
+#[cfg(debug_assertions)]
+#[pyfunction]
+#[pyo3(name = "_staging_work")]
+pub(crate) fn staging_work() -> [usize; 4] {
+    rdocx::take_staging_work()
+}
+
 use oxml_py_support::{
     ContentPath, PathSeg, PreparedRevision, RevisionCounter, RevisionScope, RevisionState,
     StaleElementError, revision_to_pyerr,

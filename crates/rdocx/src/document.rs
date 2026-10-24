@@ -58469,6 +58469,72 @@ mod tests {
         }
         assert_eq!(work[0], work[1]);
     }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn staging_reads_the_main_part_once_while_it_keeps_its_opened_bytes() {
+        // A font and a numbering edit compared by save, on bodies of N and 4N
+        // paragraphs with pictures, a nested namespace owner and a numbering
+        // part and font table read from bytes.
+        let edit = |document: &Document, k: usize| {
+            let mut candidate = document.clone_for_staging();
+            candidate
+                .set_font(FontDefinition::new(format!("Probe {k}")))
+                .unwrap();
+            candidate
+                .add_numbering_definition(&[ListLevel::decimal()])
+                .unwrap();
+            candidate
+        };
+        let mut work = Vec::new();
+        let mut forgetting = Vec::new();
+        for count in [50usize, 200] {
+            let body = format!("{}{}", issue407_runs(count), issue407_varied_body(""));
+            let mut source = issue407_document(&body, false);
+            for _ in 0..count / 10 {
+                source.add_picture(
+                    super::watermark_tests::PNG,
+                    "pixel.png",
+                    Length::pt(12.0),
+                    Length::pt(12.0),
+                );
+            }
+            source.set_font(FontDefinition::new("Seed")).unwrap();
+            source
+                .add_numbering_definition(&[ListLevel::decimal()])
+                .unwrap();
+            let mut document = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+            take_staging_work();
+            // The first staging parses, scans and checks the main part once.
+            let candidate = edit(&document, 0);
+            assert!(!document.saves_as(&candidate).unwrap());
+            document = candidate;
+            let first = take_staging_work();
+            assert!(first[..3].iter().all(|bytes| *bytes > 0), "{first:?}");
+            let mut sample = Vec::new();
+            for k in 1..3 {
+                let candidate = edit(&document, k);
+                assert!(!document.saves_as(&candidate).unwrap());
+                document = candidate;
+                sample.push(take_staging_work());
+            }
+            work.push(sample);
+            // A copy that forgets its opening reads the whole part again.
+            let mut copy = document.clone_for_staging();
+            copy.parsed = None;
+            let candidate = edit(&copy, 3);
+            assert!(!copy.saves_as(&candidate).unwrap());
+            forgetting.push(take_staging_work());
+        }
+        // Later edits read none of it again, in a body four times as large
+        // too.
+        assert_eq!(work[0], work[1]);
+        assert!(work[0].iter().all(|sample| *sample == [0; 4]), "{work:?}");
+        assert!(
+            (0..4).all(|work| forgetting[1][work] > forgetting[0][work]),
+            "{forgetting:?}"
+        );
+    }
 }
 
 #[cfg(test)]
