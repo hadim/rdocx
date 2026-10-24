@@ -164,5 +164,7 @@ fn _rpptx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     layout::register(module)?;
     #[cfg(debug_assertions)]
     module.add_function(wrap_pyfunction!(presentation::inventory_work, module)?)?;
+    #[cfg(debug_assertions)]
+    module.add_function(wrap_pyfunction!(presentation::commit_work, module)?)?;
     Ok(())
 }

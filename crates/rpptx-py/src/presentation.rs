@@ -38,6 +38,16 @@ fn reset_fx260_ppt_visits() {
 pub(crate) fn inventory_work() -> usize {
     FX260_PPT_VISITS.with(|cell| cell.replace(0))
 }
+
+/// Debug builds only: the work staging and reopening packages did since the
+/// previous call, as parts parsed, slide and notes parts serialized, media
+/// hashed and packages written as a ZIP.
+#[cfg(debug_assertions)]
+#[pyfunction]
+#[pyo3(name = "_commit_work")]
+pub(crate) fn commit_work() -> [usize; 4] {
+    rpptx::take_commit_work()
+}
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyList, PyString, PyTuple};
@@ -1789,9 +1799,7 @@ impl PyPresentation {
             })?;
         let result = PyTuple::new(py, counts)?;
         let changed = py
-            .detach(|| -> rpptx::Result<bool> {
-                Ok(self.inner.to_bytes()? != candidate.to_bytes()?)
-            })
+            .detach(|| -> rpptx::Result<bool> { Ok(!self.inner.saves_as(&candidate)?) })
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         if changed {
             let survivors = self.replaced_text_owners(&candidate)?;
@@ -2542,7 +2550,7 @@ struct LiveOwner {
 
 /// One owner's explicit survival proof.
 /// A matching native ID never constructs this proof automatically.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct OwnerSurvival {
     pub(crate) generation: u64,
     pub(crate) destination: smallvec::SmallVec<[oxml_py_support::PathSeg; 5]>,
@@ -2967,6 +2975,15 @@ impl CarriedParts {
         }
     }
 
+    /// For each live slide, whether a candidate part keeps it.
+    fn kept_live_slides(&self, live_slides: usize) -> Vec<bool> {
+        let mut kept = vec![false; live_slides];
+        for from in self.slides.iter().flatten() {
+            kept[*from] = true;
+        }
+        kept
+    }
+
     /// Whether a candidate part is kept from the live inventory.
     fn keeps(&self, part: OwnerPart) -> bool {
         match part {
@@ -3195,15 +3212,6 @@ fn shape_owner_addresses(
         }
     }
     Ok(())
-}
-
-fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
-    let mut out = Vec::new();
-    for index in 0..inner.len() {
-        slide_owner_addresses(inner, index, &mut out)?;
-    }
-    master_owner_addresses(inner, &mut out)?;
-    Ok(out)
 }
 
 /// The owners of one slide part: the slide and its shapes.
@@ -3890,10 +3898,7 @@ impl PyPresentation {
         use oxml_py_support::RevisionScope as S;
         let fail = |message: &str| pyo3::exceptions::PyValueError::new_err(message.to_owned());
         let live = &self.owners.parts;
-        let mut kept = vec![false; live.slides.len()];
-        for from in carried.slides.iter().flatten() {
-            kept[*from] = true;
-        }
+        let kept = carried.kept_live_slides(live.slides.len());
         let kept_part = |part: OwnerPart| match part {
             OwnerPart::Slide(index) => kept[index],
             OwnerPart::Masters => carried.masters,
@@ -4807,23 +4812,125 @@ impl PyPresentation {
     /// Footer staging only removes owned footer shapes, appends fresh copies,
     /// and preserves every surviving physical identity. Match that explicit
     /// native guarantee and compare complete text owners before publication.
+    ///
+    /// A part the candidate still shares keeps its owners unchanged, so only
+    /// the other parts are walked and matched. A physical identity names its
+    /// part, and a slide ID is held by one slide, so an owner of a matched
+    /// part can only match within that part, and gets the proof that
+    /// matching every part gives. A kept part is not matched at all, so a
+    /// physical identity two of its owners share, such as a repeated shape
+    /// ID or two `mc:AlternateContent` shapes, no longer refuses the edit as
+    /// ambiguous. Debug builds check both against matching every part.
     pub(crate) fn footer_owners(&self, candidate: &rpptx::Presentation) -> PyResult<OwnerProofs> {
+        let carried = self.carried_parts(candidate, &OwnerProofs::edit(PartEdit::Unchanged));
+        let kept = carried.kept_live_slides(self.owners.parts.slides.len());
+        let changed = self
+            .prefix_parts(&[])
+            .into_iter()
+            .filter(|part| match part {
+                OwnerPart::Slide(index) => !kept[*index],
+                OwnerPart::Masters => !carried.masters,
+            })
+            .collect::<Vec<_>>();
+        let mut next = Vec::new();
+        for (at, origin) in carried.slides.iter().enumerate() {
+            if origin.is_none() {
+                slide_owner_addresses(candidate, at, &mut next)?;
+            }
+        }
+        if !carried.masters {
+            master_owner_addresses(candidate, &mut next)?;
+        }
+        let proofs = self.matched_footer_owners(candidate, changed.clone(), &next);
+        #[cfg(debug_assertions)]
+        without_work_count(|| self.assert_footer_owners(candidate, &carried, &changed, &proofs))?;
+        proofs
+    }
+
+    /// Debug builds check footer proofs against matching every part: when
+    /// that succeeds the proofs are the same, those of a kept part being its
+    /// unchanged ones, and when it refuses, matching the kept parts alone
+    /// refuses too, the one difference footer_owners states.
+    #[cfg(debug_assertions)]
+    fn assert_footer_owners(
+        &self,
+        candidate: &rpptx::Presentation,
+        carried: &CarriedParts,
+        changed: &[OwnerPart],
+        proofs: &PyResult<OwnerProofs>,
+    ) -> PyResult<()> {
+        let mut every = Vec::new();
+        let mut kept_next = Vec::new();
+        for (at, origin) in carried.slides.iter().enumerate() {
+            slide_owner_addresses(candidate, at, &mut every)?;
+            if origin.is_some() {
+                slide_owner_addresses(candidate, at, &mut kept_next)?;
+            }
+        }
+        master_owner_addresses(candidate, &mut every)?;
+        if carried.masters {
+            master_owner_addresses(candidate, &mut kept_next)?;
+        }
+        let whole = self.matched_footer_owners(candidate, self.prefix_parts(&[]), &every);
+        match (whole, proofs) {
+            (Ok(whole), Ok(proofs)) => {
+                for (part, list) in &whole.parts {
+                    match proofs.parts.iter().find(|(listed, _)| listed == part) {
+                        Some((_, listed)) => assert_eq!(listed, list, "footer proofs of {part:?}"),
+                        None => {
+                            let owners = self.owners.parts.part(*part).expect("live part");
+                            let unchanged = owners
+                                .owners
+                                .iter()
+                                .filter_map(|owner| PartEdit::Unchanged.proof(owner))
+                                .collect::<Vec<_>>();
+                            assert_eq!(&unchanged, list, "footer proofs of kept {part:?}");
+                        }
+                    }
+                }
+            }
+            (Err(whole), Ok(_)) => {
+                let kept_parts = self
+                    .prefix_parts(&[])
+                    .into_iter()
+                    .filter(|part| !changed.contains(part))
+                    .collect();
+                assert!(
+                    self.matched_footer_owners(candidate, kept_parts, &kept_next)
+                        .is_err(),
+                    "footer proofs accept what matching every part refuses: {whole}"
+                );
+            }
+            (Ok(_), Err(error)) => {
+                panic!("footer proofs refuse what matching every part accepts: {error}")
+            }
+            (Err(whole), Err(error)) => assert_eq!(whole.to_string(), error.to_string()),
+        }
+        Ok(())
+    }
+
+    /// Survival proofs for the owners of `parts`, each matched by physical
+    /// identity to its one address in `next`.
+    fn matched_footer_owners(
+        &self,
+        candidate: &rpptx::Presentation,
+        parts: Vec<OwnerPart>,
+        next: &[OwnerAddress],
+    ) -> PyResult<OwnerProofs> {
         use oxml_py_support::ContentPath;
-        let next = owner_addresses(candidate)?;
         let mut by_physical =
             HashMap::<&PhysicalOwner, smallvec::SmallVec<[&OwnerAddress; 1]>>::new();
         by_physical.try_reserve(next.len()).map_err(|_| {
             pyo3::exceptions::PyMemoryError::new_err("footer owner allocation failed")
         })?;
-        for address in &next {
+        for address in next {
             by_physical
                 .entry(&address.physical)
                 .or_default()
                 .push(address);
         }
         let mut changed_bodies = Vec::<smallvec::SmallVec<[PathSeg; 5]>>::new();
-        let every_part = self.prefix_parts(&[]);
-        self.part_owner_proofs(every_part, |old, proof| {
+        self.part_owner_proofs(parts, |old, proof| {
             // The native footer provider retains the body but replaces its
             // text children. Earlier nodes do not survive by ordinal.
             if matches!(
@@ -5700,9 +5807,11 @@ impl PyPresentation {
         candidate: rpptx::Presentation,
         operation: &'static str,
     ) -> PyResult<()> {
-        let before = self.inner.to_bytes().map_err(|e| rpptx_to_pyerr(py, e))?;
-        let after = candidate.to_bytes().map_err(|e| rpptx_to_pyerr(py, e))?;
-        if before == after {
+        if self
+            .inner
+            .saves_as(&candidate)
+            .map_err(|e| rpptx_to_pyerr(py, e))?
+        {
             return Ok(());
         }
         let survivors = self.unchanged_owners()?;

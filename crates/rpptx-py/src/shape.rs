@@ -281,11 +281,9 @@ impl PyShape {
             .ok_or_else(|| PyIndexError::new_err("shape index out of range"))?
             .set_flips(flags.0, flags.1)
             .map_err(|e| rpptx_to_pyerr(py, e))?;
-        if candidate.to_bytes().map_err(|e| rpptx_to_pyerr(py, e))?
-            == presentation
-                .inner
-                .to_bytes()
-                .map_err(|e| rpptx_to_pyerr(py, e))?
+        if candidate
+            .saves_as(&presentation.inner)
+            .map_err(|e| rpptx_to_pyerr(py, e))?
         {
             return Ok(());
         }
@@ -339,11 +337,9 @@ impl PyShape {
                 site,
             )
             .map_err(|e| rpptx_to_pyerr(py, e))?;
-        if candidate.to_bytes().map_err(|e| rpptx_to_pyerr(py, e))?
-            == presentation
-                .inner
-                .to_bytes()
-                .map_err(|e| rpptx_to_pyerr(py, e))?
+        if candidate
+            .saves_as(&presentation.inner)
+            .map_err(|e| rpptx_to_pyerr(py, e))?
         {
             return Ok(());
         }
@@ -2078,11 +2074,9 @@ impl PyShapeCollection {
             .map_err(|_| PyValueError::new_err("missing group"))?
             .align(&indices, alignment, reference)
             .map_err(|e| rpptx_to_pyerr(py, e))?;
-        if candidate.to_bytes().map_err(|e| rpptx_to_pyerr(py, e))?
-            == presentation
-                .inner
-                .to_bytes()
-                .map_err(|e| rpptx_to_pyerr(py, e))?
+        if candidate
+            .saves_as(&presentation.inner)
+            .map_err(|e| rpptx_to_pyerr(py, e))?
         {
             return Ok(());
         }
@@ -2132,11 +2126,9 @@ impl PyShapeCollection {
             .map_err(|_| PyValueError::new_err("missing group"))?
             .distribute(&indices, direction, reference)
             .map_err(|e| rpptx_to_pyerr(py, e))?;
-        if candidate.to_bytes().map_err(|e| rpptx_to_pyerr(py, e))?
-            == presentation
-                .inner
-                .to_bytes()
-                .map_err(|e| rpptx_to_pyerr(py, e))?
+        if candidate
+            .saves_as(&presentation.inner)
+            .map_err(|e| rpptx_to_pyerr(py, e))?
         {
             return Ok(());
         }
@@ -2841,11 +2833,9 @@ impl PyChart {
         candidate
             .set_chart_legend(slide, id, visible, position, overlay)
             .map_err(|e| rpptx_to_pyerr(py, e))?;
-        if candidate.to_bytes().map_err(|e| rpptx_to_pyerr(py, e))?
-            == presentation
-                .inner
-                .to_bytes()
-                .map_err(|e| rpptx_to_pyerr(py, e))?
+        if candidate
+            .saves_as(&presentation.inner)
+            .map_err(|e| rpptx_to_pyerr(py, e))?
         {
             return Ok(());
         }
@@ -2943,12 +2933,8 @@ impl PyChart {
             .replace_chart_data(slide, id, &data)
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         if candidate
-            .to_bytes()
+            .saves_as(&presentation.inner)
             .map_err(|error| rpptx_to_pyerr(py, error))?
-            == presentation
-                .inner
-                .to_bytes()
-                .map_err(|error| rpptx_to_pyerr(py, error))?
         {
             return Ok(());
         }
