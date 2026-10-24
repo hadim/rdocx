@@ -926,17 +926,21 @@ fn note_reread_zip_write() {
 
 /// Whether a write stores the part or relationship owner `name` under a ZIP
 /// entry that reading it back names `name` again: an absolute name with no
-/// empty or dot segment, no trailing backslash, which the reader takes for
-/// a directory, and short enough for a ZIP entry name with its `_rels`
-/// segment and suffix.
+/// empty or dot segment and no trailing backslash, which the reader takes
+/// for a directory. The ordinary entry name and the relationship entry name
+/// must both pass `reject_zip_local_entry_name`. A failure there is not a
+/// fast-path error. `reread` takes the ZIP fallback, and `write_to` keeps
+/// its existing validation order.
 fn written_as_is(name: &str) -> bool {
-    name.len() < usize::from(u16::MAX) - "_rels/.rels".len()
-        && name.starts_with('/')
+    let canonical = name.starts_with('/')
         && !name.ends_with('\\')
         && name
             .split('/')
             .skip(1)
-            .all(|segment| !matches!(segment, "" | "." | ".."))
+            .all(|segment| !matches!(segment, "" | "." | ".."));
+    canonical
+        && reject_zip_local_entry_name(name.strip_prefix('/').unwrap_or(name)).is_ok()
+        && reject_zip_local_entry_name(&part_name_to_rels_path(name)).is_ok()
 }
 
 /// Whether `candidate` names the part `identity` names. A name that is its
@@ -2935,6 +2939,60 @@ mod tests {
             .get_or_create_part_rels("/ppt/slides/slide1.xml")
             .add(rel_types::IMAGE, "../media/image1.png");
         written_and_read(&package).unwrap()
+    }
+
+    /// Entry lengths are the names `zip_entries` emits. Relationship lengths
+    /// come from `part_name_to_rels_path`, not from a fixed owner offset.
+    #[test]
+    fn reread_matches_shared_zip_name_limits() {
+        let read = read_pptx();
+
+        let ordinary = |entry_len: usize| {
+            let mut stem = "x".repeat(entry_len - ".bin".len());
+            stem.push_str(".bin");
+            let key = format!("/{stem}");
+            assert_eq!(key.strip_prefix('/').unwrap().len(), entry_len);
+            let mut candidate = read.clone();
+            candidate
+                .content_types
+                .add_default("bin", "application/octet-stream");
+            candidate.set_part(&key, vec![1, 2, 3]);
+            candidate
+        };
+        assert_rereads_as_written(&ordinary(65_504), &read);
+        assert_rereads_as_written(&ordinary(65_505), &read);
+
+        let relationship = |entry_len: usize| {
+            let mut owner = format!("/{}", "r".repeat(entry_len));
+            let mapped = part_name_to_rels_path(&owner);
+            assert!(mapped.len() >= entry_len);
+            owner.truncate(owner.len() - (mapped.len() - entry_len));
+            assert_eq!(part_name_to_rels_path(&owner).len(), entry_len);
+            let mut candidate = read.clone();
+            candidate
+                .get_or_create_part_rels(&owner)
+                .add(rel_types::IMAGE, "../media/image1.png");
+            candidate
+        };
+        assert_rereads_as_written(&relationship(65_504), &read);
+        assert_rereads_as_written(&relationship(65_505), &read);
+
+        let mut invalid = ordinary(65_505);
+        let key = invalid
+            .parts
+            .keys()
+            .find(|name| {
+                name.strip_prefix('/')
+                    .is_some_and(|entry| entry.len() == 65_505)
+            })
+            .unwrap()
+            .clone();
+        invalid.content_types.add_override(&key, "application/xml");
+        invalid.set_part(&key, b"<\x01/>".to_vec());
+        assert_rereads_as_written(&invalid, &read);
+        let error = invalid.clone().reread(&read).unwrap_err().to_string();
+        assert!(error.contains("U+0001"), "{error}");
+        assert!(!error.contains("ZipLocalBlock"), "{error}");
     }
 
     #[test]
