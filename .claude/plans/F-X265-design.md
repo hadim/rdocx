@@ -48,6 +48,8 @@ pub fn add_hyperlink_relationship_to_story(&mut self, story: &StoryId, url: &str
 
 `Document::import_fragment` parameter order is destination, fragment, policy. The name is `destination`, not `at`. Python `Document.insert_document(self, other: Document, *, at: int, policy: FragmentConflictPolicy | None = None) -> None` is the stub at `_rdocx.pyi:1255`. `embed_image`, `add_hyperlink_relationship` and `add_hyperlink_relationship_to_story` are native only. They have no Python stub. Native typed `insert_document` is a different body route and stays an unaffected control. The shared provider keeps every fragment kind it already admits. No new Word oracle is added for native open, save or reopen.
 
+Native typed `insert_document` is the existing body, style and numbering route. It is not a fragment media importer. `Document::insert_document` stages through `insert_document_content_staged_with_numbering_policy` at `crates/rdocx/src/document.rs:35177`. That function reserves merge bundles, merges styles, clones body content and remaps numbering. It does not import source media relationships. The unaffected control uses a source and a destination that already share the intended media graph, then compares the correct source picture bytes after reopen. Distinct-media native insertion is not newly qualified and is not repaired by this story.
+
 Picture bytes stay identical for both insertion orders, the default path, and reuse turned off. Mixed picture, chart and hyperlink inserts return ids that still name the intended targets after intervening staged edits. Save and reopen keep referenced target bytes. Chart, template, building-block and rich-merge publishers use the same rule. Native typed insert is an unaffected control and is still tested.
 
 Style import dedups the first definition before dependency closure.
@@ -67,7 +69,8 @@ Style import dedups the first definition before dependency closure.
 | Picture order | Existing picture insert, default and reuse off | Same bytes either order | Insert, save, reopen |
 | Mixed targets | Picture, chart and hyperlink ids | Intervening staging does not retarget a returned id | Insert, serialize, reopen |
 | Styles | Existing fragment style import | First definition before closure. Target duplicates stay | Import, serialize |
-| Unaffected | Template, building block, rich merge, native typed insert | Same rule, no new API | Import, reopen |
+| Unaffected fragment publishers | Template, building block, rich merge | Same provider. Shared relationship and style rules. No new API | Import, reopen |
+| Unaffected native control | Native typed insert | Existing body, style and numbering route. Source and destination already share the intended media graph. Correct source picture bytes after reopen. No fragment media import | Insert, reopen |
 
 ## Behavior contracts and evidence
 
@@ -93,7 +96,7 @@ F-X261 is done in `BACKLOG.md`. F-X265 is pending and unclaimed. No in-sprint pr
 | A3 | Issue 408. Equal first definitions | Zero copies | Style import | `equal_styles_add_no_copy` | Local regression |
 | A4 | Source first differs from target first. A later shadowed definition and its dependencies | Exactly one renamed copy. Shadow ignored | Style import | `different_first_style_copies_once` | Target duplicate XML verbatim |
 | A5 | Same style id whose first Normal definitions differ on the default flag. Separate case: the source default id differs from the target default id | Same id yields one renamed non-default copy. A different source default id keeps the existing refusal | Style import | `same_id_default_copies_once_nondefault` | Local regression |
-| A6 | Template, building block, rich merge, and native typed insert | Same relationship and style rules. No new public method | Those existing publishers | `template_merge_and_typed_insert_follow_the_same_rule` | No API expansion |
+| A6 | Template, building block and rich merge. Native typed insert whose source and destination already share the intended media graph | Fragment publishers use the shared relationship and style rules. Native typed insert is a valid unchanged same-media-graph control and keeps the correct source picture bytes after reopen. No fragment media-import parity claim. No new public method | Fragment publishers, plus the unchanged native control | `template_merge_and_typed_insert_follow_the_same_rule` | No API expansion |
 
 ## Test matrix
 
@@ -103,7 +106,7 @@ F-X261 is done in `BACKLOG.md`. F-X265 is pending and unclaimed. No in-sprint pr
 | C2 | Chart staged between a picture id and a hyperlink id | Each returned id still resolves | Renumber-on-stage fails |
 | C3 | Equal styles versus different first plus a shadowed dependency | Zero copies versus one copy and no dependency import | Closure-before-dedup fails |
 | C4 | Target already contains duplicate style XML | Those duplicates remain verbatim | A cleanup pass fails |
-| C5 | Native typed insert of one picture | Pending helper does not change the typed path's bytes | A fragment-only fix that breaks typed insert fails |
+| C5 | Native typed insert of one picture. Source and destination already share the intended media graph | Correct picture bytes stay unchanged. There is no assertion that an inserted distinct red picture should show blue | A fragment-only fix that breaks the same-graph typed insert fails. A distinct-media red-to-blue expectation is outside this control |
 
 Omitted: a public pending-id API, and any promise that an unreferenced handle survives reload.
 
@@ -145,7 +148,7 @@ Existing integration entrypoint and `crates/rdocx-py/tests/test_core.py` only.
 - Public API. No new public signature. Dry-run only if a later publish gate runs for the sprint.
 - PyO3 and WASM. No new binding. Final union still checks WASM because the sprint union includes it.
 - Compatibility and collection ordering. Picture byte order and style first-definition order are specified above.
-- Shared consumers. Fragment import, template, building block, rich merge, and typed insert.
+- Shared consumers. Fragment import, template, building block and rich merge share the provider rule. Native typed insert remains the unchanged same-media-graph control.
 - Contributed criteria. A2 is qualified on the available cases. The exact original stays unverified.
 - Cached facts are not the defect. No new projection API.
 
@@ -155,11 +158,11 @@ Expected unchanged for existing fixtures. New tests use new inputs. If a style-d
 
 ## Implementation checklist
 
-- [ ] Add `register_pending_relationship` in the existing document module.
-- [ ] Dedup style first definitions before dependency closure.
-- [ ] Cover picture order, mixed ids, and the style rows in existing tests.
-- [ ] Cover A2 with local RED then GREEN on the available unused-relationship reproducer and the best available copied-target and body-replaced scenario. Do not claim original-input equivalence. Donor image 9 and image 10 stay an additional reconstructed case.
-- [ ] Add no public API.
+- [x] Add `register_pending_relationship` in the existing document module.
+- [x] Dedup style first definitions before dependency closure.
+- [x] Cover picture order, mixed ids, and the style rows in existing tests.
+- [x] Cover A2 with local RED then GREEN on the available unused-relationship reproducer and the best available copied-target and body-replaced scenario. Do not claim original-input equivalence. Donor image 9 and image 10 stay an additional reconstructed case.
+- [x] Add no public API.
 
 ## Open questions
 
@@ -187,3 +190,13 @@ The contract stays approved. This section amends only the active A2 obligation. 
 A2 requires an actual available unused-relationship reproducer. Exact inserted picture byte identity holds through policies, save and reopen, including the best available copied-target and body-replaced scenario. Local RED then GREEN on those available cases is mandatory. Donor image 9 and image 10 remain a reconstructed additional case. They are not claimed equivalent to the original. The exact original input stays unverified. Reporter follow-up comes after a concrete tested fix. It is not a final acceptance blocker. No original-input requirement blocks sprint closure.
 
 The user authorizes a reporter comment only after that tested fix exists on a reviewed sprint ref, or during the proper close phase. The comment invites the reporter to test the original image and to reopen the issue if the example still fails. This amendment does not send the comment, close Issue 404, fetch, push, or record a result. The exact note is drafted later with the real head and the real test details.
+
+## S1 clarification, 2026-10-24
+
+Codex root microscope pass 1, recorded in the sibling review `.claude/reviews/F-X265-all-pass-1.md`, found 0 runtime defects and smell S1. S1 says the native control must not pin a distinct red source drawing as destination blue bytes.
+
+On canonical `sprint/s95.4` at `d5b41edf4191a1f1b37c9f699b2f3dd2ab06b319`, `Document::insert_document` calls `insert_document_content_staged_with_numbering_policy` at `crates/rdocx/src/document.rs:35177`. That function reserves merge bundles, merges styles, clones body content and remaps numbering. It does not import source media relationships. The review names this route. Its citation `document.rs:35220` falls inside `reserve_merge_bundles` on this HEAD. The function entry is line 35177.
+
+The original aggregate Base failed in the template section before the typed assertion. There is no observed isolated Base result for the native control. This clarification does not invent a RED run and does not add a native media-import repair.
+
+Q17, A1 through A5, the public API, estimates, the HLD impact list and the approval history stay as written. Status stays approved. The canonical revision left its own implementation checklist unticked. This worker copy keeps the implementation ticks already recorded for the completed runtime work. No gate is claimed passed. The worker acknowledges this revision and corrects the fixture in a separate task.

@@ -4418,6 +4418,8 @@ TOC content and nested controls, inherited aliases, namespace shadowing,
 default clearing and escaped producer URIs. Equal-count wrong-owner and
 malformed-source controls continue to refuse.
 
+F-X265 local regressions cover picture order and reuse, staged picture, chart and hyperlink targets, available unused-relationship and body-replaced picture bytes, equal and different first style definitions, a same-id non-default rename, a different default-id refusal, and template, building-block and rich-merge controls. The native typed-insert control uses a source and a destination that already share the intended media graph. The original Issue 404 input remains unverified. Final hash, installed typing, WASM and native Word riders stay outside this local set.
+
 Text controls compare accepted Paragraph and story snapshots across body, tables, controls and related stories. CLI plain and JSON views retain aliases, tabs, direct and simple-field newlines, and closed complex cached-field page and column controls. Nested instruction, deleted and moveFrom content stays suppressed. Malformed related stories retain main text and the existing ordered omission diagnostic. Markdown keeps literal whitespace and physical field, control, revision and hard-break boundaries. Export controls inspect owned ODT space elements and EPUB content rather than relying on lexical XML substrings.
 
 ## PowerPoint names and finite language controls
