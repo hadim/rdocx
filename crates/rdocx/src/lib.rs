@@ -88,13 +88,14 @@ pub use epub::{EpubDiagnostic, EpubWriteResult};
 pub use error::{Error, Result};
 pub use field::{
     AuthorityEntry, BarcodeCaseStyle, BarcodeField, BarcodeKind, BarcodePointOfSaleStyle,
-    CaptionOptions, CaptionTarget, CrossReferenceNumber, CrossReferenceOptions, FieldDateTime,
-    FieldEvaluation, FieldEvaluationContext, FieldOutcome, FieldsUpdateReport,
+    CaptionOptions, CaptionTarget, CrossReferenceNumber, CrossReferenceOptions, Field,
+    FieldDateTime, FieldEvaluation, FieldEvaluationContext, FieldOutcome, FieldsUpdateReport,
     GeneratedTablesReport, IndexEntry, IndexOptions, LayoutBackedFieldUpdateReport,
-    LegacyFormFieldInfo, LegacyFormFieldKind, LegacyFormFieldValue, MailMergeControl,
-    MailMergeData, MailMergeFormatContext, MailMergeFormattedText, MailMergeImage, MailMergeRecord,
-    MailMergeValue, SequenceOptions, TableOfAuthoritiesOptions, TableOfFiguresOptions, TcField,
-    TocEntrySelection, TocField, TocRebuildReport,
+    LegacyCheckBoxSize, LegacyFormFieldDefinition, LegacyFormFieldInfo, LegacyFormFieldKind,
+    LegacyFormFieldOptions, LegacyFormFieldValue, LegacyFormInfoText, LegacyTextInputType,
+    MailMergeControl, MailMergeData, MailMergeFormatContext, MailMergeFormattedText,
+    MailMergeImage, MailMergeRecord, MailMergeValue, SequenceOptions, TableOfAuthoritiesOptions,
+    TableOfFiguresOptions, TcField, TocEntrySelection, TocField, TocRebuildReport,
 };
 pub use html::{
     HtmlDiagnostic, HtmlFragmentInsertResult, HtmlImageResource, HtmlReadResult, MhtmlDiagnostic,

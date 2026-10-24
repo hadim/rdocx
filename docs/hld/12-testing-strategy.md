@@ -212,7 +212,10 @@ marker order after both resolutions. Compatible comment text remains covered
 by the existing full-story Word records.
 
 The legacy form and glossary round-trip gate constructs every package in
-source. It covers typed text, checkbox, and drop-down values, deterministic
+source. Current values and explicit reset defaults are separate observations.
+A local layout and PDF check uses the bundled deterministic fonts and shows a
+fallback display before an empty current-value assignment. Literal replacement
+of that virtual display changes no bytes. The gate covers typed text, checkbox, and drop-down values, deterministic
 part-scoped ordinal identity across supported internal Word stories, AutoText
 classification, and selected building-block replacement. Prefix aliases,
 fixed-prefix changed output, schema-order insertion, structural reopen,

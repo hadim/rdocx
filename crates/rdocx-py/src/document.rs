@@ -7188,10 +7188,16 @@ pub struct PyLegacyFormField {
     value: Py<PyAny>,
     #[pyo3(get)]
     choices: Py<PyTuple>,
+    #[pyo3(get)]
+    default_value: Py<PyAny>,
 }
 
 impl PyLegacyFormField {
-    fn from_info(py: Python<'_>, field: rdocx::LegacyFormFieldInfo) -> PyResult<Self> {
+    fn from_info(
+        py: Python<'_>,
+        field: rdocx::LegacyFormFieldInfo,
+        default_value: Option<rdocx::LegacyFormFieldValue>,
+    ) -> PyResult<Self> {
         let value = match field.value {
             rdocx::LegacyFormFieldValue::Text(value) => {
                 value.into_pyobject(py)?.into_any().unbind()
@@ -7216,7 +7222,298 @@ impl PyLegacyFormField {
             },
             value,
             choices: PyTuple::new(py, field.choices)?.unbind(),
+            default_value: match default_value {
+                Some(value) => legacy_value_to_py(py, &value)?,
+                None => py.None(),
+            },
         })
+    }
+}
+
+fn legacy_value_to_py(py: Python<'_>, value: &rdocx::LegacyFormFieldValue) -> PyResult<Py<PyAny>> {
+    match value {
+        rdocx::LegacyFormFieldValue::Text(value) => {
+            Ok(value.into_pyobject(py)?.into_any().unbind())
+        }
+        rdocx::LegacyFormFieldValue::Checked(value) => {
+            Ok(value.into_pyobject(py)?.to_owned().into_any().unbind())
+        }
+        rdocx::LegacyFormFieldValue::SelectedIndex(value) => {
+            Ok(value.into_pyobject(py)?.into_any().unbind())
+        }
+    }
+}
+
+fn strict_flag(value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    require_exact_bool(value, "flag")
+}
+
+fn strict_index(value: &Bound<'_, PyAny>) -> PyResult<usize> {
+    if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err("index requires an integer"));
+    }
+    ensure_nonnegative(value, "index cannot be negative")?;
+    value.extract()
+}
+
+fn require_exact_bool(value: &Bound<'_, PyAny>, label: &str) -> PyResult<bool> {
+    if !value.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(format!("{label} requires bool")));
+    }
+    value.extract()
+}
+
+fn optional_info_text(
+    value: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<rdocx::LegacyFormInfoText>> {
+    let Some(value) = value.filter(|value| !value.is_none()) else {
+        return Ok(None);
+    };
+    let (kind, text) = value
+        .extract::<(String, String)>()
+        .map_err(|_| PyTypeError::new_err("help and status must be a (kind, text) pair or None"))?;
+    match kind.as_str() {
+        "text" => Ok(Some(rdocx::LegacyFormInfoText::Text(text))),
+        "autoText" => Ok(Some(rdocx::LegacyFormInfoText::AutoText(text))),
+        _ => Err(PyValueError::new_err(
+            "help and status kind must be text or autoText",
+        )),
+    }
+}
+
+fn checkbox_size(value: Option<&Bound<'_, PyAny>>) -> PyResult<rdocx::LegacyCheckBoxSize> {
+    let Some(value) = value.filter(|value| !value.is_none()) else {
+        return Ok(rdocx::LegacyCheckBoxSize::Auto);
+    };
+    if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err(
+            "checkbox size requires an integer half-point count or None",
+        ));
+    }
+    ensure_nonnegative(value, "checkbox size cannot be negative")?;
+    Ok(rdocx::LegacyCheckBoxSize::HalfPoints(
+        value.extract::<u64>()?,
+    ))
+}
+
+fn copied_choices(value: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+    if value.is_instance_of::<PyString>() || value.is_instance_of::<PyBytes>() {
+        return Err(PyTypeError::new_err(
+            "choices must be a sequence of str, not str or bytes",
+        ));
+    }
+    let mut choices = Vec::new();
+    for item in value.try_iter()? {
+        let item = item?;
+        if !item.is_instance_of::<PyString>() {
+            return Err(PyTypeError::new_err("each drop-down choice must be str"));
+        }
+        choices.push(item.extract()?);
+    }
+    Ok(choices)
+}
+
+fn text_input_type(value: &str) -> PyResult<rdocx::LegacyTextInputType> {
+    Ok(match value {
+        "regular" => rdocx::LegacyTextInputType::Regular,
+        "number" => rdocx::LegacyTextInputType::Number,
+        "date" => rdocx::LegacyTextInputType::Date,
+        "currentTime" => rdocx::LegacyTextInputType::CurrentTime,
+        "currentDate" => rdocx::LegacyTextInputType::CurrentDate,
+        "calculated" => rdocx::LegacyTextInputType::Calculated,
+        _ => {
+            return Err(PyValueError::new_err(
+                "text input type must be regular, number, date, currentTime, currentDate, or calculated",
+            ));
+        }
+    })
+}
+
+fn optional_bounded_length(
+    value: Option<&Bound<'_, PyAny>>,
+    label: &str,
+) -> PyResult<Option<usize>> {
+    let Some(value) = value.filter(|value| !value.is_none()) else {
+        return Ok(None);
+    };
+    if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err(format!(
+            "{label} requires an integer or None"
+        )));
+    }
+    ensure_nonnegative(value, &format!("{label} cannot be negative"))?;
+    Ok(Some(value.extract::<usize>()?))
+}
+
+fn ensure_nonnegative(value: &Bound<'_, PyAny>, message: &str) -> PyResult<()> {
+    if value.lt(0)? {
+        return Err(PyValueError::new_err(message.to_owned()));
+    }
+    Ok(())
+}
+
+/// Frozen authoring payload for one legacy form field.
+#[pyclass(name = "LegacyFormFieldDefinition", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyLegacyFormFieldDefinition {
+    field: rdocx::Field,
+}
+
+impl PyLegacyFormFieldDefinition {
+    pub(crate) fn field(&self) -> rdocx::Field {
+        self.field.clone()
+    }
+
+    fn checked(
+        py: Python<'_>,
+        options: rdocx::LegacyFormFieldOptions,
+        definition: rdocx::LegacyFormFieldDefinition,
+    ) -> PyResult<Self> {
+        let field = rdocx::Field::from_legacy_form(options, definition)
+            .map_err(|error| rdocx_to_pyerr(py, rdocx::Error::Oxml(error)))?;
+        Ok(Self { field })
+    }
+
+    fn shared_options(
+        name: Option<String>,
+        enabled: bool,
+        calculate_on_exit: bool,
+        help_text: Option<&Bound<'_, PyAny>>,
+        status_text: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<rdocx::LegacyFormFieldOptions> {
+        Ok(rdocx::LegacyFormFieldOptions {
+            name,
+            enabled,
+            calculate_on_exit,
+            help_text: optional_info_text(help_text)?,
+            status_text: optional_info_text(status_text)?,
+        })
+    }
+}
+
+#[pymethods]
+impl PyLegacyFormFieldDefinition {
+    #[new]
+    fn new(_private: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Err(PyTypeError::new_err(
+            "LegacyFormFieldDefinition cannot be constructed directly",
+        ))
+    }
+
+    #[staticmethod]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        *,
+        value="",
+        default=None,
+        input_type="regular",
+        max_length=None,
+        format=None,
+        name=None,
+        enabled=true,
+        calculate_on_exit=false,
+        help_text=None,
+        status_text=None
+    ))]
+    fn text_input(
+        py: Python<'_>,
+        value: &str,
+        default: Option<&Bound<'_, PyAny>>,
+        input_type: &str,
+        max_length: Option<&Bound<'_, PyAny>>,
+        format: Option<String>,
+        name: Option<String>,
+        #[pyo3(from_py_with = strict_flag)] enabled: bool,
+        #[pyo3(from_py_with = strict_flag)] calculate_on_exit: bool,
+        help_text: Option<&Bound<'_, PyAny>>,
+        status_text: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let default = match default.filter(|value| !value.is_none()) {
+            Some(value) if value.is_instance_of::<PyString>() => Some(value.extract::<String>()?),
+            Some(_) => return Err(PyTypeError::new_err("text default requires str or None")),
+            None => None,
+        };
+        Self::checked(
+            py,
+            Self::shared_options(name, enabled, calculate_on_exit, help_text, status_text)?,
+            rdocx::LegacyFormFieldDefinition::TextInput {
+                input_type: text_input_type(input_type)?,
+                default,
+                value: value.to_owned(),
+                max_length: optional_bounded_length(max_length, "max_length")?,
+                format,
+            },
+        )
+    }
+
+    #[staticmethod]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        *,
+        checked=false,
+        default=false,
+        size_half_points=None,
+        name=None,
+        enabled=true,
+        calculate_on_exit=false,
+        help_text=None,
+        status_text=None
+    ))]
+    fn checkbox(
+        py: Python<'_>,
+        #[pyo3(from_py_with = strict_flag)] checked: bool,
+        #[pyo3(from_py_with = strict_flag)] default: bool,
+        size_half_points: Option<&Bound<'_, PyAny>>,
+        name: Option<String>,
+        #[pyo3(from_py_with = strict_flag)] enabled: bool,
+        #[pyo3(from_py_with = strict_flag)] calculate_on_exit: bool,
+        help_text: Option<&Bound<'_, PyAny>>,
+        status_text: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        Self::checked(
+            py,
+            Self::shared_options(name, enabled, calculate_on_exit, help_text, status_text)?,
+            rdocx::LegacyFormFieldDefinition::CheckBox {
+                size: checkbox_size(size_half_points)?,
+                default,
+                checked,
+            },
+        )
+    }
+
+    #[staticmethod]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        choices,
+        *,
+        selected_index=0,
+        default_index=0,
+        name=None,
+        enabled=true,
+        calculate_on_exit=false,
+        help_text=None,
+        status_text=None
+    ))]
+    fn drop_down_list(
+        py: Python<'_>,
+        choices: &Bound<'_, PyAny>,
+        #[pyo3(from_py_with = strict_index)] selected_index: usize,
+        #[pyo3(from_py_with = strict_index)] default_index: usize,
+        name: Option<String>,
+        #[pyo3(from_py_with = strict_flag)] enabled: bool,
+        #[pyo3(from_py_with = strict_flag)] calculate_on_exit: bool,
+        help_text: Option<&Bound<'_, PyAny>>,
+        status_text: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        Self::checked(
+            py,
+            Self::shared_options(name, enabled, calculate_on_exit, help_text, status_text)?,
+            rdocx::LegacyFormFieldDefinition::DropDownList {
+                choices: copied_choices(choices)?,
+                default_index,
+                selected_index,
+            },
+        )
     }
 }
 
@@ -9909,13 +10206,36 @@ impl PyDocument {
     fn legacy_form_fields<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         let fields = self
             .inner
-            .legacy_form_fields()
+            .legacy_form_fields_with_defaults()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         let fields = fields
             .into_iter()
-            .map(|field| Py::new(py, PyLegacyFormField::from_info(py, field)?))
+            .map(|(field, default_value)| {
+                Py::new(py, PyLegacyFormField::from_info(py, field, default_value)?)
+            })
             .collect::<PyResult<Vec<_>>>()?;
         PyTuple::new(py, fields)
+    }
+
+    fn insert_legacy_form_field(
+        &mut self,
+        py: Python<'_>,
+        position: &Bound<'_, PyAny>,
+        definition: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let definition = definition.cast::<PyLegacyFormFieldDefinition>()?.borrow();
+        let position = position.cast::<PyStoryRunPosition>()?.borrow();
+        let field = definition.field();
+        let mut candidate = self.inner.clone_for_staging();
+        let location = self.native_location(py, &position.item)?;
+        let native = rdocx::StoryRunPosition {
+            location,
+            run_index: position.run_index,
+        };
+        py.detach(|| candidate.insert_field(&native, field))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.publish_api_candidate(py, candidate, "Document.insert_legacy_form_field")?;
+        Ok(())
     }
 
     #[pyo3(signature = (name, value, *, source_part=None, ordinal=None))]
@@ -9994,9 +10314,21 @@ impl PyDocument {
                 candidate.set_legacy_form_field_value(&field.source_part, field.ordinal, value)
             })
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        let result = Py::new(py, PyLegacyFormField::from_info(py, reopened)?)?;
+        let default_value = candidate
+            .legacy_form_fields_with_defaults()
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .into_iter()
+            .find(|(info, _)| {
+                info.source_part == reopened.source_part && info.ordinal == reopened.ordinal
+            })
+            .map(|(_, default_value)| default_value)
+            .ok_or_else(|| PyValueError::new_err("legacy form identity did not survive reopen"))?;
+        let prepared = Py::new(
+            py,
+            PyLegacyFormField::from_info(py, reopened, default_value)?,
+        )?;
         self.publish_form_candidate(py, candidate, "Document.set_legacy_form_field_value")?;
-        Ok(result)
+        Ok(prepared)
     }
 
     fn content_controls<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {

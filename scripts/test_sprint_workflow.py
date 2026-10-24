@@ -8933,6 +8933,9 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-282 delivers the bounded native foundation in S90.
                 # F-X192 owns the remaining DOCX-049 catalogue in S91.
                 282,
+                # F-288 completes DOCX-055 additive field creation.
+                # Removal, Word evaluation, and the final union stay outside that row.
+                288,
             }
         } | {"F-X192"}
         self.assertEqual(

@@ -434,6 +434,34 @@ impl PyRun {
         Ok(())
     }
 
+    fn add_legacy_form_field(&self, py: Python<'_>, definition: &Bound<'_, PyAny>) -> PyResult<()> {
+        let definition = definition
+            .cast::<crate::document::PyLegacyFormFieldDefinition>()?
+            .borrow();
+        let field = definition.field();
+        let (location, _) = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        location
+            .edit(&mut candidate, |paragraph| {
+                let mut added = Ok(());
+                paragraph.edit_run(&self.run_path, |run| {
+                    added = run.add_field_value(field);
+                })?;
+                added
+            })
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        let prepared = document.prepare_word_revision(
+            py,
+            &candidate,
+            "Run.add_legacy_form_field",
+            crate::document::WordPublication::Conservative,
+        )?;
+        document.commit_word_revision(prepared)?;
+        document.inner = candidate;
+        Ok(())
+    }
+
     /// Remove this run from its paragraph, keeping the markers around it.
     fn remove(&self, py: Python<'_>) -> PyResult<()> {
         let (location, run_index) = self.validate(py)?;

@@ -6875,7 +6875,7 @@ fn fx241_cli_fill_five_kinds_preserves_order_source_and_old_tag_contract() {
     assert!(xml.contains("MS Gothic"));
     assert!(xml.contains("2026-10-16T00:00:00Z"));
     assert!(xml.contains("yyyy-MM-dd"));
-    assert!(xml.contains("w:default w:val=\"filled\""));
+    assert!(xml.contains("w:default w:val=\"old\""));
     assert_eq!(
         package_part_text(&output, "/customXml/opaque.xml"),
         "<opaque exact='yes'/>"

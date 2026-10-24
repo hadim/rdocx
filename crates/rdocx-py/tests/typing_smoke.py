@@ -609,6 +609,14 @@ def fx241_form_types(document: Document) -> None:
     assert_type(field.type, Literal["text", "checkbox", "dropdown"])
     assert_type(field.value, str | bool | int)
     assert_type(field.choices, tuple[str, ...])
+    assert_type(field.default_value, str | bool | int | None)
+    from rdocx import LegacyFormFieldDefinition
+    definition = LegacyFormFieldDefinition.text_input(value="now", default="keep", calculate_on_exit=False)
+    box = LegacyFormFieldDefinition.checkbox(checked=True, size_half_points=12)
+    listed = LegacyFormFieldDefinition.drop_down_list(["one", "two"], selected_index=1)
+    assert_type(box, LegacyFormFieldDefinition)
+    assert_type(listed, LegacyFormFieldDefinition)
+    assert_type(definition, LegacyFormFieldDefinition)
 
 
 def fx240_owned_signature_reports(owner: Document, private_key: bytes, certificate: bytes) -> None:
