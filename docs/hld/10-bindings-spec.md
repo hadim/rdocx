@@ -4176,6 +4176,15 @@ conversion diagnostics and inline defaults remain unchanged.
 Document.remove_footnote(id) and remove_endnote(id) use current checked native
 removal, independent of retired note handles. Non-bool signed32 ids are admitted
 before publication. Missing or reserved ids retain native refusal behavior.
+Public Word signatures are unchanged. Direct body XML and plain body splices
+are hidden native providers. `None` from a direct reader means the slot is
+absent or the child has the wrong kind. An invalid run or cell path inside a
+present table or paragraph is an error and does not fall back to success.
+Debug-only `_word_whole_body_work` and `_word_splice_work` reset on read and
+are not stable exports. The splice visit count includes each ordinary owner,
+plan, prepare, commit, index and projection record on the qualified path.
+Explicit debug whole-source comparisons stay outside that count. The release
+ratio for Issue 407 stays a final gate.
 Selected note removal cannot revive retired aliases or remove unrelated notes.
 
 
