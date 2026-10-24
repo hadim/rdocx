@@ -298,10 +298,10 @@ Tests land in the existing integration entrypoint. No new test binary.
 ## HLD impact
 
 - `docs/hld/02-scope-and-non-goals.md`, row DOCX-056 for F-289 (transient rules, no password, no custom rule engine)
-- `docs/hld/03-architecture.md`, "What stays put" and "Facade conventions"
-- `docs/hld/04-opc-and-packaging.md`, "The package"
-- `docs/hld/10-bindings-spec.md`, "Python API shape" and "Live Word sections and rich related owners"
-- `docs/hld/12-testing-strategy.md`, "Test taxonomy" and "Typed content-control native Word qualification"
+- `docs/hld/03-architecture.md`, "Owned publication and causal paths", "What stays put" and "Facade conventions"
+- `docs/hld/04-opc-and-packaging.md`, "The package" and "Checked Word operation source ownership"
+- `docs/hld/10-bindings-spec.md`, "Python API shape", "Live Word sections and rich related owners" and "Python Word document operations"
+- `docs/hld/12-testing-strategy.md`, "Test taxonomy", "Word document-operation parity controls" and "Typed content-control native Word qualification"
 
 ## Risk routing
 
