@@ -4910,7 +4910,7 @@ fn empty_section_properties() -> CT_SectPr {
 /// Each set represents one OOXML scope. References are deliberately excluded
 /// from definition sets, so a bookmark end, comment anchor, or numbering use
 /// does not collide with the definition it names.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DocumentIdentifiers {
     relationship_ids: HashMap<String, HashSet<String>>,
     bookmark_ids: HashSet<i32>,
@@ -6586,6 +6586,10 @@ pub struct Document {
     /// when known and otherwise taken on first use, since the replay costs a
     /// serialization of the body.
     nested_owner_replay: OnceLock<NestedOwnerReplayFacts>,
+    /// What the last opening parsed, which staging and comparing saves reuse
+    /// while the main part keeps the bytes it was opened with. `None` for a
+    /// document built in memory.
+    parsed: Option<Arc<Parsed>>,
     pub(crate) styles: CT_Styles,
     pub(crate) numbering: Option<CT_Numbering>,
     /// Boxed, because debug builds keep many copies of `Document` on deep
@@ -6674,6 +6678,179 @@ pub struct Document {
     deterministic_layout_cache: Mutex<Option<Arc<rdocx_layout::WordLayoutResult>>>,
     /// Reusable bundled-font engine with caller faces at highest priority.
     bundled_fallback_layout_engine: Mutex<Option<rdocx_layout::engine::Engine>>,
+}
+
+/// What the last opening of a document parsed: the package as opened and,
+/// each found once when first needed, what staging reads in its main part.
+/// A document reuses them while its main part holds the bytes it was opened
+/// with, compared by value, and a staged copy shares them.
+///
+/// The record lives until the document is reopened, which in the binding is
+/// as long as the Python document lives, and keeps memory meanwhile: the
+/// main part parsed, about ten times the part's bytes, the part as the model
+/// serializes it, about its size, and the opened bytes of every part an edit
+/// has replaced since. A 6 MiB document.xml of 20000 paragraphs keeps about
+/// 68 MiB more after a first font edit.
+struct Parsed {
+    /// The package as opened. Its parts share their bytes with the
+    /// document's package until an edit replaces one, whose opened bytes
+    /// then stay here.
+    package: OpcPackage,
+    /// Whether `package` was read from bytes, which [`OpcPackage::reread`]
+    /// requires. A Flat OPC package is built in memory.
+    read_from_bytes: bool,
+    /// The main part name.
+    main_part: String,
+    /// The main part parsed, or `None` when it does not parse.
+    main_document: OnceLock<Option<CT_Document>>,
+    /// The nested namespace owners of the main part, or `None` when the scan
+    /// fails.
+    nested_namespace_owners: OnceLock<Option<Vec<NestedNamespaceOwner>>>,
+    /// What canonicalizing drawing identifiers reads in the main part when it
+    /// has nothing to renumber there, or `None` when one of its checks fails.
+    unchanged_main_part: OnceLock<Option<UnchangedMainPart>>,
+}
+
+/// What canonicalizing drawing identifiers reads in a main part it has
+/// nothing to renumber in, found with the checks it makes, which all passed.
+struct UnchangedMainPart {
+    /// The main part as the typed model serializes it.
+    xml: Vec<u8>,
+    /// The body namespace bindings the checks read relationships with.
+    body_namespace_bindings: Vec<(String, String)>,
+    /// The drawing identifiers `xml` holds, or `None` when it cannot be read
+    /// for them.
+    drawing_ids: Option<HashSet<u32>>,
+}
+
+impl Parsed {
+    fn of(package: &OpcPackage, main_part: &str, read_from_bytes: bool) -> Self {
+        Self {
+            package: package.clone(),
+            read_from_bytes,
+            main_part: main_part.to_owned(),
+            main_document: OnceLock::new(),
+            nested_namespace_owners: OnceLock::new(),
+            unchanged_main_part: OnceLock::new(),
+        }
+    }
+
+    /// The main part bytes as opened.
+    fn main_part_xml(&self) -> Option<&[u8]> {
+        self.package.get_part(&self.main_part)
+    }
+
+    /// The main part as opened, parsed once.
+    fn main_document(&self) -> Option<&CT_Document> {
+        self.main_document
+            .get_or_init(|| {
+                let xml = self.main_part_xml()?;
+                note_staging_work(|work| work.parsed += xml.len());
+                CT_Document::from_xml(xml).ok()
+            })
+            .as_ref()
+    }
+
+    /// The nested namespace owners of the main part as opened, found once.
+    fn nested_namespace_owners(&self) -> Option<&[NestedNamespaceOwner]> {
+        self.nested_namespace_owners
+            .get_or_init(|| {
+                let xml = self.main_part_xml()?;
+                note_staging_work(|work| work.scanned += xml.len());
+                nested_modeled_namespace_owners(xml).ok()
+            })
+            .as_deref()
+    }
+}
+
+/// Whole main part work that staging and comparing saves did on this thread,
+/// in bytes of the main part: parsed again, scanned for nested namespace
+/// owners, canonicalized whole, and written as a ZIP to compare saves. Debug
+/// builds count it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+struct StagingWork {
+    parsed: usize,
+    scanned: usize,
+    canonicalized: usize,
+    zip_written: usize,
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    static STAGING_WORK: std::cell::Cell<StagingWork> = const {
+        std::cell::Cell::new(StagingWork { parsed: 0, scanned: 0, canonicalized: 0, zip_written: 0 })
+    };
+    static STAGING_WORK_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn note_staging_work(count: impl FnOnce(&mut StagingWork)) {
+    #[cfg(debug_assertions)]
+    if !STAGING_WORK_PAUSED.get() {
+        let mut work = STAGING_WORK.get();
+        count(&mut work);
+        STAGING_WORK.set(work);
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = count;
+}
+
+/// Debug builds only: the whole main part work staging and comparing saves
+/// did on this thread since the previous call, in bytes of the main part
+/// parsed again, scanned for nested namespace owners, canonicalized whole and
+/// written as a ZIP, so that tests can compare documents of N and 4N
+/// paragraphs.
+#[doc(hidden)]
+#[cfg(debug_assertions)]
+pub fn take_staging_work() -> [usize; 4] {
+    let work = STAGING_WORK.replace(StagingWork::default());
+    [
+        work.parsed,
+        work.scanned,
+        work.canonicalized,
+        work.zip_written,
+    ]
+}
+
+#[cfg(debug_assertions)]
+fn without_staging_work<T>(run: impl FnOnce() -> T) -> T {
+    let paused = STAGING_WORK_PAUSED.replace(true);
+    let result = run();
+    STAGING_WORK_PAUSED.set(paused);
+    result
+}
+
+/// Asserts that canonicalizing beside an unchanged main part gave what the
+/// whole canonicalization gives: the same error, or the same model, package
+/// and identifiers.
+#[cfg(debug_assertions)]
+fn assert_same_canonicalization(
+    document: &Document,
+    result: &Result<()>,
+    full: &Document,
+    full_result: &Result<()>,
+) {
+    match (result, full_result) {
+        (Ok(()), Ok(())) => {}
+        (Err(error), Err(full_error)) => assert_eq!(error.to_string(), full_error.to_string()),
+        (result, full_result) => panic!(
+            "canonicalizing beside the unchanged main part gives {result:?} where the whole \
+             canonicalization gives {full_result:?}"
+        ),
+    }
+    assert!(
+        document.document == full.document
+            && document.document.to_xml().ok() == full.document.to_xml().ok(),
+        "canonicalizing beside the unchanged main part changes the model otherwise"
+    );
+    assert!(
+        document.package.same_package_as(&full.package),
+        "canonicalizing beside the unchanged main part changes the package otherwise"
+    );
+    assert!(
+        document.identifiers == full.identifiers,
+        "canonicalizing beside the unchanged main part changes the identifiers otherwise"
+    );
 }
 
 enum ChartPackageSource<'a> {
@@ -17568,6 +17745,7 @@ impl Document {
             body_namespace_bindings: Vec::new(),
             plain_local_edit_blocked: false,
             nested_owner_replay: OnceLock::from(NestedOwnerReplayFacts::default()),
+            parsed: None,
             styles,
             numbering: None,
             core_properties,
@@ -17656,6 +17834,7 @@ impl Document {
             body_namespace_bindings: self.body_namespace_bindings.clone(),
             plain_local_edit_blocked: self.plain_local_edit_blocked,
             nested_owner_replay: self.nested_owner_replay.clone(),
+            parsed: self.parsed.clone(),
             styles: self.styles.clone(),
             numbering: self.numbering.clone(),
             core_properties: self.core_properties.clone(),
@@ -17908,28 +18087,44 @@ impl Document {
         // typed story can inventory its exact retained source, including opaque
         // property-root attributes that canonical serialization cannot replay.
         // Dirty stories and modeled relationships still need the checked mask.
+        // A main part that holds the bytes it was opened with is compared
+        // with, and scanned as, what that opening parsed.
+        let kept = self.kept_main_part();
         if modeled_relationships.is_empty()
             && let Some(source) = self.package.get_part(&self.doc_part_name)
-            && {
-                #[cfg(test)]
-                eprintln!("FX211_DRAWING_STAGE opaque-reparse-before");
-                let matches = CT_Document::from_xml(source).ok().as_ref() == Some(&self.document);
-                #[cfg(test)]
-                eprintln!("FX211_DRAWING_STAGE opaque-reparse-after");
-                matches
+            && match kept.as_deref() {
+                Some(kept) => kept.main_document() == Some(&self.document),
+                None => {
+                    #[cfg(test)]
+                    eprintln!("FX211_DRAWING_STAGE opaque-reparse-before");
+                    note_staging_work(|work| work.parsed += source.len());
+                    let matches =
+                        CT_Document::from_xml(source).ok().as_ref() == Some(&self.document);
+                    #[cfg(test)]
+                    eprintln!("FX211_DRAWING_STAGE opaque-reparse-after");
+                    matches
+                }
             }
         {
             return xml_relationship_ids_in_order(source);
         }
-        let nested_namespace_owners = self
-            .package
-            .get_part(&self.doc_part_name)
-            .map(nested_modeled_namespace_owners)
-            .transpose()?
-            .unwrap_or_default();
+        let scanned;
+        let nested_namespace_owners =
+            match kept.as_deref().and_then(Parsed::nested_namespace_owners) {
+                Some(owners) => owners,
+                None => {
+                    let source = self.package.get_part(&self.doc_part_name);
+                    note_staging_work(|work| work.scanned += source.map_or(0, <[u8]>::len));
+                    scanned = source
+                        .map(nested_modeled_namespace_owners)
+                        .transpose()?
+                        .unwrap_or_default();
+                    &scanned
+                }
+            };
         let serialize = |document: &CT_Document| -> Result<Vec<u8>> {
             let xml = document.to_xml()?;
-            replay_nested_namespace_declarations(&xml, &nested_namespace_owners)
+            replay_nested_namespace_declarations(&xml, nested_namespace_owners)
         };
 
         let current_xml = serialize(&self.document)?;
@@ -18020,9 +18215,182 @@ impl Document {
         }
     }
 
+    /// Give the authored relationships and drawings of the main part and of
+    /// its related story parts their canonical identifiers. A main part with
+    /// nothing to renumber, as [`Document::unchanged_main_part`] checks, is
+    /// not read again: what the checks of a whole canonicalization found in
+    /// it the first time stands for it.
     fn canonicalize_drawing_ids(&mut self) -> Result<()> {
+        let Some(kept) = self.unchanged_main_part() else {
+            return self.canonicalize_all_drawing_ids();
+        };
+        let unchanged = kept
+            .unchanged_main_part
+            .get()
+            .and_then(Option::as_ref)
+            .expect("checked unchanged main part");
+        // Debug builds, which run the binding tests, canonicalize a copy that
+        // forgets the opening, the whole way, and compare.
+        #[cfg(debug_assertions)]
+        let mut full = self.clone_for_staging();
+        #[cfg(debug_assertions)]
+        {
+            full.parsed = None;
+        }
+        let result = self.canonicalize_beside_unchanged_main_part(unchanged);
+        #[cfg(debug_assertions)]
+        {
+            let full_result = without_staging_work(|| full.canonicalize_all_drawing_ids());
+            assert_same_canonicalization(self, &result, &full, &full_result);
+        }
+        result
+    }
+
+    /// The opening kept for a main part that canonicalizing drawing
+    /// identifiers has nothing to renumber in: it holds the bytes and the
+    /// model it was opened with, which serializes as it did, its
+    /// relationships and section references were all there when it was
+    /// opened, the references are in canonical order, and it holds no
+    /// authored drawing or nested story relationship. The checks a whole
+    /// canonicalization makes on it passed when first made, with the same
+    /// body namespace bindings.
+    fn unchanged_main_part(&self) -> Option<Arc<Parsed>> {
+        let kept = self.kept_main_part()?;
+        let owner_identity = relationship_owner_identity(&self.doc_part_name);
+        if self
+            .identifiers
+            .authored_nested_story_relationship_ids
+            .get(&owner_identity)
+            .is_some_and(|ids| !ids.is_empty())
+        {
+            return None;
+        }
+        let preserved = self
+            .identifiers
+            .preserved_relationship_ids
+            .get(&owner_identity);
+        let preserved = |id: &String| preserved.is_some_and(|ids| ids.contains(id));
+        if self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .is_some_and(|relationships| {
+                !relationships
+                    .items
+                    .iter()
+                    .all(|relationship| preserved(&relationship.id))
+            })
+        {
+            return None;
+        }
+        if let Some(section) = &self.document.body.sect_pr
+            && (!section
+                .header_refs
+                .iter()
+                .chain(&section.footer_refs)
+                .all(|reference| preserved(&reference.rel_id))
+                || !section
+                    .header_refs
+                    .is_sorted_by_key(|reference| hdr_ftr_type_order(reference.hdr_ftr_type))
+                || !section
+                    .footer_refs
+                    .is_sorted_by_key(|reference| hdr_ftr_type_order(reference.hdr_ftr_type)))
+        {
+            return None;
+        }
+        let mut authored_drawing = false;
+        visit_authored_drawings(&self.document.body.content, &mut |_| {
+            authored_drawing = true;
+        });
+        if authored_drawing || kept.main_document() != Some(&self.document) {
+            return None;
+        }
+        let unchanged = kept
+            .unchanged_main_part
+            .get_or_init(|| self.unchanged_main_part_checks().ok())
+            .as_ref()?;
+        if unchanged.body_namespace_bindings != self.body_namespace_bindings
+            || self.document.to_xml().ok()? != unchanged.xml
+        {
+            return None;
+        }
+        Some(kept)
+    }
+
+    /// The checks [`Document::canonicalize_all_drawing_ids`] makes on a main
+    /// part it has nothing to renumber in, in its order, and what they read
+    /// there: the part as the model serializes it and its drawing
+    /// identifiers.
+    fn unchanged_main_part_checks(&self) -> Result<UnchangedMainPart> {
+        note_staging_work(|work| {
+            work.canonicalized += self
+                .package
+                .get_part(&self.doc_part_name)
+                .map_or(0, <[u8]>::len);
+        });
+        let mut modeled_story_relationships = Vec::new();
+        collect_relationship_ids(
+            &self.document.body.content,
+            &mut modeled_story_relationships,
+        );
+        if let Some(section) = &self.document.body.sect_pr {
+            for reference in section.header_refs.iter().chain(&section.footer_refs) {
+                if !modeled_story_relationships.contains(&reference.rel_id) {
+                    modeled_story_relationships.push(reference.rel_id.clone());
+                }
+            }
+        }
+        self.opaque_relationship_ids_from_serialized_story(&modeled_story_relationships)?;
+        let xml = self.document.to_xml()?;
+        xml_relationship_ids_in_order_with_bindings(&xml, &self.body_namespace_bindings)?;
+        authored_drawing_slots_in_source_order(&xml, &[], &HashSet::new())?;
+        let drawing_ids = drawing_ids_in_xml(&xml).ok();
+        xml_relationship_ids_in_order(&xml)?;
+        Ok(UnchangedMainPart {
+            xml,
+            body_namespace_bindings: self.body_namespace_bindings.clone(),
+            drawing_ids,
+        })
+    }
+
+    /// What [`Document::canonicalize_all_drawing_ids`] does beside a main
+    /// part it has nothing to renumber in: the related story parts and the
+    /// image parts are canonicalized, and the main part keeps its
+    /// relationships, drawings and authored registries.
+    fn canonicalize_beside_unchanged_main_part(
+        &mut self,
+        unchanged: &UnchangedMainPart,
+    ) -> Result<()> {
+        let owner_identity = relationship_owner_identity(&self.doc_part_name);
+        self.identifiers
+            .authored_nested_story_relationship_ids
+            .remove(&owner_identity);
+        let related_parts = self.related_story_parts();
+        let mut occupied_drawings = self.identifiers.preserved_drawing_ids.clone();
+        if let Some(live_ids) = &unchanged.drawing_ids {
+            occupied_drawings.extend(live_ids);
+        }
+        for part in &related_parts {
+            if !self.identifiers.authored_story_parts.contains(part)
+                && let Some(xml) = self.package.get_part(part)
+                && let Ok(live_ids) = drawing_ids_in_xml(xml)
+            {
+                occupied_drawings.extend(live_ids);
+            }
+        }
+        self.identifiers
+            .authored_nested_story_drawing_ids
+            .remove(&owner_identity);
+        self.canonicalize_related_story_relationships(&related_parts, &mut occupied_drawings)?;
+        self.identifiers.drawing_ids = occupied_drawings;
+        self.canonicalize_image_parts(true)
+    }
+
+    fn canonicalize_all_drawing_ids(&mut self) -> Result<()> {
         let owner = self.doc_part_name.clone();
         let owner_identity = relationship_owner_identity(&owner);
+        note_staging_work(|work| {
+            work.canonicalized += self.package.get_part(&owner).map_or(0, <[u8]>::len);
+        });
         // Story picture insertion keeps current producer XML. Patch its
         // canonical relationship and drawing IDs into that retained source.
         let retained_main_xml = self
@@ -18449,7 +18817,7 @@ impl Document {
         }
         self.canonicalize_related_story_relationships(&related_parts, &mut occupied_drawings)?;
         self.identifiers.drawing_ids = occupied_drawings;
-        self.canonicalize_image_parts()?;
+        self.canonicalize_image_parts(false)?;
         Ok(())
     }
 
@@ -18749,13 +19117,35 @@ impl Document {
         Ok(())
     }
 
-    fn canonicalize_image_parts(&mut self) -> Result<()> {
+    /// Move each authored image part to its canonical name. With
+    /// `main_checked`, the main part serializes as when its checks passed, and
+    /// when each of its image relationships names a part that was there when
+    /// it was opened, it gives no part to move, in any order.
+    fn canonicalize_image_parts(&mut self, main_checked: bool) -> Result<()> {
         let mut ordered = Vec::new();
-        let main_xml = self.document.to_xml()?;
-        let mut owners = vec![(
-            self.doc_part_name.clone(),
-            xml_relationship_ids_in_order(&main_xml)?,
-        )];
+        let main_moves_nothing = main_checked
+            && self
+                .package
+                .get_part_rels(&self.doc_part_name)
+                .is_none_or(|relationships| {
+                    relationships
+                        .items
+                        .iter()
+                        .filter(|relationship| relationship.rel_type == rel_types::IMAGE)
+                        .all(|relationship| {
+                            self.identifiers
+                                .part_is_preserved(&OpcPackage::resolve_rel_target(
+                                    &self.doc_part_name,
+                                    &relationship.target,
+                                ))
+                        })
+                });
+        let main_ids = if main_moves_nothing {
+            Vec::new()
+        } else {
+            xml_relationship_ids_in_order(&self.document.to_xml()?)?
+        };
+        let mut owners = vec![(self.doc_part_name.clone(), main_ids)];
         for owner in self.related_story_parts() {
             let owner_identity = relationship_owner_identity(&owner);
             if self.identifiers.authored_story_parts.contains(&owner)
@@ -18866,7 +19256,7 @@ impl Document {
     /// Open a document from a file path.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let package = OpcPackage::open(path)?;
-        Self::from_package(package)
+        Self::from_opened_package(package, true)
     }
 
     /// Open a password-protected agile-encrypted document from a file path.
@@ -18874,7 +19264,7 @@ impl Document {
     pub fn open_encrypted<P: AsRef<Path>>(path: P, password: &str) -> Result<Self> {
         let file = std::fs::File::open(path)?;
         let package = OpcPackage::from_encrypted_reader(file, password)?;
-        Self::from_package(package)
+        Self::from_opened_package(package, true)
     }
 
     /// Open a document from bytes.
@@ -18897,14 +19287,14 @@ impl Document {
     ) -> Result<Self> {
         let cursor = std::io::Cursor::new(bytes);
         let package = OpcPackage::from_encrypted_reader_with_limits(cursor, password, limits)?;
-        Self::from_package(package)
+        Self::from_opened_package(package, true)
     }
 
     /// Open a document from bytes while bounding OPC archive expansion.
     pub fn from_bytes_with_limits(bytes: &[u8], limits: PackageReadLimits) -> Result<Self> {
         let cursor = std::io::Cursor::new(bytes);
         let package = OpcPackage::from_reader_with_limits(cursor, limits)?;
-        Self::from_package(package)
+        Self::from_opened_package(package, true)
     }
 
     /// Return the exact Word package class declared for the main document part.
@@ -18987,6 +19377,12 @@ impl Document {
     }
 
     pub(crate) fn from_package(package: OpcPackage) -> Result<Self> {
+        Self::from_opened_package(package, false)
+    }
+
+    /// Open a document from `package`, read from bytes when
+    /// `read_from_bytes`, which [`OpcPackage::reread`] requires.
+    fn from_opened_package(package: OpcPackage, read_from_bytes: bool) -> Result<Self> {
         let (doc_part_name, _) = validated_word_package_class(&package)?;
 
         let doc_xml = package
@@ -19148,6 +19544,11 @@ impl Document {
         let package_signatures_invalidated =
             crate::embedded::known_invalid_package_signature_on_open(&package);
         let identifiers = DocumentIdentifiers::scan(&package)?;
+        let parsed = Some(Arc::new(Parsed::of(
+            &package,
+            &doc_part_name,
+            read_from_bytes,
+        )));
         Ok(Document {
             package,
             document,
@@ -19156,6 +19557,7 @@ impl Document {
             body_namespace_bindings: namespace_scopes.body_bindings,
             plain_local_edit_blocked,
             nested_owner_replay,
+            parsed,
             styles,
             numbering,
             core_properties,
@@ -19364,6 +19766,65 @@ impl Document {
 
     /// Save the document to a byte vector.
     pub fn to_bytes(&mut self) -> Result<Vec<u8>> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        self.saved_package()?.write_to(&mut buf)?;
+        Ok(buf.into_inner())
+    }
+
+    /// Whether this document and `other` save to the same bytes: what
+    /// comparing their [`Document::to_bytes`], this one's first, gives. When
+    /// both were opened from bytes, the packages they save are read back in
+    /// memory with [`OpcPackage::reread`] instead of being written as ZIPs:
+    /// packages read back are the same exactly when the bytes written are.
+    #[doc(hidden)]
+    pub fn saves_as(&self, other: &Document) -> Result<bool> {
+        let same: Result<bool> = (|| match (self.read_package(), other.read_package()) {
+            (Some(read), Some(other_read)) => Ok(self
+                .saved_package()?
+                .reread(read)?
+                .same_package_as(&other.saved_package()?.reread(other_read)?)),
+            _ => {
+                let mut bytes = std::io::Cursor::new(Vec::new());
+                self.saved_package()?.write_to(&mut bytes)?;
+                let mut other_bytes = std::io::Cursor::new(Vec::new());
+                other.saved_package()?.write_to(&mut other_bytes)?;
+                note_staging_work(|work| {
+                    work.zip_written += bytes.get_ref().len() + other_bytes.get_ref().len();
+                });
+                Ok(bytes.into_inner() == other_bytes.into_inner())
+            }
+        })();
+        // Debug builds, which run the binding tests, compare the bytes the
+        // two documents save once they forget their opening.
+        #[cfg(debug_assertions)]
+        {
+            let forgetting = |document: &Document| {
+                let mut copy = document.clone_for_staging();
+                copy.parsed = None;
+                copy
+            };
+            let bytes = without_staging_work(|| -> Result<bool> {
+                Ok(forgetting(self).to_bytes()? == forgetting(other).to_bytes()?)
+            });
+            match (&same, bytes) {
+                (Ok(same), Ok(bytes)) => assert_eq!(*same, bytes, "saves_as differs from to_bytes"),
+                (Err(same), Err(bytes)) => assert_eq!(same.to_string(), bytes.to_string()),
+                (same, bytes) => panic!("saves_as gives {same:?} where to_bytes gives {bytes:?}"),
+            }
+        }
+        same
+    }
+
+    /// The package as last opened, when it was read from bytes.
+    fn read_package(&self) -> Option<&OpcPackage> {
+        self.parsed
+            .as_deref()
+            .filter(|parsed| parsed.read_from_bytes)
+            .map(|parsed| &parsed.package)
+    }
+
+    /// The package [`Document::to_bytes`] writes.
+    fn saved_package(&self) -> Result<OpcPackage> {
         #[cfg(test)]
         eprintln!("FX211_SAVE_STAGE resource-before");
         self.validate_model_resource_limits()?;
@@ -19383,9 +19844,7 @@ impl Document {
             &mut candidate.package,
             candidate.package_signatures_invalidated,
         )?;
-        let mut buf = std::io::Cursor::new(Vec::new());
-        candidate.package.write_to(&mut buf)?;
-        Ok(buf.into_inner())
+        Ok(candidate.package)
     }
 
     /// Serialize the bytes that [`Document::save`] writes to `path`.
@@ -19914,31 +20373,80 @@ impl Document {
         // producer's complete scopes and every retained raw subtree byte for
         // byte. A modified document fails closed when canonical serialization
         // could change the meaning or bytes of retained content.
+        //
+        // A main part that holds the bytes it was opened with is compared
+        // with, and scanned as, what that opening parsed, found once.
+        let kept = self.kept_main_part();
         let existing_document_xml = self.package.get_part(&self.doc_part_name);
-        #[cfg(test)]
-        let typed_document_is_unchanged = {
-            eprintln!("FX211_FLUSH_STAGE reparse-before");
-            let parsed = existing_document_xml.and_then(|xml| CT_Document::from_xml(xml).ok());
-            eprintln!("FX211_FLUSH_STAGE reparse-after");
-            eprintln!("FX211_FLUSH_STAGE equality-before");
-            let unchanged = parsed.as_ref() == Some(&self.document);
-            eprintln!("FX211_FLUSH_STAGE equality-after");
-            eprintln!("FX211_FLUSH_STAGE temporary-drop-before");
-            drop(parsed);
-            eprintln!("FX211_FLUSH_STAGE temporary-drop-after");
-            unchanged
+        let typed_document_is_unchanged = match kept.as_deref() {
+            Some(kept) => kept.main_document() == Some(&self.document),
+            None => {
+                #[cfg(test)]
+                eprintln!("FX211_FLUSH_STAGE reparse-before");
+                note_staging_work(|work| {
+                    work.parsed += existing_document_xml.map_or(0, <[u8]>::len);
+                });
+                let parsed = existing_document_xml.and_then(|xml| CT_Document::from_xml(xml).ok());
+                #[cfg(test)]
+                eprintln!("FX211_FLUSH_STAGE reparse-after");
+                #[cfg(test)]
+                eprintln!("FX211_FLUSH_STAGE equality-before");
+                let unchanged = parsed.as_ref() == Some(&self.document);
+                #[cfg(test)]
+                eprintln!("FX211_FLUSH_STAGE equality-after");
+                #[cfg(test)]
+                eprintln!("FX211_FLUSH_STAGE temporary-drop-before");
+                drop(parsed);
+                #[cfg(test)]
+                eprintln!("FX211_FLUSH_STAGE temporary-drop-after");
+                unchanged
+            }
         };
-        #[cfg(not(test))]
-        let typed_document_is_unchanged = existing_document_xml
-            .and_then(|xml| CT_Document::from_xml(xml).ok())
-            .as_ref()
-            == Some(&self.document);
+        // Debug builds, which run the binding tests, parse the part again.
+        #[cfg(debug_assertions)]
+        if kept.is_some() {
+            assert_eq!(
+                typed_document_is_unchanged,
+                existing_document_xml
+                    .and_then(|xml| CT_Document::from_xml(xml).ok())
+                    .as_ref()
+                    == Some(&self.document),
+                "the kept main part parse decides another change than a parse"
+            );
+        }
         #[cfg(test)]
         eprintln!("FX211_FLUSH_STAGE nested-scopes-before");
-        let nested_namespace_owners = existing_document_xml
-            .map(nested_modeled_namespace_owners)
-            .transpose()?
-            .unwrap_or_default();
+        let scanned;
+        let nested_namespace_owners =
+            match kept.as_deref().and_then(Parsed::nested_namespace_owners) {
+                Some(owners) => {
+                    #[cfg(debug_assertions)]
+                    assert_eq!(
+                        format!("{owners:?}"),
+                        format!(
+                            "{:?}",
+                            existing_document_xml
+                                .map(nested_modeled_namespace_owners)
+                                .transpose()
+                                .ok()
+                                .flatten()
+                                .unwrap_or_default()
+                        ),
+                        "the kept nested namespace owners differ from a scan"
+                    );
+                    owners
+                }
+                None => {
+                    note_staging_work(|work| {
+                        work.scanned += existing_document_xml.map_or(0, <[u8]>::len);
+                    });
+                    scanned = existing_document_xml
+                        .map(nested_modeled_namespace_owners)
+                        .transpose()?
+                        .unwrap_or_default();
+                    &scanned
+                }
+            };
         #[cfg(test)]
         eprintln!("FX211_FLUSH_STAGE nested-scopes-after");
         let unsafe_prefix = unsafe_serializer_namespace_prefix(
@@ -19946,11 +20454,10 @@ impl Document {
             &self.body_namespace_declarations,
             existing_document_xml,
         )
-        .or_else(|| unsafe_nested_namespace_prefix(&nested_namespace_owners));
+        .or_else(|| unsafe_nested_namespace_prefix(nested_namespace_owners));
+        // An unchanged part keeps its bytes.
         let doc_xml = if typed_document_is_unchanged {
-            existing_document_xml
-                .expect("compared existing document XML")
-                .to_vec()
+            None
         } else {
             if let Some(prefix) = unsafe_prefix {
                 return Err(Error::Other(format!(
@@ -19962,10 +20469,20 @@ impl Document {
             let serialized = self.document.to_xml()?;
             #[cfg(test)]
             eprintln!("FX211_FLUSH_STAGE serialize-after");
-            replay_nested_namespace_declarations(&serialized, &nested_namespace_owners)?
+            Some(replay_nested_namespace_declarations(
+                &serialized,
+                nested_namespace_owners,
+            )?)
         };
-        let namespace_scopes = document_namespace_scopes(&doc_xml)?;
-        self.package.set_part(&self.doc_part_name, doc_xml);
+        let namespace_scopes = document_namespace_scopes(
+            doc_xml
+                .as_deref()
+                .or(existing_document_xml)
+                .expect("compared existing document XML"),
+        )?;
+        if let Some(doc_xml) = doc_xml {
+            self.package.set_part(&self.doc_part_name, doc_xml);
+        }
         self.root_namespace_declarations = namespace_scopes.root_declarations;
         self.body_namespace_declarations = namespace_scopes.body_declarations;
         self.body_namespace_bindings = namespace_scopes.body_bindings;
@@ -19976,6 +20493,16 @@ impl Document {
             self.nested_owner_replay = OnceLock::from(NestedOwnerReplayFacts::default());
         }
         Ok(())
+    }
+
+    /// What the last opening parsed, while the main part holds the bytes it
+    /// was opened with.
+    fn kept_main_part(&self) -> Option<Arc<Parsed>> {
+        let parsed = self.parsed.as_ref()?;
+        let kept = parsed.main_part_xml()?;
+        let current = self.package.get_part(&self.doc_part_name)?;
+        (parsed.main_part == self.doc_part_name && (std::ptr::eq(kept, current) || kept == current))
+            .then(|| Arc::clone(parsed))
     }
 
     fn refresh_related_story_caches(&mut self) -> Result<()> {
@@ -58036,6 +58563,72 @@ mod tests {
             work.push(sample);
         }
         assert_eq!(work[0], work[1]);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn staging_reads_the_main_part_once_while_it_keeps_its_opened_bytes() {
+        // A font and a numbering edit compared by save, on bodies of N and 4N
+        // paragraphs with pictures, a nested namespace owner and a numbering
+        // part and font table read from bytes.
+        let edit = |document: &Document, k: usize| {
+            let mut candidate = document.clone_for_staging();
+            candidate
+                .set_font(FontDefinition::new(format!("Probe {k}")))
+                .unwrap();
+            candidate
+                .add_numbering_definition(&[ListLevel::decimal()])
+                .unwrap();
+            candidate
+        };
+        let mut work = Vec::new();
+        let mut forgetting = Vec::new();
+        for count in [50usize, 200] {
+            let body = format!("{}{}", issue407_runs(count), issue407_varied_body(""));
+            let mut source = issue407_document(&body, false);
+            for _ in 0..count / 10 {
+                source.add_picture(
+                    super::watermark_tests::PNG,
+                    "pixel.png",
+                    Length::pt(12.0),
+                    Length::pt(12.0),
+                );
+            }
+            source.set_font(FontDefinition::new("Seed")).unwrap();
+            source
+                .add_numbering_definition(&[ListLevel::decimal()])
+                .unwrap();
+            let mut document = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+            take_staging_work();
+            // The first staging parses, scans and checks the main part once.
+            let candidate = edit(&document, 0);
+            assert!(!document.saves_as(&candidate).unwrap());
+            document = candidate;
+            let first = take_staging_work();
+            assert!(first[..3].iter().all(|bytes| *bytes > 0), "{first:?}");
+            let mut sample = Vec::new();
+            for k in 1..3 {
+                let candidate = edit(&document, k);
+                assert!(!document.saves_as(&candidate).unwrap());
+                document = candidate;
+                sample.push(take_staging_work());
+            }
+            work.push(sample);
+            // A copy that forgets its opening reads the whole part again.
+            let mut copy = document.clone_for_staging();
+            copy.parsed = None;
+            let candidate = edit(&copy, 3);
+            assert!(!copy.saves_as(&candidate).unwrap());
+            forgetting.push(take_staging_work());
+        }
+        // Later edits read none of it again, in a body four times as large
+        // too.
+        assert_eq!(work[0], work[1]);
+        assert!(work[0].iter().all(|sample| *sample == [0; 4]), "{work:?}");
+        assert!(
+            (0..4).all(|work| forgetting[1][work] > forgetting[0][work]),
+            "{forgetting:?}"
+        );
     }
 }
 

@@ -64,6 +64,9 @@ pub use content_control::{
     ContentControlAppearance, ContentControlLock, ContentControlPlacement, ContentControlRef,
     ContentControlSpec, ContentControlTypePayload,
 };
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub use document::take_staging_work;
 pub use document::{
     AccessibilityIssue, BodyContentRef, BodyItemContext, BodyItemOwners, BodyItemRef,
     ContentFragment, ContentLocation, ContentMeasurement, Document, DocumentFragment,

@@ -100,6 +100,17 @@ pub(crate) fn word_piece_work() -> usize {
     WORD_PIECE_READS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The whole main part work staging and comparing saves did on this thread
+/// since the previous call, in bytes of the main part parsed again, scanned
+/// for nested namespace owners, canonicalized whole and written as a ZIP.
+/// Debug builds only.
+#[cfg(debug_assertions)]
+#[pyfunction]
+#[pyo3(name = "_staging_work")]
+pub(crate) fn staging_work() -> [usize; 4] {
+    rdocx::take_staging_work()
+}
+
 use oxml_py_support::{
     ContentPath, PathSeg, PreparedRevision, RevisionCounter, RevisionScope, RevisionState,
     StaleElementError, revision_to_pyerr,
@@ -9328,18 +9339,15 @@ impl PyDocument {
     pub(crate) fn publish_owner_candidate(
         &mut self,
         py: Python<'_>,
-        mut candidate: rdocx::Document,
+        candidate: rdocx::Document,
         operation: &'static str,
         publication: WordPublication,
     ) -> PyResult<()> {
-        let before = self
+        if self
             .inner
-            .to_bytes()
-            .map_err(|error| rdocx_to_pyerr(py, error))?;
-        let after = candidate
-            .to_bytes()
-            .map_err(|error| rdocx_to_pyerr(py, error))?;
-        if before == after {
+            .saves_as(&candidate)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+        {
             return Ok(());
         }
         let prepared = self.prepare_word_revision(py, &candidate, operation, publication)?;
@@ -9421,12 +9429,14 @@ impl PyDocument {
     fn publish_api_candidate(
         &mut self,
         py: Python<'_>,
-        mut candidate: rdocx::Document,
+        candidate: rdocx::Document,
         operation: &'static str,
     ) -> PyResult<()> {
-        let before = self.inner.to_bytes().map_err(|e| rdocx_to_pyerr(py, e))?;
-        let after = candidate.to_bytes().map_err(|e| rdocx_to_pyerr(py, e))?;
-        if before == after {
+        if self
+            .inner
+            .saves_as(&candidate)
+            .map_err(|e| rdocx_to_pyerr(py, e))?
+        {
             return Ok(());
         }
         let prepared = self.prepare_word_revision(
@@ -9442,12 +9452,14 @@ impl PyDocument {
     fn publish_form_candidate(
         &mut self,
         py: Python<'_>,
-        mut candidate: rdocx::Document,
+        candidate: rdocx::Document,
         operation: &'static str,
     ) -> PyResult<()> {
-        let before = self.inner.to_bytes().map_err(|e| rdocx_to_pyerr(py, e))?;
-        let after = candidate.to_bytes().map_err(|e| rdocx_to_pyerr(py, e))?;
-        if before == after {
+        if self
+            .inner
+            .saves_as(&candidate)
+            .map_err(|e| rdocx_to_pyerr(py, e))?
+        {
             return Ok(());
         }
         let prepared =

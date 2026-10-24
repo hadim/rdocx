@@ -11733,3 +11733,93 @@ def test_word_owner_pieces_follow_a_tail_removal():
         assert (work(), pieces()) == before
         list(doc.paragraphs)[-1].text = "edited"
         assert work() == before[0] and pieces() - before[1] == 1, paragraphs
+
+
+def _staging_work():
+    from rdocx import _rdocx
+
+    work = getattr(_rdocx, "_staging_work", None)
+    if work is None:
+        pytest.skip("the staging work counter exists in debug builds only")
+    return work
+
+
+_STAGING_DOCUMENTS = {}
+
+
+def _staging_document(paragraphs):
+    """The review-shaped document of the owner piece tests, with a font table and a numbering part, opened from
+    bytes."""
+    import rdocx
+
+    if paragraphs not in _STAGING_DOCUMENTS:
+        document = _issue407_review_document(paragraphs)
+        document.set_font(rdocx.FontDefinition("Seed"))
+        document.add_numbering_definition([rdocx.ListLevel(format="decimal", text="%1.")])
+        _STAGING_DOCUMENTS[paragraphs] = document.to_bytes()
+    return rdocx.Document.from_bytes(_STAGING_DOCUMENTS[paragraphs])
+
+
+def _staging_edits():
+    """Edits that stage a document or compare its saves and leave its main part as it was opened, or change only its
+    model, each given the document and a fresh k and returning the call that makes the edit."""
+    from pathlib import Path
+
+    import rdocx
+
+    font = (Path(__file__).resolve().parents[2] / "oxml-layout/fonts/Selawik-Regular.ttf").read_bytes()
+    license = rdocx.FontEmbeddingLicense(authorized=True, identity="SIL Open Font License 1.1")
+
+    def levels():
+        return [rdocx.ListLevel(format="decimal", text="%1.")]
+
+    def remove_font(doc, k):
+        doc.set_font(rdocx.FontDefinition(f"Gone {k}"))
+        return lambda: doc.remove_font(f"Gone {k}")
+
+    def add_numbering_instance(doc, k):
+        definition = doc.add_numbering_definition(levels())
+        return lambda: doc.add_numbering_instance(definition)
+
+    def link_style_to_numbering(doc, k):
+        style = doc.add_style(f"Probe style {k}", "paragraph").style_id
+        instance = doc.add_numbering_instance(doc.add_numbering_definition(levels()))
+        return lambda: doc.link_style_to_numbering(style, instance, 0)
+
+    return {
+        "Document.set_font": lambda doc, k: lambda: doc.set_font(rdocx.FontDefinition(f"Probe {k}")),
+        "Document.embed_font": lambda doc, k: lambda: doc.embed_font(
+            "Selawik", font, ("regular", "bold", "italic")[k], license=license),
+        "Document.remove_font": remove_font,
+        "Document.embed_true_type_fonts": lambda doc, k: lambda: setattr(doc, "embed_true_type_fonts", k != 1),
+        "Document.add_numbering_definition": lambda doc, k: lambda: doc.add_numbering_definition(levels()),
+        "Document.add_numbering_instance": add_numbering_instance,
+        "Document.link_style_to_numbering": link_style_to_numbering,
+        "Document.add_bullet_list_item": lambda doc, k: lambda: doc.add_bullet_list_item(f"item {k}"),
+        "Document.add_numbered_list_item": lambda doc, k: lambda: doc.add_numbered_list_item(f"item {k}"),
+    }
+
+
+@pytest.mark.parametrize("edit", sorted(_staging_edits()))
+def test_staging_reads_the_main_part_once_while_it_keeps_its_opened_bytes(edit):
+    # A document parses, scans and checks the main part it was opened with once for staging: the first edit reads
+    # it. Later edits that leave that part as it was, or change only its model, read none of it again, in a body of 20
+    # paragraphs as in one four times as large, and compare saves without writing a ZIP. Debug builds check every reuse
+    # against the whole work.
+    work = _staging_work()
+    make = _staging_edits()[edit]
+    counts = []
+    for paragraphs in (20, 80):
+        doc = _staging_document(paragraphs)
+        work()
+        make(doc, 0)()
+        first = list(work())
+        assert any(first), (paragraphs, first)
+        sample = []
+        for k in (1, 2):
+            call = make(doc, k)
+            work()
+            call()
+            sample.append(list(work()))
+        counts.append(sample)
+    assert counts[0] == counts[1] == [[0, 0, 0, 0], [0, 0, 0, 0]], counts

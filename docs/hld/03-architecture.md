@@ -344,6 +344,26 @@ Their values are found by expanded office relationship namespace, including
 bindings inherited by the document body, and are never remapped without a safe
 raw rewrite.
 
+A Word document keeps what its last opening parsed, shared with its staged
+copies: the package as opened, and, each found once when first needed, the
+main part parsed, its nested namespace owners, and the outcome of the checks
+that identifier canonicalization makes on a part with nothing to renumber.
+Staging uses them only while the main part holds the bytes it was opened with,
+compared by value. A flush compares the model with that parse. A main part
+whose model equals the parse and serializes as it did, whose relationships and
+section references all have preserved provenance, whose section references are
+in canonical order, and that holds no authored drawing or nested story
+relationship is not canonicalized again, and an error the checks found raises
+at the same call. Two documents opened from bytes compare their saves by
+rereading their staged packages in memory against the packages they were
+opened from, so no ZIP is written. A reopen keeps a new record. The record
+lives until the document is reopened, which in the binding is as long as the
+Python document lives, and keeps memory meanwhile: the main part parsed, about
+ten times the part's bytes, the part as the model serializes it, about its
+size, and the opened bytes of every part an edit has replaced since. A 6 MiB
+document.xml of 20000 paragraphs keeps about 68 MiB more after a first font
+edit.
+
 Story-scoped image and hyperlink operations resolve the normalized OPC owner
 from `StoryId`. Cells and text boxes inherit the containing part, while
 headers, footers, notes, and comments use their related parts. Main-part
