@@ -12018,8 +12018,8 @@ def _producer_document(paragraphs, root_prefix=None):
 
 def _block_edits():
     """Edits that change the main part of a document and commit it, each given the document and a fresh k and
-    returning the call that makes the edit. Document.import_fragment splices the main part as the package holds it,
-    and is made on a document whose main part another producer wrote."""
+    returning the call that makes the edit. The fragment imports, the scoped text replacements and the pictures edit
+    the main part as the package holds it, and are made on a document whose main part another producer wrote."""
     import rdocx
 
     def run_text(doc, k):
@@ -12040,6 +12040,17 @@ def _block_edits():
         body = next(story for story in doc.stories if story.kind == "body")
         return lambda: doc.import_fragment(rdocx.ContentLocation.end(body), fragment)
 
+    def replace_text_at(doc, k):
+        index = doc.find_content_index(doc.add_paragraph(f"alpha {k}"))
+        item = next(item for item in doc.story_items if item.story.kind == "body" and item.kind == "paragraph"
+                    and item.direct_body_index == index)
+        return lambda: doc.replace_text_at(item, "alpha", "omega")
+
+    def cell_replace_text(doc, k):
+        cell = doc.tables[-1].cell(0, 0)
+        cell.text = f"alpha {k}"
+        return lambda: cell.replace_text("alpha", "omega")
+
     return {
         "Table.add_row": lambda doc, k: doc.tables[-1].add_row,
         "Cell.text": lambda doc, k: lambda: setattr(doc.tables[-1].cell(0, 1), "text", f"cell {k}"),
@@ -12050,6 +12061,14 @@ def _block_edits():
             f"<p>inserted {k}</p>", after=[paragraph for paragraph in doc.paragraphs if paragraph.text == "spot"][-1]),
         "Document.add_footnote": footnote,
         "Document.import_fragment": import_fragment,
+        "Paragraph.replace_text": lambda doc, k: (lambda paragraph: lambda: paragraph.replace_text("alpha", "omega"))(
+            doc.add_paragraph(f"alpha {k}")),
+        "Cell.replace_text": cell_replace_text,
+        "Document.replace_text_at": replace_text_at,
+        "Document.add_picture": lambda doc, k: lambda: doc.add_picture(
+            _one_pixel_png(bytes([k, k, k])), f"p{k}.png", 12700, 12700),
+        "Cell.add_picture": lambda doc, k: (lambda cell: lambda: cell.add_picture(
+            _one_pixel_png(bytes([k, k, k])), f"c{k}.png", 12700, 12700))(doc.tables[-1].cell(0, 0)),
         "SectionHandle.set_page_border": lambda doc, k: lambda: doc.section(0).set_page_border(
             ("top", "left", "bottom", "right")[k]),
     }
@@ -12068,7 +12087,9 @@ def test_staging_writes_and_reads_only_the_main_part_blocks_an_edit_changes(edit
     counts = []
     reopens = []
     for paragraphs in (20, 80):
-        doc = (_producer_document if edit == "Document.import_fragment" else _staging_document)(paragraphs)
+        producer = edit in ("Document.import_fragment", "Paragraph.replace_text", "Cell.replace_text",
+                            "Document.replace_text_at", "Document.add_picture", "Cell.add_picture")
+        doc = (_producer_document if producer else _staging_document)(paragraphs)
         for k in (0, 1):
             make(doc, k)()
         sample = []
