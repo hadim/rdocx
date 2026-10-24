@@ -3505,7 +3505,7 @@ fn import_fragment_content_with_state(
     let mut part_map = BTreeMap::new();
     let mut imports = Vec::new();
     let mut external_imports = Vec::new();
-    for relationship_id in used_relationships {
+    for relationship_id in used_relationships.clone() {
         let relationship = source_rels.get_by_id(&relationship_id).ok_or_else(|| {
             Error::Other(format!(
                 "rich mail merge fragment relationship {relationship_id} is missing"
@@ -3960,6 +3960,9 @@ fn import_fragment_content_with_state(
                 ))
             })?;
         if selected_owner {
+            if used_relationships.contains(&relationship_id) {
+                document.register_pending_relationship(&destination_owner, &destination_id);
+            }
             relationship_map.insert(relationship_id, destination_id);
         } else {
             comment_relationship_map.insert(relationship_id, destination_id);
@@ -3972,6 +3975,7 @@ fn import_fragment_content_with_state(
             &relationship.target,
         )?;
         if selected_owner {
+            document.register_pending_relationship(&destination_owner, &destination_id);
             relationship_map.insert(relationship_id, destination_id);
         } else {
             comment_relationship_map.insert(relationship_id, destination_id);
@@ -4213,6 +4217,14 @@ fn equivalent_fragment_leaf_part(
 }
 
 fn prune_document_fragment_dependencies(fragment: &mut Document, selected: &[u8]) -> Result<()> {
+    // A repeated style ID resolves to its first definition before the
+    // dependency closure. A later definition is neither a dependency nor
+    // compared with the destination style.
+    let mut defined = HashSet::new();
+    fragment
+        .styles
+        .styles
+        .retain(|style| defined.insert(style.style_id.clone()));
     let mut body_xml = selected.to_vec();
     for companion in fragment_dependency_companions(fragment, selected)? {
         body_xml.extend(companion);
@@ -4526,6 +4538,10 @@ fn remap_fragment_style_collisions(
     for style in &mut fragment.styles.styles {
         if let Some(replacement) = replacements.get(&style.style_id) {
             style.style_id = replacement.clone();
+            // A renamed copy is not the destination default. The destination
+            // keeps its own default. A second default is still refused when
+            // the source default id does not collide and is not renamed.
+            style.is_default = false;
         }
         if let Some(replacement) = style
             .based_on

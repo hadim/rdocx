@@ -11402,3 +11402,47 @@ def test_comment_anchor_text_tracks_retained_run_edits():
     assert "\t" in publish(lambda run: run.add_tab())
     assert publish(lambda run: setattr(run, "text", "changed")) == "changed"
     assert "\n" in publish(lambda run: run.add_break())
+
+
+def test_fx265_insert_document_keeps_picture_bytes_for_both_orders():
+    """Python insert_document follows fragment import, not native insert_document."""
+    import rdocx
+
+    red = _one_pixel_png(b"\xc8\x00\x00")
+    blue = _one_pixel_png(b"\x00\x00\xc8")
+    policies = [
+        None,
+        rdocx.FragmentConflictPolicy.reuse_equivalent().with_related_part_reuse(False),
+    ]
+    for policy in policies:
+        for order in ((red, blue), (blue, red)):
+            target = rdocx.Document()
+            target.add_picture(blue, "blue.png")
+            target.add_picture(red, "red.png")
+            source = rdocx.Document()
+            source.add_picture(order[0], "first.png")
+            source.add_picture(order[1], "second.png")
+            if policy is None:
+                target.insert_document(source, at=2)
+            else:
+                target.insert_document(source, at=2, policy=policy)
+            reopened = rdocx.Document.from_bytes(target.to_bytes())
+            package_bytes = reopened.to_bytes()
+            with zipfile.ZipFile(io.BytesIO(package_bytes)) as package:
+                xml = package.read("word/document.xml").decode()
+                relationships = package.read("word/_rels/document.xml.rels").decode()
+                targets = {
+                    re.search(r'Id="([^"]+)"', element).group(1): re.search(
+                        r'Target="([^"]+)"', element
+                    ).group(1)
+                    for element in re.findall(r"<Relationship [^>]*>", relationships)
+                }
+                shown = []
+                for embed in re.findall(r'r:embed="([^"]+)"', xml):
+                    target_name = targets[embed]
+                    if target_name.startswith("/"):
+                        part = target_name.lstrip("/")
+                    else:
+                        part = posixpath.normpath(posixpath.join("word", target_name))
+                    shown.append(package.read(part))
+            assert shown[2:] == [order[0], order[1]]

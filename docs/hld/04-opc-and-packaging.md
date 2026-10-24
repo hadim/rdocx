@@ -489,6 +489,8 @@ A `content_types` constants module is added alongside, so neither format crate
 hand-types the long MIME strings. It includes the modern PowerPoint comments
 and authors MIME types as well as the handout-master type.
 
+A main-part relationship id that fragment import or a returned image or hyperlink id still names is held out of staging renumbering until the main story references it or the id is gone from the relationship registry. The hold is dropped by intersecting that registry before save. Owner-part disappearance alone does not end it.
+
 The Word facade resolves at most one glossary relationship from the main
 document. The relationship must be internal, its normalized target must not
 escape the package root, the part must exist, and its override must use the

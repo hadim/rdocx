@@ -2380,6 +2380,10 @@ The native Word facade owns accepted-view text presentation and advisory package
 
 Python template conversion admits explicit JSON scalar and container types before native mutation. Its existing workspace serde_json dependency edge introduces no separate converter model. Checked fragment publication and property mutation stage complete candidates, preserve the original on refusal and invalidate live handles only after changed publication. Markdown requests recursive physical-owner boundaries from the existing accepted projection. The default accepted view remains unchanged for its other consumers.
 
+Fragment import keeps a main-part relationship id stable until the main story references that id or the id leaves the relationship registry. Loss of an owner part by itself does not drop the hold. Reconciliation intersects the registry before save. An unreferenced id is not promised to survive a fresh reload. Picture bytes stay with the drawing for both insertion orders, the default policy and related-part reuse turned off. Chart, hyperlink, template, building-block and rich-merge publication use that same hold. Native typed insert_document remains the existing body, style and numbering route. It does not import source media relationships. Its unchanged control uses a source and a destination that already share the intended media graph.
+
+Style import resolves a repeated style id to its first definition before the dependency closure. Equal first definitions add no copy. A different first definition adds one renamed copy, and that renamed copy is not a default. A later shadowed definition and its dependencies are ignored. Existing target duplicate style XML stays. A source default whose id differs from the destination default still refuses as a second default.
+
 ## PowerPoint checked XML ownership
 
 The rpptx facade resolves checked XML against actual slide, layout or master

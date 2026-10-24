@@ -158,11 +158,11 @@ Expected unchanged for existing fixtures. New tests use new inputs. If a style-d
 
 ## Implementation checklist
 
-- [ ] Add `register_pending_relationship` in the existing document module.
-- [ ] Dedup style first definitions before dependency closure.
-- [ ] Cover picture order, mixed ids, and the style rows in existing tests.
-- [ ] Cover A2 with local RED then GREEN on the available unused-relationship reproducer and the best available copied-target and body-replaced scenario. Do not claim original-input equivalence. Donor image 9 and image 10 stay an additional reconstructed case.
-- [ ] Add no public API.
+- [x] Add `register_pending_relationship` in the existing document module.
+- [x] Dedup style first definitions before dependency closure.
+- [x] Cover picture order, mixed ids, and the style rows in existing tests.
+- [x] Cover A2 with local RED then GREEN on the available unused-relationship reproducer and the best available copied-target and body-replaced scenario. Do not claim original-input equivalence. Donor image 9 and image 10 stay an additional reconstructed case.
+- [x] Add no public API.
 
 ## Open questions
 
@@ -199,4 +199,4 @@ On canonical `sprint/s95.4` at `d5b41edf4191a1f1b37c9f699b2f3dd2ab06b319`, `Docu
 
 The original aggregate Base failed in the template section before the typed assertion. There is no observed isolated Base result for the native control. This clarification does not invent a RED run and does not add a native media-import repair.
 
-Q17, A1 through A5, the public API, estimates, the HLD impact list and the approval history stay as written. Status stays approved. The implementation checklist stays unticked. No gate is claimed passed. The worker acknowledges this revision and corrects the fixture in a separate task.
+Q17, A1 through A5, the public API, estimates, the HLD impact list and the approval history stay as written. Status stays approved. The canonical revision left its own implementation checklist unticked. This worker copy keeps the implementation ticks already recorded for the completed runtime work. No gate is claimed passed. The worker acknowledges this revision and corrects the fixture in a separate task.

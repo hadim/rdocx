@@ -20,6 +20,7 @@ use rdocx_oxml::CT_BorderEdge;
 use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrType};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr, CT_Shd};
 use rdocx_oxml::shared::{ST_Border, ST_PageOrientation, ST_SectionType};
+use rdocx_oxml::styles::StyleType;
 use rdocx_oxml::table::{CT_TblBorders, CT_TblCellMar, CT_TblPr, CT_TcPr};
 
 const ODT_ORACLE_VERSION: &str = "LibreOffice 26.2.5.2 cd7284b4cbbfeb507e630c1aac019f4157393acb";
@@ -28427,4 +28428,737 @@ fn batched_paragraph_locations_match_the_single_lookups() {
     }
     assert_eq!(cells.len(), resolved);
     assert!(resolved >= 7);
+}
+
+fn fx265_png(rgb: [u8; 3]) -> Vec<u8> {
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(2, 2).unwrap();
+    pixmap.fill(resvg::tiny_skia::Color::from_rgba8(
+        rgb[0], rgb[1], rgb[2], 255,
+    ));
+    pixmap.encode_png().unwrap()
+}
+
+fn fx265_reopened_with_pictures(pictures: &[&[u8]]) -> Document {
+    let mut document = Document::new();
+    for (index, picture) in pictures.iter().enumerate() {
+        document.add_picture(
+            picture,
+            &format!("picture{index}.png"),
+            Length::inches(1.0),
+            Length::inches(1.0),
+        );
+    }
+    Document::from_bytes(&document.to_bytes().unwrap()).unwrap()
+}
+
+fn fx265_shown_pictures(document: &mut Document, first: usize) -> Vec<(String, Vec<u8>)> {
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let relationships = package.get_part_rels("/word/document.xml").unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    xml.split(r#"r:embed=""#)
+        .skip(1)
+        .filter_map(|tail| tail.split('"').next())
+        .skip(first)
+        .map(|id| {
+            let relationship = relationships.get_by_id(id).unwrap();
+            let part = OpcPackage::resolve_rel_target("/word/document.xml", &relationship.target);
+            let bytes = package.get_part(&part).unwrap().to_vec();
+            (part, bytes)
+        })
+        .collect()
+}
+
+fn fx265_shown_colours(
+    document: &mut Document,
+    first: usize,
+    colours: &[(&str, &[u8])],
+) -> Vec<String> {
+    fx265_shown_pictures(document, first)
+        .into_iter()
+        .map(|(_, bytes)| {
+            colours
+                .iter()
+                .find(|(_, colour)| *colour == bytes.as_slice())
+                .map(|(name, _)| (*name).to_owned())
+                .unwrap_or_else(|| "other".to_owned())
+        })
+        .collect()
+}
+
+fn fx265_import_body(
+    target: &mut Document,
+    source: &Document,
+    policy: rdocx::FragmentConflictPolicy,
+) {
+    let source_body = body_story(source);
+    let start = source.story_items(&source_body).unwrap()[0]
+        .location()
+        .clone();
+    let fragment = rdocx::DocumentFragment::from_range(
+        source,
+        &start,
+        &rdocx::ContentLocation::end(source_body),
+        false,
+    )
+    .unwrap();
+    let body = body_story(target);
+    target
+        .import_fragment(&rdocx::ContentLocation::end(body), &fragment, policy)
+        .unwrap();
+}
+
+fn fx265_policies() -> [(&'static str, rdocx::FragmentConflictPolicy); 3] {
+    [
+        ("default", rdocx::FragmentConflictPolicy::default()),
+        (
+            "reuse_equivalent",
+            rdocx::FragmentConflictPolicy::reuse_equivalent(),
+        ),
+        (
+            "related-part reuse off",
+            rdocx::FragmentConflictPolicy::reuse_equivalent().with_related_part_reuse(false),
+        ),
+    ]
+}
+
+fn fx265_body_replaced(document: &mut Document, pictures: &[&[u8]]) -> Document {
+    let mut copy = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let replaced = copy.content_count();
+    for (index, picture) in pictures.iter().enumerate() {
+        copy.add_picture(
+            picture,
+            &format!("new{index}.png"),
+            Length::inches(1.0),
+            Length::inches(1.0),
+        );
+    }
+    for _ in 0..replaced {
+        let body = body_story(&copy);
+        let first = copy.story_items(&body).unwrap()[0].location().clone();
+        copy.remove_content_at(&first).unwrap();
+    }
+    Document::from_bytes(&copy.to_bytes().unwrap()).unwrap()
+}
+
+fn fx265_save_reopen(document: &mut Document) -> Document {
+    Document::from_bytes(&document.to_bytes().unwrap()).unwrap()
+}
+
+/// A1. Both picture orders, the default path, and related-part reuse off keep
+/// the inserted picture bytes through save and reopen.
+#[test]
+fn picture_order_and_reuse_keep_bytes() {
+    let red = fx265_png([200, 0, 0]);
+    let blue = fx265_png([0, 0, 200]);
+    let colours = [("red", red.as_slice()), ("blue", blue.as_slice())];
+    let mut failures = Vec::new();
+    for (label, policy) in fx265_policies() {
+        for inserted in [["red", "blue"], ["blue", "red"]] {
+            let pictures = inserted.map(|name| if name == "red" { &red[..] } else { &blue[..] });
+            let mut target = fx265_reopened_with_pictures(&[&blue, &red]);
+            let source = fx265_reopened_with_pictures(&pictures);
+            fx265_import_body(&mut target, &source, policy);
+            let shown = fx265_shown_colours(&mut target, 2, &colours);
+            let mut saved = fx265_save_reopen(&mut target);
+            let reopened = fx265_shown_colours(&mut saved, 2, &colours);
+            if shown != inserted || reopened != inserted {
+                failures.push(format!(
+                    "{label}, inserted {inserted:?}, shown {shown:?}, reopened {reopened:?}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// A1. A picture, a chart, and hyperlinks keep the targets named by the ids
+/// that were staged, including ids returned before a later staged edit.
+#[test]
+fn staged_ids_keep_targets() {
+    let red = fx265_png([200, 0, 0]);
+    let blue = fx265_png([0, 0, 200]);
+    let mut source = Document::new();
+    source.add_picture(&red, "red.png", Length::inches(1.0), Length::inches(1.0));
+    source
+        .add_chart(
+            rdocx::ChartKind::Bar,
+            Length::inches(3.0),
+            Length::inches(2.0),
+            &rdocx::ChartData {
+                categories: vec!["North".to_owned(), "South".to_owned()],
+                series: vec![("Revenue".to_owned(), vec![12.0, 18.0])],
+                ..rdocx::ChartData::default()
+            },
+        )
+        .unwrap();
+    for url in ["https://b.example/", "https://a.example/"] {
+        let body = body_story(&source);
+        source.add_hyperlink_to_story(&body, url, url).unwrap();
+    }
+    let source = fx265_save_reopen(&mut source);
+    for (label, policy) in fx265_policies() {
+        let mut target = fx265_reopened_with_pictures(&[&blue, &red]);
+        fx265_import_body(&mut target, &source, policy);
+        let package =
+            OpcPackage::from_reader(std::io::Cursor::new(target.to_bytes().unwrap())).unwrap();
+        let relationships = package.get_part_rels("/word/document.xml").unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap())
+            .unwrap()
+            .replace(r#"r:embed=""#, r#"r:id=""#);
+        let shown = xml
+            .split(r#"r:id=""#)
+            .skip(3)
+            .filter_map(|tail| tail.split('"').next())
+            .map(|id| {
+                let relationship = relationships.get_by_id(id).unwrap();
+                if relationship.rel_type == rel_types::HYPERLINK {
+                    return relationship.target.clone();
+                }
+                let part =
+                    OpcPackage::resolve_rel_target("/word/document.xml", &relationship.target);
+                if relationship.rel_type == rel_types::CHART {
+                    return format!("chart {}", part.starts_with("/word/charts/"));
+                }
+                format!(
+                    "image red {}",
+                    package.get_part(&part).unwrap() == red.as_slice()
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shown,
+            [
+                "image red true",
+                "chart true",
+                "https://b.example/",
+                "https://a.example/"
+            ],
+            "{label}"
+        );
+    }
+
+    let mut document = Document::new();
+    document.add_paragraph("cloned");
+    let b = document.add_hyperlink_relationship("https://b.example/");
+    let a = document.add_hyperlink_relationship("https://a.example/");
+    let body = body_story(&document);
+    let first = document.story_items(&body).unwrap()[0].location().clone();
+    document
+        .clone_content(&first, &rdocx::ContentLocation::end(body))
+        .unwrap();
+    let mut paragraph = document.add_paragraph("");
+    paragraph.add_hyperlink("b", &b);
+    paragraph.add_hyperlink("a", &a);
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let relationships = package.get_part_rels("/word/document.xml").unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let links = xml
+        .split("<w:hyperlink ")
+        .skip(1)
+        .map(|tail| {
+            let id = tail
+                .split(r#"r:id=""#)
+                .nth(1)
+                .unwrap()
+                .split('"')
+                .next()
+                .unwrap();
+            let text = tail
+                .split("<w:t>")
+                .nth(1)
+                .unwrap()
+                .split('<')
+                .next()
+                .unwrap();
+            (
+                text.to_owned(),
+                relationships.get_by_id(id).unwrap().target.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        links,
+        [
+            ("b".to_owned(), "https://b.example/".to_owned()),
+            ("a".to_owned(), "https://a.example/".to_owned())
+        ]
+    );
+
+    let body = body_story(&document);
+    let story_b = document
+        .add_hyperlink_relationship_to_story(&body, "https://b.example/story")
+        .unwrap();
+    let body = body_story(&document);
+    let story_a = document
+        .add_hyperlink_relationship_to_story(&body, "https://a.example/story")
+        .unwrap();
+    let body = body_story(&document);
+    let first = document.story_items(&body).unwrap()[0].location().clone();
+    document
+        .clone_content(&first, &rdocx::ContentLocation::end(body))
+        .unwrap();
+    let mut paragraph = document.add_paragraph("");
+    paragraph.add_hyperlink("story-b", &story_b);
+    paragraph.add_hyperlink("story-a", &story_a);
+    let mut reopened = fx265_save_reopen(&mut document);
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap())).unwrap();
+    let relationships = package.get_part_rels("/word/document.xml").unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let story_links = xml
+        .split("<w:hyperlink ")
+        .skip(1)
+        .filter_map(|tail| {
+            let id = tail
+                .split(r#"r:id=""#)
+                .nth(1)
+                .unwrap()
+                .split('"')
+                .next()
+                .unwrap();
+            let text = tail
+                .split("<w:t>")
+                .nth(1)
+                .unwrap()
+                .split('<')
+                .next()
+                .unwrap();
+            text.starts_with("story-").then(|| {
+                (
+                    text.to_owned(),
+                    relationships.get_by_id(id).unwrap().target.clone(),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        story_links,
+        [
+            ("story-b".to_owned(), "https://b.example/story".to_owned()),
+            ("story-a".to_owned(), "https://a.example/story".to_owned())
+        ]
+    );
+
+    let fillers = (0..8_u8)
+        .map(|index| fx265_png([20 * index, 120, 60]))
+        .collect::<Vec<_>>();
+    let mut document =
+        fx265_reopened_with_pictures(&fillers.iter().map(Vec::as_slice).collect::<Vec<_>>());
+    let red_id = document.embed_image(&red, "red.png");
+    let blue_id = document.embed_image(&blue, "blue.png");
+    let orphan = fx265_png([0, 200, 0]);
+    let orphan_id = document.embed_image(&orphan, "orphan.png");
+    let body = body_story(&document);
+    let first = document.story_items(&body).unwrap()[0].location().clone();
+    document
+        .clone_content(&first, &rdocx::ContentLocation::end(body))
+        .unwrap();
+    let mut paragraph = document.add_paragraph("");
+    for id in [&red_id, &blue_id] {
+        paragraph
+            .add_run("")
+            .add_picture(id, Length::inches(1.0), Length::inches(1.0));
+    }
+    let colours = [("red", red.as_slice()), ("blue", blue.as_slice())];
+    assert_eq!(
+        fx265_shown_colours(&mut document, 9, &colours),
+        ["red", "blue"]
+    );
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let relationship = package
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .get_by_id(&orphan_id)
+        .unwrap();
+    let part = OpcPackage::resolve_rel_target("/word/document.xml", &relationship.target);
+    assert_eq!(package.get_part(&part).unwrap(), orphan.as_slice());
+}
+
+/// A2. Available unused-relationship and body-replaced picture bytes stay
+/// exact through policies, save and reopen. Image 9 and image 10 are a
+/// reconstructed additional case. The original Issue 404 input is not claimed.
+#[test]
+fn inserted_picture_bytes_survive_unused_rels() {
+    let red = fx265_png([200, 0, 0]);
+    let blue = fx265_png([0, 0, 200]);
+    let colours = [("red", red.as_slice()), ("blue", blue.as_slice())];
+    let fillers = (0..6_u8)
+        .map(|index| fx265_png([20 * index, 120, 60]))
+        .collect::<Vec<_>>();
+    let mut held: Vec<&[u8]> = vec![&blue, &red];
+    held.extend(fillers.iter().map(Vec::as_slice));
+    let mut failures = Vec::new();
+    for (label, policy) in fx265_policies() {
+        for inserted in [["red", "blue"], ["blue", "red"]] {
+            let pictures = inserted.map(|name| if name == "red" { &red[..] } else { &blue[..] });
+            for plain_target in [false, true] {
+                let mut target = fx265_reopened_with_pictures(&held);
+                let mut source = fx265_body_replaced(&mut target, &pictures);
+                let stored = fx265_shown_pictures(&mut source, 0)
+                    .into_iter()
+                    .map(|(part, _)| part)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    stored,
+                    ["/word/media/image9.png", "/word/media/image10.png"]
+                );
+                let first = if plain_target {
+                    target = fx265_reopened_with_pictures(&[]);
+                    0
+                } else {
+                    held.len()
+                };
+                fx265_import_body(&mut target, &source, policy);
+                let shown = fx265_shown_colours(&mut target, first, &colours);
+                let mut saved = fx265_save_reopen(&mut target);
+                let reopened = fx265_shown_colours(&mut saved, first, &colours);
+                if shown != inserted || reopened != inserted {
+                    failures.push(format!(
+                        "{label}, plain target {plain_target}, inserted {inserted:?}, shown {shown:?}, reopened {reopened:?}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+fn fx265_style(id: &str, name: &str, color: &str) -> String {
+    format!(
+        r#"<w:style w:type="paragraph" w:styleId="{id}"><w:name w:val="{name}"/><w:basedOn w:val="Normal"/><w:rPr><w:color w:val="{color}"/></w:rPr></w:style>"#
+    )
+}
+
+fn fx265_restyle(
+    mut document: Document,
+    first_heading_color: Option<&str>,
+    appended: &str,
+) -> Document {
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let mut styles =
+        String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+    if let Some(color) = first_heading_color {
+        let id = styles.find(r#"w:styleId="Heading1""#).unwrap();
+        let start = styles[..id].rfind("<w:style").unwrap();
+        let end = start + styles[start..].find("</w:style>").unwrap() + "</w:style>".len();
+        styles.replace_range(start..end, &fx265_style("Heading1", "heading 1", color));
+    }
+    let styles = styles.replacen("</w:styles>", &format!("{appended}</w:styles>"), 1);
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(bytes.get_ref()).unwrap()
+}
+
+fn fx265_styled_document(
+    text: &str,
+    first_heading_color: Option<&str>,
+    appended: &str,
+) -> Document {
+    let mut document = Document::new();
+    document.add_paragraph(text).style("Heading1");
+    document.add_paragraph(text).style("Title");
+    fx265_restyle(document, first_heading_color, appended)
+}
+
+fn fx265_style_elements(document: &mut Document) -> Vec<String> {
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let styles = std::str::from_utf8(package.get_part("/word/styles.xml").unwrap()).unwrap();
+    let redeclared = format!(r#" xmlns:w="{}""#, rdocx_oxml::namespace::W_NS);
+    styles
+        .match_indices("<w:style ")
+        .map(|(start, _)| {
+            let end = start + styles[start..].find("</w:style>").unwrap() + "</w:style>".len();
+            styles[start..end].replace(&redeclared, "")
+        })
+        .collect()
+}
+
+fn fx265_paragraph_styles(document: &Document) -> Vec<String> {
+    document
+        .paragraphs()
+        .iter()
+        .map(|paragraph| paragraph.style_id().unwrap_or_default().to_owned())
+        .collect()
+}
+
+/// A3. Equal first definitions add no style copy. A target duplicate stays.
+#[test]
+fn equal_styles_add_no_copy() {
+    let duplicates =
+        fx265_style("Heading1", "heading 1", "C00000") + &fx265_style("Title", "Title", "C00000");
+    for (target_appended, source_appended) in [
+        (duplicates.as_str(), duplicates.as_str()),
+        (duplicates.as_str(), ""),
+        ("", duplicates.as_str()),
+    ] {
+        let mut target = fx265_styled_document("target", None, target_appended);
+        let source = fx265_styled_document("inserted", None, source_appended);
+        let before = fx265_style_elements(&mut target);
+        for _ in 0..2 {
+            fx265_import_body(
+                &mut target,
+                &source,
+                rdocx::FragmentConflictPolicy::default(),
+            );
+            assert_eq!(fx265_style_elements(&mut target), before);
+        }
+        assert_eq!(
+            fx265_paragraph_styles(&target),
+            ["Heading1", "Title"].repeat(3)
+        );
+    }
+}
+
+/// A4. A different first definition adds one renamed copy. A later shadow and
+/// its dependency are ignored. Existing target duplicate XML stays.
+#[test]
+fn different_first_style_copies_once() {
+    let duplicates =
+        fx265_style("Heading1", "heading 1", "C00000") + &fx265_style("Title", "Title", "C00000");
+    let mut target = fx265_styled_document("target", None, &duplicates);
+    let source = fx265_styled_document("inserted", Some("00B050"), &duplicates);
+    let mut expected = fx265_style_elements(&mut target);
+    let duplicate_count = expected
+        .iter()
+        .filter(|element| element.contains(r#"w:styleId="Heading1""#))
+        .count();
+    assert!(duplicate_count >= 2, "target duplicate setup failed");
+    expected.push(fx265_style("Heading1Merge1", "heading 1", "00B050"));
+    fx265_import_body(
+        &mut target,
+        &source,
+        rdocx::FragmentConflictPolicy::default(),
+    );
+    assert_eq!(fx265_style_elements(&mut target), expected);
+    assert_eq!(
+        fx265_paragraph_styles(&target),
+        ["Heading1", "Title", "Heading1Merge1", "Title"]
+    );
+
+    let mut target = fx265_styled_document("target", None, "");
+    let source = fx265_styled_document(
+        "inserted",
+        None,
+        r#"<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Issue408Shadowed"/></w:style><w:style w:type="paragraph" w:styleId="Issue408Shadowed"><w:name w:val="Issue 408 shadowed"/><w:basedOn w:val="Normal"/></w:style>"#,
+    );
+    let before = fx265_style_elements(&mut target);
+    fx265_import_body(
+        &mut target,
+        &source,
+        rdocx::FragmentConflictPolicy::default(),
+    );
+    assert_eq!(fx265_style_elements(&mut target), before);
+    assert!(
+        !fx265_style_elements(&mut target)
+            .iter()
+            .any(|element| element.contains("Issue408Shadowed"))
+    );
+}
+
+/// A5. Same-id Normal with different content adds one renamed non-default
+/// copy. A different source default id keeps the existing refusal.
+#[test]
+fn same_id_default_copies_once_nondefault() {
+    let mut target = Document::new();
+    target.add_paragraph("target");
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(target.to_bytes().unwrap())).unwrap();
+    let styles = String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            r#"<w:name w:val="Normal"/></w:style>"#,
+            r#"<w:name w:val="Normal"/><w:rPr><w:sz w:val="22"/></w:rPr></w:style>"#,
+            1,
+        );
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut target = Document::from_bytes(bytes.get_ref()).unwrap();
+    let mut source = Document::new();
+    source.add_paragraph("inserted");
+    fx265_import_body(
+        &mut target,
+        &source,
+        rdocx::FragmentConflictPolicy::default(),
+    );
+    target.validate_style_graph().unwrap();
+    let defaults = target
+        .styles()
+        .iter()
+        .filter(|style| style.is_default() && style.style_type() == StyleType::Paragraph)
+        .map(|style| style.style_id().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(defaults, ["Normal"]);
+    let copy = target.style("NormalMerge1").unwrap();
+    assert!(!copy.is_default());
+    assert_eq!(fx265_paragraph_styles(&target), ["", ""]);
+    let mut reopened = fx265_save_reopen(&mut target);
+    assert!(
+        fx265_style_elements(&mut reopened)
+            .iter()
+            .any(|element| element.contains(r#"w:styleId="NormalMerge1""#)
+                && !element.contains(r#"w:default="1""#))
+    );
+
+    let mut source = Document::new();
+    source.add_paragraph("other default");
+    source
+        .add_style(rdocx::StyleBuilder::paragraph(
+            "SourceDefault",
+            "Source default",
+        ))
+        .unwrap();
+    source
+        .set_default_style(StyleType::Paragraph, "SourceDefault")
+        .unwrap();
+    let mut target = Document::new();
+    target.add_paragraph("target");
+    let source_body = body_story(&source);
+    let start = source.story_items(&source_body).unwrap()[0]
+        .location()
+        .clone();
+    let fragment = rdocx::DocumentFragment::from_range(
+        &source,
+        &start,
+        &rdocx::ContentLocation::end(source_body),
+        false,
+    )
+    .unwrap();
+    let body = body_story(&target);
+    let error = target
+        .import_fragment(
+            &rdocx::ContentLocation::end(body),
+            &fragment,
+            rdocx::FragmentConflictPolicy::default(),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("more than one default"), "{error}");
+    assert_eq!(target.paragraphs().len(), 1);
+}
+
+/// A6. Template repeat, building-block insert and rich merge keep picture
+/// bytes through the shared provider. Native typed insert is the valid
+/// unchanged control for an already-shared media graph.
+#[test]
+fn template_merge_and_typed_insert_follow_the_same_rule() {
+    let red = fx265_png([200, 0, 0]);
+    let blue = fx265_png([0, 0, 200]);
+    let colours = [("red", red.as_slice()), ("blue", blue.as_slice())];
+    let mut document = Document::new();
+    for index in 0..8_u8 {
+        document.add_picture(
+            &fx265_png([20 * index, 120, 60]),
+            &format!("filler{index}.png"),
+            Length::inches(1.0),
+            Length::inches(1.0),
+        );
+    }
+    document.add_paragraph("{% for item in items %}");
+    document.add_picture(&red, "red.png", Length::inches(1.0), Length::inches(1.0));
+    document.add_picture(&blue, "blue.png", Length::inches(1.0), Length::inches(1.0));
+    document.add_paragraph("{% endfor %}");
+    let mut document = fx265_save_reopen(&mut document);
+    let stored = fx265_shown_pictures(&mut document, 8)
+        .into_iter()
+        .map(|(part, _)| part)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        stored,
+        ["/word/media/image9.png", "/word/media/image10.png"]
+    );
+    document
+        .render_template_versioned(&serde_json::json!({"items": [1, 2, 3]}), 1)
+        .unwrap();
+    assert_eq!(
+        fx265_shown_colours(&mut document, 8, &colours),
+        ["red", "blue", "red", "blue", "red", "blue"]
+    );
+
+    let source = fx265_reopened_with_pictures(&[&red, &blue]);
+    let source_body = body_story(&source);
+    let start = source.story_items(&source_body).unwrap()[0]
+        .location()
+        .clone();
+    let fragment = rdocx::DocumentFragment::from_range(
+        &source,
+        &start,
+        &rdocx::ContentLocation::end(source_body),
+        false,
+    )
+    .unwrap();
+    let mut host = fx265_reopened_with_pictures(&[&blue, &red]);
+    let block = rdocx::BuildingBlock {
+        name: "Pictures".to_owned(),
+        kind: rdocx::BuildingBlockKind::BuildingBlock,
+        category: None,
+        description: None,
+        guid: None,
+        gallery: None,
+        behaviors: Vec::new(),
+        body: rdocx_oxml::document::CT_Body {
+            content: Vec::new(),
+            sect_pr: None,
+        },
+    };
+    let info = host
+        .create_building_block_from_fragment(
+            block,
+            &fragment,
+            rdocx::FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    let body = body_story(&host);
+    host.insert_building_block(
+        &rdocx::ContentLocation::end(body),
+        &info,
+        rdocx::FragmentConflictPolicy::reuse_equivalent().with_related_part_reuse(false),
+    )
+    .unwrap();
+    assert_eq!(
+        fx265_shown_colours(&mut fx265_save_reopen(&mut host), 2, &colours),
+        ["red", "blue"]
+    );
+
+    let merge = document_with_body_inner(
+        r#"<w:p><w:fldSimple w:instr=" MERGEFIELD Picture "><w:r><w:t>Picture</w:t></w:r></w:fldSimple></w:p>"#,
+    );
+    let mut record = rdocx::MailMergeRecord::default();
+    record.values.insert(
+        "Picture".to_owned(),
+        rdocx::MailMergeValue::Image(rdocx::MailMergeImage {
+            data: red.clone(),
+            filename: "red.png".to_owned(),
+            width: Length::inches(1.0),
+            height: Length::inches(1.0),
+        }),
+    );
+    let mut merged = merge
+        .mail_merge_rich(
+            &rdocx::MailMergeData {
+                records: vec![record],
+                sources: Default::default(),
+            },
+            None,
+        )
+        .unwrap()
+        .remove(0);
+    assert_eq!(fx265_shown_colours(&mut merged, 0, &colours), ["red"]);
+
+    let mut typed = fx265_reopened_with_pictures(&[&blue]);
+    // Valid shared graph preservation. The source is a clone of the
+    // destination bytes, so both drawings already share the same intended
+    // blue picture and relationship graph.
+    let other = Document::from_bytes(&typed.to_bytes().unwrap()).unwrap();
+    typed.insert_document(1, &other);
+    assert_eq!(
+        fx265_shown_colours(&mut fx265_save_reopen(&mut typed), 0, &colours),
+        ["blue", "blue"]
+    );
 }
