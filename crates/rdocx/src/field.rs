@@ -4217,6 +4217,14 @@ fn equivalent_fragment_leaf_part(
 }
 
 fn prune_document_fragment_dependencies(fragment: &mut Document, selected: &[u8]) -> Result<()> {
+    // A repeated style ID resolves to its first definition before the
+    // dependency closure. A later definition is neither a dependency nor
+    // compared with the destination style.
+    let mut defined = HashSet::new();
+    fragment
+        .styles
+        .styles
+        .retain(|style| defined.insert(style.style_id.clone()));
     let mut body_xml = selected.to_vec();
     for companion in fragment_dependency_companions(fragment, selected)? {
         body_xml.extend(companion);
