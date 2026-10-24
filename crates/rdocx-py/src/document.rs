@@ -121,6 +121,15 @@ pub(crate) fn reopen_work() -> [usize; 3] {
     rdocx::take_reopen_work()
 }
 
+/// The main-part body children that story lookups scanned again, rather
+/// than reused from the scans the document keeps. Debug builds only.
+#[cfg(debug_assertions)]
+#[pyfunction]
+#[pyo3(name = "_main_body_block_scans")]
+pub(crate) fn main_body_block_scans() -> usize {
+    rdocx::Document::main_body_block_scans()
+}
+
 use oxml_py_support::{
     ContentPath, PathSeg, PreparedRevision, RevisionCounter, RevisionScope, RevisionState,
     StaleElementError, revision_to_pyerr,
@@ -9804,25 +9813,18 @@ impl PyDocument {
             return Err(PyIndexError::new_err("content index out of range"));
         }
         let story = self.body_story(py)?;
-        let snapshots = if indices.iter().all(|index| *index == content_count) {
-            Vec::new()
-        } else {
-            self.inner
-                .story_item_snapshots()
-                .map_err(|error| rdocx_to_pyerr(py, error))?
-        };
         let mut locations = Vec::with_capacity(indices.len());
         for index in indices {
             if *index == content_count {
                 locations.push(rdocx::ContentLocation::end(story.clone()));
                 continue;
             }
-            let location = snapshots
-                .iter()
-                .find(|item| {
-                    item.location().story() == &story && item.direct_body_index() == Some(*index)
-                })
-                .map(|item| item.location().clone())
+            // The first body item in that direct child is the child itself.
+            let location = self
+                .inner
+                .direct_body_item_location(*index)
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+                .filter(|location| location.story() == &story)
                 .ok_or_else(|| {
                     rdocx_to_pyerr(
                         py,

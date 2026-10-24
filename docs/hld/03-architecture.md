@@ -71,6 +71,16 @@ signing publications, use the whole-document inventory without reading a
 piece. So does a block that does not read as one direct body item, once read.
 The body story of a piece has no fingerprint, since that covers the whole
 body, and handles refresh a story before native use.
+A native story lookup in the main part addresses its item by body block. The
+document keeps the owners and body story items of each direct body child,
+scanned alone between the part's bytes before and after the children, and
+reuses a child's scan while its bytes and those around the children stay the
+same. Staging copies and the document a staged edit reopens share these scans,
+so a lookup after an edit scans only the children the edit changed, each alone,
+or all of them by one scan of the whole part when that reads fewer bytes, as on
+the first lookup. The scans keep a copy of each child's bytes for the life of
+the document. The part is still serialized whole, for the body story's
+fingerprint and for the edits that splice its source.
 Namespace scans retain a frame per element and copy inherited maps only when
 the element declares a namespace. Attribute validation and scope restoration
 retain their checked source semantics.
