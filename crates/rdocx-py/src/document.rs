@@ -8041,6 +8041,692 @@ fn checked_form_text(py: Python<'_>, value: String) -> PyResult<String> {
     Ok(value)
 }
 
+fn empty_py_tuple() -> Py<PyAny> {
+    Python::attach(|py| PyTuple::empty(py).into_any().unbind())
+}
+
+fn true_py_bool() -> Py<PyAny> {
+    Python::attach(|py| PyBool::new(py, true).to_owned().into_any().unbind())
+}
+
+fn exact_str<'a>(value: &'a Bound<'a, PyAny>, label: &str) -> PyResult<std::borrow::Cow<'a, str>> {
+    if !value.is_exact_instance_of::<PyString>() {
+        return Err(PyTypeError::new_err(format!("{label} must be str")));
+    }
+    value
+        .cast::<PyString>()
+        .map_err(|_| PyTypeError::new_err(format!("{label} must be str")))?
+        .to_cow()
+        .map_err(|_| PyTypeError::new_err(format!("{label} must be str")))
+}
+
+fn extract_strict_bool(value: &Bound<'_, PyAny>, label: &str) -> PyResult<bool> {
+    if !value.is_exact_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(format!("{label} must be bool")));
+    }
+    value.extract()
+}
+
+fn extract_optional_bool(value: Option<&Bound<'_, PyAny>>, label: &str) -> PyResult<Option<bool>> {
+    match value {
+        None => Ok(None),
+        Some(value) if value.is_none() => Ok(None),
+        Some(value) => Ok(Some(extract_strict_bool(value, label)?)),
+    }
+}
+
+fn extract_optional_text(
+    value: Option<&Bound<'_, PyAny>>,
+    label: &str,
+) -> PyResult<Option<String>> {
+    match value {
+        None => Ok(None),
+        Some(value) if value.is_none() => Ok(None),
+        Some(value) => Ok(Some(exact_str(value, label)?.into_owned())),
+    }
+}
+
+fn extract_u32_value(value: &Bound<'_, PyAny>, label: &str) -> PyResult<u32> {
+    if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err(format!("{label} must be an int")));
+    }
+    if value.lt(0).unwrap_or(false) {
+        return Err(PyValueError::new_err(format!(
+            "{label} must be zero or positive"
+        )));
+    }
+    value.extract::<u32>()
+}
+
+fn extract_optional_i32(value: Option<&Bound<'_, PyAny>>, label: &str) -> PyResult<Option<i32>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+    if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err(format!("{label} must be an int")));
+    }
+    let negative = value.lt(0).unwrap_or(false);
+    match value.extract::<i32>() {
+        Ok(number) => Ok(Some(number)),
+        Err(_) if negative => Err(PyValueError::new_err(format!(
+            "{label} is below the i32 range"
+        ))),
+        Err(error) => Err(error),
+    }
+}
+
+fn bounded_sequence_len(value: &Bound<'_, PyAny>, cap: usize, label: &str) -> PyResult<usize> {
+    let reported = value.len()?;
+    if reported > cap {
+        return Err(PyValueError::new_err(format!(
+            "{label} exceeds the mail-merge table limit"
+        )));
+    }
+    Ok(reported)
+}
+
+fn parse_main_document_type(value: Option<&str>) -> PyResult<Option<rdocx::MailMergeDocumentType>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    Ok(Some(match value {
+        "catalog" => rdocx::MailMergeDocumentType::Catalog,
+        "envelopes" => rdocx::MailMergeDocumentType::Envelopes,
+        "mailingLabels" => rdocx::MailMergeDocumentType::MailingLabels,
+        "formLetters" => rdocx::MailMergeDocumentType::FormLetters,
+        "email" => rdocx::MailMergeDocumentType::Email,
+        "fax" => rdocx::MailMergeDocumentType::Fax,
+        _ => {
+            return Err(PyValueError::new_err(
+                "main_document_type is not a mail-merge document type",
+            ));
+        }
+    }))
+}
+
+fn main_document_type_name(value: rdocx::MailMergeDocumentType) -> &'static str {
+    match value {
+        rdocx::MailMergeDocumentType::Catalog => "catalog",
+        rdocx::MailMergeDocumentType::Envelopes => "envelopes",
+        rdocx::MailMergeDocumentType::MailingLabels => "mailingLabels",
+        rdocx::MailMergeDocumentType::FormLetters => "formLetters",
+        rdocx::MailMergeDocumentType::Email => "email",
+        rdocx::MailMergeDocumentType::Fax => "fax",
+    }
+}
+
+fn parse_destination(value: Option<&str>) -> PyResult<Option<rdocx::MailMergeDestination>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    Ok(Some(match value {
+        "newDocument" => rdocx::MailMergeDestination::NewDocument,
+        "printer" => rdocx::MailMergeDestination::Printer,
+        "email" => rdocx::MailMergeDestination::Email,
+        "fax" => rdocx::MailMergeDestination::Fax,
+        _ => {
+            return Err(PyValueError::new_err(
+                "destination is not a mail-merge destination",
+            ));
+        }
+    }))
+}
+
+fn destination_name(value: rdocx::MailMergeDestination) -> &'static str {
+    match value {
+        rdocx::MailMergeDestination::NewDocument => "newDocument",
+        rdocx::MailMergeDestination::Printer => "printer",
+        rdocx::MailMergeDestination::Email => "email",
+        rdocx::MailMergeDestination::Fax => "fax",
+    }
+}
+
+fn default_mail_merge_settings() -> rdocx::MailMerge {
+    rdocx::MailMerge {
+        main_document_type: Some(rdocx::MailMergeDocumentType::FormLetters),
+        data_type: Some("textFile".to_owned()),
+        ..rdocx::MailMerge::default()
+    }
+}
+
+fn embedded_package_source(
+    py: Python<'_>,
+    columns: &Bound<'_, PyAny>,
+    records: &Bound<'_, PyAny>,
+) -> PyResult<rdocx::MailMergePackageSource> {
+    require_carrier_sequence(columns, "columns")?;
+    require_carrier_sequence(records, "records")?;
+    let column_len = bounded_sequence_len(columns, 1024, "columns")?;
+    let row_len = bounded_sequence_len(records, 100_000, "records")?;
+    let mut budget = rdocx::MailMergeTableBudget::new();
+    let mut owned_columns = Vec::with_capacity(column_len);
+    for item in columns.try_iter()? {
+        let item = item?;
+        let name = exact_str(&item, "column")?;
+        budget
+            .add_column(&name)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        owned_columns.push(name.into_owned());
+    }
+    let mut owned_records = Vec::with_capacity(row_len);
+    for row in records.try_iter()? {
+        let row = row?;
+        require_carrier_sequence(&row, "record")?;
+        let cell_len = row.len()?.min(owned_columns.len());
+        budget
+            .begin_record()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let mut owned_row = Vec::with_capacity(cell_len);
+        for cell in row.try_iter()? {
+            let cell = cell?;
+            let text = exact_str(&cell, "cell")?;
+            budget
+                .add_cell(&text)
+                .map_err(|error| rdocx_to_pyerr(py, error))?;
+            owned_row.push(text.into_owned());
+        }
+        budget
+            .end_record()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        owned_records.push(owned_row);
+    }
+    budget.finish().map_err(|error| rdocx_to_pyerr(py, error))?;
+    Ok(rdocx::MailMergePackageSource::Embedded {
+        columns: owned_columns,
+        records: owned_records,
+    })
+}
+
+fn copied_mappings(value: &Bound<'_, PyAny>) -> PyResult<Vec<rdocx::MailMergeFieldMapping>> {
+    require_carrier_sequence(value, "mappings")?;
+    let mut mappings = Vec::new();
+    for item in value.try_iter()? {
+        let item = item?;
+        let mapping = item.cast::<PyMailMergeFieldMapping>().map_err(|_| {
+            PyTypeError::new_err("mappings must be a sequence of MailMergeFieldMapping")
+        })?;
+        mappings.push(mapping.borrow().inner.clone());
+    }
+    Ok(mappings)
+}
+
+fn copied_recipients(value: &Bound<'_, PyAny>) -> PyResult<Vec<rdocx::MailMergeRecipient>> {
+    require_carrier_sequence(value, "recipients")?;
+    let mut recipients = Vec::new();
+    for item in value.try_iter()? {
+        let item = item?;
+        let recipient = item.cast::<PyMailMergeRecipient>().map_err(|_| {
+            PyTypeError::new_err("recipients must be a sequence of MailMergeRecipient")
+        })?;
+        recipients.push(recipient.borrow().inner.clone());
+    }
+    Ok(recipients)
+}
+
+fn copied_external_rows(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<BTreeMap<String, String>>> {
+    let mapping = py.import("collections.abc")?.getattr("Mapping")?;
+    let mut rows = Vec::new();
+    for item in value.try_iter()? {
+        let item = item?;
+        if item.is_instance_of::<PyString>() || !item.is_instance(&mapping)? {
+            return Err(PyTypeError::new_err(
+                "external record must be a mapping of str to str",
+            ));
+        }
+        let mut row = BTreeMap::new();
+        for pair in item.call_method0("items")?.try_iter()? {
+            let pair = pair?;
+            let pair = pair
+                .cast::<PyTuple>()
+                .map_err(|_| PyTypeError::new_err("external record items must be pairs"))?;
+            let key_item = pair.get_item(0)?;
+            let value_item = pair.get_item(1)?;
+            let key = exact_str(&key_item, "external record key")?;
+            let cell = exact_str(&value_item, "external record value")?;
+            row.insert(key.into_owned(), cell.into_owned());
+        }
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+fn string_tuple<'py>(py: Python<'py>, values: &[String]) -> PyResult<Bound<'py, PyTuple>> {
+    PyTuple::new(py, values.iter().map(String::as_str))
+}
+
+#[pyclass(frozen, name = "MailMergePackageSource")]
+pub(crate) struct PyMailMergePackageSource {
+    inner: rdocx::MailMergePackageSource,
+}
+
+#[pymethods]
+impl PyMailMergePackageSource {
+    #[staticmethod]
+    #[pyo3(signature = (columns, records), text_signature = "(columns, records)")]
+    fn embedded(
+        py: Python<'_>,
+        columns: &Bound<'_, PyAny>,
+        records: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: embedded_package_source(py, columns, records)?,
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (uri,), text_signature = "(uri)")]
+    fn external(py: Python<'_>, uri: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let uri = exact_str(uri, "uri")?;
+        rdocx::validate_mail_merge_external_uri(&uri).map_err(|error| rdocx_to_pyerr(py, error))?;
+        Ok(Self {
+            inner: rdocx::MailMergePackageSource::External {
+                uri: uri.into_owned(),
+            },
+        })
+    }
+
+    #[getter]
+    fn kind(&self) -> &'static str {
+        match self.inner {
+            rdocx::MailMergePackageSource::Embedded { .. } => "embedded",
+            rdocx::MailMergePackageSource::External { .. } => "external",
+        }
+    }
+
+    #[getter]
+    fn columns<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        match &self.inner {
+            rdocx::MailMergePackageSource::Embedded { columns, .. } => string_tuple(py, columns),
+            rdocx::MailMergePackageSource::External { .. } => Ok(PyTuple::empty(py)),
+        }
+    }
+
+    #[getter]
+    fn records<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        match &self.inner {
+            rdocx::MailMergePackageSource::Embedded { records, .. } => {
+                let mut rows = Vec::with_capacity(records.len());
+                for record in records {
+                    rows.push(string_tuple(py, record)?.into_any());
+                }
+                PyTuple::new(py, rows)
+            }
+            rdocx::MailMergePackageSource::External { .. } => Ok(PyTuple::empty(py)),
+        }
+    }
+
+    #[getter]
+    fn uri(&self) -> Option<&str> {
+        match &self.inner {
+            rdocx::MailMergePackageSource::External { uri } => Some(uri),
+            rdocx::MailMergePackageSource::Embedded { .. } => None,
+        }
+    }
+}
+
+#[pyclass(frozen, name = "MailMergeSettings")]
+pub(crate) struct PyMailMergeSettings {
+    inner: rdocx::MailMerge,
+}
+
+#[pymethods]
+impl PyMailMergeSettings {
+    #[new]
+    #[pyo3(
+        signature = (
+            *,
+            main_document_type = Some("formLetters"),
+            link_to_query = None,
+            data_type = Some("textFile"),
+            connect_string = None,
+            query = None,
+            do_not_suppress_blank_lines = None,
+            destination = None,
+            address_field_name = None,
+            mail_subject = None,
+            mail_as_attachment = None,
+            view_merged_data = None,
+            active_record = None,
+            check_errors = None,
+        ),
+        text_signature = "(*, main_document_type='formLetters', link_to_query=None, data_type='textFile', connect_string=None, query=None, do_not_suppress_blank_lines=None, destination=None, address_field_name=None, mail_subject=None, mail_as_attachment=None, view_merged_data=None, active_record=None, check_errors=None)"
+    )]
+    #[allow(clippy::too_many_arguments)] // The approved settings carrier keeps thirteen explicit operands.
+    fn new(
+        main_document_type: Option<&str>,
+        link_to_query: Option<&Bound<'_, PyAny>>,
+        data_type: Option<&str>,
+        connect_string: Option<&str>,
+        query: Option<&str>,
+        do_not_suppress_blank_lines: Option<&Bound<'_, PyAny>>,
+        destination: Option<&str>,
+        address_field_name: Option<&str>,
+        mail_subject: Option<&str>,
+        mail_as_attachment: Option<&Bound<'_, PyAny>>,
+        view_merged_data: Option<&Bound<'_, PyAny>>,
+        active_record: Option<&Bound<'_, PyAny>>,
+        check_errors: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: rdocx::MailMerge {
+                main_document_type: parse_main_document_type(main_document_type)?,
+                link_to_query: extract_optional_bool(link_to_query, "link_to_query")?,
+                data_type: data_type.map(str::to_owned),
+                connect_string: connect_string.map(str::to_owned),
+                query: query.map(str::to_owned),
+                do_not_suppress_blank_lines: extract_optional_bool(
+                    do_not_suppress_blank_lines,
+                    "do_not_suppress_blank_lines",
+                )?,
+                destination: parse_destination(destination)?,
+                address_field_name: address_field_name.map(str::to_owned),
+                mail_subject: mail_subject.map(str::to_owned),
+                mail_as_attachment: extract_optional_bool(
+                    mail_as_attachment,
+                    "mail_as_attachment",
+                )?,
+                view_merged_data: extract_optional_bool(view_merged_data, "view_merged_data")?,
+                active_record: extract_optional_i32(active_record, "active_record")?,
+                check_errors: extract_optional_i32(check_errors, "check_errors")?,
+            },
+        })
+    }
+
+    #[getter]
+    fn main_document_type(&self) -> Option<&'static str> {
+        self.inner.main_document_type.map(main_document_type_name)
+    }
+    #[getter]
+    fn link_to_query(&self) -> Option<bool> {
+        self.inner.link_to_query
+    }
+    #[getter]
+    fn data_type(&self) -> Option<&str> {
+        self.inner.data_type.as_deref()
+    }
+    #[getter]
+    fn connect_string(&self) -> Option<&str> {
+        self.inner.connect_string.as_deref()
+    }
+    #[getter]
+    fn query(&self) -> Option<&str> {
+        self.inner.query.as_deref()
+    }
+    #[getter]
+    fn do_not_suppress_blank_lines(&self) -> Option<bool> {
+        self.inner.do_not_suppress_blank_lines
+    }
+    #[getter]
+    fn destination(&self) -> Option<&'static str> {
+        self.inner.destination.map(destination_name)
+    }
+    #[getter]
+    fn address_field_name(&self) -> Option<&str> {
+        self.inner.address_field_name.as_deref()
+    }
+    #[getter]
+    fn mail_subject(&self) -> Option<&str> {
+        self.inner.mail_subject.as_deref()
+    }
+    #[getter]
+    fn mail_as_attachment(&self) -> Option<bool> {
+        self.inner.mail_as_attachment
+    }
+    #[getter]
+    fn view_merged_data(&self) -> Option<bool> {
+        self.inner.view_merged_data
+    }
+    #[getter]
+    fn active_record(&self) -> Option<i32> {
+        self.inner.active_record
+    }
+    #[getter]
+    fn check_errors(&self) -> Option<i32> {
+        self.inner.check_errors
+    }
+}
+
+#[pyclass(frozen, name = "MailMergeFieldMapping")]
+pub(crate) struct PyMailMergeFieldMapping {
+    inner: rdocx::MailMergeFieldMapping,
+}
+
+#[pymethods]
+impl PyMailMergeFieldMapping {
+    #[new]
+    #[pyo3(
+        signature = (column, source_name, mapped_name, *, language = None, dynamic_address = None),
+        text_signature = "(column, source_name, mapped_name, *, language=None, dynamic_address=None)"
+    )]
+    fn new(
+        column: &Bound<'_, PyAny>,
+        source_name: &Bound<'_, PyAny>,
+        mapped_name: &Bound<'_, PyAny>,
+        language: Option<&Bound<'_, PyAny>>,
+        dynamic_address: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: rdocx::MailMergeFieldMapping {
+                column: extract_u32_value(column, "column")?,
+                source_name: exact_str(source_name, "source_name")?.into_owned(),
+                mapped_name: exact_str(mapped_name, "mapped_name")?.into_owned(),
+                language: extract_optional_text(language, "language")?,
+                dynamic_address: extract_optional_bool(dynamic_address, "dynamic_address")?,
+            },
+        })
+    }
+
+    #[getter]
+    fn column(&self) -> u32 {
+        self.inner.column
+    }
+    #[getter]
+    fn source_name(&self) -> &str {
+        &self.inner.source_name
+    }
+    #[getter]
+    fn mapped_name(&self) -> &str {
+        &self.inner.mapped_name
+    }
+    #[getter]
+    fn language(&self) -> Option<&str> {
+        self.inner.language.as_deref()
+    }
+    #[getter]
+    fn dynamic_address(&self) -> Option<bool> {
+        self.inner.dynamic_address
+    }
+}
+
+#[pyclass(frozen, name = "MailMergeRecipient")]
+pub(crate) struct PyMailMergeRecipient {
+    inner: rdocx::MailMergeRecipient,
+}
+
+#[pymethods]
+impl PyMailMergeRecipient {
+    #[new]
+    #[pyo3(
+        signature = (column, unique_tag, *, active = true_py_bool()),
+        text_signature = "(column, unique_tag, *, active=True)"
+    )]
+    fn new(
+        column: &Bound<'_, PyAny>,
+        unique_tag: &Bound<'_, PyAny>,
+        active: Py<PyAny>,
+    ) -> PyResult<Self> {
+        let py = unique_tag.py();
+        if !unique_tag.is_exact_instance_of::<PyBytes>() {
+            return Err(PyTypeError::new_err("unique_tag must be bytes"));
+        }
+        Ok(Self {
+            inner: rdocx::MailMergeRecipient {
+                column: extract_u32_value(column, "column")?,
+                unique_tag: unique_tag
+                    .cast::<PyBytes>()
+                    .map_err(|_| PyTypeError::new_err("unique_tag must be bytes"))?
+                    .as_bytes()
+                    .to_vec(),
+                active: extract_strict_bool(active.bind(py), "active")?,
+            },
+        })
+    }
+
+    #[getter]
+    fn column(&self) -> u32 {
+        self.inner.column
+    }
+    #[getter]
+    fn unique_tag<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.inner.unique_tag)
+    }
+    #[getter]
+    fn active(&self) -> bool {
+        self.inner.active
+    }
+}
+
+#[pyclass(frozen, name = "MailMergePackageOptions")]
+pub(crate) struct PyMailMergePackageOptions {
+    inner: rdocx::MailMergePackageOptions,
+}
+
+#[pymethods]
+impl PyMailMergePackageOptions {
+    #[new]
+    #[pyo3(
+        signature = (source, *, settings = None, mappings = empty_py_tuple(), recipients = empty_py_tuple()),
+        text_signature = "(source, *, settings=None, mappings=(), recipients=())"
+    )]
+    fn new(
+        source: &Bound<'_, PyMailMergePackageSource>,
+        settings: Option<&Bound<'_, PyMailMergeSettings>>,
+        mappings: Py<PyAny>,
+        recipients: Py<PyAny>,
+    ) -> PyResult<Self> {
+        let py = source.py();
+        Ok(Self {
+            inner: rdocx::MailMergePackageOptions {
+                source: source.borrow().inner.clone(),
+                settings: settings
+                    .map(|settings| settings.borrow().inner.clone())
+                    .unwrap_or_else(default_mail_merge_settings),
+                mappings: copied_mappings(mappings.bind(py))?,
+                recipients: copied_recipients(recipients.bind(py))?,
+            },
+        })
+    }
+
+    #[getter]
+    fn source(&self) -> PyMailMergePackageSource {
+        PyMailMergePackageSource {
+            inner: self.inner.source.clone(),
+        }
+    }
+
+    #[getter]
+    fn settings(&self) -> PyMailMergeSettings {
+        PyMailMergeSettings {
+            inner: self.inner.settings.clone(),
+        }
+    }
+
+    #[getter]
+    fn mappings<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let mut items = Vec::with_capacity(self.inner.mappings.len());
+        for mapping in &self.inner.mappings {
+            items.push(
+                PyMailMergeFieldMapping {
+                    inner: mapping.clone(),
+                }
+                .into_pyobject(py)?,
+            );
+        }
+        PyTuple::new(py, items)
+    }
+
+    #[getter]
+    fn recipients<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let mut items = Vec::with_capacity(self.inner.recipients.len());
+        for recipient in &self.inner.recipients {
+            items.push(
+                PyMailMergeRecipient {
+                    inner: recipient.clone(),
+                }
+                .into_pyobject(py)?,
+            );
+        }
+        PyTuple::new(py, items)
+    }
+}
+
+#[pyclass(frozen, name = "MailMergePackageDiagnostic")]
+pub(crate) struct PyMailMergePackageDiagnostic {
+    inner: rdocx::MailMergePackageDiagnostic,
+}
+
+#[pymethods]
+impl PyMailMergePackageDiagnostic {
+    #[getter]
+    fn kind(&self) -> &'static str {
+        match self.inner.kind {
+            rdocx::MailMergePackageDiagnosticKind::ExternalSourceBlocked => {
+                "external_source_blocked"
+            }
+            rdocx::MailMergePackageDiagnosticKind::ExternalSourceUnavailable => {
+                "external_source_unavailable"
+            }
+            rdocx::MailMergePackageDiagnosticKind::UnsupportedSource => "unsupported_source",
+        }
+    }
+
+    #[getter]
+    fn message(&self) -> &str {
+        &self.inner.message
+    }
+}
+
+#[pyclass(frozen, name = "MailMergePreparedData")]
+pub(crate) struct PyMailMergePreparedData {
+    inner: rdocx::MailMergePreparedData,
+}
+
+#[pymethods]
+impl PyMailMergePreparedData {
+    #[getter]
+    fn records<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let mut items = Vec::with_capacity(self.inner.records.len());
+        for record in &self.inner.records {
+            let dict = PyDict::new(py);
+            for (key, value) in record {
+                dict.set_item(key, value)?;
+            }
+            items.push(dict.into_any());
+        }
+        PyTuple::new(py, items)
+    }
+
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let mut items = Vec::with_capacity(self.inner.diagnostics.len());
+        for diagnostic in &self.inner.diagnostics {
+            items.push(
+                PyMailMergePackageDiagnostic {
+                    inner: diagnostic.clone(),
+                }
+                .into_pyobject(py)?,
+            );
+        }
+        PyTuple::new(py, items)
+    }
+}
+
 fn require_carrier_sequence(value: &Bound<'_, PyAny>, label: &str) -> PyResult<()> {
     let abc = value.py().import("collections.abc")?;
     if value.is_instance_of::<PyString>()
@@ -15265,6 +15951,76 @@ impl PyDocument {
             .set_save_subset_fonts(value)
             .map_err(|e| rdocx_to_pyerr(py, e))?;
         self.publish_api_candidate(py, candidate, "Document.set_save_subset_fonts")
+    }
+
+    fn set_mail_merge_package(
+        &mut self,
+        py: Python<'_>,
+        options: &Bound<'_, PyMailMergePackageOptions>,
+    ) -> PyResult<()> {
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .set_mail_merge_package(options.borrow().inner.clone())
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.publish_api_candidate(py, candidate, "Document.set_mail_merge_package")
+    }
+
+    fn mail_merge_package(&self, py: Python<'_>) -> PyResult<Option<PyMailMergePackageOptions>> {
+        Ok(self
+            .inner
+            .mail_merge_package()
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .map(|inner| PyMailMergePackageOptions { inner }))
+    }
+
+    fn remove_mail_merge_package(&mut self, py: Python<'_>) -> PyResult<bool> {
+        let mut candidate = self.inner.clone_for_staging();
+        let removed = candidate
+            .remove_mail_merge_package()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.publish_api_candidate(py, candidate, "Document.remove_mail_merge_package")?;
+        Ok(removed)
+    }
+
+    #[pyo3(
+        signature = (*, policy = "offline", external_records = None),
+        text_signature = "($self, *, policy='offline', external_records=None)"
+    )]
+    fn prepare_mail_merge_data(
+        &self,
+        py: Python<'_>,
+        policy: &str,
+        external_records: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<PyMailMergePreparedData> {
+        let native_policy = match policy {
+            "offline" => rdocx::MailMergeSourcePolicy::Offline,
+            "caller_supplied" => rdocx::MailMergeSourcePolicy::CallerSupplied,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "policy must be 'offline' or 'caller_supplied'",
+                ));
+            }
+        };
+        let prepared = if let Some(external_records) = external_records {
+            require_carrier_sequence(external_records, "external_records")?;
+            let probe = self
+                .inner
+                .prepare_mail_merge_data(native_policy, Some(&[]))
+                .map_err(|error| rdocx_to_pyerr(py, error))?;
+            if !probe.diagnostics.is_empty() {
+                probe
+            } else {
+                let rows = copied_external_rows(py, external_records)?;
+                self.inner
+                    .prepare_mail_merge_data(native_policy, Some(&rows))
+                    .map_err(|error| rdocx_to_pyerr(py, error))?
+            }
+        } else {
+            self.inner
+                .prepare_mail_merge_data(native_policy, None)
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+        };
+        Ok(PyMailMergePreparedData { inner: prepared })
     }
 }
 

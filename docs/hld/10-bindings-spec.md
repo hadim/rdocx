@@ -2545,6 +2545,25 @@ kinds, dimensions, XML text, fragments, relationships, or callback results fail
 atomically. These types and methods are additive native Rust APIs. The flat
 methods and Python, WASM, and CLI surfaces remain unchanged.
 
+Native Word and Python also author the mail-merge package without running a
+merge. `set_mail_merge_package`, `mail_merge_package`,
+`remove_mail_merge_package`, and `prepare_mail_merge_data` are the only new
+methods. Rust carriers are owned mutable inputs and read copies. The seven
+Python classes stay frozen. Python copies sequences and returns fresh record
+dictionaries, and those dictionaries remain mutable copies. Settings keep the
+existing thirteen-member graph. The writer emits exactly thirty canonical
+`fieldMapData` slots, including null padding. A query omits null slots and
+reads the occupied slots back in canonical role order. `data_type` stays a
+string, so an imported value wider than the authoring vocabulary still reads
+back. Prepare accepts `offline` or `caller_supplied`. Offline with supplied
+rows is an error. An absent owned package or a missing required source is an
+error. A faithful external source with no caller records is Unavailable.
+Offline on that source is Blocked and takes precedence. An unsupported alias,
+a recipient filter, or `data_type` `native` returns a diagnostic and no
+invented rows. Ambiguous ownership is an error and is not a diagnostic.
+Python, like Rust, does not fetch the declared source. WASM and CLI gain no
+package method. This is not a Word execution pass.
+
 Template occurrence staging uses the existing accepted-run mapper through the
 doc-hidden `replace_prepared_occurrences(&mut CT_P,
 &[(usize, Range<usize>, String, Option<CT_RPr>)]) -> Result<()>` provider.

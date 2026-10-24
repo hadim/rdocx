@@ -1,7 +1,7 @@
 //! Integration tests for rdocx — end-to-end document creation and round-trip.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
@@ -15,7 +15,12 @@ use rdocx::{
     RunPosition, RunRange, SectionBreak, StoryItemKind, StoryKind, StyleBuilder, TabAlignment,
     TabLeader, TableStyleRegion, UnderlineStyle,
 };
-use rdocx::{Document, PackageReadLimits, RevisionKind, WordCreationProfile, WordPackageClass};
+use rdocx::{
+    Document, MailMerge, MailMergeDocumentType, MailMergeFieldMapping,
+    MailMergePackageDiagnosticKind, MailMergePackageOptions, MailMergePackageSource,
+    MailMergeRecipient, MailMergeSourcePolicy, PackageReadLimits, RevisionKind,
+    WordCreationProfile, WordPackageClass,
+};
 use rdocx_oxml::CT_BorderEdge;
 use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrType};
 use rdocx_oxml::properties::{CT_PPr, CT_RPr, CT_Shd};
@@ -33161,4 +33166,2637 @@ fn assert_review3_courier_fonts(xml: &str, word: &str) {
             "{local} unqualified {bindings:?} {xml}"
         );
     }
+}
+
+const F290_MAIL_MERGE_SOURCE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/mailMergeSource";
+const F290_RECIPIENT_DATA: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/recipientData";
+const F290_WORD_ROLES: [&str; 30] = [
+    "Unique",
+    "CourtesyTitle",
+    "FirstName",
+    "MiddleName",
+    "LastName",
+    "Suffix",
+    "Nickname",
+    "JobTitle",
+    "Company",
+    "Address1",
+    "Address2",
+    "City",
+    "State",
+    "PostalCode",
+    "CountryorRegion",
+    "BusinessPhone",
+    "BusinessFax",
+    "HomePhone",
+    "HomeFax",
+    "EmailAddress",
+    "WebPage",
+    "SpouseCourtesyTitle",
+    "SpouseFirstName",
+    "SpouseMiddleName",
+    "SpouseLastName",
+    "SpouseNickname",
+    "RubyFirstName",
+    "RubyLastName",
+    "Address3",
+    "Department",
+];
+
+fn f290_declared_settings() -> MailMerge {
+    MailMerge {
+        main_document_type: Some(MailMergeDocumentType::FormLetters),
+        data_type: Some("textFile".to_owned()),
+        ..MailMerge::default()
+    }
+}
+
+fn f290_mapping(column: u32, source_name: &str, mapped_name: &str) -> MailMergeFieldMapping {
+    MailMergeFieldMapping {
+        column,
+        source_name: source_name.to_owned(),
+        mapped_name: mapped_name.to_owned(),
+        language: None,
+        dynamic_address: None,
+    }
+}
+
+fn f290_recipient(column: u32, tag: &[u8], active: bool) -> MailMergeRecipient {
+    MailMergeRecipient {
+        column,
+        unique_tag: tag.to_vec(),
+        active,
+    }
+}
+
+fn f290_options(
+    source: MailMergePackageSource,
+    mappings: Vec<MailMergeFieldMapping>,
+    recipients: Vec<MailMergeRecipient>,
+) -> MailMergePackageOptions {
+    MailMergePackageOptions {
+        settings: f290_declared_settings(),
+        source,
+        mappings,
+        recipients,
+    }
+}
+
+fn f290_row(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .collect()
+}
+
+fn f290_reopen(document: &mut Document) -> Document {
+    Document::from_bytes(&document.to_bytes().unwrap()).unwrap()
+}
+
+fn f290_settings_owned(document: &mut Document, rel_type: &str) -> bool {
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    package
+        .get_part_rels("/word/settings.xml")
+        .is_some_and(|rels| rels.items.iter().any(|item| item.rel_type == rel_type))
+}
+
+fn f290_main_owns(document: &mut Document, rel_type: &str) -> bool {
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    package
+        .get_part_rels("/word/document.xml")
+        .is_some_and(|rels| rels.items.iter().any(|item| item.rel_type == rel_type))
+}
+
+fn f290_part_inventory(document: &mut Document) -> BTreeMap<String, Vec<u8>> {
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    package
+        .parts
+        .iter()
+        .map(|(name, bytes)| (name.clone(), bytes.as_ref().clone()))
+        .collect()
+}
+
+fn f290_exact_parts(
+    inventory: &BTreeMap<String, Vec<u8>>,
+    needle: &[u8],
+) -> BTreeMap<String, Vec<u8>> {
+    inventory
+        .iter()
+        .filter(|(_, bytes)| bytes.as_slice() == needle)
+        .map(|(name, bytes)| (name.clone(), bytes.clone()))
+        .collect()
+}
+
+fn f290_parts_containing(
+    inventory: &BTreeMap<String, Vec<u8>>,
+    needle: &[u8],
+) -> BTreeMap<String, Vec<u8>> {
+    inventory
+        .iter()
+        .filter(|(_, bytes)| bytes.windows(needle.len()).any(|window| window == needle))
+        .map(|(name, bytes)| (name.clone(), bytes.clone()))
+        .collect()
+}
+
+fn f290_package_bytes(package: &OpcPackage) -> Vec<u8> {
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    output.into_inner()
+}
+
+fn f290_alternate_package(body: &[u8]) -> Document {
+    let mut document = Document::new();
+    document
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/alternate.csv".to_owned(),
+            },
+            Vec::new(),
+            vec![f290_recipient(0, b"tag", true)],
+        ))
+        .expect("standard recipient before alternate swap");
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let part = package
+        .parts
+        .keys()
+        .find(|name| name.contains("recipient"))
+        .cloned()
+        .expect("recipient part");
+    package.set_part(&part, body.to_vec());
+    package
+        .content_types
+        .add_override(&part, "application/vnd.ms-word.mailMergeRecipientData+xml");
+    Document::from_bytes(&f290_package_bytes(&package)).expect("alternate package")
+}
+
+fn f290_plant_settings(settings_xml: &str, rels: &[(&str, &str)]) -> Document {
+    let mut document = Document::new();
+    document
+        .set_mail_merge_settings(f290_declared_settings())
+        .unwrap();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    package.set_part("/word/settings.xml", settings_xml.as_bytes().to_vec());
+    for (id, target) in rels {
+        let relationships = package.get_or_create_part_rels("/word/settings.xml");
+        relationships.add_with_id(id, F290_MAIL_MERGE_SOURCE, target);
+        relationships
+            .items
+            .last_mut()
+            .expect("planted relationship")
+            .target_mode = Some("External".to_owned());
+    }
+    Document::from_bytes(&f290_package_bytes(&package)).expect("planted settings reopen")
+}
+
+fn f290_expect_contains<T: std::fmt::Debug>(
+    failures: &mut Vec<String>,
+    label: &str,
+    result: Result<T, impl std::fmt::Display>,
+    needle: &str,
+) {
+    match result {
+        Err(error) if error.to_string().contains(needle) => {}
+        Err(error) => failures.push(format!("{label} error {error} missing {needle}")),
+        Ok(value) => failures.push(format!("{label} returned {value:?}")),
+    }
+}
+
+fn f290_expect_source_gap(failures: &mut Vec<String>, label: &str, document: &Document) {
+    f290_expect_contains(failures, label, document.mail_merge_package(), "source");
+    match document.prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None) {
+        Err(error) if error.to_string().contains("absent") => {
+            failures.push(format!("{label} prepare called the package absent"))
+        }
+        Err(_) => {}
+        Ok(value) => failures.push(format!("{label} prepare returned {value:?}")),
+    }
+}
+
+fn f290_externalize_settings(mut document: Document) -> Document {
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let main = package.main_document_part().expect("main document");
+    package
+        .get_part_rels_mut(&main)
+        .expect("document relationships")
+        .items
+        .iter_mut()
+        .filter(|item| item.rel_type.ends_with("/settings"))
+        .for_each(|item| item.target_mode = Some("External".to_owned()));
+    Document::from_bytes(&f290_package_bytes(&package)).expect("external settings owner")
+}
+
+fn f290_settings_xml(document: &mut Document) -> Vec<u8> {
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    package.get_part("/word/settings.xml").unwrap().to_vec()
+}
+
+fn f290_relative_target(from_part: &str, to_part: &str) -> String {
+    let from_dir: Vec<&str> = from_part
+        .trim_matches('/')
+        .rsplit_once('/')
+        .map(|(dir, _)| {
+            dir.split('/')
+                .filter(|segment| !segment.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut to_parts: Vec<&str> = to_part
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let file = to_parts.pop().expect("relationship target file");
+    let mut shared = 0;
+    while shared < from_dir.len() && shared < to_parts.len() && from_dir[shared] == to_parts[shared]
+    {
+        shared += 1;
+    }
+    let mut target = String::new();
+    for _ in shared..from_dir.len() {
+        target.push_str("../");
+    }
+    for part in &to_parts[shared..] {
+        target.push_str(part);
+        target.push('/');
+    }
+    target.push_str(file);
+    target
+}
+
+fn f290_relocate_merge_parts(bytes: &[u8]) -> Vec<u8> {
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let doc_part = package.main_document_part().expect("main document");
+    let settings_target = package
+        .get_part_rels(&doc_part)
+        .expect("document relationships")
+        .items
+        .iter()
+        .find(|item| {
+            item.target_mode.as_deref() != Some("External")
+                && package
+                    .get_part(&OpcPackage::resolve_rel_target(&doc_part, &item.target))
+                    .is_some_and(|body| {
+                        body.windows(b"mailMerge".len())
+                            .any(|window| window == b"mailMerge")
+                    })
+        })
+        .expect("settings owner")
+        .target
+        .clone();
+    let old_settings = OpcPackage::resolve_rel_target(&doc_part, &settings_target);
+    let new_settings = "/custom/merge-owner.xml";
+    let settings_body = package
+        .get_part(&old_settings)
+        .expect("settings part")
+        .to_vec();
+    let settings_type = package
+        .content_types
+        .override_for(&old_settings)
+        .map(str::to_owned);
+    let mut settings_rels = package
+        .remove_part_rels(&old_settings)
+        .expect("settings relationships");
+    package.remove_part(&old_settings);
+    if let Some(content_type) = settings_type {
+        package.content_types.remove_override(&old_settings);
+        package
+            .content_types
+            .add_override(new_settings, &content_type);
+    }
+    package.set_part(new_settings, settings_body);
+    let recipient_index = settings_rels
+        .items
+        .iter()
+        .position(|item| item.rel_type == F290_RECIPIENT_DATA)
+        .expect("recipient edge");
+    let old_recipient =
+        OpcPackage::resolve_rel_target(&old_settings, &settings_rels.items[recipient_index].target);
+    let recipient_body = package
+        .get_part(&old_recipient)
+        .expect("recipient part")
+        .to_vec();
+    let recipient_type = package
+        .content_types
+        .remove_override(&old_recipient)
+        .expect("recipient content type");
+    package.remove_part(&old_recipient);
+    package.remove_part_rels(&old_recipient);
+    let new_recipient = "/custom/rows/people.xml";
+    package.set_part(new_recipient, recipient_body);
+    package
+        .content_types
+        .add_override(new_recipient, &recipient_type);
+    settings_rels.items[recipient_index].target = f290_relative_target(new_settings, new_recipient);
+    package.set_part_rels(new_settings, settings_rels);
+    package
+        .get_part_rels_mut(&doc_part)
+        .expect("document relationships")
+        .items
+        .iter_mut()
+        .find(|item| item.target == settings_target)
+        .expect("settings edge")
+        .target = f290_relative_target(&doc_part, new_settings);
+    f290_package_bytes(&package)
+}
+
+#[test]
+fn authored_mail_merge_package_retains_source_mappings_and_recipients() {
+    let source = MailMergePackageSource::External {
+        uri: "file:///declared/people.csv".to_owned(),
+    };
+    let mappings = vec![
+        f290_mapping(1, "Given", "FirstName"),
+        f290_mapping(0, "Family", "LastName"),
+    ];
+    let recipients = vec![
+        f290_recipient(0, b"tag-a", true),
+        f290_recipient(1, b"tag-b", false),
+    ];
+    let mut document = Document::new();
+    document
+        .set_mail_merge_package(f290_options(source, mappings.clone(), recipients.clone()))
+        .expect("authored external package");
+    let mut reopened = f290_reopen(&mut document);
+    let snapshot = reopened
+        .mail_merge_package()
+        .expect("read package")
+        .expect("recognized owned configuration");
+    assert_eq!(
+        snapshot.source,
+        MailMergePackageSource::External {
+            uri: "file:///declared/people.csv".to_owned(),
+        }
+    );
+    assert_eq!(
+        snapshot.settings.main_document_type,
+        Some(MailMergeDocumentType::FormLetters)
+    );
+    assert_eq!(snapshot.settings.data_type.as_deref(), Some("textFile"));
+    assert_eq!(
+        snapshot
+            .mappings
+            .iter()
+            .map(|item| item.mapped_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["FirstName", "LastName"]
+    );
+    assert_eq!(snapshot.recipients, recipients);
+    assert!(f290_settings_owned(&mut reopened, F290_MAIL_MERGE_SOURCE));
+    assert!(f290_settings_owned(&mut reopened, F290_RECIPIENT_DATA));
+    assert!(!f290_main_owns(&mut reopened, F290_MAIL_MERGE_SOURCE));
+    assert!(!f290_main_owns(&mut reopened, F290_RECIPIENT_DATA));
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap())).unwrap();
+    let source_rel = package
+        .get_part_rels("/word/settings.xml")
+        .unwrap()
+        .items
+        .iter()
+        .find(|item| item.rel_type == F290_MAIL_MERGE_SOURCE)
+        .unwrap();
+    assert_eq!(source_rel.target, "file:///declared/people.csv");
+    assert_eq!(source_rel.target_mode.as_deref(), Some("External"));
+
+    let relocated = f290_relocate_merge_parts(&reopened.to_bytes().unwrap());
+    let mut moved = Document::from_bytes(&relocated).expect("relocated package");
+    let moved_snapshot = moved
+        .mail_merge_package()
+        .expect("read relocated package")
+        .expect("relocated configuration");
+    assert_eq!(moved_snapshot.source, snapshot.source);
+    assert_eq!(moved_snapshot.recipients, recipients);
+    let moved_package =
+        OpcPackage::from_reader(std::io::Cursor::new(moved.to_bytes().unwrap())).unwrap();
+    let moved_doc = moved_package.main_document_part().expect("moved main");
+    let moved_settings = OpcPackage::resolve_rel_target(
+        &moved_doc,
+        &moved_package
+            .get_part_rels(&moved_doc)
+            .expect("moved document relationships")
+            .items
+            .iter()
+            .find(|item| {
+                item.target_mode.as_deref() != Some("External")
+                    && OpcPackage::resolve_rel_target(&moved_doc, &item.target)
+                        .contains("merge-owner")
+            })
+            .expect("relocated settings edge")
+            .target,
+    );
+    assert!(moved_settings.contains("merge-owner"));
+    assert!(!moved_settings.contains("/word/"));
+    let owner_rels = moved_package
+        .get_part_rels(&moved_settings)
+        .expect("owner relationships");
+    let moved_source = owner_rels
+        .items
+        .iter()
+        .find(|item| item.rel_type == F290_MAIL_MERGE_SOURCE)
+        .expect("owner source");
+    assert_eq!(moved_source.target_mode.as_deref(), Some("External"));
+    let moved_recipient = owner_rels
+        .items
+        .iter()
+        .find(|item| item.rel_type == F290_RECIPIENT_DATA)
+        .expect("owner recipient");
+    assert_ne!(moved_recipient.target_mode.as_deref(), Some("External"));
+    let recipient_part = OpcPackage::resolve_rel_target(&moved_settings, &moved_recipient.target);
+    assert!(recipient_part.contains("people.xml"));
+    assert!(!recipient_part.contains("/word/"));
+    assert!(
+        !moved_package
+            .get_part_rels(&moved_doc)
+            .expect("main edges")
+            .items
+            .iter()
+            .any(|item| item.rel_type == F290_MAIL_MERGE_SOURCE
+                || item.rel_type == F290_RECIPIENT_DATA)
+    );
+    moved
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/moved.csv".to_owned(),
+            },
+            mappings,
+            vec![f290_recipient(2, b"tag-c", true)],
+        ))
+        .expect("update relocated package");
+    let mut updated = f290_reopen(&mut moved);
+    let updated_snapshot = updated
+        .mail_merge_package()
+        .expect("read updated package")
+        .expect("updated configuration");
+    assert_eq!(
+        updated_snapshot.source,
+        MailMergePackageSource::External {
+            uri: "file:///declared/moved.csv".to_owned(),
+        }
+    );
+    assert_eq!(
+        updated_snapshot.recipients,
+        vec![f290_recipient(2, b"tag-c", true)]
+    );
+    let updated_package =
+        OpcPackage::from_reader(std::io::Cursor::new(updated.to_bytes().unwrap())).unwrap();
+    assert!(updated_package.get_part(&moved_settings).is_some());
+    assert!(updated_package.get_part(&recipient_part).is_some());
+}
+
+#[test]
+fn embedded_merge_records_round_trip_without_external_access() {
+    let mut document = Document::new();
+    let before = document.to_bytes().unwrap();
+    let refused = document.set_mail_merge_package(f290_options(
+        MailMergePackageSource::Embedded {
+            columns: Vec::new(),
+            records: Vec::new(),
+        },
+        Vec::new(),
+        Vec::new(),
+    ));
+    assert!(refused.is_err(), "zero columns refuse");
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    document
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["a".to_owned(), "b".to_owned()],
+                records: vec![
+                    vec!["x".to_owned(), String::new()],
+                    vec!["&".to_owned(), "<".to_owned()],
+                ],
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .expect("authored embedded table");
+    let mut reopened = f290_reopen(&mut document);
+    let snapshot = reopened
+        .mail_merge_package()
+        .expect("read embedded")
+        .expect("embedded configuration");
+    match snapshot.source {
+        MailMergePackageSource::Embedded { columns, records } => {
+            assert_eq!(columns, vec!["a".to_owned(), "b".to_owned()]);
+            assert_eq!(
+                records,
+                vec![
+                    vec!["x".to_owned(), String::new()],
+                    vec!["&".to_owned(), "<".to_owned()],
+                ]
+            );
+        }
+        MailMergePackageSource::External { uri } => {
+            panic!("embedded table became external {uri}")
+        }
+    }
+    assert!(snapshot.mappings.is_empty());
+    assert!(snapshot.recipients.is_empty());
+    let prepared = reopened
+        .prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None)
+        .expect("offline embedded rows");
+    assert!(prepared.diagnostics.is_empty());
+    assert_eq!(
+        prepared.records,
+        vec![
+            f290_row(&[("a", "x"), ("b", "")]),
+            f290_row(&[("a", "&"), ("b", "<")])
+        ]
+    );
+    assert!(!f290_settings_owned(&mut reopened, F290_MAIL_MERGE_SOURCE));
+
+    let mut empty = Document::new();
+    empty
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["a".to_owned()],
+                records: Vec::new(),
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .expect("zero rows");
+    let prepared = f290_reopen(&mut empty)
+        .prepare_mail_merge_data(MailMergeSourcePolicy::default(), None)
+        .expect("zero-row prepare");
+    assert!(prepared.records.is_empty());
+    assert!(prepared.diagnostics.is_empty());
+
+    let mut bound = Document::new();
+    bound
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["a".to_owned()],
+                records: vec![vec!["old".to_owned()]],
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .expect("bound baseline");
+    let old_guid = bound
+        .document_variable("rdocx.mailMerge.storeItemId")
+        .expect("owned store guid")
+        .to_owned();
+    let story = body_story(&bound);
+    insert_form_control(
+        &mut bound,
+        &story,
+        rdocx_oxml::content_control::SdtType::PlainText,
+        "merge-bound",
+    );
+    let location = control_by_tag(&bound, "merge-bound");
+    bound
+        .set_content_control_binding(
+            &location,
+            &old_guid,
+            "/m:mergeData/m:records/m:record/m:cell",
+            Some("xmlns:m='urn:rdocx:mail-merge-data:v1'"),
+        )
+        .expect("bind old store");
+    bound
+        .set_content_control_value_by_tag("merge-bound", "old")
+        .expect("display matches bound cell");
+    let before = f290_part_inventory(&mut bound);
+    let old_store: Vec<_> = before
+        .iter()
+        .filter(|(_, bytes)| {
+            bytes
+                .windows(b"<cell>old</cell>".len())
+                .any(|window| window == b"<cell>old</cell>")
+        })
+        .map(|(name, bytes)| (name.clone(), bytes.clone()))
+        .collect();
+    assert_eq!(old_store.len(), 1, "one owned store part");
+    let binding_parts = f290_parts_containing(&before, old_guid.as_bytes());
+    assert!(
+        binding_parts.values().any(|bytes| {
+            bytes
+                .windows(b"dataBinding".len())
+                .any(|window| window == b"dataBinding")
+        }),
+        "binding xml keeps the old guid"
+    );
+    bound
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["a".to_owned()],
+                records: vec![vec!["new".to_owned()]],
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .expect("copy on write when the store is bound");
+    let new_guid = bound
+        .document_variable("rdocx.mailMerge.storeItemId")
+        .expect("new store guid")
+        .to_owned();
+    assert_ne!(new_guid, old_guid);
+    let after = f290_part_inventory(&mut bound);
+    assert_eq!(
+        after.get(&old_store[0].0).map(Vec::as_slice),
+        Some(old_store[0].1.as_slice()),
+        "old store bytes stay"
+    );
+    let binding_after = f290_parts_containing(&after, old_guid.as_bytes());
+    assert!(
+        binding_after.values().any(|bytes| {
+            bytes
+                .windows(b"dataBinding".len())
+                .any(|window| window == b"dataBinding")
+        }),
+        "binding still names the old guid"
+    );
+    assert_eq!(
+        bound.content_controls_by_tag("merge-bound")[0].text(),
+        "old"
+    );
+    let snapshot = bound
+        .mail_merge_package()
+        .expect("query new rows")
+        .expect("package");
+    match snapshot.source {
+        MailMergePackageSource::Embedded { records, .. } => {
+            assert_eq!(records, vec![vec!["new".to_owned()]]);
+        }
+        MailMergePackageSource::External { uri } => panic!("embedded became external {uri}"),
+    }
+    let mut reopened = f290_reopen(&mut bound);
+    assert_eq!(
+        reopened.document_variable("rdocx.mailMerge.storeItemId"),
+        Some(new_guid.as_str())
+    );
+    assert_eq!(
+        reopened.content_controls_by_tag("merge-bound")[0].text(),
+        "old"
+    );
+    let reopened_parts = f290_part_inventory(&mut reopened);
+    assert_eq!(
+        reopened_parts.get(&old_store[0].0).map(Vec::as_slice),
+        Some(old_store[0].1.as_slice())
+    );
+
+    let png: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x60,
+        0xf8, 0xcf, 0xf0, 0x00, 0x00, 0x04, 0x01, 0x01, 0x08, 0x9d, 0x1d, 0xe1, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82, b'<', b'w', b':', b'n', b'o', b't',
+    ];
+    let mut pictured = Document::new();
+    pictured
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["a".to_owned()],
+                records: vec![vec!["old".to_owned()]],
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .expect("embedded package beside media");
+    pictured.add_picture(png, "pixel.png", Length::pt(1.0), Length::pt(1.0));
+    let pictured_before = f290_part_inventory(&mut pictured);
+    let media: Vec<_> = pictured_before
+        .iter()
+        .filter(|(_, bytes)| bytes.as_slice() == png)
+        .map(|(name, bytes)| (name.clone(), bytes.clone()))
+        .collect();
+    assert_eq!(media.len(), 1, "png bytes are one part");
+    pictured
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["a".to_owned()],
+                records: vec![vec!["new".to_owned()]],
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .expect("binary media does not fail the binding scan");
+    let pictured_after = f290_part_inventory(&mut pictured);
+    assert_eq!(
+        pictured_after.get(&media[0].0).map(Vec::as_slice),
+        Some(png),
+        "png bytes stay exact"
+    );
+}
+
+#[test]
+fn offline_merge_sources_return_explicit_diagnostics() {
+    let mut embedded = Document::new();
+    embedded
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["a".to_owned()],
+                records: Vec::new(),
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .expect("clean embedded zero-row package");
+    let smuggled = vec![f290_row(&[("a", "hidden")])];
+    let offline_rows =
+        embedded.prepare_mail_merge_data(MailMergeSourcePolicy::Offline, Some(smuggled.as_slice()));
+    assert!(offline_rows.is_err(), "offline plus rows is Err");
+    let embedded_rows = embedded.prepare_mail_merge_data(
+        MailMergeSourcePolicy::CallerSupplied,
+        Some(smuggled.as_slice()),
+    );
+    assert!(embedded_rows.is_err(), "embedded plus rows is Err");
+    let clean = embedded
+        .prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None)
+        .expect("clean zero rows");
+    assert!(clean.records.is_empty());
+    assert!(clean.diagnostics.is_empty());
+
+    let mut plain = Document::new();
+    plain
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "https://declared.example/people.csv".to_owned(),
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .expect("plain external declaration");
+    let blocked = plain
+        .prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None)
+        .expect("offline external");
+    assert!(blocked.records.is_empty());
+    assert_eq!(blocked.diagnostics.len(), 1, "{:?}", blocked.diagnostics);
+    assert_eq!(
+        blocked.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::ExternalSourceBlocked
+    );
+    assert!(!blocked.diagnostics[0].message.contains("declared.example"));
+    let unavailable = plain
+        .prepare_mail_merge_data(MailMergeSourcePolicy::CallerSupplied, None)
+        .expect("caller supplied none");
+    assert!(unavailable.records.is_empty());
+    assert_eq!(
+        unavailable.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::ExternalSourceUnavailable
+    );
+    let empty_supplied = plain
+        .prepare_mail_merge_data(MailMergeSourcePolicy::CallerSupplied, Some(&[]))
+        .expect("empty caller rows");
+    assert!(empty_supplied.records.is_empty());
+    assert!(empty_supplied.diagnostics.is_empty());
+    let faithful = vec![f290_row(&[("a", "x"), ("b", "")])];
+    let copied = plain
+        .prepare_mail_merge_data(
+            MailMergeSourcePolicy::CallerSupplied,
+            Some(faithful.as_slice()),
+        )
+        .expect("faithful raw rows");
+    assert!(copied.diagnostics.is_empty());
+    assert_eq!(copied.records, faithful);
+    let plain_meta = plain
+        .mail_merge_package()
+        .expect("plain metadata")
+        .expect("plain package");
+    assert_eq!(
+        plain_meta.source,
+        MailMergePackageSource::External {
+            uri: "https://declared.example/people.csv".to_owned(),
+        }
+    );
+    assert!(plain_meta.mappings.is_empty());
+    assert!(plain_meta.recipients.is_empty());
+
+    let mut filtered = Document::new();
+    filtered
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/filtered.csv".to_owned(),
+            },
+            vec![f290_mapping(0, "Family", "LastName")],
+            Vec::new(),
+        ))
+        .expect("mapped declaration");
+    let blocked_first = filtered
+        .prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None)
+        .expect("offline still blocks an unfaithful external");
+    assert!(blocked_first.records.is_empty());
+    assert_eq!(
+        blocked_first.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::ExternalSourceBlocked
+    );
+    let unsupported_none = filtered
+        .prepare_mail_merge_data(MailMergeSourcePolicy::CallerSupplied, None)
+        .expect("unsupported before unavailable");
+    assert!(unsupported_none.records.is_empty());
+    assert_eq!(
+        unsupported_none.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::UnsupportedSource
+    );
+    let unsupported_empty = filtered
+        .prepare_mail_merge_data(MailMergeSourcePolicy::CallerSupplied, Some(&[]))
+        .expect("empty rows stay unsupported");
+    assert!(unsupported_empty.records.is_empty());
+    assert_eq!(
+        unsupported_empty.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::UnsupportedSource
+    );
+    let supplied = vec![f290_row(&[("Family", "Lovelace")])];
+    let unsupported_rows = filtered
+        .prepare_mail_merge_data(
+            MailMergeSourcePolicy::CallerSupplied,
+            Some(supplied.as_slice()),
+        )
+        .expect("supplied rows are not a partial filter");
+    assert!(unsupported_rows.records.is_empty());
+    assert_ne!(unsupported_rows.records, supplied);
+    assert_eq!(
+        unsupported_rows.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::UnsupportedSource
+    );
+    assert!(
+        filtered
+            .mail_merge_package()
+            .expect("metadata remains")
+            .is_some()
+    );
+
+    let absent = Document::new()
+        .prepare_mail_merge_data(MailMergeSourcePolicy::default(), None)
+        .unwrap_err();
+    assert!(
+        absent.to_string().contains("mail-merge package is absent"),
+        "{absent}"
+    );
+
+    let mut identity = Document::new();
+    identity
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["FirstName".to_owned()],
+                records: vec![vec!["Ada".to_owned()]],
+            },
+            vec![f290_mapping(0, "FirstName", "FirstName")],
+            Vec::new(),
+        ))
+        .expect("embedded identity map");
+    let applied = identity
+        .prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None)
+        .expect("identity embedded rows");
+    assert!(applied.diagnostics.is_empty());
+    assert_eq!(applied.records, vec![f290_row(&[("FirstName", "Ada")])]);
+
+    let mut alias = Document::new();
+    alias
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["Family".to_owned()],
+                records: vec![vec!["Lovelace".to_owned()]],
+            },
+            vec![f290_mapping(0, "Family", "LastName")],
+            Vec::new(),
+        ))
+        .expect("embedded alias map");
+    let raw_alias = alias
+        .prepare_mail_merge_data(MailMergeSourcePolicy::CallerSupplied, None)
+        .expect("alias is unsupported rather than raw");
+    assert!(raw_alias.records.is_empty());
+    assert_eq!(
+        raw_alias.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::UnsupportedSource
+    );
+
+    let mut external_identity = Document::new();
+    external_identity
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/identity.csv".to_owned(),
+            },
+            vec![f290_mapping(0, "FirstName", "FirstName")],
+            Vec::new(),
+        ))
+        .expect("external identity map");
+    let keyed = vec![f290_row(&[("FirstName", "Ada"), ("City", "London")])];
+    let copied_identity = external_identity
+        .prepare_mail_merge_data(
+            MailMergeSourcePolicy::CallerSupplied,
+            Some(keyed.as_slice()),
+        )
+        .expect("identity external rows");
+    assert!(copied_identity.diagnostics.is_empty());
+    assert_eq!(copied_identity.records, keyed);
+    let missing_key = vec![f290_row(&[("City", "London")])];
+    let missing = external_identity
+        .prepare_mail_merge_data(
+            MailMergeSourcePolicy::CallerSupplied,
+            Some(missing_key.as_slice()),
+        )
+        .expect("missing required column");
+    assert!(missing.records.is_empty());
+    assert_eq!(
+        missing.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::UnsupportedSource
+    );
+
+    let mut connected = Document::from_bytes(&external_identity.to_bytes().unwrap()).unwrap();
+    let mut with_query = f290_declared_settings();
+    with_query.connect_string = Some("dsn".to_owned());
+    with_query.query = Some("select".to_owned());
+    connected
+        .set_mail_merge_settings(with_query)
+        .expect("preserve source while recording connect");
+    let evaluated = connected
+        .prepare_mail_merge_data(
+            MailMergeSourcePolicy::CallerSupplied,
+            Some(keyed.as_slice()),
+        )
+        .expect("connect and query stay unsupported");
+    assert_eq!(
+        evaluated.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::UnsupportedSource
+    );
+    assert!(evaluated.records.is_empty());
+
+    let scheme = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:mailMerge>
+    <w:mainDocumentType w:val="formLetters"/>
+    <w:dataType w:val="textFile"/>
+    <w:dataSource r:id="src"/>
+  </w:mailMerge>
+</w:settings>"#,
+        &[("src", "ftp://declared.example/people.csv")],
+    );
+    match scheme
+        .mail_merge_package()
+        .expect("raw scheme query")
+        .expect("package")
+        .source
+    {
+        MailMergePackageSource::External { uri } => {
+            assert_eq!(uri, "ftp://declared.example/people.csv");
+        }
+        MailMergePackageSource::Embedded { .. } => panic!("scheme became embedded"),
+    }
+    let scheme_offline = scheme
+        .prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None)
+        .expect("offline before scheme");
+    assert_eq!(
+        scheme_offline.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::ExternalSourceBlocked
+    );
+    let scheme_rows = scheme
+        .prepare_mail_merge_data(
+            MailMergeSourcePolicy::CallerSupplied,
+            Some(keyed.as_slice()),
+        )
+        .expect("unknown scheme unsupported");
+    assert_eq!(
+        scheme_rows.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::UnsupportedSource
+    );
+
+    let native = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:mailMerge>
+    <w:mainDocumentType w:val="formLetters"/>
+    <w:dataType w:val="native"/>
+    <w:dataSource r:id="data"/>
+    <w:odso><w:src r:id="odso"/></w:odso>
+  </w:mailMerge>
+</w:settings>"#,
+        &[
+            ("data", "file:///declared/data.csv"),
+            ("odso", "file:///declared/odso.csv"),
+        ],
+    );
+    match native
+        .mail_merge_package()
+        .expect("differing native query")
+        .expect("package")
+        .source
+    {
+        MailMergePackageSource::External { uri } => assert_eq!(uri, "file:///declared/odso.csv"),
+        MailMergePackageSource::Embedded { .. } => panic!("native became embedded"),
+    }
+    let native_offline = native
+        .prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None)
+        .expect("offline before differing native");
+    assert_eq!(
+        native_offline.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::ExternalSourceBlocked
+    );
+    let native_rows = native
+        .prepare_mail_merge_data(
+            MailMergeSourcePolicy::CallerSupplied,
+            Some(keyed.as_slice()),
+        )
+        .expect("differing native unsupported");
+    assert!(native_rows.records.is_empty());
+    assert_eq!(
+        native_rows.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::UnsupportedSource
+    );
+
+    let odd_type = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:mailMerge>
+    <w:mainDocumentType w:val="formLetters"/>
+    <w:dataType w:val="textFile"/>
+    <w:dataSource r:id="src"/>
+    <w:odso><w:fieldMapData><w:type w:val="addressColumn"/></w:fieldMapData></w:odso>
+  </w:mailMerge>
+</w:settings>"#,
+        &[("src", "file:///declared/typed.csv")],
+    );
+    assert!(
+        odd_type.mail_merge_package().is_err(),
+        "unknown active type is not an empty map"
+    );
+    let odd_prepare = odd_type
+        .prepare_mail_merge_data(
+            MailMergeSourcePolicy::CallerSupplied,
+            Some(keyed.as_slice()),
+        )
+        .expect("unknown type prepares as unsupported");
+    assert_eq!(
+        odd_prepare.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::UnsupportedSource
+    );
+
+    let mut many = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:mailMerge>
+    <w:mainDocumentType w:val="formLetters"/>
+    <w:dataType w:val="textFile"/>
+    <w:dataSource r:id="src"/>
+    <w:odso>"#,
+    );
+    for _ in 0..31 {
+        many.push_str("<w:fieldMapData><w:type w:val=\"null\"/></w:fieldMapData>");
+    }
+    many.push_str("</w:odso></w:mailMerge></w:settings>");
+    let overflow = f290_plant_settings(&many, &[("src", "file:///declared/overflow.csv")]);
+    assert!(
+        overflow.mail_merge_package().is_err(),
+        "more than 30 slots is not an empty map"
+    );
+    let overflow_prepare = overflow
+        .prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None)
+        .expect("overflow prepares as unsupported");
+    assert_eq!(
+        overflow_prepare.diagnostics[0].kind,
+        MailMergePackageDiagnosticKind::ExternalSourceBlocked,
+        "offline block precedes the unsupported map",
+    );
+
+    let mut corrupt = Document::new();
+    corrupt
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["a".to_owned()],
+                records: vec![vec!["old".to_owned()]],
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .unwrap();
+    let mut corrupt_package =
+        OpcPackage::from_reader(std::io::Cursor::new(corrupt.to_bytes().unwrap())).unwrap();
+    let store_name = corrupt_package
+        .parts
+        .iter()
+        .find(|(_, bytes)| {
+            bytes
+                .windows(b"mergeData".len())
+                .any(|window| window == b"mergeData")
+        })
+        .map(|(name, _)| name.clone())
+        .expect("store part");
+    corrupt_package.set_part(&store_name, b"<<not-xml".to_vec());
+    let corrupt = Document::from_bytes(&f290_package_bytes(&corrupt_package)).unwrap();
+    let corrupt_rows = corrupt
+        .prepare_mail_merge_data(
+            MailMergeSourcePolicy::CallerSupplied,
+            Some(keyed.as_slice()),
+        )
+        .unwrap_err();
+    assert!(
+        corrupt_rows.to_string().contains("rejects caller"),
+        "embedded rows are refused before the broken store, observed {corrupt_rows}"
+    );
+
+    let mut parser_failures = Vec::new();
+    for (label, body) in [
+        (
+            "prefixed alternate root",
+            br#"<wne:recipients xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml"><wne:hash>opaque</wne:hash></wne:recipients>"#.as_slice(),
+        ),
+        (
+            "default alternate root",
+            br#"<recipients xmlns="http://schemas.microsoft.com/office/word/2006/wordml"><hash>opaque</hash></recipients>"#.as_slice(),
+        ),
+    ] {
+        let alternate = f290_alternate_package(body);
+        match alternate.prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None) {
+            Ok(prepared)
+                if prepared.diagnostics.first().is_some_and(|item| {
+                    item.kind == MailMergePackageDiagnosticKind::ExternalSourceBlocked
+                }) => {}
+            other => parser_failures.push(format!("{label} offline was {other:?}")),
+        }
+        match alternate.prepare_mail_merge_data(MailMergeSourcePolicy::CallerSupplied, Some(&[])) {
+            Ok(prepared)
+                if prepared.records.is_empty()
+                    && prepared.diagnostics.first().is_some_and(|item| {
+                        item.kind == MailMergePackageDiagnosticKind::UnsupportedSource
+                    }) => {}
+            other => parser_failures.push(format!("{label} caller rows were {other:?}")),
+        }
+    }
+    for (label, body) in [
+        (
+            "wrong alternate root",
+            br#"<wne:hash xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml">opaque</wne:hash>"#.as_slice(),
+        ),
+        (
+            "wrong alternate namespace",
+            br#"<recipients xmlns="urn:f290:not-wordml"><hash>opaque</hash></recipients>"#.as_slice(),
+        ),
+    ] {
+        let mut alternate = f290_alternate_package(body);
+        let before = alternate.to_bytes().unwrap();
+        match alternate.prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None) {
+            Err(_) => {}
+            Ok(prepared) => parser_failures.push(format!("{label} offline returned {prepared:?}")),
+        }
+        if alternate.to_bytes().unwrap() != before {
+            parser_failures.push(format!("{label} changed bytes"));
+        }
+    }
+    let mut root = Document::new();
+    match root.set_mail_merge_package(f290_options(
+        MailMergePackageSource::External {
+            uri: "file:///".to_owned(),
+        },
+        Vec::new(),
+        Vec::new(),
+    )) {
+        Ok(()) => match root.mail_merge_package() {
+            Ok(Some(package)) => match package.source {
+                MailMergePackageSource::External { uri } if uri == "file:///" => {}
+                other => parser_failures.push(format!("file root source was {other:?}")),
+            },
+            other => parser_failures.push(format!("file root query was {other:?}")),
+        },
+        Err(error) => parser_failures.push(format!("file root assignment was {error}")),
+    }
+    for uri in ["file://host?query=/data", "file://host#frag/path"] {
+        let mut host = Document::new();
+        let before = host.to_bytes().unwrap();
+        match host.set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: uri.to_owned(),
+            },
+            Vec::new(),
+            Vec::new(),
+        )) {
+            Err(_) if host.to_bytes().unwrap() == before => {}
+            other => parser_failures.push(format!("{uri} assignment was {other:?}")),
+        }
+    }
+    assert!(parser_failures.is_empty(), "{}", parser_failures.join("\n"));
+}
+
+#[test]
+fn mail_merge_graph_uses_settings_relationship_scope() {
+    let mut document = Document::new();
+    document
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/scope.csv".to_owned(),
+            },
+            vec![f290_mapping(0, "Family", "LastName")],
+            Vec::new(),
+        ))
+        .expect("package before narrow edit");
+    let mut narrow = f290_declared_settings();
+    narrow.active_record = Some(4);
+    document
+        .set_mail_merge_settings(narrow.clone())
+        .expect("narrow 13-member edit");
+    assert_eq!(document.mail_merge_settings(), Some(&narrow));
+    let snapshot = document
+        .mail_merge_package()
+        .expect("graph survives narrow edit")
+        .expect("source still owned");
+    assert_eq!(
+        snapshot.source,
+        MailMergePackageSource::External {
+            uri: "file:///declared/scope.csv".to_owned(),
+        }
+    );
+    assert!(f290_settings_owned(&mut document, F290_MAIL_MERGE_SOURCE));
+    assert!(!f290_main_owns(&mut document, F290_MAIL_MERGE_SOURCE));
+
+    let mut bare = Document::new();
+    bare.set_mail_merge_settings(f290_declared_settings())
+        .expect("recognized settings");
+    let missing = bare.mail_merge_package().unwrap_err();
+    assert!(
+        missing.to_string().contains("source"),
+        "missing required source is Err, observed {missing}"
+    );
+    assert_eq!(
+        bare.mail_merge_settings()
+            .and_then(|item| item.data_type.clone()),
+        Some("textFile".to_owned())
+    );
+
+    let planted = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <u:mailMerge xmlns:u="urn:f290:foreign"><w:dataSource r:id="decoy"/></u:mailMerge>
+  <w:mailMerge w:keepAttr="kept">
+    <w:mainDocumentType w:val="formLetters"/>
+    <w:dataType w:val="textFile"/>
+    <w:dataSource r:id="src"/>
+    <w:headerSource r:id="src"><w:keptChild w:flag="yes"/></w:headerSource>
+    <u:odso xmlns:u="urn:f290:foreign"/>
+    <w:odso>
+      <w:udl w:val="keep-udl"/>
+      <w:table w:val="keep-table"/>
+      <w:src r:id="src"/>
+      <w:type w:val="keep-type"/>
+      <w:fHdr w:val="1"/>
+      <x:extra xmlns:x="urn:f290:extra" x:flag="kept"/>
+    </w:odso>
+    <w:nest><w:odso><w:src r:id="nested"/></w:odso></w:nest>
+  </w:mailMerge>
+</w:settings>"#,
+        &[
+            ("src", "file:///declared/shared.csv"),
+            ("decoy", "file:///declared/decoy.csv"),
+            ("nested", "file:///declared/nested.csv"),
+        ],
+    );
+    let inherited = planted
+        .mail_merge_package()
+        .expect("inherited alias and direct path")
+        .expect("real source");
+    assert_eq!(
+        inherited.source,
+        MailMergePackageSource::External {
+            uri: "file:///declared/shared.csv".to_owned(),
+        },
+        "foreign and nested local names are not the settings source"
+    );
+    let mut planted = planted;
+    planted
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/moved.csv".to_owned(),
+            },
+            vec![f290_mapping(0, "Family", "LastName")],
+            Vec::new(),
+        ))
+        .expect("rewrite keeps unknown mail-merge xml");
+    let rewritten = f290_settings_xml(&mut planted);
+    let rewritten_text = String::from_utf8(rewritten.clone()).unwrap();
+    for needle in [
+        "w:keepAttr=\"kept\"",
+        "keep-udl",
+        "keep-table",
+        "keep-type",
+        "w:keptChild",
+        "urn:f290:extra",
+        "x:flag=\"kept\"",
+        "w:fHdr",
+    ] {
+        assert!(
+            rewritten_text.contains(needle),
+            "missing preserved markup {needle}"
+        );
+    }
+    assert!(
+        rewritten_text.contains("r:id=\"src\""),
+        "header keeps the shared relationship id"
+    );
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(planted.to_bytes().unwrap())).unwrap();
+    let rels = package.get_part_rels("/word/settings.xml").unwrap();
+    let shared = rels.items.iter().find(|item| item.id == "src").unwrap();
+    assert_eq!(shared.target, "file:///declared/shared.csv");
+    assert_eq!(shared.rel_type, F290_MAIL_MERGE_SOURCE);
+    assert!(
+        rels.items
+            .iter()
+            .any(|item| item.target == "file:///declared/moved.csv"
+                && item.rel_type == F290_MAIL_MERGE_SOURCE)
+    );
+    let moved = planted
+        .mail_merge_package()
+        .expect("query moved source")
+        .expect("package");
+    assert_eq!(
+        moved.source,
+        MailMergePackageSource::External {
+            uri: "file:///declared/moved.csv".to_owned(),
+        }
+    );
+
+    let opaque = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:mailMerge><w:odso><w:udl w:val="only-udl"/></w:odso></w:mailMerge>
+</w:settings>"#,
+        &[],
+    );
+    assert_eq!(
+        opaque
+            .mail_merge_package()
+            .expect("opaque odso is not a package"),
+        None
+    );
+
+    let shadowed = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<q:settings xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <q:mailMerge xmlns:w="urn:f290:foreign-word">
+    <q:mainDocumentType q:val="formLetters"/>
+    <q:dataType q:val="textFile"/>
+    <q:dataSource xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="src"/>
+  </q:mailMerge>
+</q:settings>"#,
+        &[("src", "file:///declared/shadow.csv")],
+    );
+    let mut shadowed = shadowed;
+    shadowed
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/shadow-moved.csv".to_owned(),
+            },
+            vec![f290_mapping(0, "Family", "LastName")],
+            Vec::new(),
+        ))
+        .expect("shadowed word prefix still authors canonical children");
+    let shadowed_xml = String::from_utf8(f290_settings_xml(&mut shadowed)).unwrap();
+    assert!(
+        shadowed_xml.contains("xmlns:w=\"urn:f290:foreign-word\""),
+        "imported foreign word prefix binding stays"
+    );
+    assert!(
+        shadowed_xml
+            .contains("xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\""),
+        "authored children declare the canonical word namespace"
+    );
+    assert_eq!(
+        shadowed
+            .mail_merge_package()
+            .expect("shadowed query")
+            .expect("package")
+            .source,
+        MailMergePackageSource::External {
+            uri: "file:///declared/shadow-moved.csv".to_owned(),
+        }
+    );
+
+    let mut nested = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:mailMerge>
+    <w:mainDocumentType w:val="formLetters"/>
+    <w:dataType w:val="textFile"/>
+    <w:dataSource r:id="src"/>
+    <w:odso>
+      <w:fieldMapData>
+        <w:type w:val="dbColumn"/>
+        <w:name w:val="Family"><w:kept/></w:name>
+        <w:mappedName w:val="LastName"/>
+        <w:column w:val="0"/>
+      </w:fieldMapData>
+    </w:odso>
+  </w:mailMerge>
+</w:settings>"#,
+        &[("src", "file:///declared/nested-leaf.csv")],
+    );
+    let nested_before = nested.to_bytes().unwrap();
+    let nested_error = nested
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/nested-moved.csv".to_owned(),
+            },
+            vec![f290_mapping(0, "Family", "LastName")],
+            Vec::new(),
+        ))
+        .unwrap_err();
+    let nested_message = nested_error.to_string();
+    assert!(
+        nested_message.contains("unknown assignment") || nested_message.contains("field map"),
+        "{nested_message}"
+    );
+    assert_eq!(nested.to_bytes().unwrap(), nested_before);
+
+    let mut stale = Document::new();
+    stale
+        .set_document_variable(
+            "rdocx.mailMerge.storeItemId",
+            "{BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB}",
+        )
+        .unwrap();
+    let stale_before = stale.to_bytes().unwrap();
+    let stale_error = stale
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/stale.csv".to_owned(),
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .unwrap_err();
+    let stale_message = stale_error.to_string();
+    assert!(
+        stale_message.contains("stale")
+            || stale_message.contains("not found")
+            || stale_message.contains("store"),
+        "{stale_message}"
+    );
+    assert!(!stale_message.contains("not authored"), "{stale_message}");
+    assert_eq!(stale.to_bytes().unwrap(), stale_before);
+
+    let mut ownership_failures = Vec::new();
+    let map_only = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:mailMerge><w:odso><w:fieldMapData>
+    <w:type w:val="dbColumn"/><w:name w:val="Family"/><w:mappedName w:val="LastName"/><w:column w:val="0"/>
+  </w:fieldMapData></w:odso></w:mailMerge>
+</w:settings>"#,
+        &[],
+    );
+    f290_expect_source_gap(
+        &mut ownership_failures,
+        "field map without source",
+        &map_only,
+    );
+    let null_only = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:mailMerge><w:odso><w:fieldMapData><w:type w:val="null"/></w:fieldMapData></w:odso></w:mailMerge>
+</w:settings>"#,
+        &[],
+    );
+    f290_expect_source_gap(
+        &mut ownership_failures,
+        "null slot without source",
+        &null_only,
+    );
+    let mut recipient_only = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:mailMerge><w:odso><w:recipientData r:id="gone"/></w:odso></w:mailMerge>
+</w:settings>"#,
+        &[],
+    );
+    f290_expect_contains(
+        &mut ownership_failures,
+        "recipient reference without a target",
+        recipient_only.mail_merge_package(),
+        "recipient",
+    );
+    match recipient_only.remove_mail_merge_package() {
+        Err(error) if error.to_string().contains("recipient") => {}
+        other => ownership_failures.push(format!("recipient remove was {other:?}")),
+    }
+    let bad_header = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:mailMerge>
+    <w:mainDocumentType w:val="formLetters"/>
+    <w:dataType w:val="textFile"/>
+    <w:dataSource r:id="src"/>
+    <w:headerSource r:id="missing"/>
+  </w:mailMerge>
+</w:settings>"#,
+        &[("src", "file:///declared/header.csv")],
+    );
+    f290_expect_contains(
+        &mut ownership_failures,
+        "active source with a missing header",
+        bad_header.mail_merge_package(),
+        "header",
+    );
+    match bad_header.prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None) {
+        Err(error) if !error.to_string().contains("absent") => {}
+        other => ownership_failures.push(format!("bad header prepare was {other:?}")),
+    }
+    let mut embedded = Document::new();
+    embedded
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["given".to_owned()],
+                records: vec![vec!["Ada".to_owned()]],
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .expect("embedded before mode edit");
+    let mut external_settings =
+        OpcPackage::from_reader(std::io::Cursor::new(embedded.to_bytes().unwrap())).unwrap();
+    external_settings
+        .get_part_rels_mut("/word/document.xml")
+        .expect("document relationships")
+        .items
+        .iter_mut()
+        .filter(|item| item.rel_type.contains("settings"))
+        .for_each(|item| item.target_mode = Some("External".to_owned()));
+    let mut external_settings = Document::from_bytes(&f290_package_bytes(&external_settings))
+        .expect("external settings mode");
+    let external_before = external_settings.to_bytes().unwrap();
+    f290_expect_contains(
+        &mut ownership_failures,
+        "embedded package behind an external settings relationship",
+        external_settings.mail_merge_package(),
+        "settings",
+    );
+    let _ = external_settings.set_mail_merge_package(f290_options(
+        MailMergePackageSource::External {
+            uri: "file:///declared/mode.csv".to_owned(),
+        },
+        Vec::new(),
+        Vec::new(),
+    ));
+    if external_settings.to_bytes().unwrap() != external_before {
+        ownership_failures.push("external settings mode changed bytes".to_owned());
+    }
+    let mut bare = Document::new();
+    bare.set_mail_merge_settings(f290_declared_settings())
+        .unwrap();
+    let bare_before = bare.to_bytes().unwrap();
+    let bare_error = bare.set_mail_merge_package(f290_options(
+        MailMergePackageSource::Embedded {
+            columns: vec!["given".to_owned()],
+            records: Vec::new(),
+        },
+        Vec::new(),
+        Vec::new(),
+    ));
+    match bare_error {
+        Err(error)
+            if error.to_string().contains("source") && bare.to_bytes().unwrap() == bare_before => {}
+        other => ownership_failures.push(format!("bare embedded refusal was {other:?}")),
+    }
+    let mut unused = OpcPackage::from_reader(std::io::Cursor::new(bare_before.clone())).unwrap();
+    let relationships = unused.get_or_create_part_rels("/word/settings.xml");
+    relationships.add_with_id("unused", F290_MAIL_MERGE_SOURCE, "file:///unused.csv");
+    relationships.items.last_mut().unwrap().target_mode = Some("External".to_owned());
+    relationships.add_with_id("hdr", F290_MAIL_MERGE_SOURCE, "file:///header.csv");
+    relationships.items.last_mut().unwrap().target_mode = Some("External".to_owned());
+    let mut unused = Document::from_bytes(&f290_package_bytes(&unused)).unwrap();
+    let unused_before = unused.to_bytes().unwrap();
+    let unused_error = unused.set_mail_merge_package(f290_options(
+        MailMergePackageSource::Embedded {
+            columns: vec!["given".to_owned()],
+            records: Vec::new(),
+        },
+        Vec::new(),
+        Vec::new(),
+    ));
+    match unused_error {
+        Err(error)
+            if error.to_string().contains("source")
+                && unused.to_bytes().unwrap() == unused_before => {}
+        other => ownership_failures.push(format!(
+            "unused mailMergeSource edge changed the embedded refusal: {other:?}"
+        )),
+    }
+    let native_src = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:mailMerge>
+    <w:dataType w:val="native"/>
+    <w:odso><w:src r:id="rId0"/></w:odso>
+  </w:mailMerge>
+</w:settings>"#;
+    let internal_src = f290_plant_settings(native_src, &[("rId0", "file:///declared/owner.csv")]);
+    match internal_src.mail_merge_package() {
+        Ok(Some(package)) => match package.source {
+            MailMergePackageSource::External { uri } if uri == "file:///declared/owner.csv" => {}
+            other => ownership_failures.push(format!("internal src source was {other:?}")),
+        },
+        other => ownership_failures.push(format!("internal src query was {other:?}")),
+    }
+    match internal_src.prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None) {
+        Ok(prepared)
+            if prepared.diagnostics.first().is_some_and(|item| {
+                item.kind == MailMergePackageDiagnosticKind::ExternalSourceBlocked
+            }) => {}
+        other => ownership_failures.push(format!("internal src prepare was {other:?}")),
+    }
+    let mut external_src = f290_externalize_settings(internal_src);
+    let external_src_before = external_src.to_bytes().unwrap();
+    f290_expect_contains(
+        &mut ownership_failures,
+        "external owner hides native src",
+        external_src.mail_merge_package(),
+        "settings",
+    );
+    f290_expect_contains(
+        &mut ownership_failures,
+        "external owner hides native src prepare",
+        external_src.prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None),
+        "settings",
+    );
+    let _ = external_src.set_mail_merge_package(f290_options(
+        MailMergePackageSource::External {
+            uri: "file:///declared/replacement.csv".to_owned(),
+        },
+        Vec::new(),
+        Vec::new(),
+    ));
+    if external_src.to_bytes().unwrap() != external_src_before {
+        ownership_failures.push("external src mutation changed bytes".to_owned());
+    }
+    let type_only = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:mailMerge><w:dataType w:val="native"/></w:mailMerge>
+</w:settings>"#;
+    let internal_type = f290_plant_settings(type_only, &[]);
+    f290_expect_source_gap(
+        &mut ownership_failures,
+        "internal dataType without source",
+        &internal_type,
+    );
+    let mut external_type = f290_externalize_settings(internal_type);
+    let external_type_before = external_type.to_bytes().unwrap();
+    f290_expect_contains(
+        &mut ownership_failures,
+        "external owner hides dataType",
+        external_type.mail_merge_package(),
+        "settings",
+    );
+    f290_expect_contains(
+        &mut ownership_failures,
+        "external owner hides dataType prepare",
+        external_type.prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None),
+        "settings",
+    );
+    let _ = external_type.remove_mail_merge_package();
+    if external_type.to_bytes().unwrap() != external_type_before {
+        ownership_failures.push("external dataType removal changed bytes".to_owned());
+    }
+    let empty_type = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<settings xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <mailMerge><dataType/></mailMerge>
+</settings>"#;
+    let internal_empty = f290_plant_settings(empty_type, &[]);
+    f290_expect_source_gap(
+        &mut ownership_failures,
+        "default namespace empty dataType",
+        &internal_empty,
+    );
+    let external_empty = f290_externalize_settings(internal_empty);
+    f290_expect_contains(
+        &mut ownership_failures,
+        "external owner hides empty dataType",
+        external_empty.mail_merge_package(),
+        "settings",
+    );
+    let _ = external_empty.prepare_mail_merge_data(MailMergeSourcePolicy::Offline, None);
+    let started_type = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:settings xmlns:a="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <a:mailMerge><a:dataType></a:dataType></a:mailMerge>
+</a:settings>"#;
+    f290_expect_source_gap(
+        &mut ownership_failures,
+        "aliased started dataType",
+        &f290_plant_settings(started_type, &[]),
+    );
+    let foreign = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <m:mailMerge xmlns:m="urn:f290:not-word"><m:dataType m:val="native"/></m:mailMerge>
+</w:settings>"#,
+        &[],
+    );
+    match foreign.mail_merge_package() {
+        Ok(None) => {}
+        other => ownership_failures.push(format!("foreign dataType query was {other:?}")),
+    }
+    let opaque_text = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docVars><w:docVar w:name="note" w:val="rdocx.mailMerge.storeItemId"/></w:docVars>
+  <w:mailMerge><w:odso><w:udl w:val="kept"/></w:odso></w:mailMerge>
+</w:settings>"#,
+        &[],
+    );
+    match opaque_text.mail_merge_package() {
+        Ok(None) => {}
+        other => ownership_failures.push(format!("opaque text query was {other:?}")),
+    }
+    let owned_var = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docVars><w:docVar w:name="rdocx.mailMerge.storeItemId" w:val="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"/></w:docVars>
+</w:settings>"#;
+    let internal_var = f290_plant_settings(owned_var, &[]);
+    match internal_var.mail_merge_package() {
+        Err(error) if !error.to_string().contains("absent") => {}
+        other => ownership_failures.push(format!("direct owned variable query was {other:?}")),
+    }
+    let mut external_var = f290_externalize_settings(internal_var);
+    let external_var_before = external_var.to_bytes().unwrap();
+    f290_expect_contains(
+        &mut ownership_failures,
+        "external owner hides direct document variable",
+        external_var.mail_merge_package(),
+        "settings",
+    );
+    let _ = external_var.set_mail_merge_package(f290_options(
+        MailMergePackageSource::External {
+            uri: "file:///declared/var.csv".to_owned(),
+        },
+        Vec::new(),
+        Vec::new(),
+    ));
+    if external_var.to_bytes().unwrap() != external_var_before {
+        ownership_failures.push("external document variable mutation changed bytes".to_owned());
+    }
+    let nested_var = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <m:wrap xmlns:m="urn:f290:not-word">
+    <w:docVars><w:docVar w:name="rdocx.mailMerge.storeItemId" w:val="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"/></w:docVars>
+  </m:wrap>
+</w:settings>"#;
+    let foreign_vars = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <m:docVars xmlns:m="urn:f290:not-word"><m:docVar m:name="rdocx.mailMerge.storeItemId" m:val="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"/></m:docVars>
+</w:settings>"#;
+    let unrelated_var = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docVars><w:docVar w:name="note" w:val="rdocx.mailMerge.storeItemId"/></w:docVars>
+</w:settings>"#;
+    for (label, xml) in [
+        ("nested qualified docVars", nested_var),
+        ("foreign docVars", foreign_vars),
+        ("unrelated variable text", unrelated_var),
+        (
+            "nested settings under a foreign root child",
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <m:wrap xmlns:m="urn:f290:not-word">
+    <w:settings>
+      <w:docVars><w:docVar w:name="rdocx.mailMerge.storeItemId" w:val="{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}"/></w:docVars>
+    </w:settings>
+  </m:wrap>
+</w:settings>"#,
+        ),
+    ] {
+        let planted = f290_plant_settings(xml, &[]);
+        match planted.mail_merge_package() {
+            Ok(None) => {}
+            other => ownership_failures.push(format!("{label} query was {other:?}")),
+        }
+        match f290_externalize_settings(planted).mail_merge_package() {
+            Ok(None) => {}
+            other => ownership_failures.push(format!("{label} external query was {other:?}")),
+        }
+    }
+    assert!(
+        ownership_failures.is_empty(),
+        "{}",
+        ownership_failures.join("\n")
+    );
+}
+
+#[test]
+fn merge_package_mutations_preserve_unowned_parts_and_refuse_ambiguity() {
+    let mut document = Document::new();
+    let store = br#"<mergeData xmlns="urn:rdocx:mail-merge-data:v1"><columns><column name="kept"/></columns><records/></mergeData>"#;
+    let unowned = document
+        .add_custom_xml_store(store, &["urn:unowned:mail-merge-test"])
+        .expect("unowned store");
+    let owned_store = f290_exact_parts(&f290_part_inventory(&mut document), store);
+    let owned_guid = f290_parts_containing(&f290_part_inventory(&mut document), unowned.as_bytes());
+    assert!(!owned_store.is_empty(), "input store bytes are one part");
+    assert!(!owned_guid.is_empty(), "unowned guid is stored in a part");
+    document
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["a".to_owned()],
+                records: Vec::new(),
+            },
+            Vec::new(),
+            vec![f290_recipient(0, b"one", true)],
+        ))
+        .expect("owned package beside unowned store");
+    let mut reopened = f290_reopen(&mut document);
+    assert_eq!(
+        f290_exact_parts(&f290_part_inventory(&mut reopened), store),
+        owned_store
+    );
+    assert_eq!(
+        f290_parts_containing(&f290_part_inventory(&mut reopened), unowned.as_bytes()),
+        owned_guid
+    );
+    assert!(document.remove_mail_merge_package().expect("first remove"));
+    assert_eq!(
+        document.mail_merge_package().expect("query after remove"),
+        None
+    );
+    assert!(!document.remove_mail_merge_package().expect("second remove"));
+    assert_eq!(
+        f290_exact_parts(&f290_part_inventory(&mut document), store),
+        owned_store
+    );
+    assert_eq!(
+        f290_parts_containing(&f290_part_inventory(&mut document), unowned.as_bytes()),
+        owned_guid
+    );
+
+    let mut ambiguous = Document::new();
+    ambiguous
+        .set_document_variable(
+            "rdocx.mailMerge.storeItemId",
+            "{AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA}",
+        )
+        .unwrap();
+    ambiguous
+        .set_mail_merge_settings(f290_declared_settings())
+        .unwrap();
+    let before = ambiguous.to_bytes().unwrap();
+    let before_parts = f290_part_inventory(&mut ambiguous);
+    let error = ambiguous
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/other.csv".to_owned(),
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("ambigu"),
+        "ambiguous ownership refuses before mutation, observed {message}"
+    );
+    assert!(
+        !message.contains("not authored"),
+        "placeholder is not the ambiguity result, observed {message}"
+    );
+    assert_eq!(ambiguous.to_bytes().unwrap(), before);
+    assert_eq!(f290_part_inventory(&mut ambiguous), before_parts);
+
+    let mut shared = Document::new();
+    shared
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/shared-people.csv".to_owned(),
+            },
+            Vec::new(),
+            vec![f290_recipient(0, b"one", true)],
+        ))
+        .expect("recipient owner");
+    let mut shared_package =
+        OpcPackage::from_reader(std::io::Cursor::new(shared.to_bytes().unwrap())).unwrap();
+    let recipient_part = shared_package
+        .parts
+        .keys()
+        .find(|name| name.contains("recipientData"))
+        .cloned()
+        .expect("recipient part");
+    let recipient_bytes = shared_package.get_part(&recipient_part).unwrap().to_vec();
+    shared_package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "rIdKeep",
+            F290_RECIPIENT_DATA,
+            recipient_part.rsplit('/').next().unwrap_or(&recipient_part),
+        );
+    let mut shared = Document::from_bytes(&f290_package_bytes(&shared_package)).unwrap();
+    let shared_before = shared.to_bytes().unwrap();
+    let shared_edit = shared
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/shared-people.csv".to_owned(),
+            },
+            Vec::new(),
+            vec![f290_recipient(1, b"two", false)],
+        ))
+        .unwrap_err();
+    assert!(
+        shared_edit.to_string().contains("shared") || shared_edit.to_string().contains("recipient"),
+        "{shared_edit}"
+    );
+    assert_eq!(shared.to_bytes().unwrap(), shared_before);
+    assert!(
+        shared
+            .remove_mail_merge_package()
+            .expect("drop owned recipient ref")
+    );
+    assert_eq!(
+        shared
+            .mail_merge_package()
+            .expect("query after shared remove"),
+        None
+    );
+    assert!(
+        !shared
+            .remove_mail_merge_package()
+            .expect("second shared remove")
+    );
+    let after_shared = f290_part_inventory(&mut shared);
+    assert_eq!(
+        after_shared.get(&recipient_part).map(Vec::as_slice),
+        Some(recipient_bytes.as_slice())
+    );
+
+    let mut paired = Document::new();
+    paired
+        .set_mail_merge_settings(f290_declared_settings())
+        .unwrap();
+    let mut paired_package =
+        OpcPackage::from_reader(std::io::Cursor::new(paired.to_bytes().unwrap())).unwrap();
+    paired_package.set_part("/word/recipientStandard.xml", b"<kept-standard>".to_vec());
+    paired_package.content_types.add_override(
+        "/word/recipientStandard.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.mailMergeRecipientData+xml",
+    );
+    paired_package.set_part("/word/recipientAlternate.xml", b"<kept-alternate>".to_vec());
+    paired_package.content_types.add_override(
+        "/word/recipientAlternate.xml",
+        "application/vnd.ms-word.mailMergeRecipientData+xml",
+    );
+    let mut paired = Document::from_bytes(&f290_package_bytes(&paired_package)).unwrap();
+    let paired_before = paired.to_bytes().unwrap();
+    let paired_error = paired
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/capacity.csv".to_owned(),
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .unwrap_err();
+    assert!(
+        paired_error.to_string().contains("recipient"),
+        "{paired_error}"
+    );
+    assert_eq!(paired.to_bytes().unwrap(), paired_before);
+
+    let mut idle = Document::new();
+    let mut idle_package =
+        OpcPackage::from_reader(std::io::Cursor::new(idle.to_bytes().unwrap())).unwrap();
+    idle_package.set_part("/word/recipientIdle.xml", b"<kept-idle>".to_vec());
+    idle_package.content_types.add_override(
+        "/word/recipientIdle.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.mailMergeRecipientData+xml",
+    );
+    let mut idle = Document::from_bytes(&f290_package_bytes(&idle_package)).unwrap();
+    assert_eq!(
+        idle.mail_merge_package()
+            .expect("idle recipient is not a package"),
+        None
+    );
+    assert!(!idle.remove_mail_merge_package().expect("idle remove"));
+    let idle_before = idle.to_bytes().unwrap();
+    let idle_error = idle
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/idle.csv".to_owned(),
+            },
+            Vec::new(),
+            vec![f290_recipient(0, b"new", true)],
+        ))
+        .unwrap_err();
+    assert!(idle_error.to_string().contains("recipient"), "{idle_error}");
+    assert_eq!(idle.to_bytes().unwrap(), idle_before);
+
+    let mut broken_ref = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:mailMerge>
+    <w:mainDocumentType w:val="formLetters"/>
+    <w:dataType w:val="textFile"/>
+    <w:dataSource r:id="src"/>
+    <w:odso><w:recipientData r:id="gone"/></w:odso>
+  </w:mailMerge>
+</w:settings>"#,
+        &[("src", "file:///declared/broken.csv")],
+    );
+    assert!(
+        broken_ref.mail_merge_package().is_err(),
+        "missing recipient target"
+    );
+    let broken_before = broken_ref.to_bytes().unwrap();
+    let broken_set = broken_ref
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/replaced.csv".to_owned(),
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .unwrap_err();
+    assert!(
+        broken_set.to_string().contains("recipient") || broken_set.to_string().contains("missing"),
+        "{broken_set}"
+    );
+    assert_eq!(broken_ref.to_bytes().unwrap(), broken_before);
+
+    let mut unsafe_clear = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:mailMerge>
+    <w:mainDocumentType w:val="formLetters"/>
+    <w:dataType w:val="textFile"/>
+    <w:dataSource r:id="src"/>
+    <w:odso><u:src xmlns:u="urn:f290:foreign"/><w:src r:id="src"/></w:odso>
+  </w:mailMerge>
+</w:settings>"#,
+        &[("src", "file:///declared/shaped.csv")],
+    );
+    assert!(
+        unsafe_clear
+            .mail_merge_package()
+            .expect("qualified source still queries")
+            .is_some()
+    );
+    let shaped_before = unsafe_clear.to_bytes().unwrap();
+    let clear_error = unsafe_clear.remove_mail_merge_package().unwrap_err();
+    assert!(
+        clear_error.to_string().contains("source") || clear_error.to_string().contains("prove"),
+        "{clear_error}"
+    );
+    assert_eq!(unsafe_clear.to_bytes().unwrap(), shaped_before);
+    assert!(
+        unsafe_clear
+            .mail_merge_package()
+            .expect("not falsely cleared")
+            .is_some()
+    );
+
+    let mode_cases = [
+        ("Internal", true, "internal mode stays an owned edge"),
+        ("External", false, "external"),
+        ("OtherMode", false, "mode"),
+    ];
+    for (mode, allowed, needle) in mode_cases {
+        let mut host = Document::new();
+        host.set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/mode.csv".to_owned(),
+            },
+            Vec::new(),
+            vec![f290_recipient(0, b"mode-tag", true)],
+        ))
+        .expect("mode host");
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(host.to_bytes().unwrap())).unwrap();
+        {
+            let rels = package.get_or_create_part_rels("/word/settings.xml");
+            let rel = rels
+                .items
+                .iter_mut()
+                .find(|item| item.rel_type == F290_RECIPIENT_DATA)
+                .expect("recipient relationship");
+            rel.target_mode = Some(mode.to_owned());
+        }
+        let mut host = Document::from_bytes(&f290_package_bytes(&package)).unwrap();
+        let before = host.to_bytes().unwrap();
+        if allowed {
+            let snapshot = host.mail_merge_package().expect(needle).expect("package");
+            assert_eq!(
+                snapshot.recipients,
+                vec![f290_recipient(0, b"mode-tag", true)]
+            );
+            assert_eq!(host.to_bytes().unwrap(), before, "{needle}");
+        } else {
+            let refused = host
+                .set_mail_merge_package(f290_options(
+                    MailMergePackageSource::External {
+                        uri: "file:///declared/mode-next.csv".to_owned(),
+                    },
+                    Vec::new(),
+                    Vec::new(),
+                ))
+                .unwrap_err();
+            assert!(
+                refused.to_string().contains(needle) || refused.to_string().contains("recipient"),
+                "{mode}: {refused}"
+            );
+            assert_eq!(host.to_bytes().unwrap(), before, "{mode}");
+        }
+    }
+
+    let mut outgoing = Document::new();
+    outgoing
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/outgoing.csv".to_owned(),
+            },
+            Vec::new(),
+            vec![f290_recipient(0, b"out", true)],
+        ))
+        .expect("outgoing host");
+    let mut outgoing_package =
+        OpcPackage::from_reader(std::io::Cursor::new(outgoing.to_bytes().unwrap())).unwrap();
+    let outgoing_part = outgoing_package
+        .parts
+        .keys()
+        .find(|name| name.contains("recipientData"))
+        .cloned()
+        .expect("outgoing part");
+    outgoing_package
+        .get_or_create_part_rels(&outgoing_part)
+        .add_with_id(
+            "rIdOut",
+            F290_MAIL_MERGE_SOURCE,
+            "file:///declared/outgoing-edge.csv",
+        );
+    let mut outgoing = Document::from_bytes(&f290_package_bytes(&outgoing_package)).unwrap();
+    let outgoing_before = outgoing.to_bytes().unwrap();
+    let outgoing_error = outgoing
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/outgoing.csv".to_owned(),
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .unwrap_err();
+    assert!(
+        outgoing_error.to_string().contains("outgoing"),
+        "{outgoing_error}"
+    );
+    assert_eq!(outgoing.to_bytes().unwrap(), outgoing_before);
+
+    let mut duplicated_refs = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:mailMerge>
+    <w:mainDocumentType w:val="formLetters"/>
+    <w:dataType w:val="textFile"/>
+    <w:dataSource r:id="src"/>
+    <w:odso><w:recipientData r:id="r1"/><w:recipientData r:id="r2"/></w:odso>
+  </w:mailMerge>
+</w:settings>"#,
+        &[("src", "file:///declared/dup-ref.csv")],
+    );
+    let duplicated_before = duplicated_refs.to_bytes().unwrap();
+    let duplicated_error = duplicated_refs
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/dup-ref.csv".to_owned(),
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .unwrap_err();
+    assert!(
+        duplicated_error.to_string().contains("duplicated"),
+        "{duplicated_error}"
+    );
+    assert_eq!(duplicated_refs.to_bytes().unwrap(), duplicated_before);
+
+    let mut wrong_type = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:mailMerge>
+    <w:mainDocumentType w:val="formLetters"/>
+    <w:dataType w:val="textFile"/>
+    <w:dataSource r:id="src"/>
+  </w:mailMerge>
+</w:settings>"#,
+        &[("src", "file:///declared/wrong-type.csv")],
+    );
+    {
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(wrong_type.to_bytes().unwrap())).unwrap();
+        let rels = package.get_or_create_part_rels("/word/settings.xml");
+        let rel = rels
+            .items
+            .iter_mut()
+            .find(|item| item.id == "src")
+            .expect("source relationship");
+        rel.rel_type =
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+                .to_owned();
+        wrong_type = Document::from_bytes(&f290_package_bytes(&package)).unwrap();
+    }
+    let wrong_before = wrong_type.to_bytes().unwrap();
+    let wrong_error = wrong_type
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/wrong-type.csv".to_owned(),
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .unwrap_err();
+    assert!(
+        wrong_error.to_string().contains("mailMergeSource")
+            || wrong_error.to_string().contains("source"),
+        "{wrong_error}"
+    );
+    assert_eq!(wrong_type.to_bytes().unwrap(), wrong_before);
+
+    let mut braced = Document::new();
+    braced
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["given".to_owned()],
+                records: vec![vec!["Ada".to_owned()]],
+            },
+            vec![f290_mapping(0, "given", "FirstName")],
+            Vec::new(),
+        ))
+        .expect("guid host");
+    let mut braced_package =
+        OpcPackage::from_reader(std::io::Cursor::new(braced.to_bytes().unwrap())).unwrap();
+    let mut settings = String::from_utf8(
+        braced_package
+            .get_part("/word/settings.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let marker = settings
+        .find("rdocx.mailMerge.storeItemId")
+        .expect("store docVar");
+    let val_at =
+        settings[marker..].find("w:val=\"").expect("docVar value") + marker + "w:val=\"".len();
+    let val_end = settings[val_at..].find('"').expect("docVar end") + val_at;
+    let canonical = settings[val_at..val_end].to_owned();
+    let equivalent = format!("{{{}}}", canonical.to_ascii_uppercase());
+    settings.replace_range(val_at..val_end, &equivalent);
+    braced_package.set_part("/word/settings.xml", settings.into_bytes());
+    let braced = Document::from_bytes(&f290_package_bytes(&braced_package)).unwrap();
+    let equivalent_view = braced
+        .mail_merge_package()
+        .expect("brace query")
+        .expect("package");
+    assert_eq!(equivalent_view.mappings[0].source_name, "given");
+    assert_eq!(
+        equivalent_view.source,
+        MailMergePackageSource::Embedded {
+            columns: vec!["given".to_owned()],
+            records: vec![vec!["Ada".to_owned()]],
+        }
+    );
+    let item_part = braced_package
+        .parts
+        .keys()
+        .find(|name| name.contains("customXml/item") && !name.contains("Props"))
+        .cloned()
+        .expect("store item");
+    let props_rel = braced_package
+        .get_part_rels(&item_part)
+        .expect("item rels")
+        .items
+        .iter()
+        .find(|item| item.rel_type.contains("customXmlProps"))
+        .cloned()
+        .expect("props rel");
+    let props_part = OpcPackage::resolve_rel_target(&item_part, &props_rel.target);
+    let item_bytes = braced_package.get_part(&item_part).unwrap().to_vec();
+    let props_bytes = braced_package.get_part(&props_part).unwrap().to_vec();
+    braced_package.set_part("/customXml/item9.xml", item_bytes);
+    braced_package.set_part("/customXml/itemProps9.xml", props_bytes);
+    braced_package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_with_id(
+            "rIdDupStore",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml",
+            "../customXml/item9.xml",
+        );
+    braced_package
+        .get_or_create_part_rels("/customXml/item9.xml")
+        .add_with_id("rIdDupProps", &props_rel.rel_type, "itemProps9.xml");
+    let mut duplicated_store = Document::from_bytes(&f290_package_bytes(&braced_package)).unwrap();
+    let store_before = duplicated_store.to_bytes().unwrap();
+    let store_error = duplicated_store
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["given".to_owned()],
+                records: vec![vec!["Grace".to_owned()]],
+            },
+            vec![f290_mapping(0, "given", "FirstName")],
+            Vec::new(),
+        ))
+        .unwrap_err();
+    assert!(store_error.to_string().contains("ambigu"), "{store_error}");
+    assert_eq!(duplicated_store.to_bytes().unwrap(), store_before);
+
+    let mut payload_failures = Vec::new();
+    for (label, item_xml) in [
+        (
+            "foreign root",
+            br#"<foreign xmlns="urn:rdocx:mail-merge-data:v1"/>"#.as_slice(),
+        ),
+        (
+            "producer attribute",
+            br#"<mergeData producer="kept" xmlns="urn:rdocx:mail-merge-data:v1"><columns><column name="given"/></columns><records><record><cell>Ada</cell></record></records></mergeData>"#.as_slice(),
+        ),
+        (
+            "ragged row",
+            br#"<mergeData xmlns="urn:rdocx:mail-merge-data:v1"><columns><column name="given"/></columns><records><record><cell>Ada</cell><cell>extra</cell></record></records></mergeData>"#.as_slice(),
+        ),
+    ] {
+        let mut host = Document::new();
+        host.set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["given".to_owned()],
+                records: vec![vec!["Ada".to_owned()]],
+            },
+            vec![f290_mapping(0, "given", "FirstName")],
+            Vec::new(),
+        ))
+        .expect(label);
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(host.to_bytes().unwrap())).unwrap();
+        let item_part = package
+            .parts
+            .keys()
+            .find(|name| name.contains("customXml/item") && !name.contains("Props"))
+            .cloned()
+            .expect(label);
+        package.set_part(&item_part, item_xml.to_vec());
+        let mut poisoned = Document::from_bytes(&f290_package_bytes(&package)).unwrap();
+        let before = f290_part_inventory(&mut poisoned);
+        match poisoned.mail_merge_package() {
+            Err(_) => {}
+            Ok(value) => payload_failures.push(format!("{label} query returned {value:?}")),
+        }
+        let embedded_set = poisoned.set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["given".to_owned()],
+                records: vec![vec!["Grace".to_owned()]],
+            },
+            vec![f290_mapping(0, "given", "FirstName")],
+            Vec::new(),
+        ));
+        if embedded_set.is_ok() {
+            payload_failures.push(format!("{label} embedded assignment succeeded"));
+        }
+        let external_set = poisoned.set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/replace.csv".to_owned(),
+            },
+            Vec::new(),
+            Vec::new(),
+        ));
+        if external_set.is_ok() {
+            payload_failures.push(format!("{label} external assignment succeeded"));
+        }
+        if f290_part_inventory(&mut poisoned) != before {
+            payload_failures.push(format!("{label} changed package parts"));
+        }
+    }
+    assert!(
+        payload_failures.is_empty(),
+        "{}",
+        payload_failures.join("\n")
+    );
+}
+
+#[test]
+fn author_mail_merge_mappings_use_word_slots() {
+    let mut document = Document::new();
+    document
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/slots.csv".to_owned(),
+            },
+            Vec::new(),
+            Vec::new(),
+        ))
+        .expect("empty mappings");
+    let empty = document
+        .mail_merge_package()
+        .expect("read empty mappings")
+        .expect("package");
+    assert!(empty.mappings.is_empty());
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let settings =
+        String::from_utf8(package.get_part("/word/settings.xml").unwrap().to_vec()).unwrap();
+    assert_eq!(settings.matches("w:val=\"null\"").count(), 30);
+    assert!(!settings.contains("dbColumn"));
+    for role in F290_WORD_ROLES {
+        assert!(
+            !empty.mappings.iter().any(|item| item.mapped_name == role),
+            "{role} must not be returned as padding"
+        );
+    }
+
+    document
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::Embedded {
+                columns: vec!["given".to_owned(), "family".to_owned(), "dept".to_owned()],
+                records: vec![vec![
+                    "Ada".to_owned(),
+                    "Lovelace".to_owned(),
+                    "Eng".to_owned(),
+                ]],
+            },
+            vec![
+                f290_mapping(2, "dept", "Department"),
+                f290_mapping(0, "given", "FirstName"),
+                f290_mapping(1, "family", "LastName"),
+            ],
+            Vec::new(),
+        ))
+        .expect("out-of-order roles");
+    let snapshot = document
+        .mail_merge_package()
+        .expect("read slots")
+        .expect("slots");
+    assert_eq!(
+        snapshot
+            .mappings
+            .iter()
+            .map(|item| item.mapped_name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["FirstName", "LastName", "Department"]
+    );
+    let package =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let settings =
+        String::from_utf8(package.get_part("/word/settings.xml").unwrap().to_vec()).unwrap();
+    assert_eq!(settings.matches("dbColumn").count(), 3);
+    assert_eq!(settings.matches("w:val=\"null\"").count(), 27);
+
+    let before = document.to_bytes().unwrap();
+    let invalid = document
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/slots.csv".to_owned(),
+            },
+            vec![f290_mapping(0, "given", "NotARole")],
+            Vec::new(),
+        ))
+        .unwrap_err();
+    assert!(
+        invalid.to_string().contains("NotARole")
+            || invalid.to_string().contains("role")
+            || invalid.to_string().contains("not authored"),
+        "{invalid}"
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let duplicate = document.set_mail_merge_package(f290_options(
+        MailMergePackageSource::Embedded {
+            columns: vec!["given".to_owned(), "family".to_owned()],
+            records: Vec::new(),
+        },
+        vec![
+            f290_mapping(0, "given", "LastName"),
+            f290_mapping(1, "family", "LastName"),
+        ],
+        Vec::new(),
+    ));
+    assert!(duplicate.is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    let mut authored = Document::new();
+    let authored_before = authored.to_bytes().unwrap();
+    authored
+        .set_mail_merge_package(f290_options(
+            MailMergePackageSource::External {
+                uri: "file:///declared/slots.csv".to_owned(),
+            },
+            Vec::new(),
+            vec![f290_recipient(0, b"opaque", true)],
+        ))
+        .expect("standard recipient part");
+    assert_ne!(authored.to_bytes().unwrap(), authored_before);
+    assert_eq!(
+        authored
+            .mail_merge_package()
+            .expect("read recipient")
+            .expect("package")
+            .recipients,
+        vec![f290_recipient(0, b"opaque", true)]
+    );
+
+    let mut exact = f290_declared_settings();
+    exact.connect_string = Some("a\tb\rc\nd".to_owned());
+    exact.query = Some("q\tq".to_owned());
+    exact.address_field_name = Some("n\nn".to_owned());
+    let mut mapping = f290_mapping(0, "a\tb", "FirstName");
+    mapping.language = Some("en\rUS".to_owned());
+    let mut spaced = Document::new();
+    spaced
+        .set_mail_merge_package(MailMergePackageOptions {
+            settings: exact,
+            source: MailMergePackageSource::Embedded {
+                columns: vec!["a\tb".to_owned()],
+                records: Vec::new(),
+            },
+            mappings: vec![mapping],
+            recipients: Vec::new(),
+        })
+        .expect("exact attribute escapes");
+    let spaced_xml = String::from_utf8(f290_settings_xml(&mut spaced)).unwrap();
+    for needle in [
+        "a&#9;b&#13;c&#10;d",
+        "q&#9;q",
+        "n&#10;n",
+        "a&#9;b",
+        "en&#13;US",
+    ] {
+        assert!(
+            spaced_xml.contains(needle),
+            "missing exact attribute {needle} in {spaced_xml}"
+        );
+    }
+    let spaced = f290_reopen(&mut spaced);
+    let spaced_settings = spaced.mail_merge_settings().expect("settings");
+    assert_eq!(
+        spaced_settings.connect_string.as_deref(),
+        Some("a\tb\rc\nd")
+    );
+    assert_eq!(spaced_settings.query.as_deref(), Some("q\tq"));
+    assert_eq!(spaced_settings.address_field_name.as_deref(), Some("n\nn"));
+    let spaced_package = spaced.mail_merge_package().expect("read").expect("package");
+    assert_eq!(spaced_package.mappings[0].source_name, "a\tb");
+    assert_eq!(
+        spaced_package.mappings[0].language.as_deref(),
+        Some("en\rUS")
+    );
+
+    let dynamic = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:mailMerge>
+    <w:mainDocumentType w:val="formLetters"/>
+    <w:dataType w:val="textFile"/>
+    <w:dataSource r:id="src"/>
+    <w:odso>
+      <w:fieldMapData><w:type w:val="dbColumn"/><w:name w:val="Family"/><w:mappedName w:val="LastName"/><w:column w:val="0"/></w:fieldMapData>
+      <w:fieldMapData><w:type w:val="dbColumn"/><w:name w:val="Given"/><w:mappedName w:val="FirstName"/><w:column w:val="1"/><w:dynamicAddress/></w:fieldMapData>
+      <w:fieldMapData><w:type w:val="dbColumn"/><w:name w:val="City"/><w:mappedName w:val="City"/><w:column w:val="2"/><w:dynamicAddress w:val="on"/></w:fieldMapData>
+      <w:fieldMapData><w:type w:val="dbColumn"/><w:name w:val="State"/><w:mappedName w:val="State"/><w:column w:val="3"/><w:dynamicAddress w:val="off"/></w:fieldMapData>
+      <w:fieldMapData><w:type w:val="dbColumn"/><w:name w:val="Zip"/><w:mappedName w:val="PostalCode"/><w:column w:val="4"/><w:dynamicAddress w:val="false"/></w:fieldMapData>
+    </w:odso>
+  </w:mailMerge>
+</w:settings>"#,
+        &[("src", "file:///declared/dynamic.csv")],
+    );
+    let dynamic_view = dynamic
+        .mail_merge_package()
+        .expect("dynamic query")
+        .expect("package");
+    assert_eq!(
+        dynamic_view
+            .mappings
+            .iter()
+            .map(|item| item.dynamic_address)
+            .collect::<Vec<_>>(),
+        vec![None, Some(true), Some(true), Some(false), Some(false)]
+    );
+    let mut dynamic = dynamic;
+    let before_narrow = f290_settings_xml(&mut dynamic);
+    let mut narrow = dynamic.mail_merge_settings().unwrap().clone();
+    narrow.active_record = Some(2);
+    dynamic
+        .set_mail_merge_settings(narrow)
+        .expect("narrow edit keeps dynamic spellings");
+    let after_narrow = String::from_utf8(f290_settings_xml(&mut dynamic)).unwrap();
+    let before_narrow = String::from_utf8(before_narrow).unwrap();
+    for needle in [
+        "<w:dynamicAddress/>",
+        "w:val=\"on\"",
+        "w:val=\"off\"",
+        "w:val=\"false\"",
+    ] {
+        assert!(before_narrow.contains(needle), "{needle}");
+        assert!(after_narrow.contains(needle), "narrow edit lost {needle}");
+    }
+    let duplicated = f290_plant_settings(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:mailMerge>
+    <w:mainDocumentType w:val="formLetters"/>
+    <w:dataType w:val="textFile"/>
+    <w:dataSource r:id="src"/>
+    <w:odso><w:fieldMapData>
+      <w:type w:val="dbColumn"/><w:name w:val="Family"/><w:mappedName w:val="LastName"/><w:column w:val="0"/>
+      <w:dynamicAddress/><w:dynamicAddress/>
+    </w:fieldMapData></w:odso>
+  </w:mailMerge>
+</w:settings>"#,
+        &[("src", "file:///declared/duplicate-dynamic.csv")],
+    );
+    assert!(
+        duplicated.mail_merge_package().is_err(),
+        "duplicate empty dynamicAddress is a duplicate"
+    );
 }

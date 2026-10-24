@@ -758,3 +758,47 @@ def s953_typed_authoring_contract(owner: Document, location: ContentLocation) ->
     assert_type(owner.add_custom_xml_store(b"<root/>"), str)
     assert_type(owner.add_custom_xml_store(b"<root/>", ("urn:example",)), str)
     assert_type(owner.remove_content_range(0, 0), int)
+
+
+def mail_merge_package_signatures() -> None:
+    from rdocx import (
+        Document,
+        MailMergeFieldMapping,
+        MailMergePackageDiagnostic,
+        MailMergePackageOptions,
+        MailMergePackageSource,
+        MailMergePreparedData,
+        MailMergeRecipient,
+        MailMergeSettings,
+    )
+
+    source: MailMergePackageSource = MailMergePackageSource.embedded(("given",), (("Ada",),))
+    external: MailMergePackageSource = MailMergePackageSource.external("file:///declared/people.csv")
+    settings: MailMergeSettings = MailMergeSettings()
+    mapping: MailMergeFieldMapping = MailMergeFieldMapping(0, "given", "FirstName")
+    recipient: MailMergeRecipient = MailMergeRecipient(0, b"tag")
+    options: MailMergePackageOptions = MailMergePackageOptions(
+        source, settings=settings, mappings=(mapping,), recipients=(recipient,)
+    )
+    document = Document()
+    document.set_mail_merge_package(options)
+    snapshot: MailMergePackageOptions | None = document.mail_merge_package()
+    removed: bool = document.remove_mail_merge_package()
+    prepared: MailMergePreparedData = document.prepare_mail_merge_data(
+        policy="caller_supplied", external_records=({"given": "Ada"},)
+    )
+    kind: Literal["embedded", "external"] = external.kind
+    diagnostic: MailMergePackageDiagnostic = prepared.diagnostics[0]
+    assert_type(source.columns, tuple[str, ...])
+    assert_type(source.records, tuple[tuple[str, ...], ...])
+    assert_type(source.uri, str | None)
+    assert_type(settings.data_type, str | None)
+    assert_type(settings.active_record, int | None)
+    assert_type(mapping.dynamic_address, bool | None)
+    assert_type(recipient.unique_tag, bytes)
+    assert_type(options.mappings, tuple[MailMergeFieldMapping, ...])
+    assert_type(prepared.records, tuple[dict[str, str], ...])
+    assert_type(diagnostic.kind, Literal["external_source_blocked", "external_source_unavailable", "unsupported_source"])
+    assert_type(kind, Literal["embedded", "external"])
+    assert_type(snapshot, MailMergePackageOptions | None)
+    assert_type(removed, bool)

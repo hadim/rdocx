@@ -615,6 +615,21 @@ PowerPoint edge. The all-target tree admits this test-only edge and retains the
 rule that no `oxml-*` crate depends on either facade family.
 
 ## What stays put
+Mail-merge package authoring stays in `rdocx::field` and the existing settings
+grammar. It adds four `Document` methods. Rust carriers are owned mutable
+inputs and read copies. It does not add a merge engine, a connector, or a
+second settings writer. Flat `mail_merge` and rich `mail_merge_rich` still
+consume records the caller already holds. Package prepare is offline unless
+the caller passes `CallerSupplied` rows for a faithful external source.
+Embedded rows live in one versioned custom XML store named by
+`rdocx.mailMerge.storeItemId`. An identical store is reused. A changed
+unshared store is replaced in place. A shared or bound store is copied to a
+new GUID and the old store is kept. Settings relationships stay on the
+settings part. Recipient capacity is one part for the whole package across
+both recipient content types. A changed shared recipient part is kept and the
+write is refused. The same four methods are the Python surface. The seven
+Python classes stay frozen. WASM and CLI gain no authoring method.
+
 Bibliography source authoring and formatting stay in the native
 `rdocx::bibliography` module. It owns qualified custom XML source inspection,
 checked source CRUD, document style/options and concrete measured citation and

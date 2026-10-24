@@ -94,9 +94,13 @@ pub use field::{
     GeneratedTablesReport, IndexEntry, IndexOptions, LayoutBackedFieldUpdateReport,
     LegacyCheckBoxSize, LegacyFormFieldDefinition, LegacyFormFieldInfo, LegacyFormFieldKind,
     LegacyFormFieldOptions, LegacyFormFieldValue, LegacyFormInfoText, LegacyTextInputType,
-    MailMergeControl, MailMergeData, MailMergeFormatContext, MailMergeFormattedText,
-    MailMergeImage, MailMergeRecord, MailMergeValue, SequenceOptions, TableOfAuthoritiesOptions,
+    MailMergeControl, MailMergeData, MailMergeFieldMapping, MailMergeFormatContext,
+    MailMergeFormattedText, MailMergeImage, MailMergePackageDiagnostic,
+    MailMergePackageDiagnosticKind, MailMergePackageOptions, MailMergePackageSource,
+    MailMergePreparedData, MailMergeRecipient, MailMergeRecord, MailMergeSourcePolicy,
+    MailMergeTableBudget, MailMergeValue, SequenceOptions, TableOfAuthoritiesOptions,
     TableOfFiguresOptions, TcField, TocEntrySelection, TocField, TocRebuildReport,
+    validate_mail_merge_external_uri,
 };
 pub use html::{
     HtmlDiagnostic, HtmlFragmentInsertResult, HtmlImageResource, HtmlReadResult, MhtmlDiagnostic,

@@ -12990,3 +12990,502 @@ def test_fx265_insert_document_keeps_picture_bytes_for_both_orders():
                         part = posixpath.normpath(posixpath.join("word", target_name))
                     shown.append(package.read(part))
             assert shown[2:] == [order[0], order[1]]
+
+
+import collections.abc
+
+
+class _CountedSequence(collections.abc.Sequence):
+    def __init__(self, reported):
+        self.reported = reported
+
+    def __len__(self):
+        return self.reported
+
+    def __getitem__(self, index):
+        raise AssertionError("mail-merge sequence was indexed before the cap")
+
+
+def test_mail_merge_package_authoring_round_trips_public_api():
+    import inspect
+    import io
+    import zipfile
+    import rdocx
+    from rdocx import _rdocx
+
+    names = (
+        "MailMergePackageSource",
+        "MailMergeSettings",
+        "MailMergeFieldMapping",
+        "MailMergeRecipient",
+        "MailMergePackageOptions",
+        "MailMergePackageDiagnostic",
+        "MailMergePreparedData",
+    )
+    for name in names:
+        assert name in rdocx.__all__
+        assert getattr(rdocx, name) is getattr(_rdocx, name)
+    columns = ["héllo", "line"]
+    rows = [["你\r\n", "a\tb"]]
+    source = rdocx.MailMergePackageSource.embedded(columns, rows)
+    columns.append("mutated")
+    rows[0].append("mutated")
+    assert source.columns == ("héllo", "line")
+    assert source.records == (("你\r\n", "a\tb"),)
+    external = rdocx.MailMergePackageSource.external("file:///declared/people.csv")
+    mapping = rdocx.MailMergeFieldMapping(0, "héllo", "FirstName", language="en-US")
+    recipient = rdocx.MailMergeRecipient(0, b"opaque", active=False)
+    option_mappings = [mapping]
+    options = rdocx.MailMergePackageOptions(source, mappings=option_mappings, recipients=(recipient,))
+    option_mappings.clear()
+    assert options.mappings[0].source_name == "héllo"
+    assert options.settings.main_document_type == "formLetters"
+    assert options.settings.data_type == "textFile"
+    prepared_document = rdocx.Document()
+    prepared_document.set_mail_merge_package(rdocx.MailMergePackageOptions(source))
+    prepared = prepared_document.prepare_mail_merge_data()
+    prepared.records[0]["héllo"] = "local copy"
+    assert prepared.records[0]["héllo"] == "你\r\n"
+    blocked_document = rdocx.Document()
+    blocked_document.set_mail_merge_package(rdocx.MailMergePackageOptions(external))
+    diagnostic = blocked_document.prepare_mail_merge_data().diagnostics[0]
+    for carrier, attribute, value in (
+        (source, "uri", "file:///changed.csv"),
+        (options.settings, "data_type", "database"),
+        (mapping, "mapped_name", "LastName"),
+        (recipient, "active", True),
+        (options, "source", external),
+        (diagnostic, "message", "changed"),
+        (prepared, "records", ()),
+    ):
+        with pytest.raises(AttributeError):
+            setattr(carrier, attribute, value)
+    signature = inspect.signature(rdocx.MailMergeSettings)
+    assert signature.parameters["main_document_type"].default == "formLetters"
+    assert signature.parameters["data_type"].default == "textFile"
+    assert signature.parameters["link_to_query"].default is None
+    assert inspect.signature(rdocx.MailMergeFieldMapping).parameters["language"].default is None
+    assert inspect.signature(rdocx.MailMergeRecipient).parameters["active"].default is True
+    options_signature = inspect.signature(rdocx.MailMergePackageOptions)
+    assert options_signature.parameters["settings"].default is None
+    assert options_signature.parameters["mappings"].default == ()
+    assert options_signature.parameters["recipients"].default == ()
+    assert inspect.signature(rdocx.Document.prepare_mail_merge_data).parameters["policy"].default == "offline"
+    document = rdocx.Document()
+    document.set_mail_merge_package(options)
+    document.add_table(1, 1)
+    held_cell = document.tables[0].rows[0].cells[0]
+    held_cell.text = "cell"
+    held = document.add_paragraph("held")
+    held_run = held.runs[0]
+    same = document.to_bytes()
+    document.set_mail_merge_package(options)
+    assert document.to_bytes() == same
+    assert held.text == "held" and held_run.text == "held" and held_cell.text == "cell"
+    def relocate_owner(package_bytes):
+        with zipfile.ZipFile(io.BytesIO(package_bytes)) as archive:
+            parts = {item: archive.read(item) for item in archive.namelist()}
+        settings_name = next(name for name in parts if name.endswith("settings.xml") and b"mailMerge" in parts[name])
+        rels_name = settings_name.rsplit("/", 1)[0] + "/_rels/" + settings_name.rsplit("/", 1)[1] + ".rels"
+        if rels_name not in parts:
+            rels_name = "word/_rels/settings.xml.rels"
+        recipient_name = next(name for name in parts if name.endswith("recipientData.xml"))
+        new_settings = "custom/merge-owner.xml"
+        new_recipient = "custom/rows/people.xml"
+        new_rels = "custom/_rels/merge-owner.xml.rels"
+        types = parts["[Content_Types].xml"].decode()
+        types = types.replace(f'PartName="/{settings_name}"', 'PartName="/custom/merge-owner.xml"')
+        types = types.replace(f'PartName="/{recipient_name}"', 'PartName="/custom/rows/people.xml"')
+        parts["[Content_Types].xml"] = types.encode()
+        document_rels = parts["word/_rels/document.xml.rels"].decode()
+        document_rels = document_rels.replace("settings.xml", "../custom/merge-owner.xml")
+        parts["word/_rels/document.xml.rels"] = document_rels.encode()
+        owner_rels = parts.pop(rels_name).decode()
+        owner_rels = owner_rels.replace(recipient_name.rsplit("/", 1)[-1], "rows/people.xml")
+        parts[new_rels] = owner_rels.encode()
+        parts[new_settings] = parts.pop(settings_name)
+        parts[new_recipient] = parts.pop(recipient_name)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            for item, blob in parts.items():
+                archive.writestr(item, blob)
+        return buffer.getvalue()
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    snapshot = reopened.mail_merge_package()
+    assert snapshot.source.records == (("你\r\n", "a\tb"),)
+    moved = rdocx.Document.from_bytes(relocate_owner(document.to_bytes()))
+    moved_snapshot = moved.mail_merge_package()
+    assert moved_snapshot.source.records == (("你\r\n", "a\tb"),)
+    assert moved_snapshot.recipients[0].unique_tag == b"opaque"
+    moved.set_mail_merge_package(
+        rdocx.MailMergePackageOptions(
+            source,
+            recipients=(rdocx.MailMergeRecipient(1, b"moved", active=False),),
+        )
+    )
+    updated = rdocx.Document.from_bytes(moved.to_bytes()).mail_merge_package()
+    assert updated.recipients[0].unique_tag == b"moved" and updated.recipients[0].active is False
+    with zipfile.ZipFile(io.BytesIO(moved.to_bytes())) as archive:
+        assert "custom/merge-owner.xml" in archive.namelist()
+        assert "custom/rows/people.xml" in archive.namelist()
+    assert snapshot.recipients[0].unique_tag == b"opaque" and snapshot.recipients[0].active is False
+    assert reopened.remove_mail_merge_package() is True
+    assert reopened.mail_merge_package() is None
+    assert reopened.remove_mail_merge_package() is False
+    before = document.to_bytes()
+    with pytest.raises(TypeError):
+        document.set_mail_merge_package(source)
+    assert document.to_bytes() == before
+    assert held.text == "held" and held_run.text == "held" and held_cell.text == "cell"
+
+
+def test_mail_merge_data_preparation_is_offline_and_diagnostic():
+    import rdocx
+
+    absent = rdocx.Document()
+    with pytest.raises(rdocx.RdocxError, match="absent"):
+        absent.prepare_mail_merge_data()
+    document = rdocx.Document()
+    document.set_mail_merge_package(
+        rdocx.MailMergePackageOptions(rdocx.MailMergePackageSource.external("file:///declared/people.csv"))
+    )
+    blocked = document.prepare_mail_merge_data()
+    assert blocked.records == () and blocked.diagnostics[0].kind == "external_source_blocked"
+    with pytest.raises(AttributeError):
+        blocked.diagnostics[0].kind = "changed"
+    with pytest.raises(rdocx.RdocxError):
+        document.prepare_mail_merge_data(external_records=_CountedSequence(1))
+    unavailable = document.prepare_mail_merge_data(policy="caller_supplied")
+    assert unavailable.records == ()
+    assert unavailable.diagnostics[0].kind == "external_source_unavailable"
+    empty = document.prepare_mail_merge_data(policy="caller_supplied", external_records=())
+    assert empty.records == () and empty.diagnostics == ()
+    supplied = document.prepare_mail_merge_data(policy="caller_supplied", external_records=[{"kept": "row"}])
+    first = supplied.records
+    first[0]["kept"] = "changed"
+    assert supplied.records[0]["kept"] == "row"
+    alias = rdocx.Document()
+    alias.set_mail_merge_package(
+        rdocx.MailMergePackageOptions(
+            rdocx.MailMergePackageSource.external("file:///declared/people.csv"),
+            mappings=(rdocx.MailMergeFieldMapping(0, "Family", "LastName"),),
+        )
+    )
+    aliased = alias.prepare_mail_merge_data(policy="caller_supplied", external_records=_CountedSequence(1))
+    assert aliased.records == () and aliased.diagnostics[0].kind == "unsupported_source"
+    native = rdocx.Document()
+    native.set_mail_merge_package(
+        rdocx.MailMergePackageOptions(
+            rdocx.MailMergePackageSource.embedded(["FirstName"], [["Ada"]]),
+            settings=rdocx.MailMergeSettings(data_type="native"),
+            mappings=(rdocx.MailMergeFieldMapping(0, "FirstName", "FirstName"),),
+        )
+    )
+    native_rows = native.prepare_mail_merge_data()
+    assert native_rows.records == () and native_rows.diagnostics[0].kind == "unsupported_source"
+    embedded = rdocx.Document()
+    embedded.set_mail_merge_package(
+        rdocx.MailMergePackageOptions(
+            rdocx.MailMergePackageSource.embedded(["FirstName"], [["Ada"]]),
+            mappings=(rdocx.MailMergeFieldMapping(0, "FirstName", "FirstName"),),
+            recipients=(rdocx.MailMergeRecipient(0, b"tag"),),
+        )
+    )
+    blocked_rows = embedded.prepare_mail_merge_data()
+    assert blocked_rows.records == () and blocked_rows.diagnostics[0].kind == "unsupported_source"
+    with pytest.raises(rdocx.RdocxError):
+        embedded.prepare_mail_merge_data(policy="caller_supplied", external_records=_CountedSequence(1))
+
+
+def test_mail_merge_package_snapshot_and_conversion_are_atomic():
+    import io
+    import zipfile
+    import rdocx
+
+    with pytest.raises(rdocx.XmlError):
+        rdocx.MailMergePackageSource.embedded(["\u0001"], [])
+    with pytest.raises(rdocx.RdocxError):
+        rdocx.MailMergePackageSource.external("ftp://declared.example/people.csv")
+    with pytest.raises(ValueError):
+        rdocx.MailMergePackageSource.embedded(_CountedSequence(1025), [])
+    with pytest.raises(ValueError):
+        rdocx.MailMergePackageSource.embedded(["a"], _CountedSequence(100_001))
+    with pytest.raises(rdocx.RdocxError, match="16 MiB"):
+        rdocx.MailMergePackageSource.embedded(["&" * 4_000_000], [])
+    with pytest.raises(rdocx.RdocxError, match="rectangular"):
+        rdocx.MailMergePackageSource.embedded(["a"], [["x", "y"]])
+    with pytest.raises(TypeError):
+        rdocx.MailMergePackageOptions(
+            rdocx.MailMergePackageSource.external("https://declared.example/people.csv"),
+            mappings=None,
+        )
+    with pytest.raises(TypeError):
+        rdocx.MailMergeFieldMapping(True, "given", "FirstName")
+    with pytest.raises(ValueError):
+        rdocx.MailMergeFieldMapping(-1, "given", "FirstName")
+    with pytest.raises(OverflowError):
+        rdocx.MailMergeFieldMapping(2**32, "given", "FirstName")
+    with pytest.raises(TypeError):
+        rdocx.MailMergeRecipient(0, b"tag", active=1)
+    low = rdocx.MailMergeSettings(active_record=-1, check_errors=-5)
+    assert low.active_record == -1 and low.check_errors == -5
+    with pytest.raises(OverflowError):
+        rdocx.MailMergeSettings(active_record=2**31)
+    with pytest.raises(ValueError):
+        rdocx.MailMergeSettings(check_errors=-(2**31) - 1)
+    document = rdocx.Document()
+    document.set_mail_merge_package(
+        rdocx.MailMergePackageOptions(
+            rdocx.MailMergePackageSource.embedded(["FirstName"], [["Ada"]]),
+            mappings=(rdocx.MailMergeFieldMapping(0, "FirstName", "FirstName"),),
+        )
+    )
+    prepared = document.prepare_mail_merge_data()
+    assert prepared.records == ({"FirstName": "Ada"},) and prepared.diagnostics == ()
+    body = next(story for story in document.stories if story.kind == "body")
+    document.insert_content_control(rdocx.ContentLocation.end(body), "block", "rich_text", tag="bound")
+    document.set_content_control_value_by_tag("bound", "shown")
+    location = _content_location(document, lambda item: item.kind == "content_control")
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        settings = archive.read("word/settings.xml").decode()
+        old_item = archive.read("customXml/item1.xml")
+    marker = settings.index("rdocx.mailMerge.storeItemId")
+    value_at = settings.index('w:val="', marker) + len('w:val="')
+    store_id = settings[value_at:settings.index('"', value_at)]
+    document.set_content_control_binding(
+        location, store_id, "/m:mergeData/m:records/m:record/m:cell", "xmlns:m='urn:rdocx:mail-merge-data:v1'"
+    )
+    document.set_mail_merge_package(
+        rdocx.MailMergePackageOptions(
+            rdocx.MailMergePackageSource.embedded(["FirstName"], [["Grace"]]),
+            mappings=(rdocx.MailMergeFieldMapping(0, "FirstName", "FirstName"),),
+        )
+    )
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        items = {
+            name: archive.read(name)
+            for name in archive.namelist()
+            if name.startswith("customXml/item") and "Props" not in name
+        }
+        settings = archive.read("word/settings.xml").decode()
+    assert old_item in items.values()
+    assert any(b"Grace" in blob and blob != old_item for blob in items.values())
+    assert store_id not in settings[settings.index("rdocx.mailMerge.storeItemId"):]
+    assert document.content_controls()[0].text == "shown"
+    def rewrite(package_bytes, name, transform):
+        with zipfile.ZipFile(io.BytesIO(package_bytes)) as archive:
+            parts = {item: archive.read(item) for item in archive.namelist()}
+        parts[name] = transform(parts[name])
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            for item, blob in parts.items():
+                archive.writestr(item, blob)
+        return buffer.getvalue()
+
+    imported = rdocx.Document.from_bytes(
+        rewrite(
+            document.to_bytes(),
+            "word/settings.xml",
+            lambda blob: blob.replace(b'w:val="textFile"', b'w:val="vendorData"', 1),
+        )
+    )
+    assert imported.mail_merge_package().settings.data_type == "vendorData"
+    imported_before = imported.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="data type"):
+        imported.set_mail_merge_package(
+            rdocx.MailMergePackageOptions(
+                rdocx.MailMergePackageSource.external("file:///declared/people.csv"),
+                settings=rdocx.MailMergeSettings(data_type="vendorData"),
+            )
+        )
+    assert imported.to_bytes() == imported_before
+    uri_planted = rdocx.Document()
+    uri_planted.set_mail_merge_package(
+        rdocx.MailMergePackageOptions(rdocx.MailMergePackageSource.external("file:///declared/people.csv"))
+    )
+    wider_snapshot = rdocx.Document.from_bytes(
+        rewrite(
+            uri_planted.to_bytes(),
+            "word/_rels/settings.xml.rels",
+            lambda blob: blob.replace(
+                b"file:///declared/people.csv", b"ftp://declared.example/people.csv", 1
+            ),
+        )
+    ).mail_merge_package()
+    assert wider_snapshot.source.uri == "ftp://declared.example/people.csv"
+    current_settings = zipfile.ZipFile(io.BytesIO(document.to_bytes())).read("word/settings.xml").decode()
+    marker = current_settings.index("rdocx.mailMerge.storeItemId")
+    value_at = current_settings.index('w:val="', marker) + len('w:val="')
+    current_id = current_settings[value_at:current_settings.index('"', value_at)]
+    stale = rewrite(
+        document.to_bytes(),
+        "word/settings.xml",
+        lambda blob: blob.replace(current_id.encode(), b"{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}", 1),
+    )
+    stale_document = rdocx.Document.from_bytes(stale)
+    stale_before = stale_document.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        stale_document.set_mail_merge_package(
+            rdocx.MailMergePackageOptions(rdocx.MailMergePackageSource.external("file:///declared/other.csv"))
+        )
+    assert stale_document.to_bytes() == stale_before
+    owner = rdocx.Document()
+    owner.set_mail_merge_package(
+        rdocx.MailMergePackageOptions(
+            rdocx.MailMergePackageSource.external("file:///declared/owner.csv")
+        )
+    )
+    with zipfile.ZipFile(io.BytesIO(owner.to_bytes())) as archive:
+        owner_parts = {name: archive.read(name) for name in archive.namelist()}
+    source_rel = owner_parts["word/_rels/settings.xml.rels"].decode()
+    source_id = source_rel.split('Id="', 1)[1].split('"', 1)[0]
+
+    def pack(parts):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            for name, body in parts.items():
+                archive.writestr(name, body)
+        return buffer.getvalue()
+
+    def settings_case(body, external):
+        copied = dict(owner_parts)
+        copied["word/settings.xml"] = body
+        if external:
+            rels = copied["word/_rels/document.xml.rels"].decode()
+            copied["word/_rels/document.xml.rels"] = rels.replace(
+                'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"',
+                'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml" TargetMode="External"',
+                1,
+            ).encode()
+        opened = rdocx.Document.from_bytes(pack(copied))
+        return opened
+
+    word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    src_xml = (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<w:settings xmlns:w="{word}" xmlns:r="{rel}">'
+        f'<w:mailMerge><w:dataType w:val="native"/>'
+        f'<w:odso><w:src r:id="{source_id}"/></w:odso></w:mailMerge></w:settings>'
+    ).encode()
+    internal = settings_case(src_xml, False)
+    assert internal.mail_merge_package().source.uri == "file:///declared/owner.csv"
+    assert internal.prepare_mail_merge_data().diagnostics[0].kind == "external_source_blocked"
+    hidden = settings_case(src_xml, True)
+    hidden_before = hidden.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="settings"):
+        hidden.mail_merge_package()
+    with pytest.raises(rdocx.RdocxError, match="settings"):
+        hidden.prepare_mail_merge_data()
+    with pytest.raises(rdocx.RdocxError, match="settings"):
+        hidden.set_mail_merge_package(
+            rdocx.MailMergePackageOptions(
+                rdocx.MailMergePackageSource.external("file:///declared/other.csv")
+            )
+        )
+    assert hidden.to_bytes() == hidden_before
+    type_xml = (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<settings xmlns="{word}"><mailMerge><dataType/></mailMerge></settings>'
+    ).encode()
+    with pytest.raises(rdocx.RdocxError, match="source"):
+        settings_case(type_xml, False).mail_merge_package()
+    with pytest.raises(rdocx.RdocxError, match="settings"):
+        settings_case(type_xml, True).mail_merge_package()
+    foreign_xml = (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<w:settings xmlns:w="{word}"><m:mailMerge xmlns:m="urn:f290:not-word">'
+        f'<m:dataType m:val="native"/></m:mailMerge></w:settings>'
+    ).encode()
+    assert settings_case(foreign_xml, False).mail_merge_package() is None
+
+
+def test_mail_merge_mappings_use_word_slots():
+    import io
+    import zipfile
+    import rdocx
+
+    document = rdocx.Document()
+    document.set_mail_merge_package(
+        rdocx.MailMergePackageOptions(
+            rdocx.MailMergePackageSource.external("file:///declared/slots.csv"),
+            mappings=(
+                rdocx.MailMergeFieldMapping(1, "Family", "LastName"),
+                rdocx.MailMergeFieldMapping(0, "Given", "FirstName"),
+            ),
+            recipients=(rdocx.MailMergeRecipient(0, b"one"),),
+        )
+    )
+    snapshot = document.mail_merge_package()
+    assert [item.mapped_name for item in snapshot.mappings] == ["FirstName", "LastName"]
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        document.set_mail_merge_package(
+            rdocx.MailMergePackageOptions(
+                rdocx.MailMergePackageSource.external("file:///declared/slots.csv"),
+                mappings=(rdocx.MailMergeFieldMapping(0, "Given", "NotARole"),),
+            )
+        )
+    assert document.to_bytes() == before
+    with zipfile.ZipFile(io.BytesIO(before)) as archive:
+        names = archive.namelist()
+        recipient_name = next(name for name in names if "recipientData" in name and name.endswith(".xml"))
+        recipient_bytes = archive.read(recipient_name)
+        rels_name = "word/_rels/document.xml.rels"
+        rels = archive.read(rels_name).decode()
+        parts = {name: archive.read(name) for name in names}
+    shared_rel = (
+        '<Relationship Id="rIdKeep" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/recipientData" '
+        'Target="recipientData.xml"/>'
+    )
+    parts[rels_name] = rels.replace("</Relationships>", shared_rel + "</Relationships>").encode()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, blob in parts.items():
+            archive.writestr(name, blob)
+    shared = rdocx.Document.from_bytes(buffer.getvalue())
+    shared_before = shared.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="recipient"):
+        shared.set_mail_merge_package(
+            rdocx.MailMergePackageOptions(
+                rdocx.MailMergePackageSource.external("file:///declared/slots.csv"),
+                recipients=(rdocx.MailMergeRecipient(1, b"two", active=False),),
+            )
+        )
+    assert shared.to_bytes() == shared_before
+    assert shared.remove_mail_merge_package() is True
+    assert shared.mail_merge_package() is None
+    assert shared.remove_mail_merge_package() is False
+    with zipfile.ZipFile(io.BytesIO(shared.to_bytes())) as archive:
+        assert archive.read(recipient_name) == recipient_bytes
+    duplicate = rdocx.Document()
+    duplicate.set_mail_merge_package(
+        rdocx.MailMergePackageOptions(
+            rdocx.MailMergePackageSource.external("file:///declared/slots.csv"),
+            recipients=(rdocx.MailMergeRecipient(0, b"one"),),
+        )
+    )
+    with zipfile.ZipFile(io.BytesIO(duplicate.to_bytes())) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+        original = next(name for name in parts if name.endswith("recipientData.xml"))
+    parts["word/recipientExtra.xml"] = parts[original]
+    types = parts["[Content_Types].xml"].decode()
+    parts["[Content_Types].xml"] = types.replace(
+        "</Types>",
+        '<Override PartName="/word/recipientExtra.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.mailMergeRecipientData+xml"/>'
+        "</Types>",
+    ).encode()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, blob in parts.items():
+            archive.writestr(name, blob)
+    crowded = rdocx.Document.from_bytes(buffer.getvalue())
+    crowded_before = crowded.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="recipient"):
+        crowded.set_mail_merge_package(
+            rdocx.MailMergePackageOptions(rdocx.MailMergePackageSource.external("file:///declared/other.csv"))
+        )
+    assert crowded.to_bytes() == crowded_before

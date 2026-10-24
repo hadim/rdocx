@@ -13,7 +13,7 @@
 
 Primary documents inspected by root on 2026-10-22, not a Word run: Open XML SDK 3.0.1 data source reference (ISO/IEC 29500-1 17.14.9), `CT_Odso` (17.14.25), field map data (17.14.15), and MS-OI29500 3.1.1.3 recipient data part (`https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/af3dc913-8c08-4843-ab40-495a92170b96`). `UniqueTag` is SDK 3.0.1 (`https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.uniquetag?view=openxml-3.0.1`). Native Word validation of an rdocx custom XML table is not claimed. MS-OI29500 says the recipient relationship URI ends in `/recipientData`. A similarly spelled `/mailMergeRecipientData` URI is a different string. At most one recipient part exists, and the settings part owns that relationship. An external mail-merge source relationship is owned by the settings part, not by the main document.
 
-Dependencies F-233, F-270, and F-278 are done. F-290 is pending. Installed Word is 16.114 / 16.114.26101123. No new merge-package comparison has run.
+Dependencies F-233, F-270, and F-278 are done. F-290 local implementation and review 3 are recorded. Delivery stays in progress. Installed Word is 16.114 / 16.114.26101123. No new merge-package comparison has run.
 
 ## Spec reference
 
@@ -23,7 +23,7 @@ Dependencies F-233, F-270, and F-278 are done. F-290 is pending. Installed Word 
 - `docs/hld/10-bindings-spec.md`, "Native Word facade stability".
 - `docs/hld/12-testing-strategy.md`, "Test taxonomy". This story's backlog gate is round-trip, not a native oracle for custom XML interoperability.
 - ISO/IEC 29500-1 17.14.9, 17.14.15, and 17.14.25, plus MS-OI29500 3.1.1.3, as named above.
-- Existing `MAIL_MERGE_ORDER` in `settings.rs` orders `CT_MailMerge` children, including the `odso` member. ODSO child order and recipient order are not implemented. Adding that order is work in `settings.rs`. This plan does not invent a second `CT_MailMerge` order table.
+- Existing `MAIL_MERGE_ORDER` in `settings.rs` orders `CT_MailMerge` children, including the `odso` member. The native writer uses that same table, now `#[doc(hidden)] pub const`, plus `ODSO_ORDER` and `RECIPIENT_DATA_ORDER` of the same `&[&[u8]]` type in `settings.rs`. There is still one `CT_MailMerge` order table.
 
 ## Approach
 
@@ -339,7 +339,7 @@ No new test binary. Provider dependencies are already done, so this story has no
 - Shared consumers. Existing narrow settings APIs and `mail_merge` stay. Rust and Python gain package authoring under Q1, with every new native operation mapped in `## Python API contract`. WASM and CLI gain no new authoring methods and retain preservation and current-value behavior.
 - Grammar and empty collections. Zero rows, zero columns, empty cells, empty diagnostics.
 - Performance bound. Selected Q8 caps are correctness limits checked before allocation, not a timed benchmark. If a later story adds a timing budget, pin it separately.
-- External oracle row is not a backlog mandate for the embedded schema. Do not record a fake Word pass. PyO3 is in scope under the Q1 answer. Scoped affected public API tests and the small typed use run with this feature. Strict mypy, stubtest, the installed full suite, WASM, publish dry-run, full verify, and the hash harness run only in the final union. WASM gains no new authoring method. Workspace tests keep `--exclude rdocx-py --exclude rpptx-py`. Codex root semantic validation on 2026-10-23 approved this contract. Implementation and the final union stay pending.
+- External oracle row is not a backlog mandate for the embedded schema. Do not record a fake Word pass. PyO3 is in scope under the Q1 answer. Scoped affected public API tests and the small typed use run with this feature. Strict mypy, stubtest, the installed full suite, WASM, publish dry-run, full verify, and the hash harness run only in the final union. WASM gains no new authoring method. Workspace tests keep `--exclude rdocx-py --exclude rpptx-py`. Codex root semantic validation on 2026-10-23 approved this contract. Local implementation exists. The final union stays pending.
 
 ## Hash harness
 
@@ -355,20 +355,24 @@ Before final source freeze, reconcile DOCX-057 honestly. An incomplete row canno
 
 ## Implementation checklist
 
-- [ ] Add the types and four methods in existing `field.rs` / `settings.rs` and export them. Native and HLD edits stay on files already named in this plan.
-- [ ] Bind Python only in existing `crates/rdocx-py/src/document.rs`, `crates/rdocx-py/src/lib.rs`, `python/rdocx/__init__.py`, `python/rdocx/_rdocx.pyi`, and `tests/test_core.py`. No new tracked file, module, or test binary.
-- [ ] Reuse `MAIL_MERGE_ORDER` for `CT_MailMerge`. Add ODSO child order and recipient order in `settings.rs`.
-- [ ] Add relationship constants only if missing, in the existing constants file.
-- [ ] Keep the 13-member settings API graph-preserving.
-- [ ] Implement prepare with explicit policy and fail-closed unsupported evaluation.
-- [ ] Preserve unknown bytes and refuse ambiguous replacement.
-- [ ] Apply the selected Q8 caps of 16 MiB encoded XML, 100000 records, and 1024 columns. They are not a measured benchmark.
-- [ ] Escape embedded text through the existing strict XML validator.
-- [ ] Add the native tests, including `author_mail_merge_mappings_use_word_slots`, to the existing entrypoint and the named Python tests, including `test_mail_merge_mappings_use_word_slots`, to existing `tests/test_core.py`.
-- [ ] Register every frozen class on public `rdocx` and `rdocx._rdocx`, with `_rdocx.pyi`, `__all__`, and `__init__` imports aligned.
-- [ ] Identify the owned store only through `rdocx.mailMerge.storeItemId` on the existing F-270 docVar owner and the F-287 custom XML graph.
-- [ ] Leave Word-as-database behaviour unclaimed.
-- [ ] Reconcile DOCX-057 before final source freeze. Update `scripts/test_sprint_workflow.py` only if that row genuinely leaves the incomplete owner set. Rerun the affected status assertion after completion metadata.
+- [x] Add the types and four methods in existing `field.rs` / `settings.rs` and export them. Native and HLD edits stay on files already named in this plan.
+- [x] Bind Python only in existing `crates/rdocx-py/src/document.rs`, `crates/rdocx-py/src/lib.rs`, `python/rdocx/__init__.py`, `python/rdocx/_rdocx.pyi`, and `tests/test_core.py`. No new tracked file, module, or test binary.
+- [x] Reuse `MAIL_MERGE_ORDER` for `CT_MailMerge`. Add ODSO child order and recipient order in `settings.rs`.
+- [x] Use the existing `mailMergeSource` and `recipientData` relationship types. They are private string constants beside the encoder. No new relationship module was added.
+- [x] Keep the 13-member settings API graph-preserving.
+- [x] Implement prepare with explicit policy and fail-closed unsupported evaluation.
+- [x] Preserve unknown bytes and refuse ambiguous replacement.
+- [x] Apply the selected Q8 caps of 16 MiB encoded XML, 100000 records, and 1024 columns. They are not a measured benchmark.
+- [x] Escape embedded text through the existing strict XML validator.
+- [x] Add the native tests, including `author_mail_merge_mappings_use_word_slots`, to the existing entrypoint and the named Python tests, including `test_mail_merge_mappings_use_word_slots`, to existing `tests/test_core.py`.
+- [x] Register every frozen class on public `rdocx` and `rdocx._rdocx`, with `_rdocx.pyi`, `__all__`, and `__init__` imports aligned.
+- [x] Identify the owned store only through `rdocx.mailMerge.storeItemId` on the existing F-270 docVar owner and the F-287 custom XML graph.
+- [x] Leave Word-as-database behaviour unclaimed.
+- [x] Reconcile DOCX-057 before final source freeze. The row is `complete` with owner `-`. Create, read, mutate, remove, and save-reopen are `Y`. Story is `package`. Layout and render are `NA`. Determinism, Native, and Python are `Y`. WASM and CLI are `B`. Native `Y` is the bounded Rust facade and is not Word interop. The evidence boundary is the offline versioned rdocx table plus Word metadata, with no connector, no new merge engine, and no Word-native embedded data source. F-290 left the incomplete-owner inventory. Delivery stays in progress and the plan stays approved. Review 3 is clean. Final debt remains the hash harness, the installed full suite, stubtest, and native Word acceptance owned by the other form stories in the integrated union.
+
+## Readiness
+
+Status stays approved. Delivery stays in progress. DOCX-057 is reconciled to the bounded package operation with owner `-`. Local native and Python package checks are recorded in `.claude/scratch/F-290-progress.md`. The current extension SHA-256 is `2d1656c17a26d4d84247888731be7f78b9cafd45d71d82c6d51dd1dff3ac0fb4`. Review 3 is `.claude/reviews/F-290-whole-feature-pass-3.md` with 0 defects, 0 smells, and 0 nitpicks. Final debt remains the hash harness, the installed full suite, stubtest, and native Word acceptance owned by the other form stories in the integrated union.
 
 ## Open questions
 
@@ -383,13 +387,13 @@ Q1, Q7, Q8, and Q16 are the only open-question rows of this story. Q2, Q3, Q4, Q
 
 ## Contract closure
 
-Result: user answers recorded. Codex root semantic validation on 2026-10-23 approved this contract at source `a57be365`. Q16 keeps the 30 Word slots, the source graph, the recipient maximum of one, and the package lifecycle. Implementation, native qualification, and final gates stay pending. This approval does not mark the story completed.
+Result: user answers recorded. Codex root semantic validation on 2026-10-23 approved this contract at source `a57be365`. Q16 keeps the 30 Word slots, the source graph, the recipient maximum of one, and the package lifecycle. Local implementation of that surface now exists. Native Word qualification and the final gates stay pending. This approval does not mark the story completed.
 
-Remaining decisions: Q1, Q7, Q8, and Q16 are answered. Those four are the only question rows on F-290. Q2, Q3, Q4, Q5, Q6, and Q9 through Q15 stay on their own stories. Q15 does not change this story. Q16 provenance is the 2026-10-23 user choice "Author Word-compatible canonical slots (Recommended)", after the previous contract pass, with MS-OI29500 2.1.369 as the primary source. No blocked product choice remains. Implementation and final evidence stay pending.
+Remaining decisions: Q1, Q7, Q8, and Q16 are answered. Those four are the only question rows on F-290. Q2, Q3, Q4, Q5, Q6, and Q9 through Q15 stay on their own stories. Q15 does not change this story. Q16 provenance is the 2026-10-23 user choice "Author Word-compatible canonical slots (Recommended)", after the previous contract pass, with MS-OI29500 2.1.369 as the primary source. No blocked product choice remains. Local implementation evidence exists. Final union evidence stays pending.
 
 Blockers before approval:
 
-- Q1 selects Rust and Python. The signatures in `## Python API contract` are the approved surface. Implementation has not started. The expanded 12 to 17 developer-day figure is an explicit planning estimate, not a measurement and not a capacity promise.
+- Q1 selects Rust and Python. The signatures in `## Python API contract` are the approved surface and are now bound in the existing Python files. The expanded 12 to 17 developer-day figure is an explicit planning estimate, not a measurement and not a capacity promise.
 - Q7 selects versioned custom XML plus Word metadata. It is not a Word-native embedded source and it does not fetch.
 - Q8 selects 16 MiB encoded XML, 100000 records, and 1024 columns for owned embedded table XML only. Those caps are not a measured benchmark. They do not bound caller-supplied external rows or mapping and recipient metadata.
 - Q16 selects the 30 canonical Word role slots. `mapped_name` stays a string and must be one of those ids. Serialization uses position. The count is only direct namespace-qualified Word `fieldMapData` children. Query omits null padding. There is no new public enum. There is no new Word oracle.
@@ -402,3 +406,13 @@ Blockers before approval:
 Operations: `set_mail_merge_package` proves A1, A2, and A5. `mail_merge_package` proves A1 and A4. `remove_mail_merge_package` proves A5. `prepare_mail_merge_data` proves A3. Existing `set_mail_merge_settings` proves A4. Existing `mail_merge` proves A6 when given prepared rows. No raw XML public API is added. Typed records are serialized and escaped internally.
 
 Projection inventory: no recognized owned configuration, opaque-only residual, external URI, different `dataSource` and `src` URIs, embedded table including zero rows, mappings present or empty, recipients present or empty, unknown sibling bytes, unknown raw mappedName, a structurally valid unrepresentable mapping, and recognized settings whose required source is missing. Read, preserve, assign, and clear are the four methods plus the narrow setter. Read returns logical mappings in canonical role order and keeps a wider imported `data_type` string. Read returns `None` when no recognized owned configuration remains. Preserve keeps unknown mappedName, opaque extensions, `headerSource`, and other schemes without mutation. Assign canonicalizes owned known mapping values into the 30 direct qualified slots and returns `Err` before mutation when opaque XML cannot keep its position and owner. Clear removes the known configuration under the prune rule and does not invent a diagnostic. Copy-on-write applies to embedded custom XML stores under F-287 GUID identity. A recipient part is not copied into a second part. Removal prunes only provably unshared owned parts and preserves known shared and unowned parts. Source-shaped metadata that cannot be cleared without loss, and a truly ambiguous graph, are `Err` before mutation. These boundaries are preservation rules. They do not add a user question id. API shapes stay the signatures in Approach.
+
+## Internal shared conversion
+
+This section records the internal implementation used by the native encoder and by the Python factories. It does not add a public method, a Rust carrier, or a Python class. The stable surface stays four `Document` methods, eight Rust carriers, and seven Python classes.
+
+`#[doc(hidden)] pub struct MailMergeTableBudget` lives in `crates/rdocx/src/field.rs` and is reexported from `crates/rdocx/src/lib.rs`. It has `new`, `Default`, `add_column(&str) -> Result<()>`, `begin_record() -> Result<()>`, `add_cell(&str) -> Result<()>`, `end_record() -> Result<()>`, and `finish(&self) -> Result<usize>`. The struct owns only an encoded counter, a column counter, a row counter, an open-cell counter, a `HashSet<String>` of column names, and a private phase. It has no `Document` field and no retained package state. Each `&str` borrow lasts for that call only. `finish` borrows `self` and returns the encoded total.
+
+`add_column` runs only before the first record. It rejects an empty name, a duplicate borrowed name, and a 1025th column. The duplicate check uses the borrowed name. The owned name is inserted only after the encoded increment fits. `begin_record` rejects zero columns and a 100001st row. The first record counts `</columns><records><record>`. Later records count `<record>`. `add_cell` counts `<cell>`, the escaped text, and `</cell>` only while a row is open and the cell count is still short of the column count. `end_record` requires that exact cell count and then counts `</record>`. `finish` rejects zero columns and an open row. Zero rows are valid. With rows, `finish` adds `</records></mergeData>`. With zero rows it adds `</columns><records></records></mergeData>`. Every increment uses the existing checked add and escaped-length helpers and refuses a projected total above 16 MiB, including the closing markup still required for that phase. The native `encode_merge_table` preflight is this budget. The returned `Vec` capacity is `finish`. The written bytes stay the existing schema and must equal that total. There is no whole-table `Vec` before the count and no second walk that re-encodes an old prefix. The later Python `MailMergePackageSource.embedded` factory is the other consumer. It checks `Sequence` ABC, uses the counted length before allocation, and counts each borrowed UTF-8 string before cloning it. This task does not add that class.
+
+`#[doc(hidden)] pub fn validate_mail_merge_external_uri(uri: &str) -> Result<()>` is the existing new-assignment validator, renamed in place in `crates/rdocx/src/field.rs` and reexported from `crates/rdocx/src/lib.rs`. There is no forwarding wrapper. It runs the strict XML 1.0 character rejection in the `Error::Oxml` family before the file or https `Error::Other`. Callers now are the external arm of `set_mail_merge_package`. The later Python external factory is the other caller. Imported package snapshots wrap the raw URI and do not call this function. Native default settings stay the existing narrow set. Imported preservation and the global one-recipient-part rule stay as already implemented.

@@ -33,6 +33,15 @@ XML and original style definitions stay untouched. Missing, ambiguous or
 unplaced required targets and malformed spans abort without publishing any
 candidate part.
 
+Mail-merge package writes use that same staged package. Settings, the owned
+custom XML store, and at most one recipient-data part are prepared together
+and reopened before the live document changes. Identical bytes do not publish.
+A refused graph leaves the previous bytes in place. Embedded table text is
+escaped into the versioned store. The encoded store, including markup, is
+capped at 16 MiB, 1024 columns, and 100000 rows before a large allocation.
+Those caps do not apply to caller-supplied external rows. The library does
+not open the declared URI, run SQL, or read a spreadsheet.
+
 ```rust
 pub struct OpcPackage {
     pub content_types: ContentTypes,
@@ -537,6 +546,15 @@ main-owned note traversal before constructing a main-owned fragment. A glossary-
 relationship refuses projection through main numeric note ownership. It never
 selects an unrelated equal-id main note.
 
+Mail-merge source metadata uses the existing `mailMergeSource` relationship
+on the settings part for both `dataSource` and ODSO `src`. That source
+relationship is External. `headerSource` may use that same type and stays
+owned by its qualified reference. Recipient rows use `recipientData`, and
+that relationship is Internal. The main document does not gain either
+relationship. The package holds at most one recipient part across both
+recipient content types. A second recipient part, or a source relationship of
+another type, refuses before mutation. Removal drops only a recipient part
+this owner can prove is unshared.
 
 Both facades resolve core properties through the package-level
 `CORE_PROPERTIES` relationship and retain its normalized target. Immutable

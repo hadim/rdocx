@@ -1090,6 +1090,22 @@ references, entity-escaped bookmark names, collision-safe identity allocation,
 and foreign same-local-name attributes. The methods are opt-in and no sample
 invokes them, so the 49-entry hash harness must remain unchanged.
 
+Mail-merge package tests live in the existing `rdocx` integration entrypoint
+and in four existing `rdocx-py` tests. They cover embedded and external
+authoring, noncanonical settings and recipient part names, canonical slot
+order, offline and caller-supplied prepare, diagnostics without invented
+rows, identical store reuse, in-place replacement of an unshared store,
+copy-on-write of a bound or shared store, shared recipient refusal, and the
+column, row, and encoded-size caps. Python checks deep copies, readonly
+carriers, exact default tuples, and import of a wider `data_type` or raw URI
+without the authoring factories. The focused typed check is
+`crates/rdocx-py/tests/typing_smoke.py` against the built package. F-290 owns
+that round-trip local gate and adds no Word oracle of its own. Other form
+stories own native Word acceptance in the integrated union. Bounded
+capability closure is the implemented and scoped-reviewed operation. Pending
+outcomes stay in the delivery record. Strict stubtest, the installed full
+suite, and the hash harness are outside this story's local gate.
+
 The rich mail-merge gate builds nested and named source records in code and
 compares exact paragraph, list, table, image, fragment, and formatted-run order
 with no remaining merge fields or region markers. Its unit matrix covers

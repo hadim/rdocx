@@ -166,6 +166,13 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<document::PyDocumentFragment>()?;
     module.add_class::<document::PyContentControl>()?;
     module.add_class::<document::PyContentControlTypePayload>()?;
+    module.add_class::<document::PyMailMergePackageSource>()?;
+    module.add_class::<document::PyMailMergeSettings>()?;
+    module.add_class::<document::PyMailMergeFieldMapping>()?;
+    module.add_class::<document::PyMailMergeRecipient>()?;
+    module.add_class::<document::PyMailMergePackageOptions>()?;
+    module.add_class::<document::PyMailMergePackageDiagnostic>()?;
+    module.add_class::<document::PyMailMergePreparedData>()?;
     module.add_class::<document::PyLegacyFormField>()?;
     module.add_class::<document::PyLegacyFormFieldDefinition>()?;
     module.add_class::<document::PyFormFieldTarget>()?;

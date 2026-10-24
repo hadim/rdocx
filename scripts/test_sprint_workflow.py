@@ -8939,6 +8939,9 @@ Pedro Assumpcao and the rdocx maintainers.
                 # F-289 completes DOCX-056. The row owner is complete, so it is
                 # not a live incomplete owner.
                 289,
+                # F-290 completes the bounded DOCX-057 package operation.
+                # The integrated union stays outside this row.
+                290,
             }
         } | {"F-X192"}
         self.assertEqual(
