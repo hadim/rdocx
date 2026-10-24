@@ -6,8 +6,8 @@
 Also admit the incoming Word and PowerPoint correctness and performance repairs.
 Provide public creation of legacy form fields, build modern forms on the existing
 content-control model, and author mail-merge packages with offline diagnostics.
-The seven designs are approved. F-X264 and F-X265 are reviewed and integrated,
-and their final sprint gates are still pending. F-X266 is claimed. F-X267,
+The seven designs are approved. F-X264, F-X265 and F-X266 are reviewed and
+integrated, and their final sprint gates are still pending. F-X267 is claimed.
 F-288, F-289 and F-290 stay pending and unclaimed. The repairs do not replace
 the original authoring contract.
 
@@ -18,7 +18,7 @@ stories. The four repair designs add a provisional 15 to 24 developer-days.
 The expanded planning total is 27 to 41 developer-days. Those figures are
 estimates, not measurements, and they are not a capacity promise. The visible
 over-two-week scope is an approved intake. The sprint clock started with
-F-X264 `/start-feature`. F-X266 is claimed and its implementation has not
+F-X264 `/start-feature`. F-X267 is claimed and its implementation has not
 started. F-X267 remains the largest repair.
 
 ## Spec references
@@ -51,7 +51,7 @@ started. F-X267 remains the largest repair.
 | F-X264 | Repair Word defaults package inspection and comment projection | L | in-progress | grok |
 | F-X265 | Preserve fragment relationship targets and duplicate styles | M | in-progress | grok |
 | F-X266 | Bound Word body reads and structural edit cost | L | in-progress | grok |
-| F-X267 | Bound PowerPoint mutation cost across public publishers | L | pending | - |
+| F-X267 | Bound PowerPoint mutation cost across public publishers | L | in-progress | grok |
 
 ## Sequencing note
 
@@ -66,9 +66,9 @@ of the F-288 to F-289 chain only when actual source and resource leases are
 distinct. Shared facade, binding or HLD files require serial ownership.
 
 All seven stories started pending and unclaimed. The seven designs are now
-approved. F-X264 and F-X265 are reviewed and integrated, with their final sprint
-gates pending. F-X266 is claimed. F-X267, F-288, F-289 and F-290 stay pending
-and unclaimed. Public APIs, supported properties, binding coverage, native
+approved. F-X264, F-X265 and F-X266 are reviewed and integrated, with their
+final sprint gates pending. F-X267 is claimed. F-288, F-289 and F-290 stay
+pending and unclaimed. Public APIs, supported properties, binding coverage, native
 comparison inputs and exact refusal behavior stay inside those approved
 contracts. S95.3's native fixtures do not automatically certify new form
 authoring.
