@@ -298,8 +298,7 @@ def test_fx256_line_spacing_distinguishes_multiples_and_lengths(absolute):
     values = ([rdocx.Pt(18), rdocx.Emu(634), rdocx.Emu(-634),
                *[rdocx.Emu(n*635) for n in limits],
                rdocx.Emu(limits[1]*635+634), rdocx.Emu(limits[0]*635-634)] if absolute else
-              [0, 1, 2, 2.0, 1.75, -1, *[n/240 for n in limits],
-               (limits[1]+0.75)/240, (limits[0]-0.75)/240])
+              [0, 1, 2, 2.0, 1.75, -1, *[n/240 for n in limits]])
     for value in values:
         document = rdocx.Document()
         paragraph = document.add_paragraph('spacing')
@@ -330,6 +329,12 @@ def test_fx256_line_spacing_refuses_nonfinite_types_and_overflow_atomically():
                   1e308, 2**10000, (2**31)/240, (-2**31-1)/240,
                   rdocx.Emu((2**31)*635), rdocx.Emu((-2**31-1)*635)]:
         with pytest.raises((TypeError, ValueError, OverflowError)):
+            held.paragraph_format.line_spacing = value
+        assert document.to_bytes() == before and document.verify_signatures()[0]['cryptographically_valid']
+        assert held.text == run.text == 'held' and other.text == 'other' and section.xml
+    outside = ((2**31 - 1) + 0.75) / 240, ((-2**31) - 0.75) / 240
+    for value in outside:
+        with pytest.raises(ValueError):
             held.paragraph_format.line_spacing = value
         assert document.to_bytes() == before and document.verify_signatures()[0]['cryptographically_valid']
         assert held.text == run.text == 'held' and other.text == 'other' and section.xml
@@ -4672,6 +4677,12 @@ def test_comment_anchor_fields_preserve_constructor_compatibility():
                              text="Review", parent_id=None, resolved=False)
     assert detached.anchor_text is None
     assert detached.anchor is None
+    assert detached.anchor_issue is None
+    issued = rdocx.Comment(id=7, author="Ada", initials=None, date=None,
+                           text="Review", parent_id=None, resolved=False,
+                           anchor_issue="not identity")
+    assert issued == detached
+    assert issued.anchor_issue == "not identity"
     document = rdocx.Document()
     document.add_paragraph("Alpha stays.")
     document.add_paragraph("Delta goes away.")
@@ -10192,10 +10203,15 @@ def test_issue391_default_paragraph_format_is_owned_and_atomic():
     assert 'w:after="240"' in defaults
     assert 'w:line="360"' in defaults
     before = document.to_bytes()
-    for value in (1.5, 12, True, "12"):
+    for value in (True, "12"):
         with pytest.raises(TypeError):
             document.set_default_paragraph_format(line_spacing=value)
         assert document.to_bytes() == before
+    document.set_default_paragraph_format(line_spacing=1.5)
+    assert document.to_bytes() == before
+    document.set_default_paragraph_format(line_spacing=12)
+    defaults = _fx261_defaults(document.part_xml("/word/styles.xml"))
+    assert 'w:line="2880"' in defaults and 'w:lineRule="auto"' in defaults
     document.set_default_paragraph_format(line_spacing=rdocx.Pt(12))
     defaults = _fx261_defaults(document.part_xml("/word/styles.xml"))
     assert 'w:line="240"' in defaults
@@ -10245,8 +10261,7 @@ def test_issue391_default_paragraph_line_rules_keep_imported_states():
     assert "w:line" not in defaults and "w:lineRule" not in defaults
     refused = opened('w:line="360" w:lineRule="auto"')
     before = refused.to_bytes()
-    with pytest.raises(TypeError):
-        refused.set_default_paragraph_format(line_spacing=1.5)
+    refused.set_default_paragraph_format(line_spacing=1.5)
     assert refused.to_bytes() == before
 
 
@@ -10821,3 +10836,569 @@ def test_issue389_retained_paragraph_alias_never_publishes_unsavable_text():
     else:
         assert paragraph.text == 'new'
         assert rdocx.Document.from_bytes(doc.to_bytes()).paragraphs[0].text == 'new'
+
+
+def _fx264_with_comment_markers(document, edit, ids):
+    import rdocx
+
+    archive = zipfile.ZipFile(io.BytesIO(document.to_bytes()))
+    parts = {item.filename: archive.read(item.filename) for item in archive.infolist()}
+    parts["word/document.xml"] = edit(parts["word/document.xml"].decode()).encode()
+    w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    entries = "".join(
+        f'<w:comment w:id="{comment_id}" w:author="A"><w:p><w:r><w:t>remark {comment_id}</w:t></w:r></w:p></w:comment>'
+        for comment_id in ids
+    )
+    parts["word/comments.xml"] = f'<w:comments xmlns:w="{w}">{entries}</w:comments>'.encode()
+    parts["[Content_Types].xml"] = parts["[Content_Types].xml"].replace(
+        b"</Types>",
+        b'<Override PartName="/word/comments.xml" '
+        b'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/></Types>',
+    )
+    parts["word/_rels/document.xml.rels"] = parts["word/_rels/document.xml.rels"].replace(
+        b"</Relationships>",
+        b'<Relationship Id="rIdC" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" '
+        b'Target="comments.xml"/></Relationships>',
+    )
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as rewritten:
+        for name, data in parts.items():
+            rewritten.writestr(name, data)
+    return rdocx.Document.from_bytes(output.getvalue())
+
+
+def test_line_spacing_length_is_exact_before_int():
+    import rdocx
+
+    styled = rdocx.Document()
+    styled.set_style("Normal", line_spacing=2)
+    styles = styled.part_xml("/word/styles.xml")
+    assert 'w:line="480"' in styles and 'w:lineRule="auto"' in styles
+    styled.set_style("Normal", line_spacing=rdocx.Pt(18))
+    styles = styled.part_xml("/word/styles.xml")
+    assert 'w:line="360"' in styles and 'w:lineRule="exact"' in styles
+
+    defaults = rdocx.Document()
+    defaults.set_default_paragraph_format(line_spacing=1.0)
+    stored = _fx261_defaults(defaults.part_xml("/word/styles.xml"))
+    assert 'w:line="240"' in stored and 'w:lineRule="auto"' in stored
+
+    paragraph = rdocx.Document()
+    paragraph.add_paragraph("grid")
+    paragraph.paragraphs[0].paragraph_format.line_spacing = 2
+    xml = paragraph.part_xml("/word/document.xml")
+    assert 'w:line="480"' in xml and 'w:lineRule="auto"' in xml
+    paragraph.paragraphs[0].paragraph_format.line_spacing = rdocx.Pt(18)
+    xml = paragraph.part_xml("/word/document.xml")
+    assert 'w:line="360"' in xml and 'w:lineRule="exact"' in xml
+    before = paragraph.to_bytes()
+    with pytest.raises(TypeError):
+        paragraph.paragraphs[0].paragraph_format.line_spacing = True
+    with pytest.raises(TypeError):
+        paragraph.paragraphs[0].paragraph_format.line_spacing = "2"
+    assert paragraph.to_bytes() == before
+    paragraph.paragraphs[0].paragraph_format.line_spacing = None
+    xml = paragraph.part_xml("/word/document.xml")
+    assert "w:line=" not in xml and "lineRule" not in xml
+
+
+def test_line_spacing_batch_is_atomic():
+    import rdocx
+
+    document = _fx261_set_doc_defaults(
+        rdocx.Document(),
+        '<w:pPrDefault><w:pPr><w:spacing w:before="120"/></w:pPr></w:pPrDefault>',
+    )
+    before = document.to_bytes()
+    with pytest.raises(TypeError):
+        document.set_default_paragraph_format(space_before=rdocx.Pt(6), line_spacing=True)
+    assert document.to_bytes() == before
+    with pytest.raises(ValueError):
+        document.set_default_paragraph_format(line_spacing=float("nan"))
+    assert document.to_bytes() == before
+    with pytest.raises(ValueError):
+        document.set_default_paragraph_format(line_spacing=10**10000)
+    assert document.to_bytes() == before
+    with pytest.raises(TypeError):
+        document.set_style("Normal", space_before=rdocx.Pt(6), line_spacing=True)
+    assert document.to_bytes() == before
+    with pytest.raises(ValueError):
+        document.set_style("Normal", line_spacing=float("inf"))
+    assert document.to_bytes() == before
+    with pytest.raises(ValueError):
+        document.set_style("Normal", line_spacing=10**10000)
+    assert document.to_bytes() == before
+    paragraph = rdocx.Document()
+    paragraph.add_paragraph("held")
+    paragraph.paragraphs[0].paragraph_format.line_spacing = 2
+    before = paragraph.to_bytes()
+    with pytest.raises(ValueError):
+        paragraph.paragraphs[0].paragraph_format.line_spacing = float("nan")
+    with pytest.raises(ValueError):
+        paragraph.paragraphs[0].paragraph_format.line_spacing = 10**10000
+    assert paragraph.to_bytes() == before
+    omitted = _fx261_set_doc_defaults(
+        rdocx.Document(),
+        '<w:pPrDefault><w:pPr><w:spacing w:line="360" w:lineRule="auto"/></w:pPr></w:pPrDefault>',
+    )
+    omitted.set_default_paragraph_format(space_before=rdocx.Pt(6))
+    stored = _fx261_defaults(omitted.part_xml("/word/styles.xml"))
+    assert 'w:before="120"' in stored
+    assert 'w:line="360"' in stored and 'w:lineRule="auto"' in stored
+    omitted.set_default_paragraph_format(line_spacing=None)
+    stored = _fx261_defaults(omitted.part_xml("/word/styles.xml"))
+    assert "w:line" not in stored and "lineRule" not in stored
+    assert 'w:before="120"' in stored
+
+    def normal_style(xml):
+        start = xml.find('w:styleId="Normal"')
+        end = xml.find("</w:style>", start)
+        return xml[start:end]
+
+    styled = rdocx.Document()
+    styled.set_style("Normal", line_spacing=2, space_before=rdocx.Pt(6))
+    normal = normal_style(styled.part_xml("/word/styles.xml"))
+    assert 'w:line="480"' in normal and 'w:lineRule="auto"' in normal
+    assert 'w:before="120"' in normal
+    styled.set_style("Normal", space_before=rdocx.Pt(12))
+    normal = normal_style(styled.part_xml("/word/styles.xml"))
+    assert 'w:before="240"' in normal
+    assert 'w:line="480"' in normal and 'w:lineRule="auto"' in normal
+
+    def with_rule(document, rule):
+        def transform(data):
+            text = data.decode()
+            start = text.find('w:styleId="Normal"')
+            end = text.find("</w:style>", start)
+            block = text[start:end].replace('w:lineRule="exact"', f'w:lineRule="{rule}"', 1)
+            return (text[:start] + block + text[end:]).encode()
+
+        return _fx261_replace_part(document, "word/styles.xml", transform)
+
+    exact = rdocx.Document()
+    exact.set_style("Normal", line_spacing=rdocx.Pt(12), space_before=rdocx.Pt(6))
+    at_least = with_rule(exact, "atLeast")
+    at_least.set_style("Normal", space_after=rdocx.Pt(3))
+    normal = normal_style(at_least.part_xml("/word/styles.xml"))
+    assert 'w:line="240"' in normal and 'w:lineRule="atLeast"' in normal
+    assert 'w:before="120"' in normal
+    unknown = with_rule(exact, "precise")
+    unknown.set_style("Normal", space_after=rdocx.Pt(3))
+    normal = normal_style(unknown.part_xml("/word/styles.xml"))
+    assert 'w:line="240"' in normal and 'w:lineRule="precise"' in normal
+    at_least.set_style("Normal", line_spacing=1)
+    normal = normal_style(at_least.part_xml("/word/styles.xml"))
+    assert 'w:line="240"' in normal and 'w:lineRule="auto"' in normal
+
+    styled.set_style("Normal", line_spacing=None)
+    normal = normal_style(styled.part_xml("/word/styles.xml"))
+    assert "w:line" not in normal and "lineRule" not in normal
+    assert 'w:before="240"' in normal
+    cleared = styled.to_bytes()
+    styled.set_style("Normal", line_spacing=None)
+    assert styled.to_bytes() == cleared
+
+    bare = rdocx.Document()
+    bare.add_style("Bare", "paragraph")
+    bare_before = bare.to_bytes()
+    bare.set_style("Bare", line_spacing=None)
+    assert bare.to_bytes() == bare_before
+    bare.set_style("Bare", line_spacing=None)
+    assert bare.to_bytes() == bare_before
+
+    callout = rdocx.Document()
+    callout.add_style("Callout", "character", bold=True)
+    callout_before = callout.to_bytes()
+    callout.set_style("Callout", line_spacing=None)
+    assert callout.to_bytes() == callout_before
+    with pytest.raises(ValueError, match="no paragraph formatting"):
+        callout.set_style("Callout", space_after=12700)
+    assert callout.to_bytes() == callout_before
+
+    class SequencedInt(int):
+        def __new__(cls, first):
+            value = int.__new__(cls, 1)
+            value.calls = 0
+            value.first = first
+            return value
+
+        def __float__(self):
+            self.calls += 1
+            if self.calls == 1:
+                return self.first
+            return float("inf")
+
+    findings = []
+
+    def expect_once(surface, assign, xml_of, getter):
+        token = SequencedInt(1.0)
+        try:
+            assign(token)
+            xml = xml_of()
+            got = None if getter is None else getter()
+        except Exception as exc:
+            findings.append(
+                f"{surface} once raised {type(exc).__name__}: {exc} calls={token.calls}"
+            )
+            return
+        stored = 'w:line="240"' in xml and 'w:lineRule="auto"' in xml
+        if token.calls != 1 or not stored or got not in (None, 1, 1.0):
+            findings.append(
+                f"{surface} once calls={token.calls} getter={got!r} stored240={stored}"
+            )
+
+    def expect_nonfinite(surface, document, assign):
+        before = document.to_bytes()
+        token = SequencedInt(float("inf"))
+        try:
+            assign(token)
+        except ValueError:
+            refused = True
+        except Exception as exc:
+            findings.append(
+                f"{surface} nonfinite raised {type(exc).__name__}: {exc} calls={token.calls}"
+            )
+            return
+        else:
+            refused = False
+        if (not refused) or token.calls != 1 or document.to_bytes() != before:
+            findings.append(
+                f"{surface} nonfinite refused={refused} calls={token.calls} "
+                f"bytes_same={document.to_bytes() == before}"
+            )
+
+    default_once = rdocx.Document()
+    expect_once(
+        "default",
+        lambda token: default_once.set_default_paragraph_format(line_spacing=token),
+        lambda: _fx261_defaults(default_once.part_xml("/word/styles.xml")),
+        lambda: default_once.default_paragraph_format.line_spacing,
+    )
+    style_once = rdocx.Document()
+    expect_once(
+        "style",
+        lambda token: style_once.set_style("Normal", line_spacing=token),
+        lambda: normal_style(style_once.part_xml("/word/styles.xml")),
+        None,
+    )
+    paragraph_once = rdocx.Document()
+    paragraph_once.add_paragraph("counted")
+    expect_once(
+        "paragraph",
+        lambda token: setattr(
+            paragraph_once.paragraphs[0].paragraph_format, "line_spacing", token
+        ),
+        lambda: paragraph_once.part_xml("/word/document.xml"),
+        lambda: paragraph_once.paragraphs[0].paragraph_format.line_spacing,
+    )
+
+    default_bad = rdocx.Document()
+    expect_nonfinite(
+        "default",
+        default_bad,
+        lambda token: default_bad.set_default_paragraph_format(line_spacing=token),
+    )
+    style_bad = rdocx.Document()
+    expect_nonfinite(
+        "style",
+        style_bad,
+        lambda token: style_bad.set_style("Normal", line_spacing=token),
+    )
+    paragraph_bad = rdocx.Document()
+    paragraph_bad.add_paragraph("counted")
+    expect_nonfinite(
+        "paragraph",
+        paragraph_bad,
+        lambda token: setattr(
+            paragraph_bad.paragraphs[0].paragraph_format, "line_spacing", token
+        ),
+    )
+    assert findings == []
+
+
+def test_line_spacing_grid_boundaries_round_trip_without_line_rule():
+    import math
+
+    import rdocx
+
+    for line in (123, -123, 259, 2147483647, -2147483648):
+        document = rdocx.Document()
+        document.add_paragraph("grid")
+        document.paragraphs[0].paragraph_format.line_spacing = line / 240
+        assert document.paragraphs[0].paragraph_format.line_spacing == pytest.approx(line / 240)
+        xml = document.part_xml("/word/document.xml")
+        assert f'w:line="{line}"' in xml
+
+    above = math.nextafter(2147483647 / 240, math.inf)
+    below = math.nextafter(-2147483648 / 240, -math.inf)
+    probe = rdocx.Document()
+    probe.add_paragraph("edge")
+    for value in (above, below):
+        with pytest.raises(ValueError):
+            probe.paragraphs[0].paragraph_format.line_spacing = value
+    with pytest.raises(ValueError):
+        probe.set_default_paragraph_format(line_spacing=above)
+    with pytest.raises(ValueError):
+        probe.set_style("Normal", line_spacing=below)
+
+    absent = rdocx.Document()
+    absent.add_paragraph("holder")
+
+    def plant(data):
+        xml = data.decode().replace(
+            "<w:r>", '<w:pPr><w:spacing w:line="123"/></w:pPr><w:r>', 1
+        )
+        return xml.encode()
+
+    opened = _fx261_replace_part(absent, "word/document.xml", plant)
+    before = opened.to_bytes()
+    assert opened.paragraphs[0].paragraph_format.line_spacing == pytest.approx(123 / 240)
+    opened.paragraphs[0].paragraph_format.line_spacing = opened.paragraphs[0].paragraph_format.line_spacing
+    assert opened.to_bytes() == before
+    xml = opened.part_xml("/word/document.xml")
+    assert 'w:line="123"' in xml and "lineRule" not in xml
+    defaults = _fx261_set_doc_defaults(
+        rdocx.Document(),
+        '<w:pPrDefault><w:pPr><w:spacing w:line="123"/></w:pPr></w:pPrDefault>',
+    )
+    before = defaults.to_bytes()
+    defaults.set_default_paragraph_format(line_spacing=defaults.default_paragraph_format.line_spacing)
+    assert defaults.to_bytes() == before
+    stored = _fx261_defaults(defaults.part_xml("/word/styles.xml"))
+    assert 'w:line="123"' in stored and "lineRule" not in stored
+
+    def normal_style(xml):
+        start = xml.find('w:styleId="Normal"')
+        end = xml.find("</w:style>", start)
+        return xml[start:end]
+
+    styled = rdocx.Document()
+    styled.set_style("Normal", line_spacing=123 / 240)
+    styles = normal_style(styled.part_xml("/word/styles.xml"))
+    assert 'w:line="123"' in styles and 'w:lineRule="auto"' in styles
+    bare = _fx261_replace_part(
+        styled,
+        "word/styles.xml",
+        lambda data: data.replace(b'w:line="123" w:lineRule="auto"', b'w:line="123"', 1),
+    )
+    before = bare.to_bytes()
+    bare.set_style("Normal", line_spacing=123 / 240)
+    assert bare.to_bytes() == before
+    styles = normal_style(bare.part_xml("/word/styles.xml"))
+    assert 'w:line="123"' in styles and "lineRule" not in styles
+    bare.set_style("Normal", space_before=rdocx.Pt(6))
+    styles = normal_style(bare.part_xml("/word/styles.xml"))
+    assert 'w:line="123"' in styles and "lineRule" not in styles
+
+    at_least = _fx261_set_doc_defaults(
+        rdocx.Document(),
+        '<w:pPrDefault><w:pPr><w:spacing w:line="240" w:lineRule="atLeast"/></w:pPr></w:pPrDefault>',
+    )
+    at_least.set_default_paragraph_format(space_after=rdocx.Pt(6))
+    stored = _fx261_defaults(at_least.part_xml("/word/styles.xml"))
+    assert 'w:line="240"' in stored and 'w:lineRule="atLeast"' in stored
+    at_least.set_default_paragraph_format(line_spacing=1)
+    stored = _fx261_defaults(at_least.part_xml("/word/styles.xml"))
+    assert 'w:line="240"' in stored and 'w:lineRule="auto"' in stored
+
+    off = rdocx.Document()
+    off.add_paragraph("off")
+    off.paragraphs[0].paragraph_format.line_spacing = 1.0021
+    assert 'w:line="240"' in off.part_xml("/word/document.xml")
+    off.paragraphs[0].paragraph_format.line_spacing = -1.0021
+    assert 'w:line="-240"' in off.part_xml("/word/document.xml")
+
+
+@pytest.mark.parametrize("start_in_control", [False, True])
+def test_cross_cell_comment_lists_accepted_text(start_in_control):
+    import rdocx
+
+    document = rdocx.Document()
+    table = document.add_table(1, 2)
+    table.cell(0, 0).paragraphs[0].add_run("Preconditions and test data")
+    table.cell(0, 1).paragraphs[0].add_run("the second cell")
+    start = '<w:commentRangeStart w:id="0"/>'
+    if start_in_control:
+        start = (
+            '<w:sdt><w:sdtPr><w:tag w:val="goog_rdk_0"/></w:sdtPr>'
+            f"<w:sdtContent>{start}</w:sdtContent></w:sdt>"
+        )
+
+    def edit(xml):
+        first = xml.index("<w:r>", xml.index("<w:tc>"))
+        xml = xml[:first] + start + xml[first:]
+        second = xml.index("</w:p>", xml.index("the second cell"))
+        end = '<w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r>'
+        return xml[:second] + end + xml[second:]
+
+    document = _fx264_with_comment_markers(document, edit, [0])
+    (comment,) = document.comments
+    assert comment.anchor_text == "Preconditions and test data\nthe second cell"
+    assert comment.anchor_issue is None
+    assert comment.anchor.start.item.text == "Preconditions and test data"
+    assert comment.anchor.end.item.text == "the second cell"
+    stories = [
+        (position.item.story.kind, position.item.story.owner_index)
+        for position in (comment.anchor.start, comment.anchor.end)
+    ]
+    assert stories == [("table_cell", 0), ("table_cell", 1)]
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.comments[0].anchor_text == comment.anchor_text
+    assert document.remove_comment(0)
+    assert document.comments == ()
+
+
+def test_mixed_comment_anchors_keep_good_rows():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("kept")
+    document.add_paragraph("wrapped")
+
+    def edit(xml):
+        for comment_id, text in ((0, "kept"), (1, "wrapped")):
+            run = f"<w:r><w:t>{text}</w:t></w:r>"
+            content = run if comment_id == 0 else f"<w:smartTag>{run}</w:smartTag>"
+            xml = xml.replace(
+                run,
+                f'<w:commentRangeStart w:id="{comment_id}"/>{content}'
+                f'<w:commentRangeEnd w:id="{comment_id}"/>'
+                f'<w:r><w:commentReference w:id="{comment_id}"/></w:r>',
+                1,
+            )
+        return xml
+
+    document = _fx264_with_comment_markers(document, edit, [0, 1])
+    kept, wrapped = document.comments
+    assert (kept.anchor_text, kept.anchor_issue) == ("kept", None)
+    assert wrapped.anchor is None and wrapped.anchor_text is None
+    assert wrapped.anchor_issue is not None and "comment 1" in wrapped.anchor_issue
+
+
+def _fx264_assert_parts_match_saved_entries(document):
+    names = document.part_names()
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as saved:
+        entries = {name: saved.read(name) for name in saved.namelist()}
+    assert names == tuple(sorted(f"/{entry}" for entry in entries))
+    for name in ("/[Content_Types].xml", "/_rels/.rels", "/word/_rels/document.xml.rels"):
+        assert name in names
+        assert document.part_xml(name).encode() == entries[name[1:]]
+    for entry, data in entries.items():
+        if entry.endswith((".xml", ".rels")):
+            assert document.part_xml(f"/{entry}").encode() == data
+    assert document.part_xml("[content_types].xml").encode() == entries["[Content_Types].xml"]
+    return entries
+
+
+def test_part_xml_matches_zip_entry():
+    import rdocx
+
+    fresh = rdocx.Document()
+    fresh.add_paragraph("x")
+    _fx264_assert_parts_match_saved_entries(fresh)
+    fresh.add_paragraph("edited")
+    _fx264_assert_parts_match_saved_entries(fresh)
+
+    document = rdocx.Document()
+    document.add_paragraph("linked")
+    document.set_header("header")
+    header = next(story for story in document.stories if story.kind == "header")
+    document.add_hyperlink_to_story(header, "home", "https://example.invalid/header")
+    entries = _fx264_assert_parts_match_saved_entries(document)
+    assert b"https://example.invalid/header" in entries["word/_rels/header1.xml.rels"]
+    assert (
+        document.part_xml("word/_rels/HEADER1.XML.RELS").encode()
+        == entries["word/_rels/header1.xml.rels"]
+    )
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as source, zipfile.ZipFile(
+        output, "w"
+    ) as result:
+        for info in source.infolist():
+            data = source.read(info.filename)
+            if info.filename == "[Content_Types].xml" or info.filename.endswith(".rels"):
+                data = data.replace(b"?>", b"?><!-- issue 406 producer -->", 1)
+            result.writestr(info, data)
+    reopened = rdocx.Document.from_bytes(output.getvalue())
+    reopened_entries = _fx264_assert_parts_match_saved_entries(reopened)
+    for name in (
+        "[Content_Types].xml",
+        "_rels/.rels",
+        "word/_rels/header1.xml.rels",
+    ):
+        assert b"issue 406 producer" in reopened_entries[name]
+        assert b"issue 406 producer" in reopened.part_xml(f"/{name}").encode()
+
+
+def test_part_xml_keeps_slash_case_and_binary_errors():
+    import rdocx
+
+    pictured = rdocx.Document()
+    pictured.add_picture(PNG, "pixel.png", rdocx.Pt(1), rdocx.Pt(1))
+    media = next(name for name in pictured.part_names() if "/media/" in name)
+    with pytest.raises(rdocx.RdocxError, match="not UTF-8"):
+        pictured.part_xml(media)
+    with pytest.raises(rdocx.RdocxError, match="missing"):
+        pictured.part_xml("/word/_rels/absent.xml.rels")
+    bad = _fx261_add_part(
+        rdocx.Document(),
+        "word/bad.xml",
+        b"<bad>\x01</bad>",
+        "application/xml",
+    )
+    try:
+        bad.part_names()
+        names_failed = False
+    except rdocx.RdocxError:
+        names_failed = True
+    try:
+        bad.to_bytes()
+        save_failed = False
+    except rdocx.RdocxError:
+        save_failed = True
+    assert names_failed == save_failed
+    assert names_failed is False and save_failed is False
+
+    refused = rdocx.Document()
+    refused.add_paragraph("tab\tand\x01")
+    with pytest.raises(rdocx.RdocxError) as save_error:
+        refused.to_bytes()
+    with pytest.raises(rdocx.RdocxError) as names_error:
+        refused.part_names()
+    with pytest.raises(rdocx.RdocxError) as xml_error:
+        refused.part_xml("/word/styles.xml")
+    assert str(names_error.value) == str(save_error.value)
+    assert str(xml_error.value) == str(save_error.value)
+
+
+def test_comment_anchor_text_tracks_retained_run_edits():
+    import rdocx
+
+    def publish(edit):
+        document = rdocx.Document()
+        document.add_paragraph("anchor")
+        document.add_comment(
+            rdocx.RunRange(
+                start=rdocx.RunPosition(body_index=0, run_index=0),
+                end=rdocx.RunPosition(body_index=0, run_index=1),
+            ),
+            author="Ada",
+            text="note",
+        )
+        held = document.comments[0]
+        before = held.anchor_text
+        edit(document.paragraphs[0].runs[0])
+        assert held.anchor_text == before
+        fresh = document.comments[0]
+        assert fresh.anchor_text != before
+        assert fresh.anchor_issue is None
+        assert fresh.anchor is not None
+        reopened = rdocx.Document.from_bytes(document.to_bytes()).comments[0]
+        assert reopened.anchor_text == fresh.anchor_text
+        assert reopened.anchor_issue is None
+        return fresh.anchor_text
+
+    assert "\t" in publish(lambda run: run.add_tab())
+    assert publish(lambda run: setattr(run, "text", "changed")) == "changed"
+    assert "\n" in publish(lambda run: run.add_break())

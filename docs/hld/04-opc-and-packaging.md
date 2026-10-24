@@ -91,6 +91,14 @@ opened. Relationships added to the current graph afterward are authored state,
 including internal theme and other typed edges that have no modeled `r:id`.
 They join deterministic semantic ordering by relationship type and normalized
 target. Unknown and external authored edges retain their target and mode.
+`OpcPackage::zip_entries` is the save-equivalent list `write_to` serializes.
+Order is content types, root relationships, owner-sorted relationships, then
+name-sorted ordinary parts. Names are the exact strings that writer emits.
+An ordinary part drops at most one leading slash from the first authored
+stored key, so `/word/a.xml` becomes `word/a.xml` and `//word/a.xml` stays
+`/word/a.xml`. Metadata and relationship names keep the serializer mappings.
+Metadata bytes are owned. Ordinary part bytes are borrowed. A name the shared
+writer rejects fails before either path emits entries.
 
 Modern presentation package identity is the main presentation part's exact
 content type. `oxml-opc` names the ordinary presentation, macro-enabled
@@ -1057,6 +1065,11 @@ destination part merely because their names or bytes match.
 Word comment part creation uses the conventional names when free and scans
 numbered alternatives when either path is occupied. It never overwrites an
 unrelated part merely because the conventional comment path exists.
+Published package inspection uses those same save entries. Writer names are
+the exact strings `zip_entries` emits. An ordinary part drops at most one
+leading slash from the first authored stored key. The facade prefixes one
+slash onto each writer name. Content types and relationship parts are included
+with the ordinary parts.
 
 Word chart assembly follows the same independent suffix rule as PowerPoint.
 The document relationship targets `/word/charts/chartN.xml`, and that chart's
@@ -2133,7 +2146,7 @@ Picture removal drops a media part and its relationship only when the candidate 
 
 `validate` names a header or footer relationship whose target is not a header or footer part, including the part name and content type. A valid header or footer story still saves.
 
-`Document::part_names` returns the package paths a save would write, each with a leading slash, in lexicographic order. The order includes parts with no relationship and does not move when a part is rewritten. `Document::part_xml` returns the UTF-8 text of one staged part. A missing, binary, or non-UTF-8 part returns an error that names the part and its content type. A UTF-8 BOM may be stripped. UTF-16 is not decoded. The read has no mutable handle and no WASM surface.
+`Document::part_names` and `Document::part_xml` read `OpcPackage::zip_entries`, the same entries `write_to` serializes. `zip_entries` keeps writer order. Its names are the exact strings that writer emits. An ordinary part drops at most one leading slash from the first authored stored key, so `/word/a.xml` becomes `word/a.xml` and `//word/a.xml` stays `/word/a.xml`. Metadata and relationship names keep the serializer mappings. Public `part_names` prefixes one slash onto each writer name and sorts those names lexicographically. That public order is distinct from the writer order. The list includes content types, root relationships, owner relationships, and ordinary parts, including a part with no relationship. `part_xml` returns the UTF-8 text of one of those entries. A missing, binary, or non-UTF-8 part returns an error that names the part and its content type. A UTF-8 BOM may be stripped. UTF-16 is not decoded. A package that cannot save makes both calls return that save error, including when the invalid part is unrelated. The read has no mutable handle and no WASM surface. Path-save extension conversion is not this view.
 
 ## Presentation semantic export resources
 

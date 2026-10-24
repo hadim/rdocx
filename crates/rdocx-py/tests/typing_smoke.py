@@ -206,6 +206,18 @@ def exercise_rdocx_types(path: Path) -> None:
     document.remove_section(1)
     styles: tuple[Style, ...] = document.styles
     note: Style = document.add_style("Note", "paragraph", based_on="Normal")
+    document.set_default_paragraph_format(line_spacing=1.0)
+    document.set_default_paragraph_format(line_spacing=2)
+    assert_type(document.default_paragraph_format.line_spacing, Length | float | None)
+    document.set_style("Note", line_spacing=1.5)
+    document.set_style("Note", line_spacing=2)
+    document.set_style("Note", line_spacing=Pt(12))
+    document.set_style("Note", line_spacing=None)
+    document.set_style("Note", bold=True)
+    part_names: tuple[str, ...] = document.part_names()
+    assert_type(part_names, tuple[str, ...])
+    part_xml: str = document.part_xml("/word/document.xml")
+    assert_type(part_xml, str)
     document.add_style(
         "Boxed Note",
         style_id="BoxedNote",
@@ -350,6 +362,7 @@ def exercise_rdocx_types(path: Path) -> None:
         assert_type(bounds.width, float)
     assert_type(comments[0].date, str | None)
     assert_type(comments[0].anchor_text, str | None)
+    assert_type(comments[0].anchor_issue, str | None)
     assert_type(comments[0].anchor, StoryRunRange | None)
     assert_type(sections[0].page_width, int | None)
     assert_type(styles[0].style_type, str)

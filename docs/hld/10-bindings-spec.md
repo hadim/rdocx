@@ -378,13 +378,21 @@ and explicit zero remains valid. The full signed32 twip quotient is checked
 before narrowing. None clears only the selected property.
 
 `ParagraphFormat.line_spacing` distinguishes genuine Length absolute spacing
-from non-bool integer or float line multiples. Integer2 and float2.0 both
-write480with auto rule. Pt(18) writes360with exact rule. None clears both direct
-value and rule. Finite signed values and zero retain the native domain, with
-signed32 range checked on the truncating EMU/635 quotient for absolute lengths
-or the finite multiple-times240 product for multiples. Unsupported types,
-nonfinite products and saturation refuse before mutation. Native off-grid
-multiple truncation remains distinct from python-docx's twip rounding.
+from non-bool integer or float line multiples. `Length` is tested before `int`.
+Integer 2 and float 2.0 both write 480 with the auto rule. `Pt(18)` writes 360
+with the exact rule. `None` clears both the direct value and the rule. An
+omitted style or default keyword preserves both. A Python multiple must be
+finite and must keep the raw scaled product inside the closed signed 32-bit
+range before toward-zero truncation. An exact stored-grid `n / 240` normalizes
+back to that `n` even when the raw product is one ulp away. The next
+representable neighbours are refused even when truncation would fit. Bool and
+other non-numeric types raise `TypeError`. Non-finite input and an overflowing
+numeric `int` raise `ValueError` before any write. A same represented value
+preserves an absent line rule. Native `auto_line_spacing` is infallible
+exact-grid normalization. An exact stored-grid multiple becomes its signed
+numerator. Every other value keeps the existing toward-zero truncation,
+saturation, and NaN-to-0 cast. That helper is not a bare saturating cast of
+every grid value, and it is not the Python refusal.
 
 `ParagraphFormat.tab_stops` is a live parent-bound collection with length,
 indexing, iteration, indexed deletion, add_tab_stop and clear_all. Returned
@@ -2362,19 +2370,22 @@ revision. `CommentRef` exposes
 comment metadata, text, parent identity, resolved state and checked accepted-view
 anchor access without permitting part-local mutation. `resolved` is `Option<bool>` in Rust and `bool` or `None` in Python. A missing `commentsExtended` entry is `None`. A library-written comment that still has an extension is `False`. The CLI treats only `Some(true)` as resolved. Frozen Python `Comment`
 snapshots retain the seven original keyword arguments and add optional
-`anchor_text` and `anchor` values, both defaulting to `None` for manually
-constructed records. Equality retains the original seven metadata fields, since
-derived revision-bound locations are not comment metadata identity. Document
+`anchor_text`, `anchor`, and read-only `anchor_issue`, each defaulting to
+`None` for manually constructed records. Equality retains the original seven
+metadata fields. Derived anchors and `anchor_issue` are outside that equality. Document
 listing materializes real `StoryRunRange`
 endpoints with checked story identity, paragraph path and revision. Paragraphs
 directly inside block controls retain their two-segment path and actual containing
 body index. Recursive facade handles use the actual direct paragraph identity,
 so nested control or table descendants have no two-segment location. Non-body
 owners never acquire a body index. Snapshots remain readable
-after mutation, while reuse of their stale range refuses. Listing propagates
-extraction errors instead of converting unsupported sources to orphans.
-CLI `comment list --json` retains metadata and adds nullable `anchor_text` and
-`anchor`, with explicit start/end story kind, part, owner index, paragraph kind,
+after mutation, while reuse of their stale range refuses. A per-comment
+projection or endpoint error keeps that row, leaves `anchor` and `anchor_text`
+absent, and sets read-only `anchor_issue`. Other rows stay in the list. A
+document-wide inventory or ownership error fails the whole listing. Neither
+case turns an unsupported source into an orphan.
+CLI `comment list --json` retains metadata and adds nullable `anchor_text`,
+`anchor`, and `anchor_issue`, with explicit start/end story kind, part, owner index, paragraph kind,
 index path, run index and containing body index. Its scope is `all_stories`.
 Empty point text differs from orphan null text, and replies have no invented
 parent range. `rdocx-cli comment` lists, adds, replies to, resolves, and
@@ -4207,9 +4218,9 @@ returns the property and raises `KeyError` when the name is absent. An absent
 part has length 0. `keys` is not added.
 Membership and failed operations create no properties part.
 
-Python `part_names` returns a tuple of package paths with a leading slash, in lexicographic order, including a part with no relationship. `part_xml` returns the UTF-8 text of one staged part. Rust returns `Result`. A missing, binary, or non-UTF-8 part raises `RdocxError` and names the part and content type. The read sees unsaved staged parts, returns no mutable handle, and has no WASM surface.
+Python `part_names` returns `tuple[str, ...]` for the save-equivalent entry paths, each with a leading slash, in lexicographic order. That public order is distinct from `zip_entries` writer order. The tuple includes content types, root relationships, owner relationships, and ordinary parts, including a part with no relationship. `part_xml` returns `str`, the exact UTF-8 text of one of those entries. Rust returns `Result`. A missing, binary, or non-UTF-8 part raises `RdocxError` and names the part and content type. A package that cannot save makes both calls return that save error, including when the invalid part is unrelated. The read sees the current package, returns no mutable handle, and has no WASM surface.
 
-Python `DefaultParagraphFormat` exposes `space_before`, `space_after` and `line_spacing` on `Length`. An omitted keyword keeps the stored value. A keyword set to `None` clears only that property. Rust `default_paragraph_properties` and `set_default_paragraph_properties` expose the stored `CT_PPr`. Clearing the whole native object preserves `w:rPrDefault` and unrelated opaque source. A float, int, or bool assigned to `line_spacing` refuses and does not publish. Assigning a `Length` writes `w:line` in twips and `w:lineRule="exact"`. The twip conversion divides EMU by 635 toward zero, so `Pt(12)` is 240 twips. Assigning `None` clears both `w:line` and `w:lineRule`. The getter returns a `Length` for `exact` and `atLeast`, the stored integer divided by 240 as a float for `auto` and for a missing rule, and `None` when `w:line` is absent or the rule is any other string. Omitting the keyword keeps `atLeast`, a missing rule, and an unknown rule.
+Python default, paragraph, and style `line_spacing` share one rule. `space_before` and `space_after` on the default surface stay `Length` only. `line_spacing` accepts `Length`, a non-bool `int`, or a `float`, and the getter type is `Length | float | None`. `Length` is tested before `int` and writes exact spacing. A non-bool `int` or `float` is a line multiple and must be finite. `None` clears the line value and the rule. An omitted argument preserves both. Bool and other types raise `TypeError`. Non-finite input, a raw scaled product outside the closed signed 32-bit range before truncation, and a numeric `int` whose conversion overflows `f64` raise `ValueError`. An exact stored-grid `n / 240` for signed 32-bit `n` normalizes back to `n` even when the raw product is one ulp away. Every other finite multiple truncates toward zero only after that raw product is inside the closed range, so `1.0021` becomes 240. The next representable neighbours are refused even when truncation would fit. A same represented value preserves an absent `lineRule`. A new numeric value writes `auto`. One bad keyword in a batch writes nothing from that call. An explicit `set_style` clear of a line and rule that are already absent does not invent empty paragraph properties on that tested path. Rust `default_paragraph_properties` and `set_default_paragraph_properties` expose the stored `CT_PPr`. Clearing the whole native object preserves `w:rPrDefault` and unrelated opaque source. Absolute `Length` line spacing keeps the signed 32-bit twip quotient of EMU divided by 635 toward zero before narrowing, so `Pt(12)` is 240 twips. The getter returns a `Length` for `exact` and `atLeast`, the stored integer divided by 240 as a float for `auto` and for a missing rule, and `None` when `w:line` is absent or the rule is any other string. Native `auto_line_spacing` remains a separate infallible exact-grid normalization. Off-grid values keep the existing truncation, saturation, and NaN-to-0 cast. Final installed typing and the full acceptance gate are still pending.
 
 AppProperties and presence-sensitive track_revisions are live document-owned handles. Equations return immutable source snapshots, ordered per-child conversion results and native loss diagnostics. Tag and alias control updates stage all selected qualified values once. Runtime constructors, explicit exports and strict stubs describe the same public classes and defaults.
 

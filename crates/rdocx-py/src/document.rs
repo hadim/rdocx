@@ -594,6 +594,7 @@ pub struct PyComment {
     pub resolved: Option<bool>,
     pub anchor_text: Option<String>,
     pub anchor: Option<PyStoryRunRange>,
+    pub anchor_issue: Option<String>,
 }
 
 // Preserve the established metadata value equality. Derived anchor snapshots
@@ -615,7 +616,7 @@ impl Eq for PyComment {}
 #[pymethods]
 impl PyComment {
     #[new]
-    #[pyo3(signature = (*, id, author, initials, date, text, parent_id, resolved, anchor_text=None, anchor=None))]
+    #[pyo3(signature = (*, id, author, initials, date, text, parent_id, resolved, anchor_text=None, anchor=None, anchor_issue=None))]
     #[allow(clippy::too_many_arguments)] // Preserve seven original fields plus optional anchor snapshots.
     fn new(
         id: i32,
@@ -627,10 +628,12 @@ impl PyComment {
         resolved: Option<bool>,
         anchor_text: Option<String>,
         anchor: Option<PyRef<'_, PyStoryRunRange>>,
+        anchor_issue: Option<String>,
     ) -> Self {
         Self {
             anchor_text,
             anchor: anchor.map(|range| (*range).clone()),
+            anchor_issue,
             id,
             author,
             initials,
@@ -2843,6 +2846,26 @@ impl PyListLevel {
     }
 }
 
+/// `set_style` line spacing. Omission keeps the stored line and rule.
+/// Explicit None is `Given(None)` and clears both. `add_style` never stores
+/// a clear: None and omission both stay unset on a new style.
+enum StyleLineSpacingArg {
+    Omitted,
+    Given(Option<Py<PyAny>>),
+}
+
+impl<'a, 'py> FromPyObject<'a, 'py> for StyleLineSpacingArg {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> Result<Self, Self::Error> {
+        if obj.is_none() {
+            Ok(Self::Given(None))
+        } else {
+            Ok(Self::Given(Some(obj.to_owned().unbind())))
+        }
+    }
+}
+
 /// The formatting `Document.add_style` gives a new style. Lengths and the
 /// font size are EMU, as `Length` values are, and `None` leaves a property to
 /// the style's base.
@@ -2858,7 +2881,9 @@ struct StyleFormatting {
     right_indent: Option<i64>,
     first_line_indent: Option<i64>,
     alignment: Option<i32>,
-    line_spacing: Option<Py<PyAny>>,
+    /// None omits the write. `Some(None)` clears the line and rule.
+    /// `Some(Some(value))` assigns a length or a line multiple.
+    line_spacing: Option<Option<Py<PyAny>>>,
     underline: Option<Py<PyAny>>,
     keep_with_next: Option<bool>,
     keep_together: Option<bool>,
@@ -2942,19 +2967,28 @@ impl StyleFormatting {
         py: Python<'_>,
         existing: Option<&rdocx::CT_PPr>,
     ) -> PyResult<Option<rdocx::CT_PPr>> {
-        let supplied = self.space_before.is_some()
+        let other = self.space_before.is_some()
             || self.space_after.is_some()
             || self.left_indent.is_some()
             || self.right_indent.is_some()
             || self.first_line_indent.is_some()
             || self.alignment.is_some()
-            || self.line_spacing.is_some()
             || self.keep_with_next.is_some()
             || self.keep_together.is_some()
             || self.page_break_before.is_some()
             || self.borders.is_some()
             || self.shading.is_some()
             || self.tab_stops.is_some();
+        // Clearing a line that is already absent must not create pPr.
+        if !other
+            && self.line_spacing.as_ref().is_some_and(Option::is_none)
+            && existing.is_none_or(|properties| {
+                properties.line_spacing.is_none() && properties.line_rule.is_none()
+            })
+        {
+            return Ok(None);
+        }
+        let supplied = other || self.line_spacing.is_some();
         if !supplied {
             return Ok(None);
         }
@@ -2995,21 +3029,35 @@ impl StyleFormatting {
                 rdocx::Alignment::Justify => rdocx_oxml::ST_Jc::Both,
             });
         }
-        if let Some(value) = &self.line_spacing {
-            let value = value.bind(py);
-            if value.is_instance_of::<PyFloat>() {
-                let multiple = value.extract::<f64>()?;
-                let twip = multiple * 240.0;
-                if !multiple.is_finite() || twip < i32::MIN as f64 || twip > i32::MAX as f64 {
-                    return Err(PyValueError::new_err(
-                        "style line_spacing must be finite and fit signed twips",
-                    ));
+        if let Some(spacing) = &self.line_spacing {
+            match spacing {
+                None => {
+                    properties.line_spacing = None;
+                    properties.line_rule = None;
                 }
-                properties.line_spacing = Some(rdocx::Twips(twip as i32));
-                properties.line_rule = Some("auto".to_owned());
-            } else {
-                properties.line_spacing = Some(twips(value.extract()?)?);
-                properties.line_rule = Some("exact".to_owned());
+                Some(value) => {
+                    let value = value.bind(py);
+                    let message = "style line_spacing requires a numeric line multiple or a Length";
+                    if value.is_instance_of::<PyBool>() {
+                        return Err(PyTypeError::new_err(message));
+                    }
+                    if value.is_instance(&py.import("rdocx")?.getattr("Length")?)? {
+                        properties.line_spacing = Some(twips(value.extract()?)?);
+                        properties.line_rule = Some("exact".to_owned());
+                    } else if value.is_instance_of::<PyInt>() || value.is_instance_of::<PyFloat>() {
+                        let spacing = rdocx::auto_line_spacing(
+                            crate::formatting::require_auto_line_spacing(value)?,
+                        );
+                        let kept = properties.line_rule.is_none()
+                            && properties.line_spacing == Some(spacing);
+                        properties.line_spacing = Some(spacing);
+                        if !kept {
+                            properties.line_rule = Some("auto".to_owned());
+                        }
+                    } else {
+                        return Err(PyTypeError::new_err(message));
+                    }
+                }
             }
         }
         if let Some(value) = self.keep_with_next {
@@ -3456,6 +3504,31 @@ fn length_keyword(
     let twips = i32::try_from(emu / 635)
         .map_err(|_| PyValueError::new_err(format!("{name} must fit signed twips")))?;
     Ok(Some(rdocx::Twips(twips)))
+}
+
+/// A default `line_spacing` keyword. `Length` is an exact pitch. A non-bool
+/// int or float is a line multiple. `None` clears the line and its rule.
+fn line_spacing_keyword(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Option<(rdocx::Twips, &'static str)>> {
+    if value.is_none() {
+        return Ok(None);
+    }
+    let message = "line_spacing requires a numeric line multiple, a Length or None";
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(message));
+    }
+    if value.is_instance(&py.import("rdocx")?.getattr("Length")?)? {
+        return Ok(length_keyword(py, value, "line_spacing")?.map(|twips| (twips, "exact")));
+    }
+    if !value.is_instance_of::<PyInt>() && !value.is_instance_of::<PyFloat>() {
+        return Err(PyTypeError::new_err(message));
+    }
+    Ok(Some((
+        rdocx::auto_line_spacing(crate::formatting::require_auto_line_spacing(value)?),
+        "auto",
+    )))
 }
 
 #[pyclass(name = "CustomProperties")]
@@ -9425,7 +9498,7 @@ impl PyDocument {
         let this = slf.borrow();
         let mut anchors = this
             .inner
-            .comment_anchor_snapshots()
+            .comment_anchor_snapshot_results()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         let mut items = this
             .inner
@@ -9439,24 +9512,37 @@ impl PyDocument {
             .comments()
             .into_iter()
             .map(|comment| {
-                let (range, anchor_text) = anchors.remove(&comment.id()).ok_or_else(|| {
+                let snapshot = anchors.remove(&comment.id()).ok_or_else(|| {
                     PyValueError::new_err(
                         "comment snapshot is missing its checked ownership record",
                     )
                 })?;
-                let anchor = range
-                    .map(|range| -> PyResult<PyStoryRunRange> {
-                        Ok(PyStoryRunRange {
-                            start: this.comment_story_position(
-                                py,
-                                &range.start,
-                                &mut items,
-                                &owner,
-                            )?,
-                            end: this.comment_story_position(py, &range.end, &mut items, &owner)?,
-                        })
-                    })
-                    .transpose()?;
+                // A comment whose anchor cannot be read or placed keeps its
+                // record. The reason is that comment's issue.
+                let (anchor, anchor_text, anchor_issue) = match snapshot
+                    .map_err(|error| error.to_string())
+                    .and_then(|(range, text)| {
+                        range
+                            .map(|range| -> PyResult<PyStoryRunRange> {
+                                Ok(PyStoryRunRange {
+                                    start: this.comment_story_position(
+                                        py,
+                                        &range.start,
+                                        &mut items,
+                                        &owner,
+                                    )?,
+                                    end: this.comment_story_position(
+                                        py, &range.end, &mut items, &owner,
+                                    )?,
+                                })
+                            })
+                            .transpose()
+                            .map(|anchor| (anchor, text))
+                            .map_err(|error| error.to_string())
+                    }) {
+                    Ok((anchor, text)) => (anchor, text, None),
+                    Err(issue) => (None, None, Some(issue)),
+                };
                 Ok(PyComment {
                     id: comment.id(),
                     author: comment.author().map(str::to_owned),
@@ -9467,6 +9553,7 @@ impl PyDocument {
                     resolved: comment.resolved(),
                     anchor_text,
                     anchor,
+                    anchor_issue,
                 })
             })
             .collect::<PyResult<Vec<_>>>()?;
@@ -9983,7 +10070,7 @@ impl PyDocument {
             alignment,
             line_spacing: line_spacing
                 .filter(|v| !v.is_none())
-                .map(|v| v.clone().unbind()),
+                .map(|v| Some(v.clone().unbind())),
             underline: underline
                 .filter(|v| !v.is_none())
                 .map(|v| v.clone().unbind()),
@@ -10057,7 +10144,7 @@ impl PyDocument {
         right_indent = None,
         first_line_indent = None,
         alignment = None,
-        line_spacing = None,
+        line_spacing = StyleLineSpacingArg::Omitted,
         underline = None,
         keep_with_next = None,
         keep_together = None,
@@ -10084,7 +10171,7 @@ impl PyDocument {
         right_indent: Option<i64>,
         first_line_indent: Option<i64>,
         alignment: Option<i32>,
-        line_spacing: Option<&Bound<'_, PyAny>>,
+        line_spacing: StyleLineSpacingArg,
         underline: Option<&Bound<'_, PyAny>>,
         keep_with_next: Option<bool>,
         keep_together: Option<bool>,
@@ -10133,9 +10220,10 @@ impl PyDocument {
             right_indent,
             first_line_indent,
             alignment,
-            line_spacing: line_spacing
-                .filter(|v| !v.is_none())
-                .map(|v| v.clone().unbind()),
+            line_spacing: match line_spacing {
+                StyleLineSpacingArg::Omitted => None,
+                StyleLineSpacingArg::Given(value) => Some(value),
+            },
             underline: underline
                 .filter(|v| !v.is_none())
                 .map(|v| v.clone().unbind()),
@@ -10229,13 +10317,22 @@ impl PyDocument {
             let Some(value) = kwargs.get_item(name)? else {
                 continue;
             };
-            let twips = length_keyword(py, &value, name)?;
             match name {
-                "space_before" => next.space_before = twips,
-                "space_after" => next.space_after = twips,
+                "space_before" => next.space_before = length_keyword(py, &value, name)?,
+                "space_after" => next.space_after = length_keyword(py, &value, name)?,
                 "line_spacing" => {
-                    next.line_spacing = twips;
-                    next.line_rule = twips.map(|_| "exact".to_owned());
+                    let line = line_spacing_keyword(py, &value)?;
+                    // A missing rule already means auto, so the same multiple
+                    // writes back without adding one.
+                    let kept = line.is_some_and(|(twips, rule)| {
+                        rule == "auto"
+                            && next.line_rule.is_none()
+                            && next.line_spacing == Some(twips)
+                    });
+                    next.line_spacing = line.map(|(twips, _)| twips);
+                    if !kept {
+                        next.line_rule = line.map(|(_, rule)| rule.to_owned());
+                    }
                 }
                 _ => unreachable!("keyword was checked above"),
             }

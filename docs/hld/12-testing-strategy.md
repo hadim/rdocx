@@ -4254,7 +4254,17 @@ Stated plainly, because they are why two shipped defects went unnoticed:
 ### Checked Word comment anchor projections
 
 The existing native regression entrypoint exercises exact accepted-view comment
-text and reusable story ranges across body and related owners. Controls cover
+text and reusable story ranges across body and related owners. Accepted text
+inside one enclosing non-cell flow includes table cells and joins paragraphs
+with newlines. An independent nested text box stays outside that flow.
+`cross_cell_range_stays_in_one_owner` and
+`story_range_order_rejects_reversed_and_crossing_omissions` discriminate a
+physically valid same-part omission from reversed, crossing, and duplicate-name
+controls. `BodyKeep` beside invalid `BadRelated`, and the same-name body and
+header control, stay on that order guard. `ref_cross_owner_keeps_old_cache`
+discriminates an ordinary related `REF`, a separate `REF \f`, and update plus
+reopen. `comment_anchor_snapshot_results` keeps one bad row, and
+`comment_anchor_snapshots` still returns an error for that row. Controls cover
 Google block and inline content controls, accepted revisions, field cache text,
 empty intervening paragraphs, namespace-qualified endpoints and source-order
 boundaries. Reads and reopen preserve package source. Point, orphan and reply
@@ -4263,7 +4273,11 @@ ranges return checked errors. A wrapper-only zero-run interval is refused when
 its coordinates cannot re-anchor the selected display. Python runtime and
 strict typing cover optional frozen fields, typed snapshots and stale range
 reuse. CLI JSON asserts complete typed endpoint locations and null versus empty
-text. These source-built API checks do not claim native Word render parity. Issue 289 is covered by block-control paragraph endpoints with accepted text and nonempty XML, exact two-segment paths and containing body indices before and after reopen.
+text. These source-built API checks are local discriminators. They do not claim
+native Word render parity, and they are not the final installed typing, hash,
+Word, or full verify gate. Issue 289 is covered by block-control paragraph endpoints with accepted text and nonempty XML, exact two-segment paths and containing body indices before and after reopen.
+
+`self_closing_story_paragraph_fields_evaluate` keeps the original twelve shape and story controls. The original `add_footnote` seed stays unreferenced. A fresh copy of that seed appends the same note id with `paragraph_mut(0).add_footnote_ref`, adding three referenced footnote shapes and fifteen observations in all. One `PAGE` row has cached result `9` and defers pagination. A visible ordinary update returns `1`, keeps cached `9`, and may change bytes. It is not a byte no-op. Pure evaluation and layout reads preserve bytes. The unreferenced footnote has no placement, layout-backed `page_fields` `0`, cached `9`, and the unplaced-source diagnostic. Header, footer, referenced footnote, and endnote place physical page 1 and displayed page 1 on direct child paths `[2]`, `[3]`, and `[2]`. Header and footer layout-backed update keeps `page_fields` `0` and cached `9`, with the dynamic header and footer retention diagnostic. A placed footnote or endnote writes `page_fields` `1` and cached `1`. Save and reopen check the cache and either the placement or the deliberate non-placement. Dirty state is the model flag, not an XML spelling. The endnote `PAGE` hash corpus stays final and unrun. This check claims no native Word result.
 
 
 ### Checked Word comment moves

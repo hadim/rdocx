@@ -21372,7 +21372,7 @@ impl Document {
             .collect::<Result<Vec<_>>>()?;
         let mut result = Vec::new();
         let mut seen = HashSet::new();
-        for (source_index, paragraph, location, xml) in paragraphs {
+        for (source_index, _, paragraph, location, xml) in paragraphs {
             if !matches!(
                 location.story.kind,
                 StoryKind::TextBox | StoryKind::TableCell
@@ -21551,8 +21551,18 @@ impl Document {
         Ok(restored)
     }
 
-    pub(crate) fn comment_story_range_paragraphs(&self) -> Result<Vec<(ContentLocation, Vec<u8>)>> {
-        let mut paragraphs = self.story_range_paragraphs()?;
+    /// The checked range paragraphs in story order, each with its flow, as
+    /// the source index and flow that `story_range_paragraph_sources` gives,
+    /// and its offset in that source, which orders the paragraphs of a flow.
+    #[allow(clippy::type_complexity)] // Located paragraphs with their flow and source order.
+    pub(crate) fn comment_story_range_paragraphs(
+        &self,
+    ) -> Result<Vec<((usize, usize), usize, ContentLocation, Vec<u8>)>> {
+        let (_, paragraphs) = self.story_range_paragraph_sources()?;
+        let mut paragraphs = paragraphs
+            .into_iter()
+            .map(|(source, flow, span, location, xml)| ((source, flow), span.start, location, xml))
+            .collect::<Vec<_>>();
         let canonical = self.document.to_xml()?;
         let restored = self.namespace_restored_main_source()?;
         if restored == canonical {
@@ -21591,7 +21601,7 @@ impl Document {
                 .values()
                 .filter_map(|span| boundaries.get(&span.start).copied()),
         )?;
-        for (location, xml) in &mut paragraphs {
+        for (_, _, location, xml) in &mut paragraphs {
             if location.story.part_name != self.doc_part_name {
                 continue;
             }
@@ -21614,15 +21624,32 @@ impl Document {
 
     #[doc(hidden)]
     pub fn story_range_paragraphs(&self) -> Result<Vec<(ContentLocation, Vec<u8>)>> {
-        let (_, paragraphs) = self.story_range_paragraph_sources()?;
-        Ok(paragraphs
+        Ok(self
+            .story_range_located_paragraphs()?
             .into_iter()
-            .map(|(_, _, location, xml)| (location, xml))
+            .map(|(_, _, _, location, xml)| (location, xml))
             .collect())
     }
 
+    /// Owned paragraph projection from one source inventory.
+    ///
+    /// The private source list stays inside this module. Callers receive the
+    /// source index, flow, raw span, location and namespace-closed paragraph.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn story_range_located_paragraphs(
+        &self,
+    ) -> Result<Vec<(usize, usize, Range<usize>, ContentLocation, Vec<u8>)>> {
+        let (_sources, paragraphs) = self.story_range_paragraph_sources()?;
+        Ok(paragraphs)
+    }
+
     /// List every checked range paragraph in story order, with the index of
-    /// its source and its span there, after building each package source once.
+    /// its source, its flow and its span there, after building each package
+    /// source once.
+    ///
+    /// The flow is the start offset of the paragraph's owner, or for a table
+    /// cell that of the innermost other owner holding it, so the paragraphs of
+    /// one flow are one story with its table cells, in source order.
     ///
     /// Stories keep the identities and order of [`Self::stories`]. Each source
     /// is scanned for its owners once and its paragraph scopes are inventoried
@@ -21632,7 +21659,7 @@ impl Document {
         &self,
     ) -> Result<(
         Vec<StorySource<'_>>,
-        Vec<(usize, Range<usize>, ContentLocation, Vec<u8>)>,
+        Vec<(usize, usize, Range<usize>, ContentLocation, Vec<u8>)>,
     )> {
         let sources = self.story_sources()?;
         let mut paragraphs = Vec::new();
@@ -21641,7 +21668,23 @@ impl Document {
         for (source_index, source) in sources.iter().enumerate() {
             let source_xml = source.xml.as_ref();
             let mut owners = Vec::new();
+            let mut flows = Vec::new();
+            // Owners come in start order, so the open non-cell owners nest.
+            let mut holders = Vec::<Range<usize>>::new();
             for owner in scan_story_owners(source_xml, source.root_kind)? {
+                while holders
+                    .last()
+                    .is_some_and(|holder| holder.end <= owner.full.start)
+                {
+                    holders.pop();
+                }
+                let flow = match holders.last() {
+                    Some(holder) if owner.kind == StoryKind::TableCell => holder.start,
+                    _ => owner.full.start,
+                };
+                if owner.kind != StoryKind::TableCell {
+                    holders.push(owner.full.clone());
+                }
                 let identity = (owner.kind, source.part_name.clone(), owner.owner_index);
                 if !seen.insert(identity) {
                     continue;
@@ -21653,29 +21696,32 @@ impl Document {
                     fingerprint: owner.fingerprint,
                 };
                 owners.push((story, owner));
+                flows.push(flow);
             }
             let spans = story_range_paragraph_spans(source_xml, &owners)?;
             let scopes = story_namespace_scopes_at(
                 source_xml,
                 spans.iter().flatten().map(|(_, span)| span.start),
             )?;
-            for story_spans in spans {
+            for (story_spans, flow) in spans.into_iter().zip(flows) {
                 for (location, span) in story_spans {
                     let scope = scopes.get(&span.start).ok_or_else(|| {
                         Error::Other("story paragraph namespace scope was not inventoried".into())
                     })?;
                     let xml = close_content_fragment_namespaces(&source_xml[span.clone()], scope)?;
-                    paragraphs.push((story_index, source_index, span, location, xml));
+                    paragraphs.push((story_index, source_index, flow, span, location, xml));
                 }
                 story_index += 1;
             }
         }
-        paragraphs.sort_by_key(|(story_index, _, span, _, _)| (*story_index, span.start));
+        paragraphs.sort_by_key(|(story_index, _, _, span, _, _)| (*story_index, span.start));
         Ok((
             sources,
             paragraphs
                 .into_iter()
-                .map(|(_, source_index, span, location, xml)| (source_index, span, location, xml))
+                .map(|(_, source_index, flow, span, location, xml)| {
+                    (source_index, flow, span, location, xml)
+                })
                 .collect(),
         ))
     }
@@ -22332,9 +22378,15 @@ impl Document {
             oxml_core::xml::reject_non_xml_characters("internal hyperlink", value)?;
         }
         crate::comments::validate_bookmark_name(bookmark)?;
-        let matching = self.story_ranges()?.into_iter().filter(|entry| {
-            matches!(entry.kind(), crate::StoryRangeKind::Bookmark { name, .. } if name == bookmark)
-        }).count();
+        let (ranges, across) = self.story_range_inventory()?;
+        let matching = ranges
+            .iter()
+            .map(crate::StoryRangeRef::kind)
+            .chain(&across)
+            .filter(|kind| {
+                matches!(kind, crate::StoryRangeKind::Bookmark { name, .. } if name == bookmark)
+            })
+            .count();
         if matching != 1 {
             return Err(Error::Other(
                 "internal hyperlink bookmark is missing or ambiguous".into(),
@@ -22443,7 +22495,7 @@ impl Document {
             ));
         }
         let run_count = paragraph.accepted_run_paths().len();
-        let ranges = self.story_ranges()?;
+        let (ranges, across) = self.story_range_inventory()?;
         let existing = ranges.iter().find_map(|entry| {
             let crate::StoryRangeKind::Bookmark { name, .. } = entry.kind() else {
                 return None;
@@ -22462,7 +22514,9 @@ impl Document {
             None => {
                 let names = ranges
                     .iter()
-                    .filter_map(|entry| match entry.kind() {
+                    .map(crate::StoryRangeRef::kind)
+                    .chain(&across)
+                    .filter_map(|kind| match kind {
                         crate::StoryRangeKind::Bookmark { name, .. } => Some(name.as_str()),
                         _ => None,
                     })
@@ -29890,39 +29944,43 @@ impl Document {
         Ok(candidate.package)
     }
 
-    /// Package part names a save would write, each with a leading slash,
-    /// in lexicographic order. The order includes parts with no relationship.
+    /// Package part names [`Self::to_bytes`] would write now, each with a
+    /// leading slash, in lexicographic order. They are its ZIP entries, so
+    /// they include `/[Content_Types].xml`, `/_rels/.rels`, every
+    /// relationship part such as `/word/_rels/document.xml.rels`, and parts
+    /// with no relationship. When the package would not save, this returns
+    /// the save error, such as a graph validation failure, a duplicate part
+    /// identity or a character XML cannot carry.
     pub fn part_names(&self) -> Result<Vec<String>> {
-        let mut names = self
-            .staged_output_package()?
-            .parts
-            .into_keys()
+        let package = self.staged_output_package()?;
+        let mut names = package
+            .zip_entries()?
+            .into_iter()
+            .map(|(entry, _)| format!("/{entry}"))
             .collect::<Vec<_>>();
         names.sort();
         Ok(names)
     }
 
-    /// UTF-8 XML of one package part as a save would write it now.
+    /// UTF-8 XML of one package part as [`Self::to_bytes`] would write it now.
     ///
-    /// The name may omit its leading slash and matches without regard to
-    /// case. A missing, binary, or non-UTF-8 part returns an error that names
-    /// the part and its content type. A UTF-8 BOM is stripped. UTF-16 is not
-    /// decoded.
+    /// The part is the ZIP entry of [`Self::to_bytes`] with that name, a
+    /// relationship part and `/[Content_Types].xml` included. The name may
+    /// omit its leading slash and matches without regard to case. A missing,
+    /// binary, or non-UTF-8 part returns an error that names the part and its
+    /// content type. A UTF-8 BOM is stripped. UTF-16 is not decoded. When the
+    /// package would not save, this returns the save error, as
+    /// [`Self::part_names`] does.
     pub fn part_xml(&self, part_name: &str) -> Result<String> {
-        let requested = format!(
-            "/{}",
-            part_name
-                .trim()
-                .strip_prefix('/')
-                .unwrap_or(part_name.trim())
-        );
+        let requested = part_name.trim();
+        let requested = requested.strip_prefix('/').unwrap_or(requested);
         let package = self.staged_output_package()?;
-        let Some(stored) = package
-            .parts
-            .keys()
-            .find(|name| name.eq_ignore_ascii_case(&requested))
-            .cloned()
+        let entries = package.zip_entries()?;
+        let Some((entry, data)) = entries
+            .iter()
+            .find(|(entry, _)| entry.eq_ignore_ascii_case(requested))
         else {
+            let requested = format!("/{requested}");
             let content_type = package
                 .content_types
                 .content_type_for(&requested)
@@ -29931,18 +29989,21 @@ impl Document {
                 "part {requested} is missing (content type {content_type})"
             )));
         };
+        let stored = format!("/{entry}");
         let content_type = package
             .content_types
             .content_type_for(&stored)
             .unwrap_or("none");
-        let data = package.get_part(&stored).expect("listed package part");
-        let xml_type = content_type.to_ascii_lowercase().contains("xml");
+        // A relationship part and [Content_Types].xml are XML whatever the
+        // content types declare. Every other entry is a stored part.
+        let xml_type =
+            !package.contains_part(&stored) || content_type.to_ascii_lowercase().contains("xml");
         if !xml_type {
             return Err(Error::Other(format!(
                 "part {stored} has content type {content_type} and is not UTF-8 XML"
             )));
         }
-        let body = data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(data);
+        let body = data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(data.as_ref());
         // UTF-16 text without a BOM is ASCII bytes interleaved with NUL.
         // Those bytes are valid UTF-8, and XML 1.0 forbids NUL, so a NUL is
         // the non-UTF-8 refusal for an XML content type.
@@ -44739,7 +44800,12 @@ mod tests {
                 reference_story_range_paragraphs(&document).unwrap()
             );
             assert_eq!(
-                document.comment_story_range_paragraphs().unwrap(),
+                document
+                    .comment_story_range_paragraphs()
+                    .unwrap()
+                    .into_iter()
+                    .map(|(_, _, location, xml)| (location, xml))
+                    .collect::<Vec<_>>(),
                 reference_comment_story_range_paragraphs(&document).unwrap()
             );
             assert_eq!(

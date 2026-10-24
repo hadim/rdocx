@@ -1,5 +1,6 @@
 //! OPC Package reader and writer for ZIP-based OOXML packages.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -280,43 +281,58 @@ impl OpcPackage {
 
     /// Write the OPC package to any writer.
     pub fn write_to<W: Write + Seek>(&self, writer: W) -> Result<()> {
-        Self::write_serialized(writer, self.serialize()?)
-    }
-
-    fn write_serialized<W: Write + Seek>(
-        writer: W,
-        serialized: SerializedPackage<'_>,
-    ) -> Result<()> {
+        // Serialize before the ZIP writer exists: a failure then writes nothing.
+        let entries = self.zip_entries()?;
         let mut zip = ZipWriter::new(writer);
         let options =
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-
-        // Write [Content_Types].xml
-        zip.start_file("[Content_Types].xml", options)?;
-        zip.write_all(&serialized.content_types)?;
-
-        // Write _rels/.rels
-        zip.start_file("_rels/.rels", options)?;
-        zip.write_all(&serialized.package_relationships)?;
-
-        // Write part-level .rels files. Both loops iterate in sorted order so
-        // that saving the same package twice produces byte-identical output;
-        // a HashMap's order would vary between runs.
-        for (rels_path, rels_xml) in serialized.part_relationships {
-            zip.start_file(&rels_path, options)?;
-            zip.write_all(&rels_xml)?;
+        for (name, data) in entries {
+            zip.start_file(name, options)?;
+            zip.write_all(&data)?;
         }
-
-        // Write all parts
-        for (name, data) in serialized.parts {
-            // Strip leading "/" for ZIP entry name
-            let zip_name = name.strip_prefix('/').unwrap_or(name);
-            zip.start_file(zip_name, options)?;
-            zip.write_all(data)?;
-        }
-
         zip.finish()?;
         Ok(())
+    }
+
+    /// The ZIP entries [`Self::write_to`] writes, in its order, each as the
+    /// exact entry-name string the writer emits and its bytes.
+    ///
+    /// `[Content_Types].xml` and `_rels/.rels` come first, then one
+    /// relationship part per relationship owner, sorted by owner part name,
+    /// then the parts, sorted by part name. An ordinary part drops at most
+    /// one leading slash from the first authored stored key. Metadata and
+    /// relationship names use the existing serializer mappings. Metadata
+    /// bytes are owned. Ordinary part bytes are borrowed from the package.
+    /// The same package always yields the same entries, and a package that
+    /// cannot be saved returns that save error.
+    pub fn zip_entries(&self) -> Result<Vec<(String, Cow<'_, [u8]>)>> {
+        let serialized = self.serialize()?;
+        let mut entries =
+            Vec::with_capacity(2 + serialized.part_relationships.len() + serialized.parts.len());
+        entries.push((
+            "[Content_Types].xml".to_owned(),
+            Cow::Owned(serialized.content_types),
+        ));
+        entries.push((
+            "_rels/.rels".to_owned(),
+            Cow::Owned(serialized.package_relationships),
+        ));
+        entries.extend(
+            serialized
+                .part_relationships
+                .into_iter()
+                .map(|(rels_path, rels_xml)| (rels_path, Cow::Owned(rels_xml))),
+        );
+        entries.extend(serialized.parts.into_iter().map(|(name, data)| {
+            (
+                name.strip_prefix('/').unwrap_or(name).to_owned(),
+                Cow::Borrowed(data),
+            )
+        }));
+        for (name, _) in &entries {
+            reject_zip_local_entry_name(name)?;
+        }
+        Ok(entries)
     }
 
     /// Append a password-protected CFB envelope around the deterministic OPC ZIP.
@@ -1136,6 +1152,25 @@ fn rels_path_to_part_name(rels_path: &str) -> String {
     }
 }
 
+/// Refuse a ZIP entry name that pinned `zip` 9.0.3 `ZipWriter::start_file`
+/// rejects before it writes the payload.
+///
+/// The local-header types are private. `SimpleFileOptions::default` adds no
+/// extra field, and the fixed local header is the 30-byte ZIP local file
+/// header. Their sum with the file name must stay below `u16::MAX`. The
+/// boundary is pinned by `zip_entries_and_write_to_share_pinned_zip_name_limit`
+/// against that writer, not against this constant alone.
+fn reject_zip_local_entry_name(name: &str) -> Result<()> {
+    const LOCAL_HEADER_WITHOUT_NAME_OR_EXTRA: usize = 30;
+    if LOCAL_HEADER_WITHOUT_NAME_OR_EXTRA.saturating_add(name.len()) >= usize::from(u16::MAX) {
+        return Err(zip::result::ZipError::InvalidArchive(
+            "ZipLocalBlock + filename + extra fields must be less than 64KiB when combined".into(),
+        )
+        .into());
+    }
+    Ok(())
+}
+
 /// Convert a part name to its .rels file path.
 /// e.g. "/word/document.xml" → "word/_rels/document.xml.rels"
 fn part_name_to_rels_path(part_name: &str) -> String {
@@ -1259,6 +1294,195 @@ mod tests {
             Err(OpcError::DuplicatePartName(name)) if name == "xé.bin")
         );
         assert_eq!(bytes, before);
+    }
+
+    #[test]
+    fn zip_entries_own_metadata_borrow_parts_and_follow_write_order() {
+        let mut package = OpcPackage::new();
+        package.set_part("/word/b.xml", b"<b/>".to_vec());
+        package.set_part("/word/a.xml", b"<a/>".to_vec());
+        package
+            .content_types
+            .add_override("/word/a.xml", "application/xml");
+        package
+            .content_types
+            .add_override("/word/b.xml", "application/xml");
+        let mut rels_a = Relationships::new();
+        rels_a.add("urn:test", "target-a");
+        let mut rels_b = Relationships::new();
+        rels_b.add("urn:test", "target-b");
+        package.part_rels.insert("/word/b.xml".to_owned(), rels_b);
+        package.part_rels.insert("/word/a.xml".to_owned(), rels_a);
+
+        let entries = package.zip_entries().unwrap();
+        let names = entries
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "[Content_Types].xml",
+                "_rels/.rels",
+                "word/_rels/a.xml.rels",
+                "word/_rels/b.xml.rels",
+                "word/a.xml",
+                "word/b.xml",
+            ]
+        );
+        assert!(names.iter().all(|name| !name.starts_with('/')));
+        assert!(matches!(entries[0].1, Cow::Owned(_)));
+        assert!(matches!(entries[1].1, Cow::Owned(_)));
+        assert!(matches!(entries[2].1, Cow::Owned(_)));
+        assert!(matches!(entries[3].1, Cow::Owned(_)));
+        assert!(matches!(
+            &entries[4].1,
+            Cow::Borrowed(data) if std::ptr::eq(*data, package.get_part("/word/a.xml").unwrap())
+        ));
+        assert!(matches!(
+            &entries[5].1,
+            Cow::Borrowed(data) if std::ptr::eq(*data, package.get_part("/word/b.xml").unwrap())
+        ));
+
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        let mut archive = ZipArchive::new(std::io::Cursor::new(output.into_inner())).unwrap();
+        assert_eq!(archive.len(), entries.len());
+        for (index, (name, data)) in entries.iter().enumerate() {
+            let mut file = archive.by_index(index).unwrap();
+            assert_eq!(file.name().unwrap(), name.as_str());
+            let mut saved = Vec::new();
+            file.read_to_end(&mut saved).unwrap();
+            assert_eq!(saved, data.as_ref());
+        }
+        drop(entries);
+
+        for (authored, payload, expected_part, expected_rels, alias) in [
+            (
+                "/word/a.xml",
+                &b"<canonical/>"[..],
+                "word/a.xml",
+                "word/_rels/a.xml.rels",
+                "/word/a.xml",
+            ),
+            (
+                "//word/a.xml",
+                &b"<alias/>"[..],
+                "/word/a.xml",
+                "/word/_rels/a.xml.rels",
+                "/word/a.xml",
+            ),
+            (
+                "/word/./a.xml",
+                &b"<dotted/>"[..],
+                "word/./a.xml",
+                "word/./_rels/a.xml.rels",
+                "/word/a.xml",
+            ),
+        ] {
+            let mut fresh = OpcPackage::new();
+            fresh.set_part(authored, payload.to_vec());
+            let mut rels = Relationships::new();
+            rels.add("urn:test", "target");
+            fresh.part_rels.insert(authored.to_owned(), rels);
+            let preserved = fresh.zip_entries().unwrap();
+            let preserved_names = preserved
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                preserved_names,
+                [
+                    "[Content_Types].xml",
+                    "_rels/.rels",
+                    expected_rels,
+                    expected_part,
+                ],
+                "{authored}"
+            );
+            assert!(matches!(preserved[0].1, Cow::Owned(_)), "{authored}");
+            assert!(matches!(preserved[1].1, Cow::Owned(_)), "{authored}");
+            assert!(matches!(preserved[2].1, Cow::Owned(_)), "{authored}");
+            assert!(
+                matches!(
+                    &preserved[3].1,
+                    Cow::Borrowed(data) if std::ptr::eq(*data, fresh.get_part(alias).unwrap())
+                        && std::ptr::eq(*data, fresh.get_part(authored).unwrap())
+                        && *data == payload
+                ),
+                "{authored}"
+            );
+            let mut preserved_output = std::io::Cursor::new(Vec::new());
+            fresh.write_to(&mut preserved_output).unwrap();
+            let mut preserved_archive =
+                ZipArchive::new(std::io::Cursor::new(preserved_output.into_inner())).unwrap();
+            assert_eq!(preserved_archive.len(), preserved.len(), "{authored}");
+            for (index, (name, data)) in preserved.iter().enumerate() {
+                let mut file = preserved_archive.by_index(index).unwrap();
+                assert_eq!(file.name().unwrap(), name.as_str(), "{authored}");
+                let mut saved = Vec::new();
+                file.read_to_end(&mut saved).unwrap();
+                assert_eq!(saved, data.as_ref(), "{authored}");
+            }
+        }
+
+        package.set_part("/word/a.xml", b"<\x01/>".to_vec());
+        let inspection = package.zip_entries().unwrap_err().to_string();
+        let mut ignored = std::io::Cursor::new(Vec::new());
+        let save = package.write_to(&mut ignored).unwrap_err().to_string();
+        assert_eq!(inspection, save);
+        assert!(save.contains("U+0001"), "{save}");
+    }
+
+    fn deflated_writer_result(name: &str) -> std::result::Result<(), String> {
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        let mut zip = ZipWriter::new(&mut cursor);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file(name, options)
+            .map_err(|error| error.to_string())?;
+        zip.write_all(b"x").map_err(|error| error.to_string())?;
+        zip.finish().map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    #[test]
+    fn zip_entries_and_write_to_share_pinned_zip_name_limit() {
+        let accepted = "n".repeat(65_504);
+        let rejected = "n".repeat(65_505);
+        assert!(deflated_writer_result("word/document.xml").is_ok());
+        assert!(
+            deflated_writer_result(&accepted).is_ok(),
+            "pinned ZipWriter rejected the near-boundary name"
+        );
+        let writer_error = deflated_writer_result(&rejected).unwrap_err();
+        assert!(
+            writer_error.contains("ZipLocalBlock + filename + extra fields"),
+            "{writer_error}"
+        );
+
+        let mut fits = OpcPackage::new();
+        fits.set_part(&accepted, b"x".to_vec());
+        assert!(fits.zip_entries().is_ok());
+        let mut output = std::io::Cursor::new(Vec::new());
+        fits.write_to(&mut output).unwrap();
+
+        let mut oversized = OpcPackage::new();
+        oversized.set_part(&rejected, b"x".to_vec());
+        let inspection = match oversized.zip_entries() {
+            Ok(_) => panic!("zip_entries accepted a name the pinned writer rejects"),
+            Err(error) => error.to_string(),
+        };
+        let mut ignored = std::io::Cursor::new(Vec::new());
+        let save = match oversized.write_to(&mut ignored) {
+            Ok(_) => panic!("write_to accepted a name the pinned writer rejects"),
+            Err(error) => error.to_string(),
+        };
+        assert_eq!(inspection, save, "inspection={inspection} save={save}");
+        assert!(
+            inspection.contains("ZipLocalBlock + filename + extra fields"),
+            "{inspection}"
+        );
     }
 
     #[test]
