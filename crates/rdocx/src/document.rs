@@ -1721,6 +1721,10 @@ pub struct BodyItemOwners {
     /// by table within the item, and whether it routed every table cell
     /// owner of the item, or `None` where it fails.
     pub cell_paragraphs: Option<(HashMap<(usize, usize, usize), Vec<ContentLocation>>, bool)>,
+    /// Whether the item's bytes hold a field. A field compares equal to one
+    /// whose source form or run span differs, which its bytes and owners
+    /// follow, so an equal item need not read the same.
+    pub holds_field: bool,
 }
 
 /// What [`Document::body_item_owners`] reads besides the item, as
@@ -5913,6 +5917,13 @@ fn intersect_relationship_registry(
             (!retained.is_empty()).then_some((owner, retained))
         })
         .collect()
+}
+
+/// Whether `xml` may hold a simple or complex field: it names a
+/// `fldSimple` or `fldChar` element, or holds those words.
+fn xml_holds_field(xml: &[u8]) -> bool {
+    xml.windows(9).any(|bytes| bytes == b"fldSimple")
+        || xml.windows(7).any(|bytes| bytes == b"fldChar")
 }
 
 fn identifier_xml_is_well_formed(xml: &[u8]) -> bool {
@@ -26756,6 +26767,7 @@ impl Document {
             tables: alone.tables().count(),
             cell_paragraphs: cell_paragraph_routes(&mut alone, &part, &owners, &self.doc_part_name)
                 .ok(),
+            holds_field: xml_holds_field(&part),
         })
     }
 
@@ -60332,6 +60344,7 @@ mod tests {
             let mut paragraphs = Vec::new();
             let mut cell_paragraphs = HashMap::new();
             let mut sample = Vec::new();
+            let mut holding_fields = Vec::new();
             for (slot, item) in document.document.body.content.iter().enumerate() {
                 STORY_SOURCE_BUILDS.set(0);
                 STORY_OWNER_SCANS.set(0);
@@ -60393,7 +60406,13 @@ mod tests {
                     .count();
                 cells += owners.cell_stories;
                 tables += owners.tables;
+                if owners.holds_field {
+                    holding_fields.push(slot);
+                }
             }
+            // Only the paragraph of the simple PAGE and complex DATE fields
+            // holds one.
+            assert_eq!(holding_fields, [count + 2]);
             let expected = document
                 .paragraph_story_locations()
                 .unwrap()

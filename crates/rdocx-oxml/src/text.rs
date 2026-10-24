@@ -1873,11 +1873,10 @@ impl Field {
     }
 }
 
-// The Python binding keeps the Word owners it read for a body block while
-// the block compares equal. The fields this ignores, the source form, the
-// run span and the nested cached fields, can change the block's bytes and
-// the runs it owns, so an edit that changes one of them must also change a
-// field compared here, or that inventory keeps stale owners.
+// The fields this ignores, the source form, the run span and the nested
+// cached fields, can change the block's bytes and the runs it owns, so two
+// blocks that hold equal fields need not read or serialize the same. The
+// Python binding reads a body block holding a field again for that reason.
 impl PartialEq for Field {
     fn eq(&self, other: &Self) -> bool {
         self.instruction == other.instruction

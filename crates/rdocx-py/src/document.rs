@@ -5269,6 +5269,9 @@ struct WordBlockOwners {
     /// Its part of `Document::cell_paragraph_story_locations`, and whether
     /// that routed every cell of the block, or `None` where it fails.
     cell_paragraphs: Option<(CellParagraphRoutes, bool)>,
+    /// Whether the block holds a field, whose value compares equal to one
+    /// that owns otherwise.
+    holds_field: bool,
 }
 
 /// The owners of `block` as the only body child of `document`, or `None`
@@ -5288,6 +5291,7 @@ fn word_block_owners(
         paragraph_routes,
         tables,
         cell_paragraphs,
+        holds_field,
     } = document.body_item_owners(block)?;
     let body = |snapshot: &&rdocx::StoryItemSnapshot| {
         snapshot.location().story().kind() == rdocx::StoryKind::Body
@@ -5314,6 +5318,7 @@ fn word_block_owners(
         paragraphs: paragraph_routes,
         tables,
         cell_paragraphs,
+        holds_field,
     }))
 }
 
@@ -5352,6 +5357,8 @@ fn plain_paragraph_owners(
         paragraphs: vec![Some(vec![0])],
         tables: 0,
         cell_paragraphs: Some((HashMap::new(), true)),
+        // A plain paragraph holds text runs only.
+        holds_field: false,
     }
 }
 
@@ -5390,6 +5397,8 @@ fn table_owners(facts: WordOwnerFacts, cells: usize) -> Option<WordBlockOwners> 
         paragraphs: Vec::new(),
         tables: 1,
         cell_paragraphs: Some((routes, true)),
+        // A detached table is a new table, which holds no field.
+        holds_field: false,
         facts,
     })
 }
@@ -5459,9 +5468,11 @@ struct WordPartPiece {
 /// where the document still holds an equal value: the same bytes for a
 /// part, and for a block an equal `BodyContent` under an equal
 /// [`rdocx::BodyItemContext`]. That holds while equal blocks own the same,
-/// which the manual `PartialEq` of `Field`, `CT_TabStop` and
-/// `BookmarkMarker` must keep, since each ignores fields: the first two
-/// fields that serialize, the last a read projection.
+/// which the manual `PartialEq` of `CT_TabStop` and `BookmarkMarker` must
+/// keep, since each ignores a field: the first one that serializes, the
+/// last a read projection. A block holding a field is read again whenever
+/// it is assembled, since `Field` compares equal to a field whose source
+/// form or run span differs, which the block's bytes and owners follow.
 #[derive(Clone, Default)]
 pub(crate) struct WordPieces {
     context: Option<rdocx::BodyItemContext>,
@@ -5494,8 +5505,9 @@ impl WordPieces {
         // Equal blocks keep their pieces: the common prefix and suffix of
         // the body. Equality is that of `BodyContent`, which reads the same
         // owners only while its manual `PartialEq` impls ignore no field
-        // that changes them (see `WordPieces`). Another root or package
-        // namespace fact reads them all.
+        // that changes them, so a block holding a field is read again, in
+        // its place (see `WordPieces`). Another root or package namespace
+        // fact reads them all.
         let old = if self.context.as_ref() == Some(&context) {
             self.blocks.as_slice()
         } else {
@@ -5517,15 +5529,29 @@ impl WordPieces {
             blocks: Vec::with_capacity(blocks.len()),
             parts: Vec::new(),
         };
-        pieces.blocks.extend_from_slice(&old[..prefix]);
-        for block in &blocks[prefix..blocks.len() - suffix] {
-            note_word_piece_read();
-            pieces.blocks.push(std::sync::Arc::new(WordBlockPiece {
-                block: block.clone(),
-                owners: word_block_owners(document, block).ok().flatten(),
-            }));
+        let kept = old[..prefix]
+            .iter()
+            .map(Some)
+            .chain(std::iter::repeat_n(None, blocks.len() - prefix - suffix))
+            .chain(old[old.len() - suffix..].iter().map(Some));
+        for (block, piece) in blocks.iter().zip(kept) {
+            let holds_field = |piece: &&std::sync::Arc<WordBlockPiece>| {
+                piece
+                    .owners
+                    .as_ref()
+                    .is_some_and(|owners| owners.holds_field)
+            };
+            match piece.filter(|piece| !holds_field(piece)) {
+                Some(piece) => pieces.blocks.push(piece.clone()),
+                None => {
+                    note_word_piece_read();
+                    pieces.blocks.push(std::sync::Arc::new(WordBlockPiece {
+                        block: block.clone(),
+                        owners: word_block_owners(document, block).ok().flatten(),
+                    }));
+                }
+            }
         }
-        pieces.blocks.extend_from_slice(&old[old.len() - suffix..]);
         for (kind, part_name, xml) in sources {
             if let Some(piece) = self.parts.iter().find(|piece| {
                 piece.kind == kind && piece.part_name == part_name && piece.xml == *xml
