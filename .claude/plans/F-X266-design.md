@@ -221,6 +221,8 @@ The timed calls are `Paragraph.xml`, `insert_paragraph(10, "x")` and `remove_con
 
 ## F-X268 local provider checkpoint
 
+The next paragraph is the 2026-10-24 approval. It is dated historical for the state before the 2026-10-25 local completion recorded below.
+
 Codex root approved this checkpoint on 2026-10-24 for use by F-X268. It does not mark F-X266 done. The story stays in progress and reviewed, owner grok, until the checkpoint is actually satisfied. Final Word, the full suite, the hash harness, and the release performance gate stay mandatory and unrun. `AS_BUILT.md` and `SPRINT_TRACKER.md` stay unchanged.
 
 The checkpoint consumes all 9 existing local scoped rows: `direct_routes_match_full_body_bytes`, `append_keeps_eligible_owners`, `conservative_retires_all_scopes`, `failed_splice_publishes_nothing`, `fragment_omits_unused_w14`, `owner_scope_precedence_unchanged`, `held_fresh_reopen_match_old_semantics`, `body_work_counters_follow_owners`, and `missing_run_path_refuses`. It also consumes genuine RED, GREEN, and negative proof, the scoped checks, clean Root microscopes, and the integrated source ancestor. Map each name to the command and outcome already in the progress record. Do not invent a combined pass. Rerun only an input a later change invalidates. Rebuild the current import where binding evidence is affected.
@@ -229,4 +231,16 @@ Source head `9c6ef377971182a73b2e3cef07ccedde579d2f37` is integrated at `9ee48bf
 
 The closure generic has two actual callback instantiations from the patch: direct paragraph, and direct run, table and cell. The private splice types are justified by the direct-body fast path and the existing rebuild fallback. Both exist as soon as this story lands.
 
-The linear visit bound is specified and is part of the chosen implementation budget. Local test `body_work_counters_follow_owners` must prove it during implementation. That proof was not a design block. If the landed loops miss the bound, report that during implementation. Do not invent a passing counter. The contract is approved and the proof stays pending.
+The next paragraph is the earlier contract state, written before the local prefix. It is not the current proof status.
+
+The linear visit bound is specified and is part of the chosen implementation budget. Local test `body_work_counters_follow_owners` must prove it during implementation. That proof was not a design block. If the landed loops miss the bound, report that during implementation. Do not invent a passing counter. The contract is approved and the proof stays pending in that earlier text.
+
+The current local prefix covers that counter. `body_work_counters_follow_owners` is one of the 9 pytest rows that passed on the current import below. That pass is the local counter GREEN. It is not the final 407 release ratio.
+
+## Local prefix completed 2026-10-25
+
+Root approved genuine local provider completion for F-X266 on canonical `79047bf193bcd9dfb229a0b37a93d979dc0997a7`. This record is that Root review. It is not a self-review. The plan status stays approved. The story is done for this local prefix only. It is not final acceptance.
+
+All 9 scoped rows are covered. Fresh `cargo test -p rdocx --lib -- missing_run_path_refuses` passed 1 on binary `target/debug/deps/rdocx-f5b05f5a8af950bb`. Log `/private/tmp/s95.4-prefix-rdocx-missing-run.txt`. `owner_scope_precedence_unchanged` stays the consumed pass in `/tmp/fx266-precedence3.txt` because `crates/oxml-py-support/src/lib.rs` has no commit after `9ee48bf0902d976de016553b1dd0c79fed856612`. Fresh `maturin develop --offline` for `rdocx-py` used `VIRTUAL_ENV=/private/tmp/f-x264-py312` and the canonical `CARGO_TARGET_DIR`. Import sha256 `ae3879224176459797da677f26058757a5aa0592817921004c985ded1d8d17d6`, 123196360 bytes, archived at `/private/tmp/s95.4-fx266-verified-_rdocx.abi3.so`. Pytest of the 9 rows plus `test_body_work_counts_owner_lookup_without_xml` passed 10. Log `/private/tmp/s95.4-prefix-pytest-fx266.txt`. The earlier archive `b2c538021432dc629286e2648b75d892ae55cccac31333b6090e16d07ff5d5ca` was replaced by that move and is not the current qualifier.
+
+Source head `9c6ef377971182a73b2e3cef07ccedde579d2f37` and integration `9ee48bf0902d976de016553b1dd0c79fed856612` are ancestors of `79047bf193bcd9dfb229a0b37a93d979dc0997a7`. Clean Root reviews remain the reviews already consumed at integration. Final Word, the full suite, the hash harness, strict mypy, stubtest, WASM, packaging, and the release performance gate stay pending. `AS_BUILT.md` and `SPRINT_TRACKER.md` stay unchanged.

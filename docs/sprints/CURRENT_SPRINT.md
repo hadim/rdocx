@@ -6,8 +6,11 @@
 Also admit the incoming Word and PowerPoint correctness and performance repairs.
 Provide public creation of legacy form fields, build modern forms on the existing
 content-control model, and author mail-merge packages with offline diagnostics.
-Eight designs are approved. F-X264, F-X265, F-X266 and F-X267 are reviewed
-and integrated, and their final sprint gates are still pending. F-288 has its
+Eight designs are approved. F-X264 and F-X265 are reviewed and integrated,
+and their final sprint gates are still pending. F-X266 and F-X267 have the
+approved local provider prefix recorded on
+`79047bf193bcd9dfb229a0b37a93d979dc0997a7`. Their final sprint gates are still
+pending. F-288 has its
 approved local provider prefix. Its final Word and sprint gates stay pending.
 F-289 is integrated and reviewed locally, owner grok, and stays in progress.
 The consumed local checkpoint is native 91 and Python 13. Whole-feature pass 2
@@ -18,16 +21,17 @@ outcome. It is not the current whole-feature result. Final Word 16.114 A7, a
 fresh final CLI, the full workspace, full verify, the full hash suite, WASM,
 publish dry-run, strict installed mypy, and stubtest stay pending. F-289 is
 not done.
-F-290 is claimed for parallel work, owner grok, and stays in progress. The implementation is under Root review. The D1 repair is pending. No complete claim is made.
+F-290 is integrated at `79047bf193bcd9dfb229a0b37a93d979dc0997a7` and stays in progress, owner grok. Root whole-feature pass 3 is clean, with 0 defects, 0 smells, and 0 nitpicks, at `.claude/reviews/F-290-whole-feature-pass-3.md`. Public local checks are consumed. Final gates stay pending. Shared leases are released. No final acceptance is claimed.
 F-X268 is pending, owner `-`. The design is approved, including the
 2026-10-25 refresh4 extension, and the story is not claimed. Codex root
 approved the 2026-10-24 refresh2 extension. Codex root approved the
 2026-10-24 refresh3 extension. Codex root approved the refresh4 mechanism 8
 contract on 2026-10-25 after the user answered Q24. The baseline is
 `d1f42516eb3747442fe4304a6331eab946dc9a0e`. Those approvals do not change
-one another. No implementation has started and no gate pass is claimed. It follows F-289 and F-290, and it also waits for actual completion of the
-approved F-X266 and F-X267 local provider checkpoints. That completion has
-not been performed. It is not product implementation. The
+one another. No implementation has started and no gate pass is claimed. It follows F-289 and F-290. The approved F-X266 and F-X267 local provider
+checkpoints are satisfied on `79047bf193bcd9dfb229a0b37a93d979dc0997a7`.
+That completion is the local prefix only. It is not final acceptance and it
+is not product implementation of F-X268. The
 repairs do not replace the original authoring contract. The sprint now has
 eight stories. The previously authorized full run remains authorized. This
 approval does not ask for a new permission. Q1 through Q24 stay answered.
@@ -86,8 +90,8 @@ consumed local evidence is not a full gate. F-X267 remains the largest repair.
 | F-290 | Mail-merge package and data-source authoring | M | in-progress | grok |
 | F-X264 | Repair Word defaults package inspection and comment projection | L | in-progress | grok |
 | F-X265 | Preserve fragment relationship targets and duplicate styles | M | in-progress | grok |
-| F-X266 | Bound Word body reads and structural edit cost | L | in-progress | grok |
-| F-X267 | Bound PowerPoint mutation cost across public publishers | L | in-progress | grok |
+| F-X266 | Bound Word body reads and structural edit cost | L | done | - |
+| F-X267 | Bound PowerPoint mutation cost across public publishers | L | done | - |
 | F-X268 | Bound Word owner inventory and unchanged package staging | L | pending | - |
 
 ## Sequencing note
@@ -103,8 +107,9 @@ of the F-288 to F-289 chain only when actual source and resource leases are
 distinct. Shared facade, binding or HLD files require serial ownership.
 
 All seven stories started pending and unclaimed. The seven designs are now
-approved. F-X264, F-X265, F-X266 and F-X267 are reviewed and integrated, with
-their final sprint gates pending. F-288 local prefix is recorded at
+approved. F-X264 and F-X265 are reviewed and integrated, with their final
+sprint gates pending. F-X266 and F-X267 have the approved local provider
+prefix recorded, and their final sprint gates stay pending. F-288 local prefix is recorded at
 `96718dadf6840fe6ff73663dff3cd2b286418844`. F-289 is integrated and reviewed
 locally, owner grok, and stays in progress. The consumed local checkpoint is
 native 91 and Python 13. Whole-feature pass 2 is clean at
@@ -113,7 +118,7 @@ It is not the current whole-feature result. Pass 5 does not approve completion.
 F-289 has not passed a full gate. Final Word 16.114 A7, a fresh final CLI, the
 full workspace, full verify, the full hash suite, WASM, publish dry-run, strict
 installed mypy, and stubtest stay pending. F-290
-is claimed for parallel work, owner grok, and stays in progress. The implementation is under Root review. The D1 repair is pending. No complete claim is made. The consumed
+is integrated at `79047bf193bcd9dfb229a0b37a93d979dc0997a7` and stays in progress, owner grok. Root whole-feature pass 3 is clean, with 0 defects, 0 smells, and 0 nitpicks, at `.claude/reviews/F-290-whole-feature-pass-3.md`. Public local checks are consumed. Final gates stay pending. Shared leases are released. No final acceptance is claimed. The consumed
 local gate
 includes every named native group, A7 and the render fallback, the affected
 Python checks, a clean microscope, and that integrated ancestor. Reviewed
@@ -130,10 +135,11 @@ F-X266, and F-X260 and F-X262 for F-X267.
 
 Proposed serial integration, because leases overlap, is F-X264, F-X265,
 F-X266, F-X267, then F-288, then its verified local provider prefix, then
-F-289, then F-290. F-X268 follows F-289 and F-290, and it also waits for actual completion of
-the approved F-X266 and F-X267 local provider checkpoints. Those checkpoints
-are approved contract and have not been performed. Those two providers are
-not done and are not final-accepted. F-X268 is not claimed.
+F-289, then F-290. F-X268 follows F-289 and F-290. The approved F-X266 and
+F-X267 local provider checkpoints are satisfied on
+`79047bf193bcd9dfb229a0b37a93d979dc0997a7`. Those two providers are done for
+that local prefix. They are not final-accepted. F-X268 is not claimed in this
+record.
 That order is not a set of invented formal dependencies. Formal dependencies
 for F-X268 are F-X266 and F-X267. Preserve the F-288 verified local provider
 prefix before F-289. Final Word qualification of that prefix stays pending.
