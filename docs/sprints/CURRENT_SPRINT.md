@@ -22,8 +22,8 @@ fresh final CLI, the full workspace, full verify, the full hash suite, WASM,
 publish dry-run, strict installed mypy, and stubtest stay pending. F-289 is
 not done.
 F-290 is integrated at `79047bf193bcd9dfb229a0b37a93d979dc0997a7` and stays in progress, owner grok. Root whole-feature pass 3 is clean, with 0 defects, 0 smells, and 0 nitpicks, at `.claude/reviews/F-290-whole-feature-pass-3.md`. Public local checks are consumed. Final gates stay pending. Shared leases are released. No final acceptance is claimed.
-F-X268 is pending, owner `-`. The design is approved, including the
-2026-10-25 refresh4 extension, and the story is not claimed. Codex root
+F-X268 is in progress, owner grok. The design is approved, including the
+2026-10-25 refresh4 extension, and the story is claimed for parallel work. Codex root
 approved the 2026-10-24 refresh2 extension. Codex root approved the
 2026-10-24 refresh3 extension. Codex root approved the refresh4 mechanism 8
 contract on 2026-10-25 after the user answered Q24. The baseline is
@@ -61,13 +61,13 @@ consumed local evidence is not a full gate. F-X267 remains the largest repair.
 - `docs/hld/14-development-backlog.md`, sections F-288, F-289 and F-290 define
   supported authoring behavior, dependencies and each story's acceptance gate.
   Sections F-X264, F-X265, F-X266 and F-X267 define the admitted repair scope.
-  Section F-X268 defines the pending story. Its design is approved and the story is unclaimed.
+  Section F-X268 defines the claimed story. Its design is approved and the story is in progress, owner grok.
   The durable issue and PR mapping is the S95.4 issue and PR intake, 2026-10-23 section in `docs/sprints/SPRINT_PLAN.md`.
   The 2026-10-24 refresh is a later section in the same file.
   The 2026-10-24T13:49:35Z refresh is appended to that same intake.
   The 2026-10-24T17:02:28Z refresh is appended to that same intake.
   The 2026-10-24T23:05:39Z refresh is appended to that same intake.
-  The scope approved through refresh3 stays approved. F-X268 stays pending and unclaimed. Codex root approved the refresh4 extension on 2026-10-25. Q24 is answered.
+  The scope approved through refresh3 stays approved. F-X268 is claimed and in progress, owner grok. Codex root approved the refresh4 extension on 2026-10-25. Q24 is answered.
 - `docs/hld/03-architecture.md`, the existing legacy form, field, content-control,
   protection and mail-merge ownership contracts settle reuse of the document
   model, staging and publication boundaries.
@@ -92,7 +92,7 @@ consumed local evidence is not a full gate. F-X267 remains the largest repair.
 | F-X265 | Preserve fragment relationship targets and duplicate styles | M | in-progress | grok |
 | F-X266 | Bound Word body reads and structural edit cost | L | done | - |
 | F-X267 | Bound PowerPoint mutation cost across public publishers | L | done | - |
-| F-X268 | Bound Word owner inventory and unchanged package staging | L | pending | - |
+| F-X268 | Bound Word owner inventory and unchanged package staging | L | in-progress | grok |
 
 ## Sequencing note
 
@@ -138,8 +138,8 @@ F-X266, F-X267, then F-288, then its verified local provider prefix, then
 F-289, then F-290. F-X268 follows F-289 and F-290. The approved F-X266 and
 F-X267 local provider checkpoints are satisfied on
 `79047bf193bcd9dfb229a0b37a93d979dc0997a7`. Those two providers are done for
-that local prefix. They are not final-accepted. F-X268 is not claimed in this
-record.
+that local prefix. They are not final-accepted. F-X268 is claimed for
+parallel work, owner grok. Implementation has not started.
 That order is not a set of invented formal dependencies. Formal dependencies
 for F-X268 are F-X266 and F-X267. Preserve the F-288 verified local provider
 prefix before F-289. Final Word qualification of that prefix stays pending.
