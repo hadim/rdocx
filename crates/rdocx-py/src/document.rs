@@ -10972,7 +10972,13 @@ impl PyDocument {
                 "checked XML owner has no current physical authority",
             ));
         }
-        let matches = indexed_inventory_matches(&self.owners, &locations, &publication);
+        // Conservative publication retires every old scope. Matching those
+        // owners cannot certify any retention and only clones unused routes.
+        let matches = if matches!(publication, WordPublication::Conservative) {
+            vec![None; locations.len()]
+        } else {
+            indexed_inventory_matches(&self.owners, &locations, &publication)
+        };
         let (eligible_parts, modern_snapshot) = if modern {
             unchanged_related_owner_parts(&self.inner, candidate, &self.owners, &locations)
                 .map_err(|error| rdocx_to_pyerr(py, error))?
@@ -18086,9 +18092,15 @@ fn fx268_changed_existing_context_uses_full_inventory_before_publication() {
             document.inner.body_item_context()
         );
         word_whole_body_work();
+        FX237_ROUTE_WORK.set([0; 8]);
         let prepared = document
             .prepare_word_revision(py, &stable, "F-X268.stable", WordPublication::Conservative)
             .unwrap();
+        assert_eq!(
+            FX237_ROUTE_WORK.get(),
+            [0; 8],
+            "fully conservative publication must not match scopes it always retires"
+        );
         assert_eq!(
             word_whole_body_work(),
             (0, 0),

@@ -64,6 +64,10 @@ ZIP file openings and byte openings both establish actual package-read provenanc
 
 Masked namespace and relationship queries can compose a new result across a tail-only change. Both writer-produced partitions, the identical head and the new empty frame are checked. Unchanged closed children contribute their existing relative XML facts at the same occurrence. Changed children and frame facts are checked anew. Generic frame invalidation stays intact. This temporary query does not transport parsed ASTs, writer eligibility or decoder facts.
 
+Fully conservative Word publication constructs and validates the candidate owner inventory but does not match old owner routes that its policy always retires. Birth order, retirement and snapshot invalidation follow the same publication policy.
+
+Picture discovery optionally inventories all owners and paragraph scopes of one source together. Each paragraph's own declarations are applied before reading its drawings. Failed batch preparation restores the original ordered traversal and its first error. Comment movement consumes the checked paragraph spans and closed XML from its existing source inventory rather than resolving each paragraph again. These traversals add no retained cache.
+
 Namespace scans retain a frame per element and copy inherited maps only when
 the element declares a namespace. Attribute validation and scope restoration
 retain their checked source semantics.

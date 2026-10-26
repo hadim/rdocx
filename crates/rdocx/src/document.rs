@@ -26065,17 +26065,16 @@ impl Document {
         let (part_name, xml, selected) = self.story_range_marker_spans(entry, true)?;
         let (edits, reference, reference_span) = comment_move_source_edits(&xml, &selected)?;
         let mut reference_axis = None;
-        for (location, _) in self.story_range_paragraphs()? {
+        let (_, paragraphs) = self.story_range_paragraph_sources()?;
+        for (_, _, span, location, raw) in paragraphs {
             if location.story != entry.range().start.location.story {
                 continue;
             }
-            let (source, paragraph) = self.story_range_paragraph_source(&location)?;
-            if !paragraph.full.contains(&reference_span.start) {
+            // This inventory already owns the checked physical span and
+            // closed XML. Resolving every location again repeats owner scans.
+            if !span.contains(&reference_span.start) {
                 continue;
             }
-            let scope = story_namespace_scope_at(source.xml.as_ref(), paragraph.full.start)?;
-            let raw =
-                close_content_fragment_namespaces(&source.xml[paragraph.full.clone()], &scope)?;
             let paragraph_model = CT_P::from_xml_fragment(&raw)?;
             let indices = paragraph_model
                 .accepted_run_paths()
@@ -26098,7 +26097,7 @@ impl Document {
                     "comment reference has no unique accepted run boundary".into(),
                 ));
             }
-            reference_axis = Some((paragraph.full.start, indices[0]));
+            reference_axis = Some((span.start, indices[0]));
         }
         let (reference_paragraph, reference_index) = reference_axis.ok_or_else(|| {
             Error::Other("comment reference is outside the supported accepted run axis".into())
@@ -28236,20 +28235,62 @@ impl Document {
         let mut result = Vec::new();
         let mut seen = HashSet::new();
         for source in self.story_sources()? {
-            let owners = scan_story_owners(&source.xml, source.root_kind)?;
-            for owner in owners {
-                let story = StoryId {
-                    kind: owner.kind,
-                    part_name: source.part_name.clone(),
-                    owner_index: owner.owner_index,
-                    fingerprint: owner.fingerprint,
-                };
-                for (location, span) in
-                    story_range_paragraph_spans(&source.xml, &[(story.clone(), owner.clone())])?
+            let owners = scan_story_owners(&source.xml, source.root_kind)?
+                .into_iter()
+                .map(|owner| {
+                    let story = StoryId {
+                        kind: owner.kind,
+                        part_name: source.part_name.clone(),
+                        owner_index: owner.owner_index,
+                        fingerprint: owner.fingerprint,
+                    };
+                    (story, owner)
+                })
+                .collect::<Vec<_>>();
+            // This is optional preparation. A later owner's malformed source
+            // must not replace an earlier paragraph's authoritative error.
+            let batch = (|| -> Result<_> {
+                let spans = story_range_paragraph_spans(&source.xml, &owners)?;
+                let scopes = story_namespace_scopes_at(
+                    &source.xml,
+                    spans.iter().flatten().map(|(_, span)| span.start),
+                )?;
+                Ok((spans, scopes))
+            })()
+            .ok();
+            for (index, (story, owner)) in owners.iter().enumerate() {
+                let spans = match &batch {
+                    Some((spans, _)) => std::borrow::Cow::Borrowed(spans[index].as_slice()),
+                    None => std::borrow::Cow::Owned(
+                        story_range_paragraph_spans(
+                            &source.xml,
+                            &[(story.clone(), owner.clone())],
+                        )?
                         .into_iter()
                         .flatten()
-                {
-                    let scope = story_namespace_scope_at(&source.xml, span.start)?;
+                        .collect::<Vec<_>>(),
+                    ),
+                };
+                for (location, span) in spans.as_ref() {
+                    let scope = match batch
+                        .as_ref()
+                        .and_then(|(_, scopes)| scopes.get(&span.start))
+                    {
+                        Some(inherited) => {
+                            let mut reader =
+                                quick_xml::Reader::from_reader(&source.xml[span.clone()]);
+                            match reader.read_event().map_err(|error| {
+                                Error::Other(format!("story namespace scope scan failed: {error}"))
+                            })? {
+                                Event::Start(element) | Event::Empty(element) => {
+                                    changed_story_namespace_scope(inherited, &element)?
+                                        .unwrap_or_else(|| inherited.clone())
+                                }
+                                _ => story_namespace_scope_at(&source.xml, span.start)?,
+                            }
+                        }
+                        None => story_namespace_scope_at(&source.xml, span.start)?,
+                    };
                     let closed =
                         close_content_fragment_namespaces(&source.xml[span.clone()], &scope)?;
                     let paragraph = CT_P::from_xml_fragment(&closed)?;
@@ -28389,7 +28430,7 @@ impl Document {
                             )
                         } else {
                             let target = self.validate_internal_relationship_for_story(
-                                &story,
+                                story,
                                 embed,
                                 rel_types::IMAGE,
                             )?;
@@ -48697,6 +48738,31 @@ mod tests {
             assert_eq!(reopened.paragraph(count).unwrap().text(), "delta");
         }
         assert_eq!(samples[0], samples[1]);
+    }
+
+    #[test]
+    fn final_gate_picture_inventory_does_not_rescan_paragraph_prefixes() {
+        for count in [250, 1000] {
+            let mut document = issue407_document(&issue407_runs(count), false);
+            document.add_picture(
+                super::watermark_tests::PNG,
+                "pixel.png",
+                Length::pt(12.0),
+                Length::pt(15.0),
+            );
+            let document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            let source_bytes = document.document.to_xml().unwrap().len();
+            FX237_PREFIX_NAMESPACE_BYTES.set(0);
+            let pictures = document.pictures().unwrap();
+            assert_eq!(pictures.len(), 1);
+            assert_eq!((pictures[0].width, pictures[0].height), (152400, 190500));
+            assert_eq!(pictures[0].bytes, super::watermark_tests::PNG);
+            assert!(
+                FX237_PREFIX_NAMESPACE_BYTES.get() <= source_bytes,
+                "picture inventory reread {} prefix bytes for {source_bytes} source bytes",
+                FX237_PREFIX_NAMESPACE_BYTES.get()
+            );
+        }
     }
 
     #[test]
