@@ -2441,6 +2441,11 @@ fn index_elements(xml: &[u8]) -> Result<Vec<XmlElem>> {
         "control.index_elements.events:{}",
         std::panic::Location::caller().line()
     );
+    #[cfg(test)]
+    let a9_close_pass = format!(
+        "control.index_elements.close:{}",
+        std::panic::Location::caller().line()
+    );
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
@@ -2512,7 +2517,11 @@ fn index_elements(xml: &[u8]) -> Result<Vec<XmlElem>> {
                         "content control XML has an unmatched end element".to_owned(),
                     ));
                 };
-                let Some(elem) = elems.iter_mut().find(|elem| elem.id == id) else {
+                // IDs are assigned exactly once at the append position for
+                // both start and empty elements. Closing never reorders them.
+                #[cfg(test)]
+                crate::document::a9_lookup_candidate(&a9_close_pass);
+                let Some(elem) = elems.get_mut(id).filter(|elem| elem.id == id) else {
                     return Err(Error::Other(
                         "content control XML lost an open element".to_owned(),
                     ));
@@ -2532,6 +2541,31 @@ fn index_elements(xml: &[u8]) -> Result<Vec<XmlElem>> {
         ));
     }
     Ok(elems)
+}
+
+#[test]
+fn control_index_preserves_nested_and_empty_ranges() {
+    let xml = br#"<a:root xmlns:a="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><a:p/><a:sdt><a:sdtPr/><a:sdtContent><x:p xmlns:x="urn:foreign"><a:r/></x:p></a:sdtContent></a:sdt></a:root>"#;
+    let elems = index_elements(xml).unwrap();
+    assert_eq!(elems.len(), 7);
+    let parents = [None, Some(0), Some(0), Some(2), Some(2), Some(4), Some(5)];
+    for (index, elem) in elems.iter().enumerate() {
+        assert_eq!(elem.id, index);
+        assert_eq!(elem.parent, parents[index]);
+        assert_eq!(elem.word, index != 5);
+        let bytes = &xml[elem.range.clone()];
+        assert!(bytes.starts_with(b"<"));
+        assert!(bytes.ends_with(b">"));
+        if let Some(end) = elem.inner_end {
+            assert!(elem.open_end <= end);
+            assert!(xml[end..elem.range.end].starts_with(b"</"));
+        } else {
+            assert!(bytes.ends_with(b"/>"));
+        }
+    }
+    assert_eq!(&xml[elems[2].range.clone()], br#"<a:sdt><a:sdtPr/><a:sdtContent><x:p xmlns:x="urn:foreign"><a:r/></x:p></a:sdtContent></a:sdt>"#);
+    assert!(index_elements(b"<root><item></root>").is_err());
+    assert!(index_elements(b"<root><item/>").is_err());
 }
 
 fn is_word(namespace: &ResolveResult<'_>) -> bool {

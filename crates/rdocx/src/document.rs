@@ -26147,6 +26147,16 @@ impl Document {
         story: &StoryId,
     ) -> Result<(StorySource<'a>, StoryOwnerSpan, Vec<StoryOwnerSpan>)> {
         let (canonical, _) = self.story_source_and_owner(story)?;
+        self.fragment_story_source_from_canonical(story, &canonical)
+    }
+
+    // Reuse a canonical source only within the same immutable candidate phase.
+    // The retained physical owner is still independently discovered below.
+    fn fragment_story_source_from_canonical<'a>(
+        &'a self,
+        story: &StoryId,
+        canonical: &StorySource<'_>,
+    ) -> Result<(StorySource<'a>, StoryOwnerSpan, Vec<StoryOwnerSpan>)> {
         let xml = self.package.get_part(&canonical.part_name).ok_or_else(|| {
             Error::Other(format!(
                 "document fragment story part {} is missing",
@@ -26163,8 +26173,9 @@ impl Document {
             })?;
         Ok((
             StorySource {
+                root_kind: canonical.root_kind,
+                part_name: canonical.part_name.clone(),
                 xml: Cow::Borrowed(xml),
-                ..canonical
             },
             owner,
             owners,
@@ -28782,6 +28793,17 @@ impl Document {
         expected_type: &str,
     ) -> Result<String> {
         self.story_source_and_owner(story)?;
+        self.validate_internal_relationship_in_checked_story(story, relationship_id, expected_type)
+    }
+
+    // The caller must have checked this owner against the current immutable
+    // source. Relationship policy stays shared with the public checked entry.
+    fn validate_internal_relationship_in_checked_story(
+        &self,
+        story: &StoryId,
+        relationship_id: &str,
+        expected_type: &str,
+    ) -> Result<String> {
         let relationships = self
             .package
             .get_part_rels(&story.part_name)
@@ -29069,7 +29091,10 @@ impl Document {
                                 String::new(),
                             )
                         } else {
-                            let target = self.validate_internal_relationship_for_story(
+                            // This owner came from the current source above.
+                            // The immutable inventory cannot stale it between
+                            // drawings, so do not rebuild that source per image.
+                            let target = self.validate_internal_relationship_in_checked_story(
                                 story,
                                 embed,
                                 rel_types::IMAGE,
@@ -42754,7 +42779,7 @@ impl Document {
         let (canonical, canonical_owner, layout) =
             candidate.story_source_owner_and_layout(&story, path.is_some())?;
         let (source, owner, actual_owners) =
-            candidate.fragment_story_source_owner_and_owners(&story)?;
+            candidate.fragment_story_source_from_canonical(&story, &canonical)?;
         let canonical_owners = match &layout {
             Some(layout) => layout.owner_kinds(),
             None => scan_story_owners(&canonical.xml, canonical.root_kind)?
@@ -50031,6 +50056,97 @@ mod tests {
         assert!(
             !a9_lookup_excesses(&legacy[0], &legacy[1]).is_empty(),
             "the real legacy route did not fail the unchanged work bound: {legacy:?}"
+        );
+    }
+
+    #[test]
+    fn picture_inventory_assembles_one_source_for_all_relationships() {
+        let document = a9_lookup_fixture(100);
+        let mut pictures = Vec::new();
+        let counts = a9_lookup_sample(|| {
+            pictures = document.pictures()?;
+            Ok(())
+        });
+        assert_eq!(pictures.len(), 4);
+        assert!(
+            pictures
+                .iter()
+                .all(|picture| picture.bytes == super::watermark_tests::PNG)
+        );
+        assert_eq!(
+            counts
+                .get("writer.assembled_output")
+                .map_or(0, |work| work[0]),
+            1,
+            "picture inventory rebuilt an already checked source: {counts:?}"
+        );
+        for picture in &pictures {
+            assert_eq!(
+                document
+                    .validate_internal_relationship_for_story(
+                        &picture.location.story,
+                        &picture.relationship_id,
+                        rel_types::IMAGE,
+                    )
+                    .unwrap(),
+                picture.media_part_name.as_deref().unwrap(),
+            );
+        }
+    }
+
+    #[test]
+    fn retained_fragment_view_reuses_checked_canonical_source() {
+        let document = a9_lookup_fixture(25);
+        for story in document.stories().unwrap() {
+            let (canonical, _) = document.story_source_and_owner(&story).unwrap();
+            STORY_SOURCE_BUILDS.set(0);
+            let (source, owner, owners) = document
+                .fragment_story_source_from_canonical(&story, &canonical)
+                .unwrap();
+            assert_eq!(STORY_SOURCE_BUILDS.get(), 0);
+            let (reference, expected, expected_owners) = document
+                .fragment_story_source_owner_and_owners(&story)
+                .unwrap();
+            assert_eq!(STORY_SOURCE_BUILDS.get(), 1);
+            assert_eq!(source.xml, reference.xml);
+            assert_eq!(source.part_name, reference.part_name);
+            assert_eq!(
+                (owner.kind, owner.owner_index, owner.full, owner.fingerprint),
+                (
+                    expected.kind,
+                    expected.owner_index,
+                    expected.full,
+                    expected.fingerprint
+                )
+            );
+            let facts = |owners: Vec<StoryOwnerSpan>| {
+                owners
+                    .into_iter()
+                    .map(|owner| (owner.kind, owner.owner_index, owner.full, owner.fingerprint))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(facts(owners), facts(expected_owners));
+        }
+    }
+
+    #[test]
+    fn control_index_closing_work_is_linear() {
+        let mut samples = Vec::new();
+        for size in [25, 100] {
+            let mut document = a9_lookup_fixture(size);
+            samples.push(a9_lookup_action(&mut document, size, "control.block", 0));
+        }
+        let excesses = a9_lookup_excesses(&samples[0], &samples[1]);
+        assert!(
+            excesses.is_empty(),
+            "control index repeated closing work: {excesses:?}\nsmall={:?}\nlarge={:?}",
+            samples[0],
+            samples[1],
+        );
+        assert!(
+            samples[0]
+                .keys()
+                .any(|key| key.starts_with("control.index_elements.close:"))
         );
     }
 
