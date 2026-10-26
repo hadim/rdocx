@@ -8553,6 +8553,22 @@ fn root_start_tag(head: &[u8]) -> Option<std::ops::Range<usize>> {
     Some(start..end)
 }
 
+/// Query bindings have no declaration order. Keep values and multiplicity
+/// exact while the stored frame and its proof retain their byte provenance.
+fn same_query_namespace_bindings(left: &[(String, String)], right: &[(String, String)]) -> bool {
+    if left == right {
+        return true;
+    }
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut left = left.iter().collect::<Vec<_>>();
+    let mut right = right.iter().collect::<Vec<_>>();
+    left.sort_unstable();
+    right.sort_unstable();
+    left == right
+}
+
 impl MainPartBlocks {
     fn child_starts(&self) -> Option<(Vec<usize>, usize)> {
         let mut at = self.head.len();
@@ -9033,8 +9049,9 @@ impl MainPartBlocks {
         if self.head.is_empty()
             || (!bindings.is_empty() && {
                 let shell = [self.head.as_slice(), self.tail.as_slice()].concat();
-                self.canonical_frame_proof(&shell)
-                    .is_none_or(|frame| bindings != frame.body_bindings.as_slice())
+                self.canonical_frame_proof(&shell).is_none_or(|frame| {
+                    !same_query_namespace_bindings(bindings, &frame.body_bindings)
+                })
             })
         {
             return None;
@@ -9052,7 +9069,7 @@ impl MainPartBlocks {
         }
         let shell = [self.head.as_slice(), self.tail.as_slice()].concat();
         let frame = self.canonical_frame_proof(&shell)?;
-        if !bindings.is_empty() && bindings != frame.body_bindings.as_slice() {
+        if !bindings.is_empty() && !same_query_namespace_bindings(bindings, &frame.body_bindings) {
             return None;
         }
         let mut facts = Vec::with_capacity(self.blocks.len());
@@ -22652,7 +22669,7 @@ impl Document {
     /// Open a document from a file path.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let package = OpcPackage::open(path)?;
-        Self::from_package(package)
+        Self::from_opened_package(package, true)
     }
 
     /// Open a password-protected agile-encrypted document from a file path.
@@ -27935,7 +27952,21 @@ impl Document {
                 .register_nested_story_relationship(story, relationship_id);
         }
         candidate.prepare_staged_package()?;
-        candidate.clone_for_staging().reopen_prepared_staged()?;
+        let reopened = candidate.clone_for_staging().reopen_prepared_staged()?;
+        if candidate.doc_part_name == reopened.doc_part_name
+            && candidate.package.get_part(&candidate.doc_part_name)
+                == reopened.package.get_part(&reopened.doc_part_name)
+            && candidate.root_namespace_declarations == reopened.root_namespace_declarations
+            && candidate.body_namespace_declarations == reopened.body_namespace_declarations
+            && candidate.body_namespace_bindings == reopened.body_namespace_bindings
+        {
+            // Keep the authored typed body, but retain the actual validated
+            // opening and its package provenance instead of discarding them.
+            candidate.package = reopened.package;
+            candidate.parsed = reopened.parsed;
+            candidate.identifiers.scanned_parts = reopened.identifiers.scanned_parts;
+            candidate.install_carried_blocks(reopened.main_part_blocks);
+        }
         self.commit_staged_mutation(candidate);
         Ok(())
     }
@@ -48535,6 +48566,146 @@ mod tests {
             );
             assert_eq!(document.to_bytes().unwrap(), before);
         }
+    }
+
+    #[test]
+    fn final_gate_relationship_proof_accepts_equivalent_binding_order() {
+        let mut seed = Document::new();
+        seed.add_paragraph("alpha");
+        seed.set_header("header relationship");
+        let (xml, record) = seed.canonical_source().unwrap();
+        let record = record.unwrap();
+        let scopes = document_namespace_scopes(&xml).unwrap();
+        let mut reordered = scopes.body_bindings.clone();
+        reordered.reverse();
+        assert_ne!(reordered, scopes.body_bindings);
+        let expected = xml_relationship_ids_in_order_with_bindings(&xml, &reordered).unwrap();
+        assert_eq!(
+            record.proved_relationship_ids(&xml, &reordered),
+            Some(expected)
+        );
+        let mut changed = reordered.clone();
+        changed[0].1.push_str("/changed");
+        assert_eq!(record.proved_relationship_ids(&xml, &changed), None);
+        let mut duplicated = reordered;
+        duplicated[0] = duplicated[1].clone();
+        assert_eq!(record.proved_relationship_ids(&xml, &duplicated), None);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn final_gate_story_hyperlink_keeps_typed_body_and_validated_opening() {
+        let mut seed = Document::new();
+        seed.add_paragraph("anchor");
+        seed.set_header("header relationship");
+        let bytes = seed.to_bytes().unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "rdocx-hyperlink-opening-{}.docx",
+            std::process::id()
+        ));
+        std::fs::write(&path, &bytes).unwrap();
+        for mode in 0..3 {
+            let mut document = match mode {
+                0 => Document::new(),
+                1 => Document::from_bytes(&bytes).unwrap(),
+                _ => Document::open(&path).unwrap(),
+            };
+            if mode == 2 {
+                assert!(
+                    document.read_package().is_some(),
+                    "a file opening is a genuine ZIP read"
+                );
+            }
+            for index in 0..3 {
+                let body = document
+                    .stories()
+                    .unwrap()
+                    .into_iter()
+                    .find(|s| s.kind == StoryKind::Body)
+                    .unwrap();
+                let _ = take_reopen_work();
+                document
+                    .add_hyperlink_to_story(
+                        &body,
+                        &format!("link {index}"),
+                        &format!("https://example.test/{index}"),
+                    )
+                    .unwrap();
+                let work = take_reopen_work();
+                if index > 0 {
+                    assert_eq!(
+                        work[0], 0,
+                        "warm hyperlink wrote a ZIP, mode {mode}: {work:?}"
+                    );
+                } else if mode == 0 {
+                    assert_eq!(
+                        work[0], 1,
+                        "new-document first commit keeps the checked ZIP path"
+                    );
+                }
+                let Some(BodyContent::Paragraph(paragraph)) = document.document.body.content.last()
+                else {
+                    panic!("authored hyperlink paragraph");
+                };
+                assert!(
+                    paragraph
+                        .hyperlinks
+                        .last()
+                        .unwrap()
+                        .extra_attributes
+                        .iter()
+                        .any(|(name, _)| name == "xmlns:r"),
+                    "reopening must not replace the authored typed paragraph"
+                );
+                let kept = document
+                    .kept_main_part()
+                    .expect("validated current opening");
+                let source = document.package.get_part(&document.doc_part_name).unwrap();
+                assert_eq!(
+                    kept.main_document(),
+                    Some(&CT_Document::from_xml(source).unwrap())
+                );
+                let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+                let urls = reopened
+                    .package
+                    .get_part_rels(&reopened.doc_part_name)
+                    .unwrap()
+                    .items
+                    .iter()
+                    .filter(|relationship| relationship.rel_type == rel_types::HYPERLINK)
+                    .map(|relationship| relationship.target.clone())
+                    .collect::<HashSet<_>>();
+                assert_eq!(
+                    urls,
+                    (0..=index)
+                        .map(|i| format!("https://example.test/{i}"))
+                        .collect()
+                );
+                assert_eq!(
+                    reopened.document.body.content.len(),
+                    document.document.body.content.len()
+                );
+            }
+            let body = document
+                .stories()
+                .unwrap()
+                .into_iter()
+                .find(|s| s.kind == StoryKind::Body)
+                .unwrap();
+            document.package.package_rels.items[0].target.push('\0');
+            let old_target = document.package.package_rels.items[0].target.clone();
+            let old_model = document.document.to_xml().unwrap();
+            let old_parts = document.package.parts.clone();
+            assert!(
+                document
+                    .add_hyperlink_to_story(&body, "refused", "https://example.test/bad")
+                    .is_err()
+            );
+            assert_eq!(document.document.to_xml().unwrap(), old_model);
+            assert_eq!(document.package.parts, old_parts);
+            assert_eq!(document.package.package_rels.items[0].target, old_target);
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
