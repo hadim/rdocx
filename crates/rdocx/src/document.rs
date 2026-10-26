@@ -672,10 +672,28 @@ fn picture_source_extent(
     let mut depth = 0usize;
     let mut extent = None;
     loop {
-        let (namespace, event) = reader
-            .read_resolved_event()
-            .map_err(|error| Error::Other(error.to_string()))?;
+        #[cfg(test)]
+        let a9_before = reader.buffer_position() as usize;
+        let (namespace, event) = match reader.read_resolved_event() {
+            Ok(event) => event,
+            Err(error) => {
+                #[cfg(test)]
+                a9_lookup_read(
+                    "picture_source_extent.events",
+                    a9_before,
+                    reader.buffer_position() as usize,
+                );
+                return Err(Error::Other(error.to_string()));
+            }
+        };
         let word_drawing = matches!(namespace,ResolveResult::Bound(Namespace(uri)) if uri==drawing_ns::WP.as_bytes());
+        drop(namespace);
+        #[cfg(test)]
+        a9_lookup_read(
+            "picture_source_extent.events",
+            a9_before,
+            reader.buffer_position() as usize,
+        );
         match event {
             Event::Start(ref tag) | Event::Empty(ref tag) => {
                 let local = tag.local_name();
@@ -2948,11 +2966,11 @@ struct NestedNamespaceOwner {
 
 #[derive(Clone, Debug)]
 struct ModeledOwnerSpan {
-    local_name: String,
+    local_name: &'static str,
     start: usize,
     end: usize,
-    declarations: Vec<(String, String)>,
-    bindings: Vec<(String, String)>,
+    declarations: Arc<Vec<(String, String)>>,
+    bindings: Arc<Vec<(String, String)>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2967,11 +2985,16 @@ struct NamespaceMarker {
     namespace_facts: Vec<(String, Option<String>)>,
 }
 
-fn is_modeled_owner(local_name: &[u8]) -> bool {
-    matches!(
-        local_name,
-        b"p" | b"tbl" | b"tc" | b"sdt" | b"hyperlink" | b"r"
-    )
+fn modeled_owner_name(local_name: &[u8]) -> Option<&'static str> {
+    Some(match local_name {
+        b"p" => "p",
+        b"tbl" => "tbl",
+        b"tc" => "tc",
+        b"sdt" => "sdt",
+        b"hyperlink" => "hyperlink",
+        b"r" => "r",
+        _ => return None,
+    })
 }
 
 fn is_modeled_word_child(parent: Option<&[u8]>, local_name: &[u8]) -> bool {
@@ -3095,18 +3118,19 @@ fn modeled_owner_piece_spans(
                 let inherited = scope_stack.last().map(Vec::as_slice).unwrap_or_default();
                 let mut bindings = inherited.to_vec();
                 apply_namespace_declarations(&element, &mut bindings)?;
-                if inside_body && is_word && is_modeled_owner(local_name.as_ref()) {
+                if inside_body
+                    && is_word
+                    && let Some(local_name) = modeled_owner_name(local_name.as_ref())
+                {
                     let index = spans.len();
                     spans.push(ModeledOwnerSpan {
-                        local_name: std::str::from_utf8(local_name.as_ref())
-                            .map_err(|error| {
-                                Error::Other(format!("invalid nested element name: {error}"))
-                            })?
-                            .to_owned(),
+                        local_name,
                         start,
                         end: 0,
-                        declarations: rebinding_namespace_declarations(&element, inherited)?,
-                        bindings: bindings.clone(),
+                        declarations: Arc::new(rebinding_namespace_declarations(
+                            &element, inherited,
+                        )?),
+                        bindings: Arc::new(bindings.clone()),
                     });
                     owner_stack.push((depth, index));
                 }
@@ -3124,17 +3148,18 @@ fn modeled_owner_piece_spans(
                 let inherited = scope_stack.last().map(Vec::as_slice).unwrap_or_default();
                 let mut bindings = inherited.to_vec();
                 apply_namespace_declarations(&element, &mut bindings)?;
-                if inside_body && is_word && is_modeled_owner(local_name.as_ref()) {
+                if inside_body
+                    && is_word
+                    && let Some(local_name) = modeled_owner_name(local_name.as_ref())
+                {
                     spans.push(ModeledOwnerSpan {
-                        local_name: std::str::from_utf8(local_name.as_ref())
-                            .map_err(|error| {
-                                Error::Other(format!("invalid nested element name: {error}"))
-                            })?
-                            .to_owned(),
+                        local_name,
                         start,
                         end,
-                        declarations: rebinding_namespace_declarations(&element, inherited)?,
-                        bindings,
+                        declarations: Arc::new(rebinding_namespace_declarations(
+                            &element, inherited,
+                        )?),
+                        bindings: Arc::new(bindings),
                     });
                 }
             }
@@ -3891,7 +3916,7 @@ fn namespace_owners_from_spans(
 ) -> Result<Vec<NestedNamespaceOwner>> {
     let mut owners = Vec::new();
     for span in spans {
-        let mut declarations = span.declarations.clone();
+        let mut declarations = span.declarations.as_ref().clone();
         if declarations.is_empty() {
             continue;
         }
@@ -3986,7 +4011,7 @@ fn namespace_owners_from_spans(
         });
         owners.push(NestedNamespaceOwner {
             source: span.start..span.end,
-            local_name: span.local_name.clone(),
+            local_name: span.local_name.to_owned(),
             declarations,
             snapshot,
             markers,
@@ -7382,6 +7407,54 @@ thread_local! {
     static STANDALONE_BODY_ITEM_BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
+// A9 counts actual lookup work, separately for every scanner and candidate
+// pass. It is private test instrumentation, never a binding debug export.
+#[cfg(test)]
+thread_local! {
+    static A9_LOOKUP_WORK: std::cell::RefCell<(bool, BTreeMap<String, [usize; 3]>)> =
+        const { std::cell::RefCell::new((false, BTreeMap::new())) };
+    static A9_FORCE_LEGACY_CELL_ROUTES: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn a9_lookup_read(pass: &str, before: usize, after: usize) {
+    A9_LOOKUP_WORK.with(|work| {
+        let mut work = work.borrow_mut();
+        if work.0 {
+            if !work.1.contains_key(pass) {
+                work.1.insert(pass.to_owned(), [0; 3]);
+            }
+            let counts = work.1.get_mut(pass).expect("registered lookup pass");
+            counts[0] += 1;
+            counts[1] += after.saturating_sub(before);
+        }
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn a9_lookup_candidate(pass: &str) {
+    A9_LOOKUP_WORK.with(|work| {
+        let mut work = work.borrow_mut();
+        if work.0 {
+            if !work.1.contains_key(pass) {
+                work.1.insert(pass.to_owned(), [0; 3]);
+            }
+            work.1.get_mut(pass).expect("registered candidate pass")[2] += 1;
+        }
+    });
+}
+
+#[cfg(all(test, debug_assertions))]
+fn a9_without_lookup_work<T>(run: impl FnOnce() -> T) -> T {
+    let enabled = A9_LOOKUP_WORK.with(|work| {
+        let mut work = work.borrow_mut();
+        std::mem::replace(&mut work.0, false)
+    });
+    let result = run();
+    A9_LOOKUP_WORK.with(|work| work.borrow_mut().0 = enabled);
+    result
+}
+
 thread_local! {
     static DIRECT_FRAGMENT_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -7692,6 +7765,9 @@ pub fn take_reopen_work() -> [usize; 3] {
 #[allow(dead_code)]
 fn without_staging_work<T>(run: impl FnOnce() -> T) -> T {
     let paused = STAGING_WORK_PAUSED.with(|cell| cell.replace(true));
+    #[cfg(test)]
+    let result = a9_without_lookup_work(run);
+    #[cfg(not(test))]
     let result = run();
     STAGING_WORK_PAUSED.with(|cell| cell.set(paused));
     result
@@ -8913,7 +8989,10 @@ impl MainPartBlocks {
     /// The live main part, when `part` is exactly `doc_xml` and every child
     /// has a positive one-child read under this frame. `None` leaves the
     /// whole parser authoritative.
-    fn proved_document(&self, doc_xml: &[u8]) -> Option<CT_Document> {
+    fn proved_document_context(
+        &self,
+        doc_xml: &[u8],
+    ) -> Option<(&CT_Document, DocumentNamespaceScopes)> {
         let part = self.part.as_deref()?;
         if part.as_slice() != doc_xml || self.head.is_empty() {
             return None;
@@ -8942,14 +9021,49 @@ impl MainPartBlocks {
         if doc_xml.get(cursor..) != Some(self.tail.as_slice()) {
             return None;
         }
+        Some((shell, scopes))
+    }
+
+    fn proved_document(&self, doc_xml: &[u8]) -> Option<CT_Document> {
+        let (shell, scopes) = self.proved_document_context(doc_xml)?;
         let mut content = Vec::with_capacity(self.blocks.len());
         for block in &self.blocks {
-            content.push(block.read_child(&self.head, &self.tail, &scopes)?);
+            content.push(
+                block
+                    .read_child(&self.head, &self.tail, &scopes)?
+                    .into_owned(),
+            );
         }
         let mut document = shell.clone();
         document.body.content = content;
         self.store_empty_namespace_owners();
         Some(document)
+    }
+
+    /// Compare the complete actual parse without copying unchanged child models.
+    /// Every child is qualified even after a mismatch, preserving refusal of an
+    /// unproved later child. This supplies equality, never writer permission.
+    fn proved_document_matches(&self, doc_xml: &[u8], document: &CT_Document) -> Option<bool> {
+        let (shell, scopes) = self.proved_document_context(doc_xml)?;
+        let CT_Document {
+            body: rdocx_oxml::document::CT_Body { content, sect_pr },
+            extra_namespaces,
+            background_xml,
+            background_extra_xml,
+            root_attributes,
+        } = document;
+        let mut matches = &shell.body.sect_pr == sect_pr
+            && &shell.extra_namespaces == extra_namespaces
+            && &shell.background_xml == background_xml
+            && &shell.background_extra_xml == background_extra_xml
+            && &shell.root_attributes == root_attributes
+            && content.len() == self.blocks.len();
+        for (index, block) in self.blocks.iter().enumerate() {
+            let child = block.read_child(&self.head, &self.tail, &scopes)?;
+            matches &= content.get(index) == Some(child.as_ref());
+        }
+        self.store_empty_namespace_owners();
+        Some(matches)
     }
 
     /// Empty nested owners for these exact part bytes, when the frame policy
@@ -9849,15 +9963,15 @@ impl BodyBlockScan {
                 .is_some_and(|item| !item.owner_facts_reusable_by_value())
     }
 
-    fn read_child(
-        &self,
+    fn read_child<'a>(
+        &'a self,
         head: &[u8],
         tail: &[u8],
         scopes: &DocumentNamespaceScopes,
-    ) -> Option<BodyContent> {
+    ) -> Option<Cow<'a, BodyContent>> {
         if self.reads_anew() {
             note_staging_work(|work| work.children_read += 1);
-            return parse_one_child(head, tail, &self.bytes);
+            return parse_one_child(head, tail, &self.bytes).map(Cow::Owned);
         }
         let cached = self.proved.get_or_init(|| {
             note_staging_work(|work| work.children_read += 1);
@@ -9873,9 +9987,9 @@ impl BodyBlockScan {
             || cached.body_bindings != scopes.body_bindings
         {
             note_staging_work(|work| work.children_read += 1);
-            return parse_one_child(head, tail, &self.bytes);
+            return parse_one_child(head, tail, &self.bytes).map(Cow::Owned);
         }
-        cached.parsed.clone()
+        cached.parsed.as_ref().map(Cow::Borrowed)
     }
 }
 
@@ -10528,9 +10642,23 @@ fn story_range_paragraph_spans_from_inventory(
     control_scopes: &HashMap<usize, BTreeMap<String, String>>,
 ) -> Result<Vec<Vec<(ContentLocation, Range<usize>)>>> {
     let mut spans = Vec::with_capacity(owners.len());
-    for ((story, _), items) in owners.iter().zip(inventories) {
+    for ((story, _), items) in owners
+        .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            a9_lookup_candidate("story_range_paragraph_spans_from_inventory.candidate.1");
+        })
+        .zip(inventories)
+    {
         let mut paragraphs = Vec::new();
-        for (index, item) in items.iter().enumerate() {
+        for (index, item) in items
+            .iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                a9_lookup_candidate("story_range_paragraph_spans_from_inventory.candidate.2");
+            })
+            .enumerate()
+        {
             let item_spans = match item.kind {
                 StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
                 StoryItemKind::ContentControl => {
@@ -10541,6 +10669,12 @@ fn story_range_paragraph_spans_from_inventory(
                     })?;
                     scan_story_control_paragraphs_with_scope(xml, item, scope)?
                         .into_iter()
+                        .inspect(|_| {
+                            #[cfg(test)]
+                            a9_lookup_candidate(
+                                "story_range_paragraph_spans_from_inventory.candidate.3",
+                            );
+                        })
                         .enumerate()
                         .map(|(paragraph, span)| (vec![index, paragraph], span))
                         .collect()
@@ -12028,8 +12162,14 @@ pub(crate) fn story_namespace_scope_at(
     let mut buffer = Vec::new();
     loop {
         let before = reader.buffer_position() as usize;
-        match reader
-            .read_event_into(&mut buffer)
+        let a9_event = reader.read_event_into(&mut buffer);
+        #[cfg(test)]
+        a9_lookup_read(
+            "story_namespace_scope_at.events",
+            before,
+            reader.buffer_position() as usize,
+        );
+        match a9_event
             .map_err(|error| Error::Other(format!("story namespace scope scan failed: {error}")))?
         {
             Event::Start(element) => {
@@ -12084,8 +12224,14 @@ fn story_namespace_scopes_at(
     let mut buffer = Vec::new();
     loop {
         let before = reader.buffer_position() as usize;
-        match reader
-            .read_event_into(&mut buffer)
+        let a9_event = reader.read_event_into(&mut buffer);
+        #[cfg(test)]
+        a9_lookup_read(
+            "story_namespace_scopes_at.events",
+            before,
+            reader.buffer_position() as usize,
+        );
+        match a9_event
             .map_err(|error| Error::Other(format!("story namespace scope scan failed: {error}")))?
         {
             Event::Start(element) => {
@@ -12744,6 +12890,10 @@ fn physical_table_cell_owner(
         .ok_or_else(|| Error::Other("rich table cell index is out of range".to_owned()))?;
     let mut owners = scan_story_owners(xml, root_kind)?
         .into_iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            a9_lookup_candidate("physical_table_cell_owner.candidate.1");
+        })
         .filter(|owner| {
             owner.kind == StoryKind::TableCell
                 && item.full.start < owner.full.start
@@ -12763,6 +12913,10 @@ fn physical_table_cell_owner(
     }
     let ordinal = modeled
         .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            a9_lookup_candidate("physical_table_cell_owner.candidate.2");
+        })
         .position(|(table, coordinate)| *table == 0 && *coordinate == Some((row, cell)))
         .ok_or_else(|| Error::Other("rich table cell has no unique physical owner".into()))?;
     Ok(owners.swap_remove(ordinal))
@@ -15851,13 +16005,24 @@ fn scan_story_owners_with_special(
     let mut buffer = Vec::new();
     loop {
         let before = reader.buffer_position() as usize;
-        let (namespace, event) = reader
-            .read_resolved_event_into(&mut buffer)
-            .map_err(|error| Error::Other(format!("story XML scan failed: {error}")))?;
+        let (namespace, event) = match reader.read_resolved_event_into(&mut buffer) {
+            Ok(event) => event,
+            Err(error) => {
+                #[cfg(test)]
+                a9_lookup_read(
+                    "scan_story_owners_with_special.events",
+                    before,
+                    reader.buffer_position() as usize,
+                );
+                return Err(Error::Other(format!("story XML scan failed: {error}")));
+            }
+        };
         let namespace_kind = story_namespace(&namespace);
         let is_word_namespace = namespace_kind == StoryNamespace::Word;
         drop(namespace);
         let after = reader.buffer_position() as usize;
+        #[cfg(test)]
+        a9_lookup_read("scan_story_owners_with_special.events", before, after);
         match event {
             Event::Start(element) => {
                 let is_word = is_word_namespace;
@@ -16576,11 +16741,24 @@ fn scan_story_control_paragraphs(xml: &[u8], control: &StoryItemSpan) -> Result<
     let mut buffer = Vec::new();
     loop {
         let before = reader.buffer_position() as usize;
-        let (namespace, event) = reader
-            .read_resolved_event_into(&mut buffer)
-            .map_err(|error| Error::Other(format!("control paragraph scan failed: {error}")))?;
+        let (namespace, event) = match reader.read_resolved_event_into(&mut buffer) {
+            Ok(event) => event,
+            Err(error) => {
+                #[cfg(test)]
+                a9_lookup_read(
+                    "scan_story_control_paragraphs.events",
+                    before,
+                    reader.buffer_position() as usize,
+                );
+                return Err(Error::Other(format!(
+                    "control paragraph scan failed: {error}"
+                )));
+            }
+        };
         let namespace = story_namespace(&namespace);
         let after = reader.buffer_position() as usize;
+        #[cfg(test)]
+        a9_lookup_read("scan_story_control_paragraphs.events", before, after);
         if !active {
             if before != control.full.start {
                 if matches!(event, Event::Eof) {
@@ -16724,13 +16902,24 @@ fn scan_story_items(
     let mut ancestor_frames: Vec<Vec<String>> = Vec::new();
     loop {
         let before = reader.buffer_position() as usize;
-        let (namespace, event) = reader
-            .read_resolved_event_into(&mut buffer)
-            .map_err(|error| Error::Other(format!("story item scan failed: {error}")))?;
+        let (namespace, event) = match reader.read_resolved_event_into(&mut buffer) {
+            Ok(event) => event,
+            Err(error) => {
+                #[cfg(test)]
+                a9_lookup_read(
+                    "scan_story_items.events",
+                    before,
+                    reader.buffer_position() as usize,
+                );
+                return Err(Error::Other(format!("story item scan failed: {error}")));
+            }
+        };
         let namespace_kind = story_namespace(&namespace);
         let is_word_namespace = namespace_kind == StoryNamespace::Word;
         drop(namespace);
         let after = reader.buffer_position() as usize;
+        #[cfg(test)]
+        a9_lookup_read("scan_story_items.events", before, after);
         if !active {
             if before != owner.full.start {
                 match &event {
@@ -17802,13 +17991,24 @@ fn story_item_text(
     let mut buffer = Vec::new();
     loop {
         let before = reader.buffer_position() as usize;
-        let (namespace, event) = reader
-            .read_resolved_event_into(&mut buffer)
-            .map_err(|error| Error::Other(format!("story text scan failed: {error}")))?;
+        let (namespace, event) = match reader.read_resolved_event_into(&mut buffer) {
+            Ok(event) => event,
+            Err(error) => {
+                #[cfg(test)]
+                a9_lookup_read(
+                    "story_item_text.events",
+                    before,
+                    reader.buffer_position() as usize,
+                );
+                return Err(Error::Other(format!("story text scan failed: {error}")));
+            }
+        };
         let namespace_kind = story_namespace(&namespace);
         let is_word_namespace = namespace_kind == StoryNamespace::Word;
         drop(namespace);
         let after = reader.buffer_position() as usize;
+        #[cfg(test)]
+        a9_lookup_read("story_item_text.events", before, after);
         if !active {
             if before != item.scan.start {
                 #[cfg(test)]
@@ -19244,14 +19444,80 @@ fn nth_table_in_cell<'a>(cell: &'a mut CT_Tc, index: &mut usize) -> Option<&'a m
     None
 }
 
+// Optional routes from one checked physical inventory. Both source consumers
+// keep their original lookup if ordering or containment cannot be qualified.
+fn modeled_main_cell_routes(
+    owners: &[StoryOwnerSpan],
+    direct_items: &[StoryItemSpan],
+) -> Option<HashMap<usize, (usize, usize)>> {
+    if direct_items.windows(2).any(|pair| {
+        #[cfg(test)]
+        a9_lookup_candidate("modeled_main_cell_routes.order");
+        pair[0].full.end > pair[1].full.start
+    }) {
+        return None;
+    }
+    let mut routes = HashMap::new();
+    let mut ordinals = HashMap::<usize, usize>::new();
+    let mut direct = 0;
+    let mut previous = None;
+    for owner in owners {
+        #[cfg(test)]
+        a9_lookup_candidate("modeled_main_cell_routes.owners");
+        if owner.kind != StoryKind::TableCell {
+            continue;
+        }
+        if previous.is_some_and(|start| start > owner.full.start) {
+            return None;
+        }
+        previous = Some(owner.full.start);
+        loop {
+            let item = direct_items.get(direct)?;
+            #[cfg(test)]
+            a9_lookup_candidate("modeled_main_cell_routes.containment");
+            if item.full.end <= owner.full.start {
+                direct += 1;
+                continue;
+            }
+            if item.full.start > owner.full.start
+                || owner.full.end > item.full.end
+                || !matches!(
+                    item.kind,
+                    StoryItemKind::Table | StoryItemKind::ContentControl
+                )
+            {
+                return None;
+            }
+            let ordinal = ordinals.entry(direct).or_default();
+            if routes
+                .insert(owner.owner_index, (direct, *ordinal))
+                .is_some()
+            {
+                return None;
+            }
+            *ordinal = ordinal.checked_add(1)?;
+            break;
+        }
+    }
+    Some(routes)
+}
+
 fn modeled_main_cell_route(xml: &[u8], target: &StoryOwnerSpan) -> Result<(usize, usize)> {
     let body = scan_story_owners(xml, StoryKind::Body)?
         .into_iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            a9_lookup_candidate("modeled_main_cell_route.candidate.1");
+        })
         .find(|owner| owner.kind == StoryKind::Body)
         .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
     let direct_items = direct_story_content_items(xml, &body)?;
     let (content_index, direct_item) = direct_items
         .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            a9_lookup_candidate("modeled_main_cell_route.candidate.2");
+        })
         .enumerate()
         .find(|(_, item)| item.full.start <= target.full.start && target.full.end <= item.full.end)
         .ok_or_else(|| Error::Other("table-cell owner has no direct body container".to_owned()))?;
@@ -19265,6 +19531,10 @@ fn modeled_main_cell_route(xml: &[u8], target: &StoryOwnerSpan) -> Result<(usize
     }
     let cell_index = scan_story_owners(xml, StoryKind::Body)?
         .into_iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            a9_lookup_candidate("modeled_main_cell_route.candidate.3");
+        })
         .filter(|owner| {
             owner.kind == StoryKind::TableCell
                 && direct_item.full.start <= owner.full.start
@@ -19354,6 +19624,7 @@ fn cell_paragraph_routes(
         .find(|owner| owner.kind == StoryKind::Body)
         .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
     let direct_items = direct_story_content_items(xml, body_owner)?;
+    let routes = modeled_main_cell_routes(owners, &direct_items);
     let mut ordinals = HashMap::<usize, usize>::new();
     let mut selected = Vec::new();
     let mut seen = HashSet::new();
@@ -19364,9 +19635,18 @@ fn cell_paragraph_routes(
     {
         // The single lookup fails on the first owner it cannot route,
         // whatever its target, so the inventory stops there too.
-        let Some((content, direct_item)) = direct_items.iter().enumerate().find(|(_, item)| {
-            item.full.start <= owner.full.start && owner.full.end <= item.full.end
-        }) else {
+        let Some((content, direct_item)) = routes
+            .as_ref()
+            .and_then(|routes| routes.get(&owner.owner_index))
+            .and_then(|(content, _)| direct_items.get(*content).map(|item| (*content, item)))
+            .or_else(|| {
+                direct_items.iter().enumerate().find(|(_, item)| {
+                    #[cfg(test)]
+                    a9_lookup_candidate("cell_routes.legacy_containment");
+                    item.full.start <= owner.full.start && owner.full.end <= item.full.end
+                })
+            })
+        else {
             complete = false;
             break;
         };
@@ -21482,18 +21762,18 @@ impl Document {
                 } else if let Some(proved) = self
                     .main_part_blocks
                     .as_ref()
-                    .and_then(|blocks| blocks.proved_document(source))
+                    .and_then(|blocks| blocks.proved_document_matches(source, &self.document))
                 {
                     #[cfg(debug_assertions)]
                     without_staging_work(|| {
                         let fresh = CT_Document::from_xml(source).ok();
                         assert_eq!(
-                            fresh.as_ref(),
-                            Some(&proved),
+                            fresh.as_ref() == Some(&self.document),
+                            proved,
                             "the proved main part disagrees with a fresh parse"
                         );
                     });
-                    proved == self.document
+                    proved
                 } else {
                     #[cfg(test)]
                     eprintln!("FX211_DRAWING_STAGE opaque-reparse-before");
@@ -21779,14 +22059,15 @@ impl Document {
         let Some(expected) = kept.serialization_proof.as_deref() else {
             return false;
         };
-        let Ok(current) = self.document.to_xml() else {
+        if kept.root_namespace_declarations != self.root_namespace_declarations
+            || kept.body_namespace_declarations != self.body_namespace_declarations
+            || kept.body_namespace_bindings != self.body_namespace_bindings
+            || kept.main_document() != Some(&self.document)
+        {
             return false;
-        };
-        kept.root_namespace_declarations == self.root_namespace_declarations
-            && kept.body_namespace_declarations == self.body_namespace_declarations
-            && kept.body_namespace_bindings == self.body_namespace_bindings
-            && current.as_slice() == expected
-            && kept.main_document() == Some(&self.document)
+        }
+        self.serialized_main_part()
+            .is_ok_and(|(current, _)| current.as_slice() == expected)
     }
 
     fn unchanged_main_part(&self) -> Option<Arc<Parsed>> {
@@ -21956,16 +22237,22 @@ impl Document {
                 let matches = if let Some(parsed) = self
                     .main_part_blocks
                     .as_ref()
-                    .and_then(|blocks| blocks.proved_document(xml))
+                    .and_then(|blocks| blocks.proved_document_matches(xml, &self.document))
                 {
-                    parsed == self.document
+                    parsed
                 } else if let Some(parsed) = kept.as_deref().and_then(Parsed::main_document) {
                     parsed == &self.document
                 } else {
                     note_staging_work(|work| work.parsed += xml.len());
                     CT_Document::from_xml(xml).ok().as_ref() == Some(&self.document)
                 };
-                matches && self.document.to_xml().ok().as_deref() != Some(*xml)
+                matches
+                    && self
+                        .serialized_main_part()
+                        .ok()
+                        .as_ref()
+                        .map(|(xml, _)| xml.as_slice())
+                        != Some(*xml)
             })
             .map(|xml| xml.to_vec());
         if let Some(section) = &mut self.document.body.sect_pr {
@@ -22994,7 +23281,7 @@ impl Document {
     }
 
     fn from_opened_package(package: OpcPackage, read_from_bytes: bool) -> Result<Self> {
-        Self::from_package_reusing(package, read_from_bytes, None, None)
+        Self::from_package_reusing(package, read_from_bytes, None, None, None)
     }
 
     fn from_package_reusing(
@@ -23002,6 +23289,7 @@ impl Document {
         read_from_bytes: bool,
         staged: Option<(&DocumentIdentifiers, &Parsed)>,
         blocks: Option<&MainPartBlocks>,
+        writer_blocks: Option<&MainPartBlocks>,
     ) -> Result<Self> {
         let (doc_part_name, _) = validated_word_package_class(&package)?;
 
@@ -23201,7 +23489,18 @@ impl Document {
             staged.map(|(identifiers, _)| identifiers),
             identifier_hint.as_ref(),
         )?;
-        let serialization_proof = document.to_xml().ok();
+        let serialization_proof = document.validate_resource_limits().ok().and_then(|()| {
+            MainPartBlocks::serialize(
+                &document,
+                &document.body.content,
+                // A producer source record proves reads, while the retained
+                // writer record independently proves normalized child bytes.
+                // serialize rechecks model alignment, fields and the frame.
+                offered_canonical_blocks(writer_blocks.or(blocks)),
+            )
+            .ok()
+            .map(|(xml, _)| xml)
+        });
         let mut parsed_record = Parsed::of(
             &package,
             &doc_part_name,
@@ -23762,6 +24061,7 @@ impl Document {
                 true,
                 Some((&provenance, opened)),
                 carried_blocks.as_ref(),
+                carried_scans.serialized.as_ref(),
             )?,
             None => {
                 let mut output = std::io::Cursor::new(Vec::new());
@@ -24151,9 +24451,9 @@ impl Document {
             return false;
         };
         if let Some(parsed) = offered_canonical_blocks(self.main_part_blocks.as_ref())
-            .and_then(|record| record.proved_document(source))
+            .and_then(|record| record.proved_document_matches(source, &self.document))
         {
-            return parsed == self.document;
+            return parsed;
         }
         if let Some(parsed) = kept
             .filter(|kept| {
@@ -24189,7 +24489,7 @@ impl Document {
     fn main_part_xml(&mut self) -> Result<Vec<u8>> {
         let (xml, record) = self.canonical_source()?;
         if let Some(record) = &record {
-            let _ = record.proved_document(&xml);
+            let _ = record.proved_document_matches(&xml, &self.document);
         }
         self.main_part_blocks = record;
         Ok(xml)
@@ -24206,6 +24506,20 @@ impl Document {
             return;
         };
         if current != part.as_slice() {
+            return;
+        }
+        if self.document.validate_resource_limits().is_ok()
+            && self
+                .document
+                .body
+                .content
+                .iter()
+                .all(BodyContent::owner_facts_reusable_by_value)
+            && carried.blocks.iter().all(|block| !block.reads_anew())
+            && carried.proved_document_matches(current, &self.document) == Some(true)
+            && self.opened_main_still_serializes()
+        {
+            self.main_part_blocks = Some(carried);
             return;
         }
         let Ok(xml) = self.document.to_xml() else {
@@ -24603,18 +24917,18 @@ impl Document {
         } else if let Some(proved) = existing_document_xml.and_then(|xml| {
             self.main_part_blocks
                 .as_ref()
-                .and_then(|blocks| blocks.proved_document(xml))
+                .and_then(|blocks| blocks.proved_document_matches(xml, &self.document))
         }) {
             #[cfg(debug_assertions)]
             without_staging_work(|| {
                 let fresh = existing_document_xml.and_then(|xml| CT_Document::from_xml(xml).ok());
                 assert_eq!(
-                    fresh.as_ref(),
-                    Some(&proved),
+                    fresh.as_ref() == Some(&self.document),
+                    proved,
                     "the proved existing part disagrees with a fresh parse"
                 );
             });
-            proved == self.document
+            proved
         } else {
             #[cfg(test)]
             eprintln!("FX211_FLUSH_STAGE reparse-before");
@@ -25637,7 +25951,12 @@ impl Document {
             fingerprint,
         };
         #[cfg(debug_assertions)]
-        uncounted_scan(|| assert_main_story_layout(xml, &layout, items));
+        uncounted_scan(|| {
+            #[cfg(test)]
+            a9_without_lookup_work(|| assert_main_story_layout(xml, &layout, items));
+            #[cfg(not(test))]
+            assert_main_story_layout(xml, &layout, items);
+        });
         Ok(layout)
     }
 
@@ -26092,6 +26411,10 @@ impl Document {
                 Ok((source.part_name.clone(), paragraph.full.start))
             })
             .into_iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                a9_lookup_candidate("move_comment_story_range.candidate.1");
+            })
             .collect::<Result<Vec<_>>>()?;
         let (part_name, xml, selected) = self.story_range_marker_spans(entry, true)?;
         let (edits, reference, reference_span) = comment_move_source_edits(&xml, &selected)?;
@@ -26110,15 +26433,25 @@ impl Document {
             let indices = paragraph_model
                 .accepted_run_paths()
                 .iter()
+                .inspect(|_| {
+                    #[cfg(test)]
+                    a9_lookup_candidate("move_comment_story_range.candidate.2");
+                })
                 .enumerate()
                 .filter_map(|(index, path)| {
                     paragraph_model
                         .accepted_run(path)
                         .filter(|run| {
-                            run.content.iter().any(|content| {
-                                matches!(content,
+                            run.content
+                                .iter()
+                                .inspect(|_| {
+                                    #[cfg(test)]
+                                    a9_lookup_candidate("move_comment_story_range.candidate.3");
+                                })
+                                .any(|content| {
+                                    matches!(content,
                         RunContent::CommentReference { id: found, .. } if *found == id)
-                            })
+                                })
                         })
                         .map(|_| index)
                 })
@@ -26134,7 +26467,14 @@ impl Document {
             Error::Other("comment reference is outside the supported accepted run axis".into())
         })?;
         let map_offset = |offset: usize| -> Result<usize> {
-            if edits.iter().any(|span| span.contains(&offset)) {
+            if edits
+                .iter()
+                .inspect(|_| {
+                    #[cfg(test)]
+                    a9_lookup_candidate("move_comment_story_range.candidate.4");
+                })
+                .any(|span| span.contains(&offset))
+            {
                 return Err(Error::Other(
                     "comment move destination is inside a removed marker-only owner".into(),
                 ));
@@ -26142,12 +26482,23 @@ impl Document {
             Ok(offset
                 - edits
                     .iter()
+                    .inspect(|_| {
+                        #[cfg(test)]
+                        a9_lookup_candidate("move_comment_story_range.candidate.5");
+                    })
                     .filter(|span| span.end <= offset)
                     .map(|span| span.len())
                     .sum::<usize>())
         };
         let mut updated = xml;
-        for span in edits.iter().rev() {
+        for span in edits
+            .iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                a9_lookup_candidate("move_comment_story_range.candidate.6");
+            })
+            .rev()
+        {
             updated.drain(span.clone());
         }
         let updated = self.comment_move_source_with_namespaces(&part_name, updated, id, true)?;
@@ -26159,6 +26510,10 @@ impl Document {
             let original = position.location.story();
             let story = stories
                 .iter()
+                .inspect(|_| {
+                    #[cfg(test)]
+                    a9_lookup_candidate("move_comment_story_range.candidate.7");
+                })
                 .find(|story| {
                     story.kind == original.kind
                         && story.part_name == original.part_name
@@ -26174,6 +26529,10 @@ impl Document {
             let mut found = None;
             for (index, item) in scan_story_items(source.xml.as_ref(), &owner, None)?
                 .iter()
+                .inspect(|_| {
+                    #[cfg(test)]
+                    a9_lookup_candidate("move_comment_story_range.candidate.8");
+                })
                 .enumerate()
             {
                 let paths = match item.kind {
@@ -26181,6 +26540,10 @@ impl Document {
                     StoryItemKind::ContentControl => {
                         scan_story_control_paragraphs(source.xml.as_ref(), item)?
                             .iter()
+                            .inspect(|_| {
+                                #[cfg(test)]
+                                a9_lookup_candidate("move_comment_story_range.candidate.9");
+                            })
                             .enumerate()
                             .map(|(child, span)| (vec![index, child], span.start))
                             .collect()
@@ -26202,9 +26565,15 @@ impl Document {
             let removed_before_boundary = endpoint.0 == part_name
                 && endpoint.1 == reference_paragraph
                 && position.run_index > reference_index
-                && edits.iter().any(|span| {
-                    span.start <= reference_span.start && reference_span.end <= span.end
-                });
+                && edits
+                    .iter()
+                    .inspect(|_| {
+                        #[cfg(test)]
+                        a9_lookup_candidate("move_comment_story_range.candidate.10");
+                    })
+                    .any(|span| {
+                        span.start <= reference_span.start && reference_span.end <= span.end
+                    });
             Ok(StoryRunPosition {
                 location: ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path),
                 run_index: position.run_index - usize::from(removed_before_boundary),
@@ -27205,8 +27574,18 @@ impl Document {
         });
         #[cfg(debug_assertions)]
         {
-            let whole =
-                uncounted_scan(|| full_direct_body_item_location(&xml, &self.doc_part_name, slot));
+            let whole = uncounted_scan(|| {
+                #[cfg(test)]
+                {
+                    a9_without_lookup_work(|| {
+                        full_direct_body_item_location(&xml, &self.doc_part_name, slot)
+                    })
+                }
+                #[cfg(not(test))]
+                {
+                    full_direct_body_item_location(&xml, &self.doc_part_name, slot)
+                }
+            });
             match (&located, &whole) {
                 (Ok(actual), Ok(expected)) => {
                     assert_eq!(actual, expected, "direct body item location {slot}")
@@ -27741,6 +28120,10 @@ impl Document {
             source_xml = retained.to_vec();
             story_owner = scan_story_owners(&source_xml, StoryKind::Body)?
                 .into_iter()
+                .inspect(|_| {
+                    #[cfg(test)]
+                    a9_lookup_candidate("insert_picture_to_story_with_options.candidate.1");
+                })
                 .find(|owner| owner.kind == story.kind && owner.owner_index == story.owner_index)
                 .ok_or_else(|| Error::Other("picture story source disappeared".to_owned()))?;
         }
@@ -27755,6 +28138,10 @@ impl Document {
                 let item = validated_direct_content_item(&source_xml, &story_owner, after)?;
                 let index = direct_items
                     .iter()
+                    .inspect(|_| {
+                        #[cfg(test)]
+                        a9_lookup_candidate("insert_picture_to_story_with_options.candidate.2");
+                    })
                     .position(|candidate| candidate.full == item.full)
                     .ok_or_else(|| Error::Other("picture placement was not found".to_owned()))?;
                 (item.full.end, index + 1)
@@ -27799,6 +28186,10 @@ impl Document {
             let refreshed_story = reopened
                 .stories()?
                 .into_iter()
+                .inspect(|_| {
+                    #[cfg(test)]
+                    a9_lookup_candidate("insert_picture_to_story_with_options.candidate.3");
+                })
                 .find(|candidate| {
                     candidate.kind == story.kind
                         && candidate.part_name == story.part_name
@@ -27813,6 +28204,10 @@ impl Document {
             let projected = scan_story_items(source.xml.as_ref(), &owner, None)?;
             let index = projected
                 .iter()
+                .inspect(|_| {
+                    #[cfg(test)]
+                    a9_lookup_candidate("insert_picture_to_story_with_options.candidate.4");
+                })
                 .position(|item| item.full == inserted.full)
                 .ok_or_else(|| {
                     Error::Other("inserted picture paragraph was not projected".to_owned())
@@ -28268,6 +28663,10 @@ impl Document {
         for source in self.story_sources()? {
             let owners = scan_story_owners(&source.xml, source.root_kind)?
                 .into_iter()
+                .inspect(|_| {
+                    #[cfg(test)]
+                    a9_lookup_candidate("pictures.candidate.1");
+                })
                 .map(|owner| {
                     let story = StoryId {
                         kind: owner.kind,
@@ -28284,12 +28683,26 @@ impl Document {
                 let spans = story_range_paragraph_spans(&source.xml, &owners)?;
                 let scopes = story_namespace_scopes_at(
                     &source.xml,
-                    spans.iter().flatten().map(|(_, span)| span.start),
+                    spans
+                        .iter()
+                        .inspect(|_| {
+                            #[cfg(test)]
+                            a9_lookup_candidate("pictures.candidate.2");
+                        })
+                        .flatten()
+                        .map(|(_, span)| span.start),
                 )?;
                 Ok((spans, scopes))
             })()
             .ok();
-            for (index, (story, owner)) in owners.iter().enumerate() {
+            for (index, (story, owner)) in owners
+                .iter()
+                .inspect(|_| {
+                    #[cfg(test)]
+                    a9_lookup_candidate("pictures.candidate.3");
+                })
+                .enumerate()
+            {
                 let spans = match &batch {
                     Some((spans, _)) => std::borrow::Cow::Borrowed(spans[index].as_slice()),
                     None => std::borrow::Cow::Owned(
@@ -28298,6 +28711,10 @@ impl Document {
                             &[(story.clone(), owner.clone())],
                         )?
                         .into_iter()
+                        .inspect(|_| {
+                            #[cfg(test)]
+                            a9_lookup_candidate("pictures.candidate.4");
+                        })
                         .flatten()
                         .collect::<Vec<_>>(),
                     ),
@@ -28326,15 +28743,29 @@ impl Document {
                         close_content_fragment_namespaces(&source.xml[span.clone()], &scope)?;
                     let paragraph = CT_P::from_xml_fragment(&closed)?;
                     let accepted = paragraph.accepted_view();
-                    let drawings = accepted.runs.iter().flat_map(|run| {
-                        run.content
-                            .iter()
-                            .filter_map(|content| match content {
-                                RunContent::Drawing(drawing) => Some(drawing),
-                                _ => None,
-                            })
-                            .chain(run.alt_drawings.iter())
-                    });
+                    let drawings = accepted
+                        .runs
+                        .iter()
+                        .inspect(|_| {
+                            #[cfg(test)]
+                            a9_lookup_candidate("pictures.candidate.5");
+                        })
+                        .flat_map(|run| {
+                            run.content
+                                .iter()
+                                .inspect(|_| {
+                                    #[cfg(test)]
+                                    a9_lookup_candidate("pictures.candidate.6");
+                                })
+                                .filter_map(|content| match content {
+                                    RunContent::Drawing(drawing) => Some(drawing),
+                                    _ => None,
+                                })
+                                .chain(run.alt_drawings.iter().inspect(|_| {
+                                    #[cfg(test)]
+                                    a9_lookup_candidate("pictures.candidate.7");
+                                }))
+                        });
                     let mut occurrences = Vec::new();
                     let mut claimed = HashSet::new();
                     for drawing in drawings {
@@ -28405,14 +28836,25 @@ impl Document {
                         let count = accepted
                             .runs
                             .iter()
+                            .inspect(|_| {
+                                #[cfg(test)]
+                                a9_lookup_candidate("pictures.candidate.8");
+                            })
                             .flat_map(|run| {
                                 run.content
                                     .iter()
+                                    .inspect(|_| {
+                                        #[cfg(test)]
+                                        a9_lookup_candidate("pictures.candidate.9");
+                                    })
                                     .filter_map(|c| match c {
                                         RunContent::Drawing(d) => Some(d),
                                         _ => None,
                                     })
-                                    .chain(run.alt_drawings.iter())
+                                    .chain(run.alt_drawings.iter().inspect(|_| {
+                                        #[cfg(test)]
+                                        a9_lookup_candidate("pictures.candidate.10");
+                                    }))
                             })
                             .filter(|d| {
                                 d.inline.as_ref().and_then(|i| i.raw_xml.as_ref()) == Some(raw)
@@ -28427,6 +28869,10 @@ impl Document {
                         }
                         let start = matches
                             .into_iter()
+                            .inspect(|_| {
+                                #[cfg(test)]
+                                a9_lookup_candidate("pictures.candidate.11");
+                            })
                             .find(|start| !claimed.contains(start))
                             .ok_or_else(|| {
                                 Error::Other("picture source correspondence is missing".into())
@@ -28516,7 +28962,14 @@ impl Document {
                         ));
                     }
                     occurrences.sort_by_key(|(start, _)| *start);
-                    for (ordinal, (start, mut picture)) in occurrences.into_iter().enumerate() {
+                    for (ordinal, (start, mut picture)) in occurrences
+                        .into_iter()
+                        .inspect(|_| {
+                            #[cfg(test)]
+                            a9_lookup_candidate("pictures.candidate.12");
+                        })
+                        .enumerate()
+                    {
                         picture.ordinal = ordinal;
                         if seen.insert((source.part_name.clone(), start)) {
                             result.push(picture);
@@ -28548,6 +29001,10 @@ impl Document {
         let current = self
             .pictures()?
             .into_iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                a9_lookup_candidate("set_picture_size_at.candidate.1");
+            })
             .find(|current| {
                 current.location == picture.location && current.ordinal == picture.ordinal
             })
@@ -28567,9 +29024,17 @@ impl Document {
             &[(picture.location.story.clone(), owner.clone())],
         )?
         .into_iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            a9_lookup_candidate("set_picture_size_at.candidate.2");
+        })
         .flatten();
         let span = spans
             .into_iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                a9_lookup_candidate("set_picture_size_at.candidate.3");
+            })
             .find(|(location, _)| location == &picture.location)
             .map(|(_, span)| span)
             .ok_or_else(|| Error::Other("picture paragraph disappeared".into()))?;
@@ -28584,6 +29049,10 @@ impl Document {
         let equal_before = candidate
             .pictures()?
             .into_iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                a9_lookup_candidate("set_picture_size_at.candidate.4");
+            })
             .filter(|other| {
                 other.location == picture.location
                     && other.ordinal < picture.ordinal
@@ -28619,11 +29088,19 @@ impl Document {
             if before != after {
                 let physical_start = boundaries
                     .iter()
+                    .inspect(|_| {
+                        #[cfg(test)]
+                        a9_lookup_candidate("set_picture_size_at.candidate.5");
+                    })
                     .find_map(|(raw, closed)| (*closed == start).then_some(*raw))
                     .ok_or_else(|| Error::Other("picture edit has no physical boundary".into()))?;
                 let end = before_reader.buffer_position() as usize;
                 let physical_end = boundaries
                     .iter()
+                    .inspect(|_| {
+                        #[cfg(test)]
+                        a9_lookup_candidate("set_picture_size_at.candidate.6");
+                    })
                     .find_map(|(raw, closed)| (*closed == end).then_some(*raw))
                     .ok_or_else(|| Error::Other("picture edit has no physical boundary".into()))?;
                 // Only numeric values change, the original element spelling
@@ -28655,7 +29132,14 @@ impl Document {
                     }
                 }
                 values.sort_by_key(|(range, _)| range.start);
-                for (range, value) in values.into_iter().rev() {
+                for (range, value) in values
+                    .into_iter()
+                    .inspect(|_| {
+                        #[cfg(test)]
+                        a9_lookup_candidate("set_picture_size_at.candidate.7");
+                    })
+                    .rev()
+                {
                     tag.splice(range, value);
                 }
                 edits.push((physical_start..physical_end, tag));
@@ -28665,7 +29149,14 @@ impl Document {
             }
         }
         let mut raw = picture.source.clone();
-        for (range, value) in edits.into_iter().rev() {
+        for (range, value) in edits
+            .into_iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                a9_lookup_candidate("set_picture_size_at.candidate.8");
+            })
+            .rev()
+        {
             raw.splice(range, value);
         }
         let mut updated = source.xml.into_owned();
@@ -30247,14 +30738,28 @@ impl Document {
     ) -> Result<Vec<(ContentLocation, usize, usize, StoryId)>> {
         let mut result = Vec::new();
         let mut tables = Vec::new();
-        for (owner, items) in owners.iter().zip(inventories) {
+        for (owner, items) in owners
+            .iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                a9_lookup_candidate("story_table_cells_from_inventory.candidate.1");
+            })
+            .zip(inventories)
+        {
             let story = StoryId {
                 kind: owner.kind,
                 part_name: source.part_name.clone(),
                 owner_index: owner.owner_index,
                 fingerprint: owner.fingerprint,
             };
-            for (index, item) in items.iter().enumerate() {
+            for (index, item) in items
+                .iter()
+                .inspect(|_| {
+                    #[cfg(test)]
+                    a9_lookup_candidate("story_table_cells_from_inventory.candidate.2");
+                })
+                .enumerate()
+            {
                 if item.kind == StoryItemKind::Table {
                     tables.push((
                         item.full.clone(),
@@ -30267,6 +30772,10 @@ impl Document {
         // a growing table inventory. Qualification came from the owner scan.
         let mut by_start = tables
             .into_iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                a9_lookup_candidate("story_table_cells_from_inventory.candidate.3");
+            })
             .map(|item| (item.0.start, item))
             .collect::<HashMap<_, _>>();
         let mut tables = Vec::with_capacity(by_start.len());
@@ -30274,8 +30783,14 @@ impl Document {
         let mut buffer = Vec::new();
         loop {
             let before = reader.buffer_position() as usize;
-            match reader
-                .read_event_into(&mut buffer)
+            let a9_event = reader.read_event_into(&mut buffer);
+            #[cfg(test)]
+            a9_lookup_read(
+                "story_table_cells_from_inventory.events",
+                before,
+                reader.buffer_position() as usize,
+            );
+            match a9_event
                 .map_err(|error| Error::Other(format!("table source order scan failed: {error}")))?
             {
                 Event::Start(_) | Event::Empty(_) => {
@@ -30295,6 +30810,10 @@ impl Document {
         }
         let cells = owners
             .iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                a9_lookup_candidate("story_table_cells_from_inventory.candidate.4");
+            })
             .filter(|owner| owner.kind == StoryKind::TableCell)
             .collect::<Vec<_>>();
         let mut next = 0;
@@ -30343,7 +30862,14 @@ impl Document {
             let mut table_routes = vec![None; count];
             let mut containing = Vec::<usize>::new();
             let mut cursor = root;
-            for ((table, coordinate), owner) in modeled.into_iter().zip(physical) {
+            for ((table, coordinate), owner) in modeled
+                .into_iter()
+                .inspect(|_| {
+                    #[cfg(test)]
+                    a9_lookup_candidate("story_table_cells_from_inventory.candidate.5");
+                })
+                .zip(physical)
+            {
                 while cursor < next && tables[cursor].0.start < owner.full.start {
                     while containing
                         .last()
@@ -33322,6 +33848,7 @@ impl Document {
             .find(|owner| owner.kind == StoryKind::Body)
             .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
         let direct_items = direct_story_content_items(&xml, body)?;
+        let routes = modeled_main_cell_routes(&owners, &direct_items);
         let mut ordinals = HashMap::<usize, usize>::new();
         let mut selected = Vec::new();
         let mut seen = HashSet::new();
@@ -33331,9 +33858,18 @@ impl Document {
         {
             // The single lookup fails on the first owner it cannot route,
             // whatever its target, so the inventory stops there too.
-            let Some((content, direct_item)) = direct_items.iter().enumerate().find(|(_, item)| {
-                item.full.start <= owner.full.start && owner.full.end <= item.full.end
-            }) else {
+            let Some((content, direct_item)) = routes
+                .as_ref()
+                .and_then(|routes| routes.get(&owner.owner_index))
+                .and_then(|(content, _)| direct_items.get(*content).map(|item| (*content, item)))
+                .or_else(|| {
+                    direct_items.iter().enumerate().find(|(_, item)| {
+                        #[cfg(test)]
+                        a9_lookup_candidate("cell_routes.legacy_containment");
+                        item.full.start <= owner.full.start && owner.full.end <= item.full.end
+                    })
+                })
+            else {
                 break;
             };
             if !matches!(
@@ -42000,11 +42536,29 @@ impl Document {
                 if found.is_none() {
                     let xml = candidate.document.to_xml()?;
                     let owners = scan_story_owners(&xml, StoryKind::Body)?;
+                    let routes = owners
+                        .iter()
+                        .find(|owner| owner.kind == StoryKind::Body)
+                        .and_then(|body| direct_story_content_items(&xml, body).ok())
+                        .and_then(|items| modeled_main_cell_routes(&owners, &items));
+                    #[cfg(test)]
+                    let routes = if A9_FORCE_LEGACY_CELL_ROUTES.get() {
+                        None
+                    } else {
+                        routes
+                    };
                     for owner in owners
                         .iter()
                         .filter(|owner| owner.kind == StoryKind::TableCell)
                     {
-                        let (content, mut ordinal) = modeled_main_cell_route(&xml, owner)?;
+                        let (content, mut ordinal) = match routes
+                            .as_ref()
+                            .and_then(|routes| routes.get(&owner.owner_index))
+                            .copied()
+                        {
+                            Some(route) => route,
+                            None => modeled_main_cell_route(&xml, owner)?,
+                        };
                         let modeled = match candidate.document.body.content.get_mut(content) {
                             Some(BodyContent::Table(t)) => nth_cell_in_table(t, &mut ordinal),
                             Some(BodyContent::ContentControl(c)) => {
@@ -47941,6 +48495,110 @@ mod tests {
     }
 
     #[test]
+    fn immutable_proof_model_equality_matches_whole_parse_and_late_refusals() {
+        let document = issue407_document(&issue407_runs(25), false);
+        let (xml, record) = document.canonical_source().unwrap();
+        let record = record.unwrap();
+        let parsed = CT_Document::from_xml(&xml).unwrap();
+        let mut candidates = vec![parsed.clone()];
+        let mut changed = document.clone_for_staging();
+        changed
+            .paragraph_mut(24)
+            .unwrap()
+            .set_text("changed last child")
+            .unwrap();
+        candidates.push(changed.document);
+        let mut changed = parsed.clone();
+        changed
+            .root_attributes
+            .push(("producer".into(), "changed".into()));
+        candidates.push(changed);
+        let mut changed = parsed.clone();
+        changed.body.sect_pr = None;
+        candidates.push(changed);
+        for candidate in candidates {
+            assert_eq!(
+                record.proved_document_matches(&xml, &candidate),
+                Some(parsed == candidate)
+            );
+        }
+        let mut split = issue407_document(&issue407_runs(2), false);
+        split
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(b"<w:p/><w:p/>".to_vec())));
+        let (xml, record) = split.canonical_source().unwrap();
+        let record = record.unwrap();
+        split
+            .paragraph_mut(0)
+            .unwrap()
+            .set_text("mismatch before unproved child")
+            .unwrap();
+        assert!(
+            record
+                .proved_document_matches(&xml, &split.document)
+                .is_none(),
+            "an earlier mismatch hid the unsupported final child"
+        );
+    }
+
+    #[test]
+    fn parsed_child_reads_borrow_immutable_proof_values() {
+        let document = issue407_document(&issue407_runs(25), false);
+        let (xml, record) = document.canonical_source().unwrap();
+        let record = record.unwrap();
+        let scopes = document_namespace_scopes(&xml).unwrap();
+        let block = &record.blocks[0];
+        let child = block
+            .read_child(&record.head, &record.tail, &scopes)
+            .unwrap();
+        let cached = block.proved.get().unwrap().parsed.as_ref().unwrap();
+        let borrowed: &BodyContent = std::borrow::Borrow::borrow(&child);
+        assert_eq!(borrowed, cached);
+        assert!(
+            std::ptr::eq(borrowed, cached),
+            "a qualified read cloned the entire parsed child"
+        );
+    }
+
+    #[test]
+    fn namespace_span_views_share_immutable_values_when_rebased() {
+        for count in [25, 100] {
+            let document = issue407_document(&issue407_runs(count), false);
+            let (xml, record) = document.canonical_source().unwrap();
+            let record = record.unwrap();
+            let first = record.proved_namespace_spans(&xml).unwrap();
+            let second = record.proved_namespace_spans(&xml).unwrap();
+            assert!(!first.is_empty());
+            assert_eq!(
+                format!("{first:?}"),
+                format!("{:?}", modeled_owner_spans(&xml).unwrap())
+            );
+            assert_eq!(format!("{first:?}"), format!("{second:?}"));
+            for (left, right) in first.iter().zip(&second) {
+                assert_eq!(
+                    left.bindings.as_ptr(),
+                    right.bindings.as_ptr(),
+                    "{count}: rebased bindings were copied"
+                );
+                assert_eq!(
+                    left.local_name.as_ptr(),
+                    right.local_name.as_ptr(),
+                    "{count}: rebased owner name was copied"
+                );
+                if !left.declarations.is_empty() {
+                    assert_eq!(
+                        left.declarations.as_ptr(),
+                        right.declarations.as_ptr(),
+                        "{count}: rebased declarations were copied"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn positive_namespace_owner_spans_match_the_old_policy() {
         fn rows_sdt() -> String {
             let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -48776,6 +49434,583 @@ mod tests {
             assert_eq!(reopened.paragraph(count).unwrap().text(), "delta");
         }
         assert_eq!(samples[0], samples[1]);
+    }
+
+    // Build the large inputs by one XML assembly, not N checked publications.
+    // All setup, target acquisition and postconditions run with A9 disabled.
+    fn a9_lookup_fixture(paragraphs: usize) -> Document {
+        let mut seed = Document::new();
+        seed.add_paragraph("seed comment");
+        seed.add_picture(
+            super::watermark_tests::PNG,
+            "a9.png",
+            Length::pt(12.0),
+            Length::pt(15.0),
+        );
+        seed.add_comment_on_text("seed", 0, "Ada", None, "seed", None)
+            .unwrap();
+        let bytes = seed.to_bytes().unwrap();
+        let mut package = OpcPackage::from_reader(Cursor::new(bytes)).unwrap();
+        let picture = seed.pictures().unwrap().remove(0);
+        let picture_source = String::from_utf8(picture.source).unwrap();
+        let (frame, range, _) = seed.document.to_xml_with_body_spans().unwrap();
+        let mut body = String::new();
+        let mut comments = format!("<w:comments xmlns:w=\"{W_NS}\">");
+        for index in 0..paragraphs {
+            // issue407_runs carries six independently formatted source runs.
+            body.push_str(
+                &issue407_runs(1).replace("paragraph 0000", &format!("paragraph {index:04}")),
+            );
+            if (index + 1) % 25 != 0 {
+                continue;
+            }
+            let index = index + 1 - 25;
+            let identity = index / 25 + 1;
+            let table = format!(
+                "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"1000\"/></w:tblGrid><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>alpha cell {index:04}</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+            );
+            body.push_str(&table);
+            body.push_str(&format!(
+                "<w:sdt><w:sdtPr><w:id w:val=\"{}\"/><w:tag w:val=\"table-{index:04}\"/><w:richText/></w:sdtPr><w:sdtContent>{table}</w:sdtContent></w:sdt>",
+                10000+identity,
+            ));
+            body.push_str(&format!(
+                "<w:sdt><w:sdtPr><w:id w:val=\"{}\"/><w:tag w:val=\"block-{index:04}\"/><w:richText/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>block {index:04}</w:t></w:r></w:p></w:sdtContent></w:sdt>",
+                20000+identity,
+            ));
+            body.push_str(&format!(
+                "<w:p><w:r><w:t>host {index:04}</w:t></w:r><w:sdt><w:sdtPr><w:id w:val=\"{}\"/><w:tag w:val=\"inline-{index:04}\"/><w:richText/></w:sdtPr><w:sdtContent><w:r><w:t>inline {index:04}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
+                30000+identity,
+            ));
+            let mut drawing = picture_source.clone();
+            let id_at = drawing.find(" id=\"").unwrap() + 5;
+            let id_end = id_at + drawing[id_at..].find('"').unwrap();
+            drawing.replace_range(id_at..id_end, &identity.to_string());
+            body.push_str(&format!(
+                "<w:p><w:r><w:drawing>{drawing}</w:drawing></w:r></w:p>"
+            ));
+            body.push_str(&format!(
+                "<w:p><w:commentRangeStart w:id=\"{identity}\"/><w:r><w:t>comment {index:04}</w:t></w:r><w:commentRangeEnd w:id=\"{identity}\"/><w:r><w:commentReference w:id=\"{identity}\"/></w:r></w:p>"
+            ));
+            body.push_str(&format!(
+                "<w:p><w:r><w:t>destination {index:04}</w:t></w:r></w:p>"
+            ));
+            comments.push_str(&format!(
+                "<w:comment w:id=\"{identity}\" w:author=\"Ada\"><w:p><w:r><w:t>note {index:04}</w:t></w:r></w:p></w:comment>"
+            ));
+        }
+        comments.push_str("</w:comments>");
+        let mut main = frame[..range.start].to_vec();
+        main.extend_from_slice(body.as_bytes());
+        main.extend_from_slice(&frame[range.end..]);
+        package.set_part(&seed.doc_part_name, main);
+        package.set_part(
+            seed.comments_part_name.as_ref().unwrap(),
+            comments.into_bytes(),
+        );
+        let mut output = Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        Document::from_bytes(output.get_ref()).unwrap()
+    }
+
+    fn a9_lookup_sample(run: impl FnOnce() -> Result<()>) -> BTreeMap<String, [usize; 3]> {
+        A9_LOOKUP_WORK.with(|work| {
+            let mut work = work.borrow_mut();
+            assert!(!work.0);
+            work.1.clear();
+            work.0 = true;
+        });
+        let result = run();
+        let counts = A9_LOOKUP_WORK.with(|work| {
+            let mut work = work.borrow_mut();
+            work.0 = false;
+            std::mem::take(&mut work.1)
+        });
+        result.unwrap();
+        assert!(
+            !counts.is_empty(),
+            "mutation recorded no actual lookup work"
+        );
+        counts
+    }
+
+    fn a9_lookup_excesses(
+        small: &BTreeMap<String, [usize; 3]>,
+        large: &BTreeMap<String, [usize; 3]>,
+    ) -> Vec<String> {
+        let keys = small
+            .keys()
+            .chain(large.keys())
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut excesses = Vec::new();
+        for key in keys {
+            let small = small.get(&key).copied().unwrap_or_default();
+            let large = large.get(&key).copied().unwrap_or_default();
+            for phase in 0..3 {
+                if large[phase] > 5 * small[phase] {
+                    excesses.push(format!(
+                        "{key} phase {phase}: {} > 5 * {}",
+                        large[phase], small[phase]
+                    ));
+                }
+            }
+        }
+        excesses
+    }
+
+    fn a9_lookup_body(document: &Document) -> StoryId {
+        document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|story| story.kind == StoryKind::Body)
+            .unwrap()
+    }
+
+    fn a9_lookup_paragraph(document: &Document, needle: &str) -> ContentLocation {
+        document
+            .story_item_snapshots()
+            .unwrap()
+            .into_iter()
+            .find(|item| {
+                item.location().item_kind == StoryItemKind::Paragraph
+                    && String::from_utf8_lossy(item.xml()).contains(needle)
+            })
+            .unwrap_or_else(|| panic!("missing paragraph {needle}"))
+            .location()
+            .clone()
+    }
+
+    fn a9_lookup_control(document: &Document, tag: &str) -> ContentLocation {
+        let body = a9_lookup_body(document);
+        let needle = format!("w:val=\"{tag}\"");
+        document
+            .story_items(&body)
+            .unwrap()
+            .into_iter()
+            .find(|item| {
+                if item.kind() != StoryItemKind::ContentControl {
+                    return false;
+                }
+                let raw = item.xml().unwrap();
+                let raw = String::from_utf8_lossy(&raw);
+                raw.find(&needle)
+                    .is_some_and(|at| at < raw.find("<w:sdtContent").unwrap_or(raw.len()))
+            })
+            .unwrap_or_else(|| panic!("missing control {tag}"))
+            .location()
+            .clone()
+    }
+
+    // Every target acquisition precedes the measured closure. The actual
+    // checked native API, including its own validation, is inside the window.
+    fn a9_lookup_action(
+        document: &mut Document,
+        size: usize,
+        family: &str,
+        step: usize,
+    ) -> BTreeMap<String, [usize; 3]> {
+        let index = (size * 3 / 4) / 25 * 25;
+        match family {
+            "cell.direct" | "cell.controlled" => {
+                let table = index / 25 * 2 + usize::from(family == "cell.controlled");
+                let (old, new) = if step.is_multiple_of(2) {
+                    ("alpha", "omega")
+                } else {
+                    ("omega", "alpha")
+                };
+                let counts = a9_lookup_sample(|| {
+                    assert_eq!(
+                        document
+                            .try_replace_text_in_cell((table, 0, 0), None, old, new, Some(1))?
+                            .unwrap(),
+                        1
+                    );
+                    Ok(())
+                });
+                // Inspect every physical cell, not just the replacement count.
+                for ordinal in 0..size / 25 * 2 {
+                    let value = if ordinal == table { new } else { "alpha" };
+                    assert_eq!(
+                        document.table(ordinal).unwrap().cell(0, 0).unwrap().text(),
+                        format!("{value} cell {:04}", ordinal / 2 * 25),
+                        "{family} step {step}, table {ordinal}"
+                    );
+                }
+                counts
+            }
+            "picture.resize" => {
+                let picture = document.pictures().unwrap().remove(index / 25);
+                let counts = a9_lookup_sample(|| {
+                    document.set_picture_size_at(
+                        &picture,
+                        Length::pt(20.0 + step as f64),
+                        Length::pt(22.0),
+                    )
+                });
+                let pictures = document.pictures().unwrap();
+                assert_eq!(pictures.len(), size / 25);
+                for (ordinal, picture) in pictures.iter().enumerate() {
+                    let expected = if ordinal == index / 25 {
+                        (Length::pt(20.0 + step as f64), Length::pt(22.0))
+                    } else {
+                        (Length::pt(12.0), Length::pt(15.0))
+                    };
+                    assert_eq!(
+                        (picture.width, picture.height),
+                        (expected.0.to_emu(), expected.1.to_emu())
+                    );
+                    assert_eq!(picture.bytes, super::watermark_tests::PNG);
+                }
+                counts
+            }
+            "picture.insert" => {
+                let after = a9_lookup_paragraph(document, &format!("destination {index:04}"));
+                let story = after.story.clone();
+                let before = document.document.body.content.clone();
+                let mut reference = document.clone_for_staging();
+                let target_index = before.iter().position(|item| matches!(item, BodyContent::Paragraph(paragraph) if paragraph.text() == format!("destination {index:04}"))).unwrap();
+                let mut returned = None;
+                let counts = a9_lookup_sample(|| {
+                    returned = Some(document.insert_picture_to_story(
+                        &story,
+                        Some(&after),
+                        super::watermark_tests::PNG,
+                        "a9-insert.png",
+                        Some(Length::pt(12.0 + step as f64)),
+                        Some(Length::pt(15.0)),
+                    )?);
+                    Ok(())
+                });
+                let mut remaining = document.document.body.content.clone();
+                assert_eq!(remaining.len(), before.len() + 1);
+                assert!(matches!(
+                    remaining.remove(target_index + 1),
+                    BodyContent::Paragraph(_)
+                ));
+                // The established whole path may renumber generated drawing and
+                // relationship identities when a picture is inserted before one.
+                // Compare that exact result, rather than requiring old IDs.
+                let off = CanonicalBlockProofOff::enter();
+                reference
+                    .insert_picture_to_story(
+                        &story,
+                        Some(&after),
+                        super::watermark_tests::PNG,
+                        "a9-insert.png",
+                        Some(Length::pt(12.0 + step as f64)),
+                        Some(Length::pt(15.0)),
+                    )
+                    .unwrap();
+                drop(off);
+                assert_eq!(document.document, reference.document);
+                assert_eq!(document.package.parts, reference.package.parts);
+                let snapshots = document.story_item_snapshots().unwrap();
+                let inserted = snapshots
+                    .iter()
+                    .find(|item| item.location() == returned.as_ref().unwrap())
+                    .unwrap();
+                assert_eq!(inserted.direct_body_index(), Some(target_index + 1));
+                assert_eq!(inserted.location().item_kind, StoryItemKind::Paragraph);
+                let pictures = document.pictures().unwrap();
+                assert_eq!(pictures.len(), size / 25 + step + 1);
+                let inserted_pictures = pictures
+                    .iter()
+                    .filter(|picture| {
+                        snapshots.iter().any(|item| {
+                            item.location() == &picture.location
+                                && item.direct_body_index() == Some(target_index + 1)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(inserted_pictures.len(), 1);
+                let picture = inserted_pictures[0];
+                assert_eq!(
+                    (picture.width, picture.height),
+                    (
+                        Length::pt(12.0 + step as f64).to_emu(),
+                        Length::pt(15.0).to_emu()
+                    )
+                );
+                assert_eq!(picture.bytes, super::watermark_tests::PNG);
+                counts
+            }
+            "control.block" | "control.nested" => {
+                let nested = family == "control.nested";
+                let tag = format!("{}-{index:04}", if nested { "inline" } else { "block" });
+                let source = a9_lookup_control(document, &tag);
+                let original = document.content_controls_by_tag(&tag)[0].inner.clone();
+                let destination = if nested {
+                    a9_lookup_paragraph(
+                        document,
+                        &format!("destination {:04}", index + 25 * (step % 2)),
+                    )
+                } else if step.is_multiple_of(2) {
+                    ContentLocation::end(a9_lookup_body(document))
+                } else {
+                    a9_lookup_paragraph(document, &format!("destination {index:04}"))
+                };
+                let counts =
+                    a9_lookup_sample(|| document.move_content_control(&source, &destination));
+                let controls = document.content_controls_by_tag(&tag);
+                assert_eq!(controls.len(), 1);
+                assert_eq!(
+                    controls[0].inner, &original,
+                    "control identity, type and payload changed"
+                );
+                let moved = a9_lookup_control(document, &tag);
+                assert_ne!(
+                    moved, source,
+                    "{family} step {step} did not leave its source"
+                );
+                if nested {
+                    let target = a9_lookup_paragraph(
+                        document,
+                        &format!("destination {:04}", index + 25 * (step % 2)),
+                    );
+                    assert_eq!(moved.story, target.story);
+                    let snapshots = document.story_item_snapshots().unwrap();
+                    let parent = snapshots
+                        .iter()
+                        .find(|item| item.location() == &target)
+                        .unwrap();
+                    let xml = String::from_utf8_lossy(parent.xml());
+                    assert!(
+                        xml.find(&format!("destination {:04}", index + 25 * (step % 2)))
+                            .unwrap()
+                            < xml.find(&tag).unwrap(),
+                        "inline control must follow the destination text"
+                    );
+                } else {
+                    // Direct modeled body slots differ from flat projected locations.
+                    let body = &document.document.body.content;
+                    let slot = body.iter().position(|item| matches!(item, BodyContent::ContentControl(control) if control.properties.as_ref().and_then(|properties| properties.tag.as_deref()) == Some(tag.as_str()))).unwrap();
+                    if step.is_multiple_of(2) {
+                        assert_eq!(slot + 1, body.len());
+                    } else {
+                        assert!(
+                            matches!(body.get(slot + 1), Some(BodyContent::Paragraph(paragraph)) if paragraph.text() == format!("destination {index:04}"))
+                        );
+                    }
+                }
+                counts
+            }
+            "comment.move" => {
+                let location = a9_lookup_paragraph(
+                    document,
+                    &format!("destination {:04}", index + 25 * (step % 2)),
+                );
+                let range = crate::StoryRunRange {
+                    start: crate::StoryRunPosition {
+                        location: location.clone(),
+                        run_index: 0,
+                    },
+                    end: crate::StoryRunPosition {
+                        location,
+                        run_index: 1,
+                    },
+                };
+                let id = (index / 25 + 1) as i32;
+                let counts = a9_lookup_sample(|| document.move_comment(id, range));
+                let target = a9_lookup_paragraph(
+                    document,
+                    &format!("destination {:04}", index + 25 * (step % 2)),
+                );
+                let ranges = document.story_ranges().unwrap();
+                let moved = ranges.iter().find(|entry| matches!(entry.kind(), crate::StoryRangeKind::Comment { id: found } if *found == id)).unwrap();
+                assert_eq!(moved.range().start.location, target);
+                assert_eq!(moved.range().end.location, target);
+                assert_eq!(
+                    (moved.range().start.run_index, moved.range().end.run_index),
+                    (0, 1)
+                );
+                counts
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn controlled_cell_replacement_does_not_repeat_whole_owner_routing() {
+        let fixtures = [a9_lookup_fixture(25), a9_lookup_fixture(100)];
+        let mut samples = Vec::new();
+        let mut legacy = Vec::new();
+        for (size, fixture) in [25, 100].into_iter().zip(&fixtures) {
+            let mut document = fixture.clone_for_staging();
+            samples.push(a9_lookup_action(&mut document, size, "cell.controlled", 0));
+            let mut document = fixture.clone_for_staging();
+            A9_FORCE_LEGACY_CELL_ROUTES.set(true);
+            let old = a9_lookup_action(&mut document, size, "cell.controlled", 0);
+            A9_FORCE_LEGACY_CELL_ROUTES.set(false);
+            legacy.push(old);
+        }
+        let excesses = a9_lookup_excesses(&samples[0], &samples[1]);
+        assert!(
+            excesses.is_empty(),
+            "controlled cell repeated owner work: {excesses:?}\nsmall={:?}\nlarge={:?}",
+            samples[0],
+            samples[1]
+        );
+        assert!(
+            !a9_lookup_excesses(&legacy[0], &legacy[1]).is_empty(),
+            "the real legacy route did not fail the unchanged work bound: {legacy:?}"
+        );
+    }
+
+    #[test]
+    fn body_lookup_work_is_linear_at_250_and_1000() {
+        let mut fixtures = [a9_lookup_fixture(250), a9_lookup_fixture(1000)];
+        let fixture_bytes = fixtures
+            .iter_mut()
+            .map(|document| document.to_bytes().unwrap())
+            .collect::<Vec<_>>();
+        for family in [
+            "picture.insert",
+            "control.block",
+            "control.nested",
+            "comment.move",
+            "cell.direct",
+            "cell.controlled",
+            "picture.resize",
+        ] {
+            // No parsed-state or scan Arc is shared across operation families.
+            let mut documents = fixture_bytes
+                .iter()
+                .map(|bytes| Document::from_bytes(bytes).unwrap())
+                .collect::<Vec<_>>();
+            let mut cold = Vec::new();
+            let mut warm = Vec::new();
+            for (size, document) in [250, 1000].into_iter().zip(&mut documents) {
+                eprintln!("A9 begin {family} cold {size}");
+                let counts = a9_lookup_action(document, size, family, 0);
+                eprintln!("A9 {family} cold {size}: {counts:?}");
+                cold.push(counts);
+            }
+            let excesses = a9_lookup_excesses(&cold[0], &cold[1]);
+            assert!(
+                excesses.is_empty(),
+                "{family} cold: {excesses:?}\nsmall={:?}\nlarge={:?}",
+                cold[0],
+                cold[1]
+            );
+            for (size, document) in [250, 1000].into_iter().zip(&mut documents) {
+                eprintln!("A9 begin {family} warm {size}");
+                // Two distinct successful changed warmups, not no-op calls.
+                a9_lookup_action(document, size, family, 1);
+                a9_lookup_action(document, size, family, 2);
+                let counts = a9_lookup_action(document, size, family, 3);
+                eprintln!("A9 {family} warm {size}: {counts:?}");
+                warm.push(counts);
+                let pictures = document.pictures().unwrap();
+                assert!(
+                    pictures
+                        .iter()
+                        .all(|picture| picture.bytes == super::watermark_tests::PNG)
+                );
+                assert_eq!(document.comments().len(), size / 25);
+                let before = document.story_item_snapshots().unwrap();
+                let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+                let after = reopened.story_item_snapshots().unwrap();
+                assert_eq!(
+                    before.len(),
+                    after.len(),
+                    "{family} reopen inventory cardinality"
+                );
+                assert_eq!(reopened.pictures().unwrap().len(), pictures.len());
+                assert_eq!(
+                    document.document.to_xml().unwrap(),
+                    reopened.document.to_xml().unwrap(),
+                    "{family} reopened model XML"
+                );
+                if family == "picture.resize" {
+                    let index = (size * 3 / 4) / 25;
+                    assert_eq!(
+                        (pictures[index].width, pictures[index].height),
+                        (Length::pt(23.0).to_emu(), Length::pt(22.0).to_emu())
+                    );
+                }
+                if family == "picture.insert" {
+                    assert_eq!(pictures.len(), size / 25 + 4);
+                }
+                if family.starts_with("control.") {
+                    assert_eq!(reopened.content_controls().len(), size / 25 * 3);
+                }
+                if family == "comment.move" {
+                    let index = (size * 3 / 4) / 25 * 25;
+                    let target =
+                        a9_lookup_paragraph(&reopened, &format!("destination {:04}", index + 25));
+                    let ranges = reopened.story_ranges().unwrap();
+                    let moved = ranges.iter().find(|entry| matches!(entry.kind(),crate::StoryRangeKind::Comment{id} if *id == (index/25+1) as i32)).unwrap();
+                    assert_eq!(moved.range().start.location, target);
+                    assert_eq!(moved.range().end.location, target);
+                    assert_eq!(
+                        (moved.range().start.run_index, moved.range().end.run_index),
+                        (0, 1)
+                    );
+                }
+                if family.starts_with("cell.") {
+                    let table =
+                        ((size * 3 / 4) / 25) * 2 + usize::from(family == "cell.controlled");
+                    assert!(
+                        reopened
+                            .table(table)
+                            .unwrap()
+                            .cell(0, 0)
+                            .unwrap()
+                            .text()
+                            .contains("alpha")
+                    );
+                }
+            }
+            for (label, samples) in [("cold", cold), ("warm", warm)] {
+                let excesses = a9_lookup_excesses(&samples[0], &samples[1]);
+                assert!(
+                    excesses.is_empty(),
+                    "{family} {label}: {excesses:?}\nsmall={:?}\nlarge={:?}",
+                    samples[0],
+                    samples[1]
+                );
+            }
+        }
+
+        // Real old algorithm: the former picture inventory resolved scope
+        // independently from the source prefix for each paragraph. Apply the
+        // exact same per-pass bound, rather than inventing synthetic N*N work.
+        let mut old = Vec::new();
+        for document in &fixtures {
+            let sources = document.story_sources().unwrap();
+            let source = &sources[0];
+            let owners = scan_story_owners(&source.xml, source.root_kind)
+                .unwrap()
+                .into_iter()
+                .map(|owner| {
+                    (
+                        StoryId {
+                            kind: owner.kind,
+                            part_name: source.part_name.clone(),
+                            owner_index: owner.owner_index,
+                            fingerprint: owner.fingerprint,
+                        },
+                        owner,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let paragraphs = story_range_paragraph_spans(&source.xml, &owners).unwrap();
+            old.push(a9_lookup_sample(|| {
+                for (_, span) in paragraphs.iter().flatten() {
+                    story_namespace_scope_at(&source.xml, span.start)?;
+                }
+                Ok(())
+            }));
+        }
+        let excesses = a9_lookup_excesses(&old[0], &old[1]);
+        assert!(
+            excesses
+                .iter()
+                .any(|item| item.starts_with("story_namespace_scope_at.events")),
+            "old per-paragraph prefix algorithm did not fail the same gate: {old:?}"
+        );
     }
 
     #[test]

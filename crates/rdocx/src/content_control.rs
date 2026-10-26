@@ -2432,7 +2432,15 @@ struct XmlElem {
     val: Option<String>,
 }
 
+#[cfg_attr(test, track_caller)]
 fn index_elements(xml: &[u8]) -> Result<Vec<XmlElem>> {
+    // Keep different index builds separate. A large linear parent index must
+    // not conceal a smaller quadratic child index in the same operation.
+    #[cfg(test)]
+    let a9_index_pass = format!(
+        "control.index_elements.events:{}",
+        std::panic::Location::caller().line()
+    );
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
@@ -2441,14 +2449,27 @@ fn index_elements(xml: &[u8]) -> Result<Vec<XmlElem>> {
     let mut next_id = 0usize;
     loop {
         let before = reader.buffer_position() as usize;
-        let (namespace, event) = reader
-            .read_resolved_event_into(&mut buffer)
-            .map_err(|error| Error::Other(format!("content control XML is invalid: {error}")))?;
+        let (namespace, event) = match reader.read_resolved_event_into(&mut buffer) {
+            Ok(event) => event,
+            Err(error) => {
+                #[cfg(test)]
+                crate::document::a9_lookup_read(
+                    &a9_index_pass,
+                    before,
+                    reader.buffer_position() as usize,
+                );
+                return Err(Error::Other(format!(
+                    "content control XML is invalid: {error}"
+                )));
+            }
+        };
         let word = is_word(&namespace);
         let w14 = is_w14(&namespace);
         let w15 = is_w15(&namespace);
         drop(namespace);
         let after = reader.buffer_position() as usize;
+        #[cfg(test)]
+        crate::document::a9_lookup_read(&a9_index_pass, before, after);
         match event {
             Event::Start(element) => {
                 let id = next_id;
@@ -2548,6 +2569,10 @@ fn word_val(reader: &NsReader<&[u8]>, element: &BytesStart<'_>) -> Result<Option
 fn element_at<'a>(elems: &'a [XmlElem], range: &Range<usize>) -> Result<&'a XmlElem> {
     elems
         .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            crate::document::a9_lookup_candidate("control.element_at.candidate.1");
+        })
         .find(|elem| elem.range.start == range.start)
         .ok_or_else(|| Error::Other("content control bytes are missing".to_owned()))
 }
@@ -2919,13 +2944,27 @@ fn parent_can_hold(xml: &[u8], sdt_range: &Range<usize>, inner: &[u8]) -> Result
 }
 
 fn parent_slot(elems: &[XmlElem], id: usize) -> ParentSlot {
-    let Some(elem) = elems.iter().find(|elem| elem.id == id) else {
+    let Some(elem) = elems
+        .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            crate::document::a9_lookup_candidate("control.parent_slot.candidate.1");
+        })
+        .find(|elem| elem.id == id)
+    else {
         return ParentSlot::Other;
     };
     let Some(parent_id) = elem.parent else {
         return ParentSlot::Other;
     };
-    let Some(parent) = elems.iter().find(|elem| elem.id == parent_id) else {
+    let Some(parent) = elems
+        .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            crate::document::a9_lookup_candidate("control.parent_slot.candidate.2");
+        })
+        .find(|elem| elem.id == parent_id)
+    else {
         return ParentSlot::Other;
     };
     element_slot(elems, parent)
@@ -2970,8 +3009,19 @@ fn transparent_children_match(
 ) -> Result<bool> {
     let custom_parent = elems
         .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            crate::document::a9_lookup_candidate("control.transparent_children_match.candidate.1");
+        })
         .any(|elem| elem.id == parent_id && elem.word && elem.local == b"customXml");
-    for child in elems.iter().filter(|elem| elem.parent == Some(parent_id)) {
+    for child in elems
+        .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            crate::document::a9_lookup_candidate("control.transparent_children_match.candidate.2");
+        })
+        .filter(|elem| elem.parent == Some(parent_id))
+    {
         if custom_parent && child.word && child.local == b"customXmlPr" {
             continue;
         }
@@ -3005,7 +3055,14 @@ fn sdt_payload_matches(
         return Ok(false);
     }
     let mut contents = Vec::new();
-    for child in elems.iter().filter(|elem| elem.parent == Some(sdt.id)) {
+    for child in elems
+        .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            crate::document::a9_lookup_candidate("control.sdt_payload_matches.candidate.1");
+        })
+        .filter(|elem| elem.parent == Some(sdt.id))
+    {
         match (child.word, child.local.as_slice()) {
             (true, b"sdtPr" | b"sdtEndPr") => {}
             (true, b"sdtContent") => contents.push(child),
@@ -3625,6 +3682,10 @@ fn is_type_child(elem: &XmlElem) -> bool {
 fn sdt_content_elem<'a>(elems: &'a [XmlElem], sdt: &XmlElem) -> Option<&'a XmlElem> {
     elems
         .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            crate::document::a9_lookup_candidate("control.sdt_content_elem.candidate.1");
+        })
         .find(|elem| elem.parent == Some(sdt.id) && elem.word && elem.local == b"sdtContent")
 }
 
@@ -3637,21 +3698,31 @@ fn sdt_has_direct_type(
 ) -> bool {
     let Some(properties) = elems
         .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            crate::document::a9_lookup_candidate("control.sdt_has_direct_type.candidate.1");
+        })
         .find(|elem| elem.parent == Some(sdt.id) && elem.word && elem.local == b"sdtPr")
     else {
         return false;
     };
-    elems.iter().any(|elem| {
-        elem.parent == Some(properties.id)
-            && elem.local.as_slice() == local
-            && if w15 {
-                elem.w15
-            } else if w14 {
-                elem.w14
-            } else {
-                elem.word
-            }
-    })
+    elems
+        .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            crate::document::a9_lookup_candidate("control.sdt_has_direct_type.candidate.2");
+        })
+        .any(|elem| {
+            elem.parent == Some(properties.id)
+                && elem.local.as_slice() == local
+                && if w15 {
+                    elem.w15
+                } else if w14 {
+                    elem.w14
+                } else {
+                    elem.word
+                }
+        })
 }
 
 fn sdt_is_repeating_section(elems: &[XmlElem], sdt: &XmlElem) -> bool {
@@ -3663,9 +3734,23 @@ fn sdt_is_repeating_item(elems: &[XmlElem], sdt: &XmlElem) -> bool {
 }
 
 fn ancestor_repeating_section(elems: &[XmlElem], sdt_id: usize) -> Option<&XmlElem> {
-    let mut current = elems.iter().find(|elem| elem.id == sdt_id)?;
+    let mut current = elems
+        .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            crate::document::a9_lookup_candidate("control.ancestor_repeating_section.candidate.1");
+        })
+        .find(|elem| elem.id == sdt_id)?;
     while let Some(parent_id) = current.parent {
-        let parent = elems.iter().find(|elem| elem.id == parent_id)?;
+        let parent = elems
+            .iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                crate::document::a9_lookup_candidate(
+                    "control.ancestor_repeating_section.candidate.2",
+                );
+            })
+            .find(|elem| elem.id == parent_id)?;
         if parent.word && parent.local == b"sdt" && sdt_is_repeating_section(elems, parent) {
             return Some(parent);
         }
@@ -3680,6 +3765,10 @@ fn direct_repeating_items<'a>(elems: &'a [XmlElem], section: &XmlElem) -> Vec<&'
     };
     elems
         .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            crate::document::a9_lookup_candidate("control.direct_repeating_items.candidate.1");
+        })
         .filter(|elem| {
             elem.parent == Some(content.id)
                 && elem.word
@@ -3803,13 +3892,21 @@ fn control_matches_context(
 fn story_inside_repeating_section(document: &Document, story: &crate::StoryId) -> Result<bool> {
     let (xml, range) = document.story_owner_span(story)?;
     let elems = index_elements(&xml)?;
-    Ok(elems.iter().any(|section| {
-        section.word
-            && section.local == b"sdt"
-            && section.range.start < range.start
-            && range.end < section.range.end
-            && sdt_is_repeating_section(&elems, section)
-    }))
+    Ok(elems
+        .iter()
+        .inspect(|_| {
+            #[cfg(test)]
+            crate::document::a9_lookup_candidate(
+                "control.story_inside_repeating_section.candidate.1",
+            );
+        })
+        .any(|section| {
+            section.word
+                && section.local == b"sdt"
+                && section.range.start < range.start
+                && range.end < section.range.end
+                && sdt_is_repeating_section(&elems, section)
+        }))
 }
 
 fn unwrap_keeps_repeating_context(xml: &[u8], range: &Range<usize>) -> Result<bool> {
