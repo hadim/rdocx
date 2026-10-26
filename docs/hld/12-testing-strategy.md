@@ -4462,6 +4462,8 @@ Modern form parity for this authoring surface is native Word 16.114 with an inde
 
 Text controls compare accepted Paragraph and story snapshots across body, tables, controls and related stories. CLI plain and JSON views retain aliases, tabs, direct and simple-field newlines, and closed complex cached-field page and column controls. Nested instruction, deleted and moveFrom content stays suppressed. Malformed related stories retain main text and the existing ordered omission diagnostic. Markdown keeps literal whitespace and physical field, control, revision and hard-break boundaries. Export controls inspect owned ODT space elements and EPUB content rather than relying on lexical XML substrings.
 
+Field-token controls count the actual comparison windows visited for `fldChar` and `fldSimple`, including rejected windows and early successful exits. After immutable block construction, repeated warm writer qualification scans zero token windows. An actual uncached scan over the same block bytes must violate that bound. Constructor and lifetime controls cover empty and short bytes, both tokens, casing, escaped spellings, foreign attributes and text, source and writer records, frame-only copies, multiple edits of one block, token removal and unchanged neighbors. Private tabs, bookmarks and fields still require their live-model controls. Inline block size is recorded before and after, and Q22 measures the existing parent cache layer and combined footprint. A local zero-rescan result does not establish a flat public-call time or memory acceptance.
+
 ## PowerPoint names and finite language controls
 
 The exact six PowerPoint rows from Issue386 use a selected-row worker adapter

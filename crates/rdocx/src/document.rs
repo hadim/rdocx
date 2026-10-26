@@ -8131,6 +8131,8 @@ struct BodyBlockScan {
     proved: OnceLock<ParsedChild>,
     /// `xmlns` occurs in `bytes`. This is a byte fact for these exact bytes.
     declares_namespace: bool,
+    /// Exact lexical field-token result for these immutable bytes, not model facts.
+    holds_field_words: bool,
     /// Definitions in `bytes` under one root and body scope. `None` is a failed
     /// scan and is not an empty success.
     identifier_proof: OnceLock<Option<IdentifierChildProof>>,
@@ -8533,6 +8535,7 @@ impl BodyBlockScan {
             staged: self.staged.clone(),
             proved: OnceLock::new(),
             declares_namespace: self.declares_namespace,
+            holds_field_words: self.holds_field_words,
             identifier_proof: OnceLock::new(),
             canonical_read: OnceLock::new(),
             empty_namespace_owners: OnceLock::new(),
@@ -8615,11 +8618,36 @@ impl Clone for MainPartBlocks {
 }
 
 fn holds_field_words(xml: &[u8]) -> bool {
-    xml.windows(b"fldChar".len())
-        .any(|window| window == b"fldChar")
-        || xml
-            .windows(b"fldSimple".len())
-            .any(|window| window == b"fldSimple")
+    #[cfg(test)]
+    let mut visited = [0usize; 2];
+    let found = xml.windows(b"fldChar".len()).any(|window| {
+        #[cfg(test)]
+        {
+            visited[0] += 1;
+        }
+        window == b"fldChar"
+    }) || xml.windows(b"fldSimple".len()).any(|window| {
+        #[cfg(test)]
+        {
+            visited[1] += 1;
+        }
+        window == b"fldSimple"
+    });
+    #[cfg(test)]
+    A9_LOOKUP_WORK.with(|work| {
+        let mut work = work.borrow_mut();
+        if work.0 {
+            for (pass, count) in ["field_token.fldChar", "field_token.fldSimple"]
+                .into_iter()
+                .zip(visited)
+            {
+                if count > 0 {
+                    work.1.entry(pass.to_owned()).or_insert([0; 3])[2] += count;
+                }
+            }
+        }
+    });
+    found
 }
 
 fn root_start_tag(head: &[u8]) -> Option<std::ops::Range<usize>> {
@@ -8855,7 +8883,7 @@ impl MainPartBlocks {
             #[cfg(test)]
             a9_lookup_candidate("writer_bytes_match.current_child");
             if !item.owner_facts_reusable_by_value()
-                || holds_field_words(&block.bytes)
+                || block.holds_field_words
                 || block.staged.as_ref() != Some(item)
             {
                 return None;
@@ -8886,7 +8914,7 @@ impl MainPartBlocks {
         let aligned =
             |item: &BodyContent, block: &BodyBlockScan| block.staged.as_ref() == Some(item);
         let reusable = |item: &BodyContent, block: &BodyBlockScan| {
-            item.owner_facts_reusable_by_value() && !holds_field_words(&block.bytes)
+            item.owner_facts_reusable_by_value() && !block.holds_field_words
         };
         let prefix = content
             .iter()
@@ -8914,6 +8942,7 @@ impl MainPartBlocks {
                 note_staging_work(|work| work.serialized_children += 1);
                 let xml = frame.body_item_xml(item)?;
                 let declares_namespace = bytes_declare_namespace(&xml);
+                let holds_field_words = holds_field_words(&xml);
                 blocks.push(Arc::new(BodyBlockScan {
                     bytes: xml,
                     owners: Vec::new(),
@@ -8921,6 +8950,7 @@ impl MainPartBlocks {
                     staged: Some(item.clone()),
                     proved: OnceLock::new(),
                     declares_namespace,
+                    holds_field_words,
                     identifier_proof: OnceLock::new(),
                     canonical_read: OnceLock::new(),
                     empty_namespace_owners: OnceLock::new(),
@@ -9646,7 +9676,7 @@ impl MainPartBlocks {
             let item = block.staged.as_ref()?;
             if matches!(item, BodyContent::RawXml(_))
                 || !item.owner_facts_reusable_by_value()
-                || holds_field_words(&block.bytes)
+                || block.holds_field_words
             {
                 return None;
             }
@@ -9838,8 +9868,8 @@ fn scoped_children_correspond(
         return false;
     }
     if a.owner_facts_reusable_by_value()
-        && !holds_field_words(&left.bytes)
-        && !holds_field_words(&right.bytes)
+        && !left.holds_field_words
+        && !right.holds_field_words
         && right.scoped_correspondence.get().is_none()
     {
         let _ = left.scoped_correspondence.set(ScopedChildCorrespondence {
@@ -9925,6 +9955,7 @@ impl BodyBlockScan {
     fn from_source(bytes: Vec<u8>) -> Self {
         Self {
             declares_namespace: bytes_declare_namespace(&bytes),
+            holds_field_words: holds_field_words(&bytes),
             bytes,
             owners: Vec::new(),
             items: None,
@@ -9975,7 +10006,7 @@ impl BodyBlockScan {
         let round_trips = parsed.body_item_xml(&item).ok()? == self.bytes;
         if !round_trips
             && (self.bytes.contains(&b'&')
-                || holds_field_words(&self.bytes)
+                || self.holds_field_words
                 || !item.owner_facts_reusable_by_value())
         {
             return None;
@@ -9995,7 +10026,7 @@ impl BodyBlockScan {
     }
 
     fn reads_anew(&self) -> bool {
-        holds_field_words(&self.bytes)
+        self.holds_field_words
             || self
                 .staged
                 .as_ref()
@@ -10319,6 +10350,7 @@ fn scan_body_block(
             staged: None,
             proved: OnceLock::new(),
             declares_namespace: bytes_declare_namespace(block.unwrap_or_default()),
+            holds_field_words: false,
             identifier_proof: OnceLock::new(),
             canonical_read: OnceLock::new(),
             empty_namespace_owners: OnceLock::new(),
@@ -10423,6 +10455,7 @@ fn child_scan(
         staged: None,
         proved: OnceLock::new(),
         declares_namespace: bytes_declare_namespace(bytes),
+        holds_field_words: holds_field_words(bytes),
         identifier_proof: OnceLock::new(),
         canonical_read: OnceLock::new(),
         empty_namespace_owners: OnceLock::new(),
@@ -24374,7 +24407,7 @@ impl Document {
             }
             let mut block = BodyBlockScan::from_source(source.get(at..item.full.end)?.to_vec());
             let child = block.read_source_child(&head, &tail, &scopes)?;
-            if holds_field_words(&block.bytes) || !child.owner_facts_reusable_by_value() {
+            if block.holds_field_words || !child.owner_facts_reusable_by_value() {
                 return None;
             }
             // The proof above is an actual read under the producer scope.
@@ -50188,6 +50221,184 @@ mod tests {
     }
 
     #[test]
+    fn field_word_facts_avoid_warm_byte_scans() {
+        println!(
+            "BodyBlockScan size: {}",
+            std::mem::size_of::<BodyBlockScan>()
+        );
+        let document = writer_comparison_document(&issue407_runs(25), true);
+        let counts = a9_lookup_sample(|| {
+            for _ in 0..3 {
+                assert!(document.opened_main_still_serializes());
+            }
+            Ok(())
+        });
+        let windows = |counts: &BTreeMap<String, [usize; 3]>| {
+            counts
+                .iter()
+                .filter(|(pass, _)| pass.starts_with("field_token."))
+                .map(|(_, work)| work[2])
+                .sum::<usize>()
+        };
+        // The control really traverses the old scanner over these same bytes.
+        let record = document
+            .main_body_scans
+            .lock()
+            .unwrap()
+            .serialized
+            .clone()
+            .unwrap();
+        let uncached = a9_lookup_sample(|| {
+            for _ in 0..3 {
+                for block in &record.blocks {
+                    assert!(!holds_field_words(&block.bytes));
+                }
+            }
+            Ok(())
+        });
+        assert!(
+            windows(&uncached) > 0,
+            "uncached control did not scan: {uncached:?}"
+        );
+        assert_eq!(
+            windows(&counts),
+            0,
+            "warm immutable bytes were rescanned: {counts:?}"
+        );
+    }
+
+    #[test]
+    fn field_word_facts_match_windows_and_constructors() {
+        for (bytes, expected, exact_work) in [
+            (b"".as_slice(), false, Some([0, 0])),
+            (b"short".as_slice(), false, Some([0, 0])),
+            (b"fldChar".as_slice(), true, Some([1, 0])),
+            (b"xfldChar".as_slice(), true, Some([2, 0])),
+            (b"fldSimple".as_slice(), true, Some([3, 1])),
+            (b"FLDCHAR".as_slice(), false, Some([1, 0])),
+            (b"fldchar".as_slice(), false, Some([1, 0])),
+            (b"fld&#67;har".as_slice(), false, None),
+            (br#"<x:p x:hint="fldChar"/>"#.as_slice(), true, None),
+            (b"<w:t>fldSimple</w:t>".as_slice(), true, None),
+        ] {
+            A9_LOOKUP_WORK.with(|work| {
+                let mut work = work.borrow_mut();
+                assert!(!work.0);
+                work.0 = true;
+                work.1.clear();
+            });
+            let found = holds_field_words(bytes);
+            let counts = A9_LOOKUP_WORK.with(|work| {
+                let mut work = work.borrow_mut();
+                work.0 = false;
+                std::mem::take(&mut work.1)
+            });
+            assert_eq!(found, expected, "{bytes:?}");
+            if let Some(exact_work) = exact_work {
+                assert_eq!(
+                    ["field_token.fldChar", "field_token.fldSimple"]
+                        .map(|pass| counts.get(pass).map_or(0, |work| work[2])),
+                    exact_work,
+                    "early-exit window counts for {bytes:?}",
+                );
+            }
+            let source = BodyBlockScan::from_source(bytes.to_vec());
+            let child = child_scan(&(0..bytes.len()), bytes, &[], None);
+            for block in [source, child] {
+                assert_eq!(block.holds_field_words, expected);
+                assert!(block.staged.is_none());
+                assert!(block.proved.get().is_none());
+                let block = Arc::new(block);
+                block.decodes.set(true).unwrap();
+                let cloned = (*block).clone();
+                let fresh = block.fresh_context_piece();
+                assert_eq!(cloned.holds_field_words, expected);
+                assert_eq!(fresh.holds_field_words, expected);
+                assert_eq!(fresh.bytes, bytes);
+                assert!(fresh.decodes.get().is_none());
+                assert!(fresh.proved.get().is_none());
+            }
+        }
+        let document = writer_comparison_document(
+            "<w:p><w:r><w:t>fldChar fldSimple</w:t></w:r></w:p><w:p><w:r><w:t>clean</w:t></w:r></w:p>",
+            true,
+        );
+        let scans = document.main_body_scans.lock().unwrap();
+        let record = scans.serialized.as_ref().unwrap();
+        assert_eq!(
+            record
+                .blocks
+                .iter()
+                .map(|b| b.holds_field_words)
+                .collect::<Vec<_>>(),
+            [true, false]
+        );
+        assert!(record.blocks.iter().all(|b| b.staged.is_some()));
+        let frame = scan_body_block(&record.head, None, &record.tail, false).unwrap();
+        assert!(frame.bytes.is_empty());
+        assert!(!frame.holds_field_words);
+    }
+
+    #[test]
+    fn field_word_facts_follow_repeated_edits_and_keep_neighbors() {
+        let document = writer_comparison_document(
+            "<w:p><w:r><w:t>alpha beta</w:t></w:r></w:p><w:p><w:r><w:t>neighbor</w:t></w:r></w:p>",
+            true,
+        );
+        let record = document
+            .main_body_scans
+            .lock()
+            .unwrap()
+            .serialized
+            .clone()
+            .unwrap();
+        let replace = |record: &MainPartBlocks, pairs: &[(&[u8], &[u8])]| {
+            let child = &record.blocks[0].bytes;
+            let mut edits = pairs
+                .iter()
+                .map(|(old, new)| {
+                    let at = child
+                        .windows(old.len())
+                        .position(|window| window == *old)
+                        .unwrap()
+                        + record.head.len();
+                    (at, at + old.len(), new.to_vec())
+                })
+                .collect::<Vec<_>>();
+            edits.sort_by_key(|edit| edit.0);
+            record.edited(&edits).unwrap()
+        };
+        let with_fields = replace(&record, &[(b"alpha", b"fldChar"), (b"beta", b"fldSimple")]);
+        assert!(!record.blocks[0].holds_field_words);
+        assert!(with_fields.blocks[0].holds_field_words);
+        assert!(with_fields.blocks[0].staged.is_none());
+        assert!(!Arc::ptr_eq(&record.blocks[0], &with_fields.blocks[0]));
+        assert!(Arc::ptr_eq(&record.blocks[1], &with_fields.blocks[1]));
+        let char_removed = replace(&with_fields, &[(b"fldChar", b"alpha")]);
+        assert!(char_removed.blocks[0].holds_field_words);
+        let clean = replace(&char_removed, &[(b"fldSimple", b"beta")]);
+        assert!(!clean.blocks[0].holds_field_words);
+        assert_eq!(clean.bytes(), record.bytes());
+        assert!(Arc::ptr_eq(&record.blocks[1], &clean.blocks[1]));
+        // A frame change resets contextual proofs while retaining exact child bytes.
+        let tail_at = with_fields.head.len()
+            + with_fields
+                .blocks
+                .iter()
+                .map(|b| b.bytes.len())
+                .sum::<usize>();
+        let reframed = with_fields
+            .edited(&[(tail_at, tail_at, b" ".to_vec())])
+            .unwrap();
+        for (before, after) in with_fields.blocks.iter().zip(&reframed.blocks) {
+            assert_eq!(before.bytes, after.bytes);
+            assert_eq!(before.holds_field_words, after.holds_field_words);
+            assert!(!Arc::ptr_eq(before, after));
+            assert!(after.proved.get().is_none());
+        }
+    }
+
+    #[test]
     fn unchanged_writer_comparisons_keep_the_record_without_assembling_output() {
         let document = writer_comparison_document(&issue407_runs(25), true);
         assert!(document.opened_main_still_serializes());
@@ -50403,6 +50614,17 @@ mod tests {
                     .as_deref(),
                 Some(expected.as_slice())
             );
+            let lexical = document
+                .main_body_scans
+                .lock()
+                .unwrap()
+                .serialized
+                .as_ref()
+                .unwrap()
+                .blocks
+                .iter()
+                .any(|block| block.holds_field_words);
+            assert_eq!(lexical, body.contains("fldSimple"));
             let counts = a9_lookup_sample(|| {
                 assert!(document.opened_main_still_serializes());
                 Ok(())
@@ -51655,9 +51877,7 @@ mod tests {
         let canonical = parsed.to_xml().unwrap();
         let shell = CT_Document::from_xml(&canonical).unwrap();
         let (head, tail) = shell.body_frame_xml().unwrap();
-        let mut block = record.blocks[0].fresh_context_piece();
-        Arc::make_mut(&mut block).bytes = tab_source.into_bytes();
-        Arc::make_mut(&mut block).staged = None;
+        let mut block = Arc::new(BodyBlockScan::from_source(tab_source.into_bytes()));
         let scopes = document_namespace_scopes(&canonical).unwrap();
         assert!(
             Arc::make_mut(&mut block)
@@ -52120,6 +52340,7 @@ mod tests {
             staged: None,
             proved: OnceLock::new(),
             declares_namespace: false,
+            holds_field_words: false,
             identifier_proof: OnceLock::new(),
             canonical_read: OnceLock::new(),
             empty_namespace_owners: OnceLock::new(),
