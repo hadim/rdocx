@@ -8026,9 +8026,9 @@ impl StoryItemSpan {
 /// bookmark changes the child bytes, so the next lookup cannot treat the old
 /// record as the same input. A namespace or body-frame change changes the
 /// head or tail and drops the record. Reopen copies this record only when
-/// the reopened part serializes that same head and tail. It does not copy
-/// model field caches or relationship checks, and it does not keep blocks
-/// from an older child list.
+/// the reopened part serializes that same head and tail. Each subsequent
+/// lookup aligns exact current child bytes before using any carried fact.
+/// It does not copy model field caches or relationship checks.
 #[derive(Clone, Default)]
 struct MainBodyScans {
     head: Vec<u8>,
@@ -23699,7 +23699,7 @@ impl Document {
         reopened
     }
 
-    fn install_carried_body_scans(&self, carried: MainBodyScans) {
+    fn install_carried_body_scans(&self, mut carried: MainBodyScans) {
         // Writer eligibility is checked against the current model and frame
         // when offered. It is independent of the stricter address-scan carry.
         // A changed owner span must not discard that current writer memo.
@@ -23710,27 +23710,32 @@ impl Document {
         if carried.frame.is_none() {
             return;
         }
-        let Ok((xml, content, children)) = self.document.to_xml_with_body_spans() else {
+        let Ok((xml, content, children)) = self.main_part_with_body_spans() else {
             return;
         };
         if carried.head.as_slice() != &xml[..content.start]
             || carried.tail.as_slice() != &xml[content.end..]
-            || carried.blocks.len() != children.len()
         {
             return;
         }
-        if carried
-            .blocks
-            .iter()
-            .zip(&children)
-            .any(|(scan, range)| scan.bytes.as_slice() != &xml[range.clone()])
+        if carried.blocks.len() != children.len()
+            || carried
+                .blocks
+                .iter()
+                .zip(&children)
+                .any(|(scan, range)| scan.bytes.as_slice() != &xml[range.clone()])
         {
-            return;
+            carried.fingerprint = None;
         }
-        *self
+        // main_story_layout checks the current frame and each aligned child's
+        // exact bytes and item coverage before it consumes these read facts.
+        // Keep the newly qualified writer memo independently of those facts.
+        let mut scans = self
             .main_body_scans
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = carried;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        carried.serialized = scans.serialized.take();
+        *scans = carried;
     }
 
     fn reopen_staged(self, in_memory: bool, limits: PackageReadLimits) -> Result<Self> {
@@ -33180,6 +33185,13 @@ impl Document {
             .into_iter()
             .find(|story| story.kind == StoryKind::Body)
             .ok_or_else(|| Error::Other("document body story is missing".to_owned()))?;
+        // Preserve the complete story-source validation before selecting the
+        // incremental direct-body route, including unrelated malformed parts.
+        if ordinal.is_none() {
+            return self.direct_body_item_location(slot).map(|location| {
+                location.filter(|location| location.item_kind == StoryItemKind::Paragraph)
+            });
+        }
         let (source, owner) = self.story_source_and_owner(&story)?;
         // The body section properties come last, so the n-th direct item is
         // the direct body child at slot n.
@@ -51334,6 +51346,74 @@ mod tests {
     }
 
     #[test]
+    fn direct_paragraph_locations_preserve_related_story_validation_errors() {
+        let mut seed = Document::new();
+        seed.add_paragraph("body");
+        let controlled = CT_Document::from_xml(
+            format!(
+                "<w:document xmlns:w=\"{W_NS}\"><w:body><w:sdt><w:sdtContent><w:p><w:r><w:t>controlled</w:t></w:r></w:p></w:sdtContent></w:sdt></w:body></w:document>"
+            ).as_bytes(),
+        ).unwrap();
+        seed.document.body.content.extend(controlled.body.content);
+        seed.set_header("header");
+        let (id, is_header) = seed.header_footer_rel_ids().into_iter().next().unwrap();
+        let part = seed.header_footer_part_name(&id, is_header).unwrap();
+        assert!(seed.paragraph_story_location(0).unwrap().is_some());
+        assert_eq!(
+            seed.paragraph_story_location(1)
+                .unwrap()
+                .unwrap()
+                .index_path
+                .len(),
+            2
+        );
+        for malformed in [false, true] {
+            let mut document = seed.clone_for_staging();
+            if malformed {
+                document.package.set_part(
+                    &part,
+                    format!("<w:hdr xmlns:w=\"{W_NS}\"><w:p></w:hdr>").into_bytes(),
+                );
+            } else {
+                document.package.parts.remove(&part);
+            }
+            let expected = document.stories().unwrap_err().to_string();
+            for paragraph in [0, 1] {
+                assert_eq!(
+                    document
+                        .paragraph_story_location(paragraph)
+                        .unwrap_err()
+                        .to_string(),
+                    expected,
+                    "malformed={malformed}, paragraph={paragraph}"
+                );
+            }
+        }
+        let mut duplicate = seed;
+        duplicate.package.set_part(
+            "/word/footnotes-s954.xml",
+            format!("<w:footnotes xmlns:w=\"{W_NS}\"/>").into_bytes(),
+        );
+        let relationships = duplicate
+            .package
+            .get_or_create_part_rels(&duplicate.doc_part_name);
+        for id in ["rIdS954a", "rIdS954b"] {
+            relationships.add_with_id(id, rel_types::FOOTNOTES, "footnotes-s954.xml");
+        }
+        let expected = duplicate.stories().unwrap_err().to_string();
+        assert!(expected.contains("referenced more than once"));
+        for paragraph in [0, 1] {
+            assert_eq!(
+                duplicate
+                    .paragraph_story_location(paragraph)
+                    .unwrap_err()
+                    .to_string(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn main_body_layout_serialized_facts_and_frame_use_scanner_bytes() {
         let mut document = Document::new();
         document.document.body.content.clear();
@@ -51495,6 +51575,34 @@ mod tests {
                 assert_eq!(fast, full);
                 #[cfg(debug_assertions)]
                 sample_deltas.push(Document::main_body_block_scans() - before);
+                // Reopen before another address read. The changed child must
+                // not discard the already-read facts for all its neighbors.
+                opened
+                    .paragraph_mut(5)
+                    .expect("p")
+                    .set_text("changed before reopen")
+                    .expect("edit");
+                let changed_reopened = main_body_reopen_route(&opened, memory);
+                #[cfg(debug_assertions)]
+                let before = Document::main_body_block_scans();
+                let fast = changed_reopened
+                    .direct_body_item_location(5)
+                    .expect("changed carry");
+                let xml = changed_reopened
+                    .document
+                    .to_xml()
+                    .expect("changed carry xml");
+                assert_eq!(
+                    fast,
+                    full_direct_body_item_location(&xml, &changed_reopened.doc_part_name, 5)
+                        .expect("whole changed carry")
+                );
+                #[cfg(debug_assertions)]
+                assert_eq!(
+                    Document::main_body_block_scans() - before,
+                    1,
+                    "changed carry at {count} through memory={memory}"
+                );
                 let model = opened.document.to_xml().expect("model");
                 let saved = opened.to_bytes().expect("saved");
                 let mut reopened = main_body_reopen_route(&opened, memory);
