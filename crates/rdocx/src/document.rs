@@ -24172,6 +24172,21 @@ impl Document {
             .main_body_scans
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(record) = offered_canonical_blocks(scans.serialized.as_ref())
+            && let Some(kept) = self.kept_main_part()
+            && let Some(expected) = kept.serialization_proof.as_deref()
+            && record.writer_bytes_match(&self.document, expected) == Some(true)
+        {
+            // These are an opening's normalized writer bytes, not its raw
+            // source. Requalify the complete current writer before copying.
+            let xml = expected.to_vec();
+            #[cfg(test)]
+            a9_lookup_read("writer.copied_normalized_output", 0, xml.len());
+            let mut record = record.clone();
+            record.part = None;
+            drop(scans);
+            return Ok((xml, Some(record)));
+        }
         let (xml, record) = MainPartBlocks::serialize(
             &self.document,
             &self.document.body.content,
@@ -50219,6 +50234,109 @@ mod tests {
                 .is_some_and(|work| work[1] > 0),
             "the actual cache-off path must violate the same no-assembly bound: {old:?}"
         );
+    }
+
+    #[test]
+    fn unchanged_main_output_copies_normalization_without_assembly() {
+        let document = writer_comparison_document(&issue407_runs(25), true);
+        let expected = document.document.to_xml().unwrap();
+        assert_ne!(
+            document.package.get_part(&document.doc_part_name).unwrap(),
+            expected
+        );
+        let mut output = None;
+        let counts = a9_lookup_sample(|| {
+            output = Some(document.serialized_main_part()?);
+            Ok(())
+        });
+        let (xml, record) = output.unwrap();
+        assert_eq!(xml, expected);
+        assert!(
+            record.unwrap().part.is_none(),
+            "writer output claimed retained source provenance"
+        );
+        assert_eq!(
+            counts
+                .get("writer.assembled_output")
+                .map_or(0, |work| work[1]),
+            0,
+            "unchanged main output rebuilt its writer: {counts:?}"
+        );
+        assert_eq!(
+            counts
+                .get("writer.copied_normalized_output")
+                .map_or(0, |work| work[1]),
+            expected.len()
+        );
+        let off = CanonicalBlockProofOff::enter();
+        let counts = a9_lookup_sample(|| {
+            assert_eq!(document.serialized_main_part()?.0, expected);
+            Ok(())
+        });
+        drop(off);
+        assert!(
+            counts
+                .get("writer.assembled_output")
+                .is_some_and(|work| work[1] > 0)
+        );
+        assert!(!counts.contains_key("writer.copied_normalized_output"));
+    }
+
+    #[test]
+    fn normalized_main_output_keeps_changed_and_private_fallbacks() {
+        for (body, explicit_w14) in [
+            ("<w:p><w:r><w:t>alpha</w:t></w:r></w:p>", false),
+            (
+                "<w:p><w:fldSimple w:instr=\" PAGE \"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>",
+                true,
+            ),
+            (
+                "<w:p><w:bookmarkStart w:id=\"1\" w:name=\"kept\"/><w:r><w:t>alpha</w:t></w:r><w:bookmarkEnd w:id=\"1\"/></w:p>",
+                true,
+            ),
+        ] {
+            let document = writer_comparison_document(body, explicit_w14);
+            let expected = document.document.to_xml().unwrap();
+            let counts = a9_lookup_sample(|| {
+                assert_eq!(document.serialized_main_part()?.0, expected);
+                Ok(())
+            });
+            assert!(
+                counts
+                    .get("writer.assembled_output")
+                    .is_some_and(|work| work[1] > 0),
+                "{counts:?}"
+            );
+            assert!(!counts.contains_key("writer.copied_normalized_output"));
+        }
+        let mut document = writer_comparison_document(&issue407_runs(2), true);
+        let stale = document.serialized_main_part().unwrap().0;
+        document.paragraph_mut(1).unwrap().add_run("changed");
+        let expected = document.document.to_xml().unwrap();
+        assert_ne!(expected, stale);
+        let counts = a9_lookup_sample(|| {
+            assert_eq!(document.serialized_main_part()?.0, expected);
+            Ok(())
+        });
+        assert!(
+            counts
+                .get("writer.assembled_output")
+                .is_some_and(|work| work[1] > 0)
+        );
+        assert!(!counts.contains_key("writer.copied_normalized_output"));
+        let mut fresh = Document::new();
+        fresh.add_paragraph("new document");
+        let expected = fresh.document.to_xml().unwrap();
+        let counts = a9_lookup_sample(|| {
+            assert_eq!(fresh.serialized_main_part()?.0, expected);
+            Ok(())
+        });
+        assert!(
+            counts
+                .get("writer.assembled_output")
+                .is_some_and(|work| work[1] > 0)
+        );
+        assert!(!counts.contains_key("writer.copied_normalized_output"));
     }
 
     #[test]
