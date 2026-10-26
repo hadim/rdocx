@@ -21260,9 +21260,35 @@ impl Document {
             remap.insert(old, reserve_lowest_i32(&mut occupied, 0, "bookmark")?);
         }
         if !remap.is_empty() {
-            visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
-                let _ = paragraph.remap_authored_bookmark_ids(&remap);
+            let mut field_owned = false;
+            visit_body_paragraphs(&self.document.body.content, false, &mut |paragraph| {
+                if paragraph.bookmark_markers.iter().any(|marker| {
+                    marker
+                        .id()
+                        .is_some_and(|id| remap.get(&id).is_some_and(|new| *new != id))
+                }) && paragraph.runs().iter().any(|run| {
+                    run.content.iter().any(|content| {
+                        matches!(content, RunContent::Field(field) if field.legacy_form.is_some())
+                    })
+                }) {
+                    field_owned = true;
+                }
             });
+            if field_owned {
+                // An external fragment can make a native form bookmark authored.
+                // Its start is inside a retained field source, so patch both
+                // physical markers together through the existing whole path.
+                let remap = remap
+                    .iter()
+                    .map(|(old, new)| (old.to_string(), new.to_string()))
+                    .collect();
+                let updated = crate::field::patch_bookmark_ids(&self.document.to_xml()?, &remap)?;
+                self.document = CT_Document::from_xml(&updated)?;
+            } else {
+                visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
+                    let _ = paragraph.remap_authored_bookmark_ids(&remap);
+                });
+            }
             for old in remap.keys() {
                 self.identifiers.authored_bookmark_ids.remove(old);
             }

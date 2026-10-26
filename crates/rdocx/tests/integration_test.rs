@@ -14464,6 +14464,135 @@ mod legacy_forms_and_building_blocks {
         assert!(xml.contains(r#"<x:producer keep="yes"><x:nested/></x:producer>"#));
     }
 
+    fn native_named_form_document(name: &str) -> Document {
+        let mut package = base_package();
+        let xml = format!(
+            concat!(
+                r#"<w:document xmlns:w="{word}"><w:body><w:p>"#,
+                r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="{name}"/><w:textInput><w:default w:val="keep"/></w:textInput></w:ffData></w:fldChar></w:r>"#,
+                r#"<w:bookmarkStart w:id="7" w:name="{name}"/><w:r><w:instrText> FORMTEXT </w:instrText></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>now</w:t></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="end"/></w:r><w:bookmarkEnd w:id="7"/></w:p>"#,
+                r#"<w:p><w:fldSimple w:instr=" REF {name} "><w:r><w:t>stale</w:t></w:r></w:fldSimple></w:p><w:sectPr/></w:body></w:document>"#,
+            ),
+            word = WORD_NS,
+            name = name,
+        );
+        package.set_part("/word/document.xml", xml.into_bytes());
+        Document::from_bytes(&package_bytes(package)).unwrap()
+    }
+
+    #[test]
+    fn native_named_legacy_bookmarks_keep_current_defaults_and_reference_text() {
+        let mut document = native_named_form_document("Legacy");
+        for value in ["now", "changed", "changed"] {
+            document
+                .set_legacy_form_field_value(
+                    "/word/document.xml",
+                    0,
+                    LegacyFormFieldValue::Text(value.into()),
+                )
+                .unwrap();
+            document
+                .update_fields(&rdocx::FieldEvaluationContext::default())
+                .unwrap();
+            let fields = document.legacy_form_fields_with_defaults().unwrap();
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].0.name.as_deref(), Some("Legacy"));
+            assert_eq!(fields[0].0.value, LegacyFormFieldValue::Text(value.into()));
+            assert_eq!(fields[0].1, Some(LegacyFormFieldValue::Text("keep".into())));
+            let bookmarks = document.bookmarks();
+            assert_eq!(bookmarks.len(), 1);
+            assert!(bookmarks[0].issue().is_none());
+            assert_eq!(bookmarks[0].text(), value);
+            let mut reference = Vec::new();
+            for run in document.paragraph(1).unwrap().runs() {
+                for item in run.items() {
+                    if let rdocx::RunItemRef::Field(field) = item {
+                        reference.push(field.cached_result().to_owned());
+                    }
+                }
+            }
+            assert_eq!(reference, [value.to_owned()]);
+            let bytes = document.to_bytes().unwrap();
+            let package = OpcPackage::from_reader(std::io::Cursor::new(bytes.clone())).unwrap();
+            let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+            assert_eq!(xml.matches("<w:bookmarkStart ").count(), 1);
+            assert_eq!(xml.matches("<w:bookmarkEnd ").count(), 1);
+            assert!(
+                xml.find("fldCharType=\"begin\"").unwrap() < xml.find("<w:bookmarkStart ").unwrap()
+            );
+            assert!(
+                xml.find("fldCharType=\"end\"").unwrap() < xml.find("<w:bookmarkEnd ").unwrap()
+            );
+            document = Document::from_bytes(&bytes).unwrap();
+        }
+    }
+
+    #[test]
+    fn native_named_legacy_rich_fragment_remaps_both_markers_before_authored_bookmarks() {
+        let mut source = native_named_form_document("MailMerge1");
+        let source_bytes = source.to_bytes().unwrap();
+        let mut package = base_package();
+        package.set_part("/word/document.xml", format!(
+            r#"<w:document xmlns:w="{WORD_NS}"><w:body><w:p><w:fldSimple w:instr=" MERGEFIELD Insert "><w:r><w:t>Insert</w:t></w:r></w:fldSimple></w:p><w:p><w:r><w:t>tail</w:t></w:r></w:p><w:sectPr/></w:body></w:document>"#
+        ).into_bytes());
+        let mut template = Document::from_bytes(&package_bytes(package)).unwrap();
+        let existing = template
+            .add_bookmark(
+                "Tail",
+                rdocx::RunRange {
+                    start: rdocx::RunPosition {
+                        body_index: 1,
+                        run_index: 0,
+                    },
+                    end: rdocx::RunPosition {
+                        body_index: 1,
+                        run_index: 1,
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(existing, 0);
+        let mut record = rdocx::MailMergeRecord::default();
+        record.values.insert(
+            "Insert".into(),
+            rdocx::MailMergeValue::Fragment(source_bytes),
+        );
+        let mut destination = template
+            .mail_merge_rich(
+                &rdocx::MailMergeData {
+                    records: vec![record],
+                    sources: Default::default(),
+                },
+                None,
+            )
+            .unwrap()
+            .remove(0);
+        for _ in 0..2 {
+            let fields = destination.legacy_form_fields_with_defaults().unwrap();
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].0.name.as_deref(), Some("MailMerge1"));
+            assert_eq!(fields[0].0.value, LegacyFormFieldValue::Text("now".into()));
+            assert_eq!(fields[0].1, Some(LegacyFormFieldValue::Text("keep".into())));
+            let bookmarks = destination.bookmarks();
+            assert_eq!(bookmarks.len(), 2);
+            assert!(bookmarks.iter().all(|bookmark| bookmark.issue().is_none()));
+            let imported = bookmarks
+                .iter()
+                .find(|bookmark| bookmark.name() == Some("MailMerge1"))
+                .unwrap();
+            let tail = bookmarks
+                .iter()
+                .find(|bookmark| bookmark.name() == Some("Tail"))
+                .unwrap();
+            assert_eq!((imported.id(), tail.id()), (Some(0), Some(1)));
+            assert_eq!(imported.text(), "now");
+            assert_eq!(tail.text(), "tail");
+            destination = Document::from_bytes(&destination.to_bytes().unwrap()).unwrap();
+        }
+    }
+
     #[test]
     fn legacy_reset_defaults_survive_current_value_updates() {
         let mut package = base_package();

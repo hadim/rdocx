@@ -186,6 +186,8 @@ Word font CLI mutation preflight composes identity and file-kind checks with
 nonreplacement availability and staged publication. These checks preserve
 source bytes and captured authority on refusal.
 
+An isolated legacy field can retain Word's own-name bookmark with its start after the pure begin run and its end after the pure end run. The start remains in the field's physical source, while direct, accepted and tracked bookmark endpoints surround the virtual field run. The exact paragraph namespace frame stays with the projection, and local scopes continue to shadow it. A conflicting generated writer binding or partial or ambiguous interior range keeps the untyped source. Authored bookmark renumbering that reaches a legacy-bearing paragraph uses the whole XML patch and reparse path, preserving both physical markers.
+
 Modern form fill, reset, protect, protection set, and protection remove clone one package candidate, validate it, allocate returned results, and publish once. Read, no-op, and refusal leave the source scope unchanged. A changed owner follows the ordinary staleness policy and is not revived. Private `WordPublication::ModernFormValues` is only that new path. Content-control binding, the legacy form setter, and signing keep their existing publication. `localScopeCommit` keeps the document epoch, so only unproved states retire. Exact `stories` and `story_item_snapshots` stay. The proof serializes and validates the whole package. It does not claim part-local or constant-time publication, and it keeps no second model or retained history.
 
 ## Three families, one workspace

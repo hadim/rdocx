@@ -9267,6 +9267,45 @@ def test_authored_legacy_form_fields_keep_defaults_and_current_values():
     assert reopened.legacy_form_fields()[0].value == "now"
 
 
+@pytest.mark.parametrize(
+    "instruction,kind,display,current,default,changed",
+    [
+        ("FORMTEXT", '<w:textInput><w:default w:val="keep"/></w:textInput>', "now", "now", "keep", "changed"),
+        ("FORMCHECKBOX", '<w:checkBox><w:sizeAuto/><w:default w:val="0"/><w:checked/></w:checkBox>', "", True, False, False),
+        ("FORMDROPDOWN", '<w:ddList><w:listEntry w:val="one"/><w:listEntry w:val="two"/></w:ddList>', "one", 0, None, 1),
+    ],
+)
+def test_native_named_legacy_fields_keep_frozen_and_reopened_defaults(
+    instruction, kind, display, current, default, changed
+):
+    import rdocx
+
+    xml = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>'
+        '<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Legacy"/>'
+        f'{kind}</w:ffData></w:fldChar></w:r><w:bookmarkStart w:id="7" w:name="Legacy"/>'
+        f'<w:r><w:instrText> {instruction} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        f'<w:r><w:t>{display}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        '<w:bookmarkEnd w:id="7"/></w:p><w:sectPr/></w:body></w:document>'
+    ).encode()
+    document = _fx261_replace_part(rdocx.Document(), "word/document.xml", lambda _: xml)
+    fields = document.legacy_form_fields()
+    assert len(fields) == 1
+    held = fields[0]
+    assert held.value == current and held.default_value == default
+    for _ in range(2):
+        document.set_legacy_form_field_value("Legacy", changed)
+        fresh = document.legacy_form_fields()[0]
+        assert fresh.value == changed and fresh.default_value == default
+        assert held.value == current and held.default_value == default
+        raw = document.part_xml("/word/document.xml")
+        assert raw.count("<w:bookmarkStart ") == raw.count("<w:bookmarkEnd ") == 1
+        assert raw.index('fldCharType="begin"') < raw.index("<w:bookmarkStart ")
+        assert raw.index('fldCharType="end"') < raw.index("<w:bookmarkEnd ")
+        document = rdocx.Document.from_bytes(document.to_bytes())
+        assert document.legacy_form_fields()[0].default_value == default
+
+
 def test_legacy_field_factories_and_attachment_refuse_atomically():
     import rdocx
     document = rdocx.Document()

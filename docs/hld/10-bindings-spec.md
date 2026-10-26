@@ -4285,6 +4285,8 @@ and drop-down a nonnegative int excluding bool. A non-integer dropdown
 refusal names the actual Python type, integer index and legacy_form_fields()
 snapshot choices. It does not select SDT display text or values. Native bounds and malformed
 source checks remain authoritative across supported related legacy stories.
+The shared native reader recognizes Word's isolated own-name field bookmark without relocating its physical markers. Names, current values and reset defaults remain available through the same frozen inventory and setter. Partial and ambiguous interior bookmark shapes keep the existing untyped fallback.
+
 `default_value` is the explicit reset default, or `None` when that metadata is
 absent. It is distinct from the current `value`. `LegacyFormFieldDefinition`
 is frozen. `text_input`, `checkbox`, and `drop_down_list` return that class.

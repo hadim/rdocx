@@ -4810,6 +4810,8 @@ archives, scoped checks and unchanged deterministic hashes complete the gate.
 
 ## Typed content-control native Word qualification
 
+Named legacy-field controls cover the native begin/bookmark/instruction/result/end/bookmark sequence for text, checkbox and dropdown kinds. They distinguish direct, accepted and tracked axes with preceding inline controls and deleted text, retain aliased scope metadata, preserve one physical marker pair through current edits and reopen, and check frozen Python defaults. Reopen uses an ordinary document scope without injecting aliases. Mixed marker aliases, opaque foreign and default namespaces, local hyperlink shadows and conflicting generated prefixes discriminate namespace-frame preservation. Negative cases retain partial, crossing, duplicate, mismatched and shared-run source. A rich mail merge fragment named `MailMerge1`, inserted before an authored bookmark, forces a nonidentity ID remap and tests both physical markers together. Ordinary bookmark text and REF cache updates use the same virtual field range. These local controls do not replace the complete native Word A6 comparison or the dense-form visual gate.
+
 F-286 external installed controls use `RDOCX_F286_WORD_PROVENANCE` to locate
 the independently retained native producer receipt. Each input is read from
 its recorded source and checked against its recorded SHA-256. The pinned

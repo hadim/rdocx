@@ -799,6 +799,8 @@ and source prefixes on an imported field stay in place. Legacy
 unordered raw children remain at the final run boundary. Readers remain prefix
 tolerant and writers use the fixed Word prefixes.
 
+A valid isolated legacy field admits Word's exact own-name bookmark pair at pure begin and end run boundaries. The internal start stays verbatim inside the field source and the external end stays in the paragraph. Its semantic endpoints use the actual accepted and tracked prefix counts, including preceding wrappers. Other interior markers, partial or crossing pairs, duplicate IDs, mismatched names, shared boundary content and nested fields retain the untyped fallback. Run-root namespace sidecars are scope metadata, not extra physical run children. Projection retains one exact paragraph namespace frame, including both marker aliases, foreign opaque names and the default namespace, without hoisting child scopes. Bindings conflicting with the shared inline validation scope or the generated `w15` types decline projection before mutation. Existing root declarations are merged once. If typed rich fragment merge makes such an identity authored and canonical ordering renumbers it, the existing whole-XML bookmark patch and reparse updates both markers. Preserved imported IDs remain outside authored renumbering.
+
 Run splitting uses the same encoded raw-child position sidecar. A second
 private classification bit associates each parsed `mc:AlternateContent`
 drawing projection with its verbatim compatibility block, so both move to the

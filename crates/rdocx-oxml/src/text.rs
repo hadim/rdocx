@@ -5803,7 +5803,7 @@ struct ComplexFieldProjection<'a> {
     word_prefixes: &'a [String],
 }
 
-fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> {
+fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<bool> {
     let ComplexFieldProjection {
         runs,
         run_sources,
@@ -5818,8 +5818,9 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
         word_prefixes,
     } = projection;
     if runs.len() != run_sources.len() {
-        return Ok(());
+        return Ok(false);
     }
+    let mut retain_namespace_frame = false;
     let mut stack = Vec::<ComplexFieldBuilder>::new();
     let mut completed = Vec::<(usize, usize, Field, Option<CT_RPr>)>::new();
     for run_index in 0..runs.len() {
@@ -6065,15 +6066,29 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
             })
             .cloned()
             .collect::<Vec<_>>();
+        let owned_bookmark = if fields.len() == 1 {
+            legacy_form_own_bookmark_start(
+                start,
+                end,
+                &fields[0].0,
+                run_sources,
+                bookmark_markers,
+                word_prefixes,
+            )
+        } else {
+            None
+        };
         if has_typed_boundary_inside(
             start,
             end,
             &unrelated_comments,
-            bookmark_markers,
+            &[],
             content_controls,
             revisions,
             hyperlinks,
-        ) {
+        ) || bookmark_markers.iter().enumerate().any(|(index, marker)| {
+            marker.run_index > start && marker.run_index <= end && Some(index) != owned_bookmark
+        }) {
             continue;
         }
         let raw_xml = complex_field_source(
@@ -6120,6 +6135,16 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
         let replacement_count = replacement.len();
         runs.splice(start..=end, replacement);
         run_sources.splice(start..=end, std::iter::repeat_n(None, replacement_count));
+        if let Some(index) = owned_bookmark {
+            retain_namespace_frame = true;
+            // The physical start remains inside the field's retained source.
+            // Its semantic boundary precedes the virtual field run. The pure
+            // begin contributed exactly one accepted and tracked run before it.
+            let marker = &mut bookmark_markers[index];
+            marker.run_index = start;
+            marker.projected_run_index -= 1;
+            marker.tracked_run_index -= 1;
+        }
         remap_complex_field_boundaries(
             start,
             end,
@@ -6135,7 +6160,89 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
             },
         );
     }
-    Ok(())
+    Ok(retain_namespace_frame)
+}
+
+// Word's own-name bookmark surrounds the result and instruction, with its
+// start just after the pure begin run and its end just after the pure end run.
+// Only this complete isolated pair can project onto one virtual field run.
+fn legacy_form_own_bookmark_start(
+    start: usize,
+    end: usize,
+    field: &Field,
+    sources: &[Option<Vec<u8>>],
+    markers: &[BookmarkMarker],
+    word_prefixes: &[String],
+) -> Option<usize> {
+    field.validate_legacy_form_owner().ok()?;
+    let name = field.legacy_form.as_ref()?.name.as_deref()?;
+    if name.is_empty() || !field.all_nested_fields_in_source_order().is_empty() {
+        return None;
+    }
+    for (index, begin) in [(start, true), (end, false)] {
+        let raw = sources.get(index)?.as_deref()?;
+        let run = parse_run_raw(raw, word_prefixes).ok()?;
+        let raw_children = run
+            .extra_xml_positions
+            .iter()
+            .filter(|encoded| !CT_R::raw_child_is_root_attributes(**encoded))
+            .count();
+        if !run.content.is_empty() || raw_children != 1 || !run.alt_drawings.is_empty() {
+            return None;
+        }
+        let events = complex_field_events(raw, word_prefixes, usize::from(!begin)).ok()?;
+        if !matches!(
+            (begin, events.as_slice()),
+            (true, [ComplexFieldEvent::Begin(_)]) | (false, [ComplexFieldEvent::End(_)])
+        ) {
+            return None;
+        }
+    }
+    let mut starts = markers.iter().enumerate().filter(|(_, marker)| {
+        marker.start
+            && marker.name.as_deref() == Some(name)
+            && marker.run_index == start + 1
+            && !marker.has_child_content
+    });
+    let (index, marker) = starts.next()?;
+    if starts.next().is_some() || marker.projected_run_index == 0 || marker.tracked_run_index == 0 {
+        return None;
+    }
+    let id = marker.id?;
+    let pair = markers
+        .iter()
+        .filter(|marker| marker.id == Some(id))
+        .collect::<Vec<_>>();
+    if pair.len() != 2
+        || !pair
+            .iter()
+            .any(|marker| !marker.start && marker.run_index == end + 1 && !marker.has_child_content)
+    {
+        return None;
+    }
+    // A carried paragraph frame must not rebind a generated writer prefix.
+    // The shared cache scope names current generated inline namespaces. SDT
+    // repeating-section types additionally emit w15 without a local binding.
+    let mut reader = Reader::from_reader(FIELD_CACHE_VALIDATION_SCOPE);
+    let Event::Start(scope) = reader.read_event().ok()? else {
+        return None;
+    };
+    let mut reserved = raw_namespace_declarations(&scope).ok()?;
+    reserved.push((
+        "w15".into(),
+        "http://schemas.microsoft.com/office/word/2012/wordml".into(),
+    ));
+    if namespace_bindings(word_prefixes)
+        .iter()
+        .any(|(prefix, uri)| {
+            reserved
+                .iter()
+                .any(|(reserved, expected)| prefix == reserved && uri != expected)
+        })
+    {
+        return None;
+    }
+    Some(index)
 }
 
 fn merge_field_dirty(current: &mut Option<bool>, next: Option<bool>) {
@@ -10157,7 +10264,7 @@ impl CT_P {
             buf.clear();
         }
 
-        project_complex_fields(ComplexFieldProjection {
+        let retain_legacy_namespace_frame = project_complex_fields(ComplexFieldProjection {
             runs: &mut runs,
             run_sources: &mut run_sources,
             extra_xml: &mut extra_xml,
@@ -10200,6 +10307,32 @@ impl CT_P {
             extra_xml.push((ROOT_ATTRIBUTES_POSITION, record));
         }
 
+        if retain_legacy_namespace_frame {
+            // The consumed runs previously carried bindings for their raw
+            // children. Retain the actual paragraph frame, including the
+            // external end marker and opaque siblings. Local declarations
+            // still shadow it, and no child scope is hoisted here.
+            let bindings = bindings_outside_retained_root(
+                &namespace_bindings(word_prefixes),
+                root,
+                word_prefixes,
+            )?;
+            if !bindings.is_empty() {
+                let mut record = BytesStart::new(std::str::from_utf8(ROOT_ATTRIBUTES_ELEMENT)?);
+                for (prefix, uri) in bindings {
+                    let name = if prefix.is_empty() {
+                        "xmlns".into()
+                    } else {
+                        format!("xmlns:{prefix}")
+                    };
+                    record.push_attribute((name.as_str(), uri.as_str()));
+                }
+                extra_xml.push((
+                    ROOT_ATTRIBUTES_POSITION,
+                    capture_standalone_event(Event::Empty(record))?,
+                ));
+            }
+        }
         Ok(CT_P {
             properties,
             runs,
@@ -19997,6 +20130,334 @@ mod tests {
         let output = serialized_paragraph(&paragraph);
         for retained in ["paragraph", "table", "row", "cell", "inline"] {
             assert!(output.contains(retained), "{output}");
+        }
+    }
+
+    #[test]
+    fn native_named_legacy_fields_keep_bookmark_axes_and_physical_markers() {
+        let cases = [
+            (
+                "FORMTEXT",
+                r#"<w:textInput><w:default w:val="keep"/></w:textInput>"#,
+                "now",
+                LegacyFormFieldValue::Text("now".into()),
+                Some(LegacyFormFieldValue::Text("keep".into())),
+                LegacyFormFieldValue::Text("changed".into()),
+            ),
+            (
+                "FORMCHECKBOX",
+                r#"<w:checkBox><w:sizeAuto/><w:default w:val="0"/><w:checked/></w:checkBox>"#,
+                "",
+                LegacyFormFieldValue::Checked(true),
+                Some(LegacyFormFieldValue::Checked(false)),
+                LegacyFormFieldValue::Checked(false),
+            ),
+            (
+                "FORMDROPDOWN",
+                r#"<w:ddList><w:listEntry w:val="one"/><w:listEntry w:val="two"/></w:ddList>"#,
+                "one",
+                LegacyFormFieldValue::SelectedIndex(0),
+                None,
+                LegacyFormFieldValue::SelectedIndex(1),
+            ),
+        ];
+        for (instruction, kind, display, current, default, changed) in cases {
+            let raw = format!(
+                concat!(
+                    r#"<w:sdt><w:sdtContent><w:r><w:t>lead</w:t></w:r></w:sdtContent></w:sdt>"#,
+                    r#"<w:del w:id="9" w:author="Ada"><w:r><w:delText>gone</w:delText></w:r></w:del>"#,
+                    r#"<w:r><w:t>before</w:t></w:r>"#,
+                    r#"<w:r><w:rPr><w:b/></w:rPr><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Legacy"/><w:enabled/><w:calcOnExit w:val="0"/>{kind}</w:ffData></w:fldChar></w:r>"#,
+                    r#"<w:bookmarkStart w:id="7" w:name="Legacy"/>"#,
+                    r#"<w:r><w:instrText> {instruction} </w:instrText></w:r><w:r><w:rPr><w:b/></w:rPr></w:r>"#,
+                    r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>{display}</w:t></w:r>"#,
+                    r#"<w:r><w:fldChar w:fldCharType="end"/></w:r><w:bookmarkEnd w:id="7"/>"#,
+                    r#"<w:r><w:t>after</w:t></w:r>"#,
+                ),
+                kind = kind,
+                instruction = instruction,
+                display = display
+            );
+            let mut paragraph = parse_paragraph(&raw);
+            assert_eq!(paragraph.runs.len(), 3, "{instruction}");
+            let check = |paragraph: &CT_P| {
+                assert_eq!(
+                    paragraph
+                        .bookmark_markers
+                        .iter()
+                        .map(BookmarkMarker::run_index)
+                        .collect::<Vec<_>>(),
+                    [1, 2]
+                );
+                assert_eq!(
+                    paragraph
+                        .bookmark_markers
+                        .iter()
+                        .map(BookmarkMarker::projected_run_index)
+                        .collect::<Vec<_>>(),
+                    [2, 3]
+                );
+                assert_eq!(
+                    paragraph
+                        .bookmark_markers
+                        .iter()
+                        .map(BookmarkMarker::tracked_run_index)
+                        .collect::<Vec<_>>(),
+                    [3, 4]
+                );
+                assert_eq!(paragraph.accepted_bookmark_runs().len(), 4);
+                let xml = serialized_paragraph(paragraph);
+                assert_eq!(xml.matches("<w:bookmarkStart ").count(), 1);
+                assert_eq!(xml.matches("<w:bookmarkEnd ").count(), 1);
+                assert!(
+                    xml.find("fldCharType=\"begin\"").unwrap()
+                        < xml.find("<w:bookmarkStart ").unwrap()
+                );
+                assert!(
+                    xml.find("fldCharType=\"end\"").unwrap() < xml.find("<w:bookmarkEnd ").unwrap()
+                );
+                xml
+            };
+            let RunContent::Field(field) = &mut paragraph.runs[1].content[0] else {
+                panic!("native named legacy field was not projected: {instruction}");
+            };
+            assert_eq!(field.legacy_form_value().unwrap(), Some(current));
+            assert_eq!(field.legacy_form_default_value().unwrap(), default);
+            check(&paragraph);
+            for _ in 0..2 {
+                let RunContent::Field(field) = &mut paragraph.runs[1].content[0] else {
+                    unreachable!()
+                };
+                field.set_legacy_form_value(changed.clone()).unwrap();
+                assert_eq!(field.legacy_form_value().unwrap(), Some(changed.clone()));
+                assert_eq!(field.legacy_form_default_value().unwrap(), default);
+                let xml = check(&paragraph);
+                let part = format!(
+                    r#"<w:document xmlns:w="{}"><w:body>{xml}</w:body></w:document>"#,
+                    crate::namespace::W_NS,
+                );
+                let reopened = crate::document::CT_Document::from_xml(part.as_bytes()).unwrap();
+                paragraph = reopened.body.paragraphs().next().unwrap().clone();
+            }
+        }
+    }
+
+    #[test]
+    fn aliased_native_legacy_bookmark_keeps_its_physical_start() {
+        let xml = format!(
+            r#"<w:p xmlns:w="{word}" xmlns:q="{word}"><q:r><q:fldChar q:fldCharType="begin"><q:ffData><q:name q:val="Alias"/><q:textInput><q:default q:val="keep"/></q:textInput></q:ffData></q:fldChar></q:r><q:bookmarkStart q:id="7" q:name="Alias"/><q:r><q:instrText> FORMTEXT </q:instrText></q:r><q:r><q:fldChar q:fldCharType="separate"/></q:r><q:r><q:t>now</q:t></q:r><q:r><q:fldChar q:fldCharType="end"/></q:r><q:bookmarkEnd q:id="7"/></w:p>"#,
+            word = crate::namespace::W_NS,
+        );
+        let xml = xml
+            .replacen("<w:p ", r#"<w:p xmlns:x="urn:outer" "#, 1)
+            .replacen(
+                "<q:r>",
+                r#"<w:hyperlink w:anchor="target" xmlns:x="urn:inner"><q:r>"#,
+                1,
+            )
+            .replace("<q:textInput>", "<x:keep/><q:textInput>")
+            .replace("</w:p>", "</w:hyperlink></w:p>");
+        let mut paragraph = CT_P::from_xml_fragment(xml.as_bytes()).unwrap();
+        assert_eq!(paragraph.runs.len(), 1);
+        let RunContent::Field(field) = &mut paragraph.runs[0].content[0] else {
+            panic!("aliased form")
+        };
+        field
+            .set_legacy_form_value(LegacyFormFieldValue::Text("changed".into()))
+            .unwrap();
+        let output = serialized_paragraph(&paragraph);
+        assert_eq!(output.matches("<q:bookmarkStart ").count(), 1);
+        assert_eq!(output.matches("<q:bookmarkEnd ").count(), 1);
+        assert!(
+            output.find("fldCharType=\"begin\"").unwrap()
+                < output.find("<q:bookmarkStart ").unwrap()
+        );
+        let part = format!(
+            r#"<w:document xmlns:w="{}"><w:body>{output}</w:body></w:document>"#,
+            crate::namespace::W_NS,
+        );
+        let document = crate::document::CT_Document::from_xml(part.as_bytes()).unwrap();
+        let reopened = document.body.paragraphs().next().unwrap();
+        let mut reader = quick_xml::NsReader::from_reader(part.as_bytes());
+        let mut markers = 0;
+        loop {
+            let (namespace, event) = reader.read_resolved_event().unwrap();
+            match event {
+                Event::Start(element) | Event::Empty(element)
+                    if matches!(
+                        element.name().as_ref(),
+                        b"q:bookmarkStart" | b"q:bookmarkEnd"
+                    ) =>
+                {
+                    assert!(
+                        matches!(namespace, quick_xml::name::ResolveResult::Bound(quick_xml::name::Namespace(uri)) if uri == crate::namespace::W_NS.as_bytes())
+                    );
+                    markers += 1;
+                }
+                Event::Start(element) | Event::Empty(element)
+                    if element.name().as_ref() == b"x:keep" =>
+                {
+                    assert!(
+                        matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == b"urn:inner")
+                    );
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        assert_eq!(markers, 2);
+        assert_eq!(
+            reopened
+                .bookmark_markers
+                .iter()
+                .map(BookmarkMarker::projected_run_index)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        let RunContent::Field(field) = &reopened.runs[0].content[0] else {
+            panic!("reopened aliased form")
+        };
+        assert_eq!(
+            field.legacy_form_value().unwrap(),
+            Some(LegacyFormFieldValue::Text("changed".into()))
+        );
+        assert_eq!(
+            field.legacy_form_default_value().unwrap(),
+            Some(LegacyFormFieldValue::Text("keep".into()))
+        );
+    }
+
+    #[test]
+    fn native_legacy_bookmark_frame_keeps_both_aliases_and_opaque_names() {
+        let xml = format!(
+            r#"<w:p xmlns:w="{word}" xmlns:q="{word}" xmlns:z="{word}" xmlns:x="urn:producer" xmlns="urn:opaque"><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Mixed"/><x:keep><opaque exact="yes"/></x:keep><w:textInput><w:default w:val="keep"/></w:textInput></w:ffData></w:fldChar></w:r><q:bookmarkStart q:id="7" q:name="Mixed"/><w:r><w:instrText> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>now</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><z:bookmarkEnd z:id="7"/></w:p>"#,
+            word = crate::namespace::W_NS,
+        );
+        let mut paragraph = CT_P::from_xml_fragment(xml.as_bytes()).unwrap();
+        assert_eq!(paragraph.runs.len(), 1);
+        let RunContent::Field(field) = &mut paragraph.runs[0].content[0] else {
+            panic!("mixed aliases")
+        };
+        field
+            .set_legacy_form_value(LegacyFormFieldValue::Text("changed".into()))
+            .unwrap();
+        let output = serialized_paragraph(&paragraph);
+        assert!(output.contains(r#"<x:keep><opaque exact="yes"/></x:keep>"#));
+        let part = format!(
+            r#"<w:document xmlns:w="{}"><w:body>{output}</w:body></w:document>"#,
+            crate::namespace::W_NS
+        );
+        let mut reader = NsReader::from_reader(part.as_bytes());
+        let mut found = Vec::new();
+        loop {
+            let (namespace, event) = reader.read_resolved_event().unwrap();
+            match event {
+                Event::Start(element) | Event::Empty(element) => {
+                    let wanted = match element.name().as_ref() {
+                        b"q:bookmarkStart" | b"z:bookmarkEnd" => Some(crate::namespace::W_NS),
+                        b"x:keep" => Some("urn:producer"),
+                        b"opaque" => Some("urn:opaque"),
+                        _ => None,
+                    };
+                    if let Some(wanted) = wanted {
+                        assert!(
+                            matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == wanted.as_bytes())
+                        );
+                        found.push(element.name().as_ref().to_vec());
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        assert_eq!(found.len(), 4);
+        let reopened = crate::document::CT_Document::from_xml(part.as_bytes()).unwrap();
+        let paragraph = reopened.body.paragraphs().next().unwrap();
+        assert_eq!(paragraph.runs.len(), 1);
+        assert_eq!(
+            paragraph
+                .bookmark_markers
+                .iter()
+                .map(BookmarkMarker::projected_run_index)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+    }
+
+    #[test]
+    fn native_legacy_bookmark_projection_declines_foreign_writer_prefixes() {
+        for prefix in ["w", "w14", "w15", "r", "mc", "wp"] {
+            let xml = format!(
+                r#"<q:p xmlns:q="{word}" xmlns:{prefix}="urn:producer"><q:r><q:fldChar q:fldCharType="begin"><q:ffData><q:name q:val="Foreign"/><q:textInput><q:default q:val="keep"/></q:textInput></q:ffData></q:fldChar></q:r><q:bookmarkStart q:id="7" q:name="Foreign"/><q:r><q:instrText> FORMTEXT </q:instrText></q:r><q:r><q:fldChar q:fldCharType="separate"/></q:r><q:r><q:t>now</q:t></q:r><q:r><q:fldChar q:fldCharType="end"/></q:r><q:bookmarkEnd q:id="7"/></q:p>"#,
+                word = crate::namespace::W_NS,
+            );
+            let paragraph = CT_P::from_xml_fragment(xml.as_bytes()).unwrap();
+            assert!(
+                !paragraph
+                    .runs
+                    .iter()
+                    .flat_map(|run| &run.content)
+                    .any(|content| matches!(content, RunContent::Field(_))),
+                "{prefix}"
+            );
+            assert_eq!(paragraph.bookmark_markers.len(), 2);
+        }
+    }
+
+    #[test]
+    fn partial_or_ambiguous_legacy_bookmarks_keep_the_untyped_source() {
+        let raw = concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Legacy"/><w:textInput><w:default w:val="keep"/></w:textInput></w:ffData></w:fldChar></w:r>"#,
+            r#"<w:bookmarkStart w:id="7" w:name="Legacy"/>"#,
+            r#"<w:r><w:instrText> FORMTEXT </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>now</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r><w:bookmarkEnd w:id="7"/>"#,
+            r#"<w:r><w:t>after</w:t></w:r>"#,
+        );
+        let start = r#"<w:bookmarkStart w:id="7" w:name="Legacy"/>"#;
+        let end = r#"<w:bookmarkEnd w:id="7"/>"#;
+        let cases = [
+            raw.replace(start, r#"<w:bookmarkStart w:id="7" w:name="Other"/>"#),
+            raw.replace(end, r#"<w:bookmarkEnd w:id="8"/>"#),
+            format!("{start}{raw}"),
+            raw.replace(start, "").replace("<w:r><w:t>now", &format!("{start}<w:r><w:t>now")),
+            format!("{}{end}", raw.replace(end, "")),
+            raw.replace("<w:r><w:t>now</w:t></w:r>", r#"<w:bookmarkStart w:id="8" w:name="part"/><w:r><w:t>now</w:t></w:r><w:bookmarkEnd w:id="8"/>"#),
+            raw.replacen("<w:r>", "<w:r><w:t>outside</w:t>", 1),
+            raw.replace(
+                r#"<w:fldChar w:fldCharType="end"/></w:r>"#,
+                r#"<w:fldChar w:fldCharType="end"/><w:t>outside</w:t></w:r>"#,
+            ),
+            raw.replace(
+                "<w:r><w:t>now</w:t></w:r>",
+                concat!(
+                    r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+                    r#"<w:r><w:instrText> DATE </w:instrText></w:r>"#,
+                    r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+                    r#"<w:r><w:t>now</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+                ),
+            ),
+        ];
+        for raw in cases {
+            let paragraph = parse_paragraph(&raw);
+            assert!(
+                !paragraph
+                    .runs
+                    .iter()
+                    .flat_map(|run| &run.content)
+                    .any(|content| matches!(content, RunContent::Field(_))),
+                "{raw}"
+            );
+            let xml = serialized_paragraph(&paragraph);
+            assert_eq!(
+                xml.matches("<w:bookmarkStart ").count(),
+                raw.matches("<w:bookmarkStart ").count()
+            );
+            assert_eq!(
+                xml.matches("<w:bookmarkEnd ").count(),
+                raw.matches("<w:bookmarkEnd ").count()
+            );
+            assert!(xml.contains(r#"<w:default w:val="keep"/>"#));
         }
     }
 
