@@ -102,8 +102,8 @@ impl PyRun {
             || paragraph_location(&self.path),
             |location| Ok(ParagraphLocation::Related(location.clone())),
         )?;
-        let location = paragraph
-            .native(candidate)
+        let location = document
+            .paragraph_route(&paragraph, Some((prepared, candidate)))
             .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         let (path, owner) = document.capture_prepared_owner(
             prepared,
@@ -360,7 +360,7 @@ impl PyRun {
             },
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(result)
     }
 
@@ -430,7 +430,7 @@ impl PyRun {
             crate::document::WordPublication::Conservative,
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(())
     }
 
@@ -458,7 +458,7 @@ impl PyRun {
             crate::document::WordPublication::Conservative,
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(())
     }
 
@@ -477,7 +477,7 @@ impl PyRun {
             crate::document::WordPublication::Conservative,
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(())
     }
 

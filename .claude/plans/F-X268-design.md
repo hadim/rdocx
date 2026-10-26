@@ -2,6 +2,8 @@
 
 **Status**: approved
 **Amendment note**: Codex root approved the refresh4 mechanism 8 contract on 2026-10-25 after the user answered Q24. The baseline is `d1f42516eb3747442fe4304a6331eab946dc9a0e`. The scope approved through refresh3 stays approved. F-X268 stays unclaimed. F-290 keeps its existing approved implementation and review. No gate pass is claimed.
+
+**Current implementation readiness**: In progress, owner codex on work/f-x268-codex. All eight mechanisms are implemented. The unclaimed and not-started statements in the dated approval snapshots describe those earlier checkpoints. Local combined native, Python and release fallback checks pass. Whole-feature pass 1 identified D1 context-transition runtime coverage and D2 case-equivalent physical-part fallback. Both are addressed in one remediation batch. The two actual native binding regressions and ten affected installed Python cases pass. Independent whole-feature pass 2 is clean with zero defects, smells and nitpicks. Scoped local completion is ready for the final sprint acceptance integration checkpoint. Final release performance, memory, Word, hash and full-union riders remain pending.
 **Sprint**: S95.4
 **Size**: L
 **Depends on**: F-X266, F-X267
@@ -89,7 +91,7 @@ Every fast path has a checked fallback. The fallback returns the same bytes and 
 
 ### 8. Scoped replacement proof and child canonicalization
 
-This is the approved 2026-10-25 refresh4 extension. It is the eighth serial mechanism on the same F-X268 story. It is not a claim and implementation has not started. It does not add a ninth story, a stable public API, a dependency, or a module. Mechanisms 1 through 7 stay as approved.
+This is the approved 2026-10-25 refresh4 extension. It is the eighth serial mechanism on the same F-X268 story. Implementation is in progress as recorded above. It does not add a ninth story, a stable public API, a dependency, or a module. Mechanisms 1 through 7 stay as approved.
 
 Scoped replacement proof uses physical body children. Picture canonicalization and relationship renames use those children and the tail. The old whole paths stay the authoritative fallback.
 
@@ -155,6 +157,8 @@ Preflight order on the four `try_` methods, all before mutation: the insert inde
 The four existing infallible methods keep their signatures and their legacy behavior. Q21 exempts them from Q19. They are not described as checked. The four new methods are the checked Rust API. Python `add_paragraph`, `insert_paragraph`, `add_table`, `insert_table`, `Paragraph.insert_paragraph_before`, `add_heading`, and `add_page_break` use the checked path. Their public signatures, error family, primitive checks, and index validation stay. The early atomic refusal is the labelled behavior commit. It is not the performance commit.
 
 ### Hidden native helpers
+
+The internal shared validation method is `#[doc(hidden)] pub fn preflight_checked_paragraph(&self, index: Option<usize>, text: &str) -> Result<()>`. Its actual consumers are the four checked Rust methods and Python paragraph character-error ordering. Python checks the native policy before its existing splice or fallback publisher. This adds no stable Python export and does not replace the source-preserving route.
 
 Adopt a donor helper only where the Python binding or `Document` is an actual consumer. The declarations in the PR417 and PR418 block below are methods, not free functions. The later refresh2 block adds the free function `take_reopen_work`. None of these is a stable Python, WASM, or CLI export. `BodyItemContext` is the whole fact source for piece reuse, and a caller must hold that proof. No forwarding wrapper, trait, generic, module, crate, feature flag, or dependency is added. No new trait or generic is planned. The repository rule that needs two implementers or two instantiations applies to traits and generics, not to this method. `CT_Body::paragraph_count_before` is the concrete count. `Document::paragraph_count_before_content` is one call chain into that method, not a second independent consumer. A public cross-crate count helper needs the actual `Document` consumer. It does not need an arbitrary second consumer.
 
@@ -341,9 +345,9 @@ F-290 is integrated at `79047bf193bcd9dfb229a0b37a93d979dc0997a7`. Root whole-fe
 |---|---|---|---|---|---|
 | A1 | Q19 and Q21. Four new Rust methods and every named Python delegate. An old document whose save already fails. A valid document. Bad index, non-XML text, zero columns | Refusal is atomic. Model, bytes, and handles stay at the old unsavable state. The old four methods stay legacy. Valid bytes match the checked source. Errors keep the existing family | Native `Document` and Python document, paragraph, heading, and page break | `checked_body_insertions_refuse_unsavable_namespace_owners_atomically`, `test_checked_body_insertions_preserve_owners_on_namespace_refusal` | Local behavior commit. Not the performance commit |
 | A2 | New PR415 unrouted facade position and nested namespace proof. Then an owner, local namespace, text, or typed field edit | First proof matches the checked source. The stale proof is not reused. Accepted aliases and unknown bytes stay. No incidental namespace byte change | Facade and fragment writer | `word_owner_piece_sources_match_the_full_physical_inventory` | Local regression |
-| A3 | Piece inventory against the full inventory for body, nested cell, text box, comment, note, shared header, duplicate part, invalid relationship, identical blocks, and a direct returned owner. The publishers named in the consumer map, including direct candidate assignment and property callbacks. Direct-body span bytes and block reuse | Equal owners, parents, routes, projections, read facts, order, births, generations, and retired set. Span bytes match existing `to_xml`. Unsupported shape falls back before publish. Held, fresh, native, save, and reopen agree. Ignored serialization facts do not count as proof | Binding and native readers | `word_owner_piece_sources_match_the_full_physical_inventory`, `word_owner_pieces_follow_splices_and_fact_changing_publishers`, `body_span_serialization_matches_existing_xml`, `main_body_block_reuse_preserves_physical_owners_and_publication`, `test_body_block_reuse_preserves_forms_settings_and_live_owners` | Local regression on the integrated ancestor that contains those publishers |
+| A3 | Piece inventory against the full inventory for body, nested cell, text box, comment, note, shared header, duplicate part, invalid relationship, identical blocks, and a direct returned owner. The publishers named in the consumer map, including direct candidate assignment and property callbacks. Direct-body span bytes and block reuse | Equal owners, parents, routes, projections, read facts, order, births, generations, and retired set. Span bytes match existing `to_xml`. Unsupported shape falls back before publish. Held, fresh, native, save, and reopen agree. Ignored serialization facts do not count as proof | Binding and native readers | `word_owner_piece_sources_match_the_full_physical_inventory`, `word_owner_pieces_follow_splices_and_fact_changing_publishers`, `body_spans_match_existing_to_xml_on_current_fixtures`, `main_body_block_reuse_preserves_physical_owners_and_publication`, `test_body_block_reuse_preserves_forms_settings_and_live_owners`, `fx268_changed_existing_context_uses_full_inventory_before_publication`, `fx268_case_equivalent_story_parts_use_the_full_inventory`, `test_word_piece_shared_header_identity_uses_opc_part_names` | Local regression on the integrated ancestor that contains those publishers |
 | A4 | Splices at head, middle, and tail, plus a missing item. A later edit. No-op and refusal | Route and later edit stay inside the work bound. Conservative births and retirement match the old path. Dead owners stay dead. No-op and refusal preserve bytes, revisions, and handles | Python publication | `word_owner_pieces_follow_splices_and_fact_changing_publishers`, `test_word_owner_pieces_follow_edits_splices_and_related_owners` | Local regression |
-| A5 | Opened cache and `saves_as` for new, opened, clone, source-edited, relationship, media, signature, and embedded packages. Main unchanged with a changed related part. Eligible in-memory reopen and a document with no trusted opened-byte baseline | Exact bytes and native error order, or the ZIP fallback. Related changes are checked. Identifier order matches. A warm edit does not reparse an unchanged main part. A document qualifies for in-memory reread only after a trusted opened-byte baseline exists | OPC and binding | `unchanged_main_staging_preserves_save_bytes_and_error_order`, `unchanged_main_staging_reuse_counts_actual_work`, `test_unchanged_main_staging_keeps_forms_and_settings_authoritative`, `in_memory_reopen_matches_zip_bytes_errors_and_identifier_order`, `test_in_memory_reopen_keeps_related_parts_and_read_limits` | Local regression |
+| A5 | Opened cache and `saves_as` for new, opened, clone, source-edited, relationship, media, signature, and embedded packages. Main unchanged with a changed related part. Eligible in-memory reopen and a document with no trusted opened-byte baseline | Exact bytes and native error order, or the ZIP fallback. Related changes are checked. Identifier order matches. A warm edit does not reparse an unchanged main part. A document qualifies for in-memory reread only after a trusted opened-byte baseline exists | OPC and binding | `unchanged_main_staging_preserves_save_bytes_and_error_order`, `unchanged_main_staging_reuse_counts_actual_work`, `test_unchanged_main_staging_keeps_forms_and_settings_authoritative`, `in_memory_reopen_matches_zip_for_new_flat_limited_and_hook_paths`, `in_memory_reopen_keeps_related_part_errors_and_drops_stale_main_checks`, `identifier_scan_replays_exact_bytes_categories_and_old_error_order`, `parsed_none_reopen_grows_zip_parse_and_identifier_bytes`, `test_header_story_text_reopen_counts_the_changed_header_part`. Native read-limit coverage is in the first of those four native tests. Python evidence uses the existing `Document.set_story_text` API only. Forms and settings evidence stays the planned `test_unchanged_main_staging_keeps_forms_and_settings_authoritative` | Local regression |
 | A6 | The 79 targeted calls and the full 252-call catalogue on a fresh release install | The 79 meet the Q20 flat bound. The 252 results and residuals are reported without xfail hiding. The original 407 gate still holds for its three calls. The four extra PR419 test-map keys are not silently added | Installed Python 3.12 | Named in the performance section. Not a worker run | Final union |
 | A7 | Q18 and Q22 memory workload | Actual per-layer and combined RSS samples at the named points. No summed RSS fabrication. No 68 MiB pass line and no hard cap | Fresh release process | Named in the memory section | Final union |
 | A8 | Installed Python, strict mypy, stubtest, rustdoc, publish archive, WASM, hash, and the prior seven stories | Prior Word, SSIM, risk, and hash gates stay mandatory and stay unrun here. Q19 compares the previous save failure, model, and handles. Two failing `to_bytes` calls are not atomicity proof. Final own-union fidelity is mandatory. The PR419 donor log is not that pass | Final union | None in the worker | Final union |
@@ -427,8 +431,18 @@ Native groups go in the existing `crates/rdocx/tests/integration_test.rs`:
 - `word_owner_pieces_follow_splices_and_fact_changing_publishers`
 - `unchanged_main_staging_preserves_save_bytes_and_error_order`
 - `unchanged_main_staging_reuse_counts_actual_work`
-- `in_memory_reopen_matches_zip_bytes_errors_and_identifier_order`
-- `body_span_serialization_matches_existing_xml`
+- `in_memory_reopen_matches_zip_for_new_flat_limited_and_hook_paths`
+- `in_memory_reopen_keeps_related_part_errors_and_drops_stale_main_checks`
+- `identifier_scan_replays_exact_bytes_categories_and_old_error_order`
+- `parsed_none_reopen_grows_zip_parse_and_identifier_bytes`
+- `body_spans_match_existing_to_xml_on_current_fixtures`
+- `main_body_layout_raw_blocks_match_the_old_scanner`
+- `main_body_layout_whole_walk_and_fallback_counts`
+- `main_body_layout_mixed_owners_follow_old_scans`
+- `main_body_layout_serialized_facts_and_frame_use_scanner_bytes`
+- `main_body_layout_reopen_reuses_unchanged_children`
+- `main_body_layout_multiple_body_owners_use_full_reader`
+- `main_body_layout_coverage_steps_scale_with_children`
 - `main_body_block_reuse_preserves_physical_owners_and_publication`
 - `body_lookup_work_is_linear_at_250_and_1000`
 - `staging_reads_only_the_main_part_blocks_an_edit_changes`
@@ -439,12 +453,13 @@ Python groups go in the existing `crates/rdocx-py/tests/test_core.py`:
 - `test_word_owner_pieces_follow_edits_splices_and_related_owners`
 - `test_unchanged_main_staging_keeps_forms_and_settings_authoritative`
 - `test_unchanged_main_staging_counts_actual_work`
-- `test_in_memory_reopen_keeps_related_parts_and_read_limits`
+- `test_header_story_text_reopen_counts_the_changed_header_part`
+- `test_fx268_body_locations_keep_physical_slots`
 - `test_body_block_reuse_preserves_forms_settings_and_live_owners`
 - `test_staging_writes_and_reads_only_the_main_part_blocks_an_edit_changes`
 - `test_a_fragment_imports_into_a_main_part_whose_root_has_another_word_prefix`
 
-The original five native groups and four Python groups stay. A9 timings run only in the final union. The new named tests cover a forced fallback, a cache-off build, an invalidated context, and an actual RED on the old provenance. Inline unit helpers already in `document.rs` stay allowed.
+The implemented mechanism 6 span case is inline in `crates/rdocx-oxml/src/document.rs`. The implemented address cases are inline in `crates/rdocx/src/document.rs`. `test_fx268_body_locations_keep_physical_slots` is that binding node. It does not replace `test_body_block_reuse_preserves_forms_settings_and_live_owners`, `body_lookup_work_is_linear_at_250_and_1000`, or the A3 and A5 forms, settings, provenance and composition criteria. Those broader composition checks are separate from address coverage. `main_body_block_reuse_preserves_physical_owners_and_publication` is the implemented broader A3 composition proof. The seven address cases do not replace it. The last two staging-counter slots are populated by mechanism 7. The broader native and Python A3/A5 compositions and A10 controls are implemented. Their current execution and remaining acceptance are recorded in the progress notes. The original five native groups and four Python groups stay. A9 timings run only in the final union. The new named tests cover a forced fallback, a cache-off build, an invalidated context, and an actual RED on the old provenance. Inline unit helpers already in `document.rs` stay allowed.
 
 `crates/rdocx-py/tests/typing_smoke.py` changes only if a public Python signature changes. None is expected. The native test calls all four new `try_` methods. Each local batch names one RED case on the old unsavable mutation, one GREEN case on a valid document, and one negative control. Worker verification is scoped `cargo fmt` and clippy on the changed crates. It is not the full suite, Word, the hash harness, or the performance rider.
 
@@ -522,17 +537,17 @@ Expected unchanged for existing fixtures touched by F-X268. Do not re-record a b
 
 ## Implementation checklist
 
-- [ ] Add the four `try_` methods without changing the old four signatures.
-- [ ] Teach the named Python delegates to refuse before mutation.
-- [ ] Keep the qualified splice and namespace proof on current facts.
-- [ ] Add the hidden piece and staging helpers with the captured signatures.
-- [ ] Count real walk, parse, and serialization work.
-- [ ] Land the behavior commit separately from the performance commit.
-- [ ] Leave the 79-call, A9, 252-call, memory, Word, and hash riders for the final union.
-- [ ] Add the eligible in-memory reopen and the direct-body span helpers with the captured signatures.
-- [ ] Keep `content_control.rs` to the indexed lookup and `collect_control_ids`, composed with the final F-289 provider.
-- [ ] Add the hidden frame and item helpers, `holds_field`, and the six-slot staging counter.
-- [ ] Add the mechanism 8 helpers with the captured signatures, the A10 additions, and A11. The contract is approved. The story is not claimed and this box is not done.
+- [x] Add the four `try_` methods without changing the old four signatures.
+- [x] Teach the named Python delegates to refuse before mutation.
+- [x] Keep the qualified splice and namespace proof on current facts.
+- [x] Add the hidden piece and staging helpers with the captured signatures.
+- [x] Count real walk, parse, and serialization work.
+- [x] Land the behavior commit separately from the performance commit.
+- [x] Leave the 79-call, A9, 252-call, memory, Word, and hash riders for the final union.
+- [x] Add the eligible in-memory reopen and the direct-body span helpers with the captured signatures.
+- [x] Keep `content_control.rs` to the indexed lookup and `collect_control_ids`, composed with the final F-289 provider.
+- [x] Add the hidden frame and item helpers, `holds_field`, and the six-slot staging counter.
+- [x] Add the mechanism 8 helpers with the captured signatures, the A10 additions, and A11. The contract is approved. Local execution and independent review apply as recorded in the current readiness and progress notes. Final sprint acceptance remains pending.
 
 ## Open questions
 

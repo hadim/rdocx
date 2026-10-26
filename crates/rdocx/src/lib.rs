@@ -65,22 +65,27 @@ pub use content_control::{
     ContentControlSpec, ContentControlTypePayload, FormFieldAssignment, FormFieldRule,
     FormFieldTarget, FormFieldValue, FormResetValue, FormValidationIssue,
 };
+#[cfg(debug_assertions)]
+pub use document::take_reopen_work;
+#[cfg(debug_assertions)]
+pub use document::take_staging_work;
 pub use document::{
-    AccessibilityIssue, BodyContentRef, BodyItemRef, ContentFragment, ContentLocation,
-    ContentMeasurement, Document, DocumentFragment, DrawingHorizontalAlignment,
-    DrawingHorizontalRelativeFrom, DrawingVerticalAlignment, DrawingVerticalRelativeFrom,
-    DrawingWrap, EmbeddedFont, EmbeddedFontKind, FontDefinition, FontEmbeddingLicense,
-    FragmentConflictPolicy, HeaderFooterKind, ImageInfo, ImageWatermarkOptions, IssueSeverity,
-    LinkInfo, ListLevel, ListLevelRestart, ListLevelSuffix, ListNumberFormat, NoteFamily,
-    NoteNumberFormat, NotePlacement, NotePolicy, NoteRestart, NoteSpecialRecord,
-    NumberedOutlineNode, NumberingDefinition, NumberingDefinitionLevel, NumberingFormat,
-    NumberingInstance, NumberingLevel, NumberingLevelOverride, OutlineNode, PictureAnchor,
-    PictureCrop, PictureOccurrence, PictureOptions, RenderOptions, ReplacementCountMismatch,
-    Section, SectionRef, SectionStory, StoryError, StoryId, StoryItemKind, StoryItemRef,
-    StoryItemSnapshot, StoryKind, StoryText, StoryTextItem, TextBoxDirection, TextBoxOptions,
-    TextDiagnostic, TextReport, TextWatermarkOptions, UnsupportedXmlRef, ValidationFinding,
-    ValidationReport, ValidationSeverity, WordCreationProfile, WordPackageClass, derive_font_key,
-    take_direct_fragment_bytes, validate_document_bytes, validate_document_file,
+    AccessibilityIssue, BodyContentRef, BodyItemContext, BodyItemOwners, BodyItemRef,
+    ContentFragment, ContentLocation, ContentMeasurement, Document, DocumentFragment,
+    DrawingHorizontalAlignment, DrawingHorizontalRelativeFrom, DrawingVerticalAlignment,
+    DrawingVerticalRelativeFrom, DrawingWrap, EmbeddedFont, EmbeddedFontKind, FontDefinition,
+    FontEmbeddingLicense, FragmentConflictPolicy, HeaderFooterKind, ImageInfo,
+    ImageWatermarkOptions, IssueSeverity, LinkInfo, ListLevel, ListLevelRestart, ListLevelSuffix,
+    ListNumberFormat, NoteFamily, NoteNumberFormat, NotePlacement, NotePolicy, NoteRestart,
+    NoteSpecialRecord, NumberedOutlineNode, NumberingDefinition, NumberingDefinitionLevel,
+    NumberingFormat, NumberingInstance, NumberingLevel, NumberingLevelOverride, OutlineNode,
+    PictureAnchor, PictureCrop, PictureOccurrence, PictureOptions, RenderOptions,
+    ReplacementCountMismatch, Section, SectionRef, SectionStory, StoryError, StoryId,
+    StoryItemKind, StoryItemRef, StoryItemSnapshot, StoryKind, StoryText, StoryTextItem,
+    TextBoxDirection, TextBoxOptions, TextDiagnostic, TextReport, TextWatermarkOptions,
+    UnsupportedXmlRef, ValidationFinding, ValidationReport, ValidationSeverity,
+    WordCreationProfile, WordPackageClass, derive_font_key, take_direct_fragment_bytes,
+    validate_document_bytes, validate_document_file,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,

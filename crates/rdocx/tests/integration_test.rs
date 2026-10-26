@@ -35800,3 +35800,208 @@ fn author_mail_merge_mappings_use_word_slots() {
         "duplicate empty dynamicAddress is a duplicate"
     );
 }
+
+fn fx268_document_with_xml(xml: &str) -> Document {
+    let seed = Document::new().to_bytes().unwrap();
+    let mut package = OpcPackage::from_reader(std::io::Cursor::new(seed)).unwrap();
+    let part = package.main_document_part().unwrap();
+    package.set_part(&part, xml.as_bytes().to_vec());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(bytes.get_ref()).unwrap()
+}
+
+#[test]
+fn checked_body_insertions_refuse_unsavable_namespace_owners_atomically() {
+    let mut valid = Document::new();
+    valid.try_add_paragraph("kept").unwrap();
+    valid.try_add_table(0, 0).unwrap();
+    valid.try_insert_paragraph(1, "mid").unwrap();
+    valid.try_insert_table(1, 0, 1).unwrap();
+    assert_eq!(valid.content_count(), 4);
+    assert!(valid.to_bytes().is_ok());
+
+    let before_bad = valid.content_count();
+    match valid.try_insert_paragraph(9, "\u{0001}") {
+        Err(rdocx::Error::Other(message)) => {
+            assert!(message.contains("content index"), "{message}")
+        }
+        Err(error) => panic!("invalid index is Other before XML: {error}"),
+        Ok(_) => panic!("invalid index was accepted"),
+    }
+    match valid.try_add_paragraph("\u{0001}") {
+        Err(rdocx::Error::Oxml(error)) => {
+            let message = error.to_string();
+            assert!(message.contains("paragraph text"), "{message}");
+        }
+        Err(error) => panic!("invalid text is Oxml: {error}"),
+        Ok(_) => panic!("invalid text was accepted"),
+    }
+    match valid.try_insert_table(9, 0, 0) {
+        Err(rdocx::Error::Other(_)) => {}
+        Err(error) => panic!("invalid table index is Other: {error}"),
+        Ok(_) => panic!("invalid table index was accepted"),
+    }
+    assert_eq!(valid.content_count(), before_bad);
+
+    let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let mut opened = fx268_document_with_xml(&format!(
+        r#"<w:document xmlns:w="{word}" xmlns="urn:producer"><w:body><w:p/><w:p/><w:p/><producer/></w:body></w:document>"#
+    ));
+    let readonly = opened
+        .to_bytes()
+        .expect("read-only save of the shadowed fixture");
+    let mut legacy = opened;
+    legacy.add_paragraph("legacy");
+    assert!(legacy.content_count() > 3);
+    let legacy_save = legacy.to_bytes().unwrap_err().to_string();
+    assert!(
+        legacy_save.contains("shadowed `default` namespace"),
+        "{legacy_save}"
+    );
+    let counts = (
+        legacy.content_count(),
+        legacy.paragraph_count(),
+        legacy.table_count(),
+    );
+    let text = legacy.text();
+    let paragraph_xml = legacy
+        .direct_body_paragraph_xml(0)
+        .unwrap()
+        .expect("direct body paragraph bytes");
+    let refused = [
+        legacy.try_add_paragraph("nope").map(|_| ()),
+        legacy.try_insert_paragraph(0, "nope").map(|_| ()),
+        legacy.try_add_table(1, 1).map(|_| ()),
+        legacy.try_insert_table(0, 1, 1).map(|_| ()),
+    ];
+    for result in refused {
+        let error = result.unwrap_err().to_string();
+        assert_eq!(error, legacy_save);
+    }
+    assert_eq!(
+        (
+            legacy.content_count(),
+            legacy.paragraph_count(),
+            legacy.table_count()
+        ),
+        counts
+    );
+    assert_eq!(legacy.text(), text);
+    assert_eq!(
+        legacy
+            .direct_body_paragraph_xml(0)
+            .unwrap()
+            .expect("direct body paragraph bytes"),
+        paragraph_xml
+    );
+    match legacy.try_insert_paragraph(9, "\u{0001}") {
+        Err(rdocx::Error::Other(message)) => {
+            assert!(message.contains("content index"), "{message}")
+        }
+        Err(error) => panic!("hazard index is Other before XML and namespace: {error}"),
+        Ok(_) => panic!("hazard invalid index was accepted"),
+    }
+    match legacy.try_insert_paragraph(0, "\u{0001}") {
+        Err(rdocx::Error::Oxml(error)) => {
+            let message = error.to_string();
+            assert!(message.contains("paragraph text"), "{message}");
+        }
+        Err(error) => panic!("hazard XML is Oxml before namespace: {error}"),
+        Ok(_) => panic!("hazard invalid text was accepted"),
+    }
+    match legacy.try_insert_table(9, 0, 0) {
+        Err(rdocx::Error::Other(_)) => {}
+        Err(error) => panic!("hazard table index is Other: {error}"),
+        Ok(_) => panic!("hazard table index was accepted"),
+    }
+    assert_eq!(
+        (
+            legacy.content_count(),
+            legacy.paragraph_count(),
+            legacy.table_count()
+        ),
+        counts
+    );
+    assert_eq!(legacy.text(), text);
+    assert_eq!(
+        legacy
+            .direct_body_paragraph_xml(0)
+            .unwrap()
+            .expect("direct body paragraph bytes"),
+        paragraph_xml
+    );
+    assert_eq!(legacy.to_bytes().unwrap_err().to_string(), legacy_save);
+    assert!(!readonly.is_empty());
+
+    let sdt = |text: &str| {
+        format!(
+            r#"<w:sdt xmlns:x="urn:x"><w:sdtPr><x:meta/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+        )
+    };
+    let mut distinct = fx268_document_with_xml(&format!(
+        r#"<w:document xmlns:w="{word}"><w:body><w:p><w:r><w:t>keep</w:t></w:r></w:p>{}{}</w:body></w:document>"#,
+        sdt("left"),
+        sdt("right")
+    ));
+    assert_eq!(
+        distinct.unsavable_body_edit(),
+        None,
+        "distinct sdt text still has a namespace-owner proof"
+    );
+    distinct
+        .paragraph_mut(2)
+        .expect("right paragraph")
+        .set_text("left")
+        .unwrap();
+    let collided = distinct.to_bytes().unwrap_err().to_string();
+    assert!(
+        collided.contains("namespace"),
+        "collided owners must fail save: {collided}"
+    );
+    let collided_counts = (
+        distinct.content_count(),
+        distinct.paragraph_count(),
+        distinct.table_count(),
+    );
+    let collided_text = distinct.text();
+    let collided_paragraph = distinct
+        .direct_body_paragraph_xml(0)
+        .unwrap()
+        .expect("plain keep paragraph");
+    match distinct.try_add_paragraph("blocked") {
+        Err(error) => assert_eq!(error.to_string(), collided),
+        Ok(_) => panic!("stale savable cache accepted a checked paragraph"),
+    }
+    assert_eq!(
+        (
+            distinct.content_count(),
+            distinct.paragraph_count(),
+            distinct.table_count()
+        ),
+        collided_counts
+    );
+    assert_eq!(distinct.text(), collided_text);
+    assert_eq!(
+        distinct
+            .direct_body_paragraph_xml(0)
+            .unwrap()
+            .expect("plain keep paragraph"),
+        collided_paragraph
+    );
+    distinct
+        .paragraph_mut(2)
+        .expect("right paragraph")
+        .set_text("right")
+        .unwrap();
+    distinct.try_add_paragraph("after-restore").unwrap();
+    assert!(distinct.to_bytes().is_ok());
+
+    let mut still_legacy = fx268_document_with_xml(&format!(
+        r#"<w:document xmlns:w="{word}" xmlns="urn:producer"><w:body><w:p/><producer/></w:body></w:document>"#
+    ));
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = still_legacy.insert_paragraph(4, "legacy-panic");
+    }));
+    assert!(panicked.is_err(), "legacy insert still panics past the end");
+}

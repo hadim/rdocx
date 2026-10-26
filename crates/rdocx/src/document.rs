@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::ops::Range;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -25,8 +25,8 @@ use quick_xml::reader::NsReader;
 use rdocx_oxml::MathProperties;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent, StorySdtOwner};
 use rdocx_oxml::document::{
-    BodyContent, CT_Column, CT_Columns, CT_DocGrid, CT_Document, CT_LineNumber, CT_NoteProperties,
-    CT_PageBorders, CT_PaperSource, CT_SectPr,
+    BodyContent, CT_Body, CT_Column, CT_Columns, CT_DocGrid, CT_Document, CT_LineNumber,
+    CT_NoteProperties, CT_PageBorders, CT_PaperSource, CT_SectPr,
 };
 use rdocx_oxml::drawing::{
     AnchorAlignH, AnchorAlignV, CT_Anchor, CT_Drawing, CT_Inline, ST_RelativeFromH,
@@ -1470,11 +1470,11 @@ impl DocumentFragment {
                 "document fragment ranges must share one checked story owner".to_owned(),
             ));
         }
-        let (source, owner) = candidate.fragment_story_source_and_owner(&start.story)?;
+        let (source, owner, _) = candidate.fragment_story_source_owner_and_owners(&start.story)?;
         let source_xml = source.xml.into_owned();
         let (owner, _, start_index, item_count) =
             fragment_content_boundary(&source_xml, &owner, start)?;
-        let (_, checked_owner) = candidate.fragment_story_source_and_owner(&end.story)?;
+        let (_, checked_owner, _) = candidate.fragment_story_source_owner_and_owners(&end.story)?;
         let (end_owner, _, end_index, _) =
             fragment_content_boundary(&source_xml, &checked_owner, end)?;
         if owner.full != end_owner.full {
@@ -1694,6 +1694,52 @@ impl StoryItemSnapshot {
     /// Return the exact or namespace-complete XML captured for this item.
     pub fn xml(&self) -> &[u8] {
         &self.xml
+    }
+}
+
+/// The checked Word owners of one body item, which
+/// [`Document::body_item_owners`] reads from a main part whose body holds
+/// only that item.
+#[doc(hidden)]
+#[allow(clippy::type_complexity)] // The four owned families and the item's index projections.
+pub struct BodyItemOwners {
+    /// The four families of [`Document::story_owner_snapshots`].
+    pub snapshots: Vec<StoryItemSnapshot>,
+    pub cells: Vec<(ContentLocation, usize, usize, StoryId)>,
+    pub paragraphs: Vec<(ContentLocation, Vec<u8>)>,
+    pub links: Vec<(ContentLocation, LinkInfo)>,
+    /// The table cell story owners of the item.
+    pub cell_stories: usize,
+    /// The text box story owners of the item.
+    pub text_boxes: usize,
+    /// The body story path that [`Document::paragraph_story_locations`]
+    /// gives each paragraph of the item, in [`Document::paragraphs`] order.
+    pub paragraph_routes: Vec<Option<Vec<usize>>>,
+    /// The tables of the item that [`Document::tables`] counts.
+    pub tables: usize,
+    /// [`Document::cell_paragraph_story_locations`] for those tables, keyed
+    /// by table within the item, and whether it routed every table cell
+    /// owner of the item, or `None` where it fails.
+    pub cell_paragraphs: Option<(HashMap<(usize, usize, usize), Vec<ContentLocation>>, bool)>,
+    /// Whether the item bytes contain `fldSimple` or `fldChar`.
+    /// A positive result is conservative. Equal field values are not reuse proof.
+    pub holds_field: bool,
+}
+
+/// What [`Document::body_item_owners`] reads besides the item, as
+/// [`Document::body_item_context`] gives it.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BodyItemContext {
+    part_name: String,
+    root: [Vec<(String, String)>; 5],
+    plain_local_edit_blocked: bool,
+}
+
+impl BodyItemContext {
+    /// The main part, which holds the body story.
+    pub fn part_name(&self) -> &str {
+        &self.part_name
     }
 }
 
@@ -2888,7 +2934,7 @@ fn namespace_prefix(declaration_name: &str) -> String {
         .to_owned()
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct NestedNamespaceOwner {
     source: Range<usize>,
     local_name: String,
@@ -2900,7 +2946,7 @@ struct NestedNamespaceOwner {
     same_namespace_structural_alternate: bool,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct ModeledOwnerSpan {
     local_name: String,
     start: usize,
@@ -2976,6 +3022,23 @@ fn is_modeled_word_child(parent: Option<&[u8]>, local_name: &[u8]) -> bool {
 }
 
 fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
+    modeled_owner_piece_spans(xml, None)?
+        .ok_or_else(|| Error::Other("modeled namespace owner piece was not eligible".to_owned()))
+}
+
+/// The modeled owner spans of `xml`.
+///
+/// `child` is a body-child slice of a head-child-tail wrapper. `None` means
+/// the slice is ineligible: a word body starts or ends inside it, or the
+/// namespace scope and `inside_body` flag do not return to the values they
+/// had when the slice began. That is the old parser state. A story-owner
+/// scan can still see one editable body around an opaque inner body, so this
+/// check is stricter than that scan. `Err` is a parser failure. The caller
+/// keeps the whole scanner and does not publish an empty span list.
+fn modeled_owner_piece_spans(
+    xml: &[u8],
+    child: Option<std::ops::Range<usize>>,
+) -> Result<Option<Vec<ModeledOwnerSpan>>> {
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
@@ -2984,8 +3047,34 @@ fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
     let mut owner_stack = Vec::new();
     let mut scope_stack: Vec<Vec<(String, String)>> = Vec::new();
     let mut spans: Vec<ModeledOwnerSpan> = Vec::new();
+    let mut saw_entry = child.is_none();
+    let mut saw_exit = child.is_none();
+    let mut entry_depth = 0usize;
+    let mut entry_scopes = 0usize;
+    let mut entry_inside = false;
+    let mut ineligible = false;
     loop {
         let start = reader.buffer_position() as usize;
+        if let Some(child) = &child {
+            if !saw_entry && start >= child.start {
+                saw_entry = true;
+                entry_depth = depth;
+                entry_scopes = scope_stack.len();
+                entry_inside = inside_body;
+                if !inside_body {
+                    ineligible = true;
+                }
+            }
+            if saw_entry && !saw_exit && start >= child.end {
+                saw_exit = true;
+                if depth != entry_depth
+                    || scope_stack.len() != entry_scopes
+                    || inside_body != entry_inside
+                {
+                    ineligible = true;
+                }
+            }
+        }
         let (namespace, event) = reader
             .read_resolved_event_into(&mut buffer)
             .map_err(|error| Error::Other(format!("invalid nested namespace scope: {error}")))?;
@@ -2994,9 +3083,15 @@ fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
             ResolveResult::Bound(Namespace(uri)) if uri == WORD_NAMESPACE.as_bytes()
         );
         let end = reader.buffer_position() as usize;
+        let in_child = child
+            .as_ref()
+            .is_some_and(|child| start >= child.start && start < child.end);
         match event {
             Event::Start(element) => {
                 let local_name = element.local_name();
+                if in_child && is_word && local_name.as_ref() == b"body" {
+                    ineligible = true;
+                }
                 let inherited = scope_stack.last().map(Vec::as_slice).unwrap_or_default();
                 let mut bindings = inherited.to_vec();
                 apply_namespace_declarations(&element, &mut bindings)?;
@@ -3023,6 +3118,9 @@ fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
             }
             Event::Empty(element) => {
                 let local_name = element.local_name();
+                if in_child && is_word && local_name.as_ref() == b"body" {
+                    ineligible = true;
+                }
                 let inherited = scope_stack.last().map(Vec::as_slice).unwrap_or_default();
                 let mut bindings = inherited.to_vec();
                 apply_namespace_declarations(&element, &mut bindings)?;
@@ -3041,6 +3139,9 @@ fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
                 }
             }
             Event::End(element) => {
+                if in_child && is_word && matches_local_name(element.name().as_ref(), b"body") {
+                    ineligible = true;
+                }
                 depth = depth.saturating_sub(1);
                 scope_stack.pop();
                 if owner_stack
@@ -3060,7 +3161,10 @@ fn modeled_owner_spans(xml: &[u8]) -> Result<Vec<ModeledOwnerSpan>> {
                         "unterminated modeled namespace owner".to_owned(),
                     ));
                 }
-                return Ok(spans);
+                if child.is_some() && (!saw_entry || !saw_exit || ineligible) {
+                    return Ok(None);
+                }
+                return Ok(Some(spans));
             }
             _ => {}
         }
@@ -3773,9 +3877,20 @@ fn marker_multiset_matches(
 }
 
 fn nested_modeled_namespace_owners(xml: &[u8]) -> Result<Vec<NestedNamespaceOwner>> {
+    note_staging_work(|work| work.scanned += xml.len());
     let spans = modeled_owner_spans(xml)?;
+    namespace_owners_from_spans(xml, &spans)
+}
+
+/// Owner rows for spans already read from `xml`. The caller notes the scan.
+/// A whole part uses [`nested_modeled_namespace_owners`]. A frame uses
+/// [`note_frame_namespace_scan`] and does not add those bytes to `scanned`.
+fn namespace_owners_from_spans(
+    xml: &[u8],
+    spans: &[ModeledOwnerSpan],
+) -> Result<Vec<NestedNamespaceOwner>> {
     let mut owners = Vec::new();
-    for span in &spans {
+    for span in spans {
         let mut declarations = span.declarations.clone();
         if declarations.is_empty() {
             continue;
@@ -3897,33 +4012,90 @@ fn unsafe_nested_namespace_prefix(owners: &[NestedNamespaceOwner]) -> Option<Str
     })
 }
 
-/// Retained nested namespace owners need staged identity reconciliation even
-/// for benign aliases. Local edits cannot refresh their source snapshots. A
-/// scan error also keeps the edit on the checked staged path.
-fn plain_local_edit_is_blocked(
+fn shadowed_namespace_diagnostic(prefix: &str) -> String {
+    format!("cannot serialize a modified document with a shadowed `{prefix}` namespace")
+}
+
+/// One scan of `document_xml` decides both a plain local edit and the
+/// diagnostic known before a replay. `nested_namespace_owners` is that scan
+/// for this exact part. A root or body shadow blocks and records the
+/// diagnostic. No owners leaves the edit local and records no diagnostic.
+/// Compatible owners block and leave the diagnostic uncomputed. An unsafe
+/// nested owner blocks and records the diagnostic. A failed scan blocks and
+/// records no diagnostic.
+fn plain_local_edit_facts(
     root_declarations: &[(String, String)],
     body_declarations: &[(String, String)],
     document_xml: &[u8],
-) -> bool {
-    if unsafe_serializer_namespace_prefix(root_declarations, body_declarations, Some(document_xml))
-        .is_some()
+    nested_namespace_owners: &OnceLock<Option<Vec<NestedNamespaceOwner>>>,
+) -> (bool, OnceLock<Option<String>>) {
+    if let Some(prefix) =
+        unsafe_serializer_namespace_prefix(root_declarations, body_declarations, Some(document_xml))
     {
-        return true;
+        return (
+            true,
+            OnceLock::from(Some(shadowed_namespace_diagnostic(&prefix))),
+        );
     }
-    match nested_modeled_namespace_owners(document_xml) {
-        Ok(owners) => !owners.is_empty(),
-        Err(_) => true,
+    match nested_namespace_owners.get_or_init(|| nested_modeled_namespace_owners(document_xml).ok())
+    {
+        Some(owners) if owners.is_empty() => (false, OnceLock::from(None)),
+        Some(owners) => match unsafe_nested_namespace_prefix(owners) {
+            Some(prefix) => (
+                true,
+                OnceLock::from(Some(shadowed_namespace_diagnostic(&prefix))),
+            ),
+            None => (true, OnceLock::new()),
+        },
+        None => (true, OnceLock::from(None)),
     }
+}
+
+fn replay_unsavable_body_edit(document_xml: &[u8], document: &CT_Document) -> Option<String> {
+    let owners = match nested_modeled_namespace_owners(document_xml) {
+        Ok(owners) if !owners.is_empty() => owners,
+        _ => return None,
+    };
+    if let Some(prefix) = unsafe_nested_namespace_prefix(&owners) {
+        return Some(shadowed_namespace_diagnostic(&prefix));
+    }
+    document
+        .to_xml()
+        .map_err(Error::from)
+        .and_then(|xml| replay_nested_namespace_declarations(&xml, &owners))
+        .err()
+        .map(|error| error.to_string())
 }
 
 fn replay_nested_namespace_declarations(
     xml: &[u8],
     owners: &[NestedNamespaceOwner],
 ) -> Result<Vec<u8>> {
+    replay_nested_namespace_declarations_with_spans(xml, owners, None)
+}
+
+/// Replays `owners` onto `xml`.
+///
+/// `spans` replaces the whole modeled-owner scan only when the caller proved
+/// it is the full candidate list for these exact bytes. `None` is the
+/// authoritative scan. An empty owner list returns `xml` and does not turn a
+/// missing span list into an empty one. Marker and ambiguity checks stay here.
+fn replay_nested_namespace_declarations_with_spans(
+    xml: &[u8],
+    owners: &[NestedNamespaceOwner],
+    spans: Option<&[ModeledOwnerSpan]>,
+) -> Result<Vec<u8>> {
     if owners.is_empty() {
         return Ok(xml.to_vec());
     }
-    let spans = modeled_owner_spans(xml)?;
+    let scanned;
+    let spans = match spans {
+        Some(spans) => spans,
+        None => {
+            scanned = modeled_owner_spans(xml)?;
+            &scanned
+        }
+    };
     let mut targets: Vec<(usize, &NestedNamespaceOwner)> = Vec::new();
     for owner in owners {
         let mut candidates = Vec::new();
@@ -4812,7 +4984,7 @@ fn empty_section_properties() -> CT_SectPr {
 /// Each set represents one OOXML scope. References are deliberately excluded
 /// from definition sets, so a bookmark end, comment anchor, or numbering use
 /// does not collide with the definition it names.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DocumentIdentifiers {
     relationship_ids: HashMap<String, HashSet<String>>,
     bookmark_ids: HashSet<i32>,
@@ -4850,10 +5022,39 @@ pub(crate) struct DocumentIdentifiers {
     /// not inserted yet, or an id returned to a caller. Staging keeps each id
     /// until the main story references it or the id leaves the registry.
     pending_relationship_ids: HashMap<String, HashSet<String>>,
+    /// Definitions read from each identifier part. A later scan replays a
+    /// part only when its bytes and categories still match. This is the
+    /// current scan, not a history of earlier ones.
+    scanned_parts: Arc<HashMap<String, ScannedIdentifierPart>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IdentifierDefinition {
+    Drawing(u32),
+    Bookmark(i32),
+    Comment(i32),
+    AbstractNumbering(u32),
+    NumberingInstance(u32),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScannedIdentifierPart {
+    bytes: Arc<Vec<u8>>,
+    categories: HashSet<IdentifierXmlCategory>,
+    /// Definitions before a read error, or `None` when the part was not XML.
+    definitions: Option<Vec<IdentifierDefinition>>,
 }
 
 impl DocumentIdentifiers {
     fn scan(package: &OpcPackage) -> Result<Self> {
+        Self::scan_reusing(package, None, None)
+    }
+
+    fn scan_reusing(
+        package: &OpcPackage,
+        earlier: Option<&Self>,
+        hinted_main: Option<&ScannedIdentifierPart>,
+    ) -> Result<Self> {
         let mut identifiers = Self {
             relationship_ids: HashMap::new(),
             bookmark_ids: HashSet::new(),
@@ -4898,6 +5099,7 @@ impl DocumentIdentifiers {
             authored_bundle_relationship_ids: HashMap::new(),
             provisional_relationship_ids: HashMap::new(),
             pending_relationship_ids: HashMap::new(),
+            scanned_parts: Arc::default(),
         };
         identifiers.part_names.extend(
             package
@@ -4966,13 +5168,50 @@ impl DocumentIdentifiers {
 
         let mut parts = package.parts.iter().collect::<Vec<_>>();
         parts.sort_by_key(|(part_name, _)| part_name.as_str());
+        let mut scanned_parts = HashMap::new();
         for (part_name, bytes) in parts {
-            if let Some(categories) = identity_parts.get(&part_name_identity(part_name))
-                && identifier_xml_is_well_formed(bytes)
-            {
+            let Some(categories) = identity_parts.get(&part_name_identity(part_name)) else {
+                continue;
+            };
+            let reused = earlier
+                .and_then(|earlier| earlier.scanned_parts.get(part_name))
+                .filter(|scanned| {
+                    scanned.categories == *categories
+                        && (Arc::ptr_eq(&scanned.bytes, bytes)
+                            || scanned.bytes.as_slice() == bytes.as_slice())
+                });
+            let hinted = hinted_main.filter(|hint| {
+                hint.categories == *categories
+                    && (Arc::ptr_eq(&hint.bytes, bytes)
+                        || hint.bytes.as_slice() == bytes.as_slice())
+            });
+            let (definitions, unreadable) = if let Some(hint) = hinted {
+                (hint.definitions.clone(), None)
+            } else {
+                match reused {
+                    Some(scanned) => (scanned.definitions.clone(), None),
+                    None => {
+                        note_reopen_work(|work| work.scanned += bytes.len());
+                        if identifier_xml_is_well_formed(bytes) {
+                            let mut definitions = Vec::new();
+                            let unreadable =
+                                Self::scan_xml_definitions(bytes, categories, &mut definitions)
+                                    .err();
+                            (Some(definitions), unreadable)
+                        } else {
+                            (None, None)
+                        }
+                    }
+                }
+            };
+            if let Some(definitions) = &definitions {
                 let mut part_drawing_ids = HashMap::new();
-                identifiers
-                    .scan_xml_definitions(bytes, categories, &mut part_drawing_ids)
+                definitions
+                    .iter()
+                    .try_for_each(|definition| {
+                        identifiers.define(*definition, &mut part_drawing_ids)
+                    })
+                    .and_then(|()| unreadable.map_or(Ok(()), Err))
                     .map_err(|error| {
                         Error::Other(format!(
                             "cannot scan identifiers in XML part {part_name}: {error}"
@@ -4990,7 +5229,16 @@ impl DocumentIdentifiers {
                 }
                 identifiers.drawing_ids.extend(part_drawing_ids.into_keys());
             }
+            scanned_parts.insert(
+                part_name.clone(),
+                ScannedIdentifierPart {
+                    bytes: Arc::clone(bytes),
+                    categories: categories.clone(),
+                    definitions,
+                },
+            );
         }
+        identifiers.scanned_parts = Arc::new(scanned_parts);
         identifiers.preserved_relationship_ids = identifiers.relationship_ids.clone();
         identifiers.preserved_bookmark_ids = identifiers.bookmark_ids.clone();
         identifiers.preserved_comment_ids = identifiers.comment_ids.clone();
@@ -5030,11 +5278,43 @@ impl DocumentIdentifiers {
         Ok(())
     }
 
-    fn scan_xml_definitions(
+    fn define(
         &mut self,
+        definition: IdentifierDefinition,
+        part_drawing_ids: &mut HashMap<u32, usize>,
+    ) -> Result<()> {
+        match definition {
+            IdentifierDefinition::Drawing(value) => {
+                *part_drawing_ids.entry(value).or_default() += 1;
+            }
+            IdentifierDefinition::Bookmark(value) => {
+                Self::insert_unique(&mut self.bookmark_ids, value, "bookmark")?;
+            }
+            IdentifierDefinition::Comment(value) => {
+                Self::insert_unique(&mut self.comment_ids, value, "comment")?;
+            }
+            IdentifierDefinition::AbstractNumbering(value) => {
+                Self::insert_unique(
+                    &mut self.abstract_numbering_ids,
+                    value,
+                    "abstract numbering",
+                )?;
+            }
+            IdentifierDefinition::NumberingInstance(value) => {
+                Self::insert_unique(
+                    &mut self.numbering_instance_ids,
+                    value,
+                    "numbering instance",
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn scan_xml_definitions(
         xml: &[u8],
         categories: &HashSet<IdentifierXmlCategory>,
-        part_drawing_ids: &mut HashMap<u32, usize>,
+        definitions: &mut Vec<IdentifierDefinition>,
     ) -> Result<()> {
         let mut reader = NsReader::from_reader(xml);
         let mut buffer = Vec::new();
@@ -5069,8 +5349,10 @@ impl DocumentIdentifiers {
                     } else {
                         None
                     };
-                    if let Some(category) = category.filter(|value| categories.contains(value)) {
-                        self.scan_xml_id(&reader, element, category, part_drawing_ids)?;
+                    if let Some(category) = category.filter(|value| categories.contains(value))
+                        && let Some(definition) = Self::scan_xml_id(&reader, element, category)?
+                    {
+                        definitions.push(definition);
                     }
                 }
                 Event::Eof => return Ok(()),
@@ -5081,12 +5363,10 @@ impl DocumentIdentifiers {
     }
 
     fn scan_xml_id(
-        &mut self,
         reader: &NsReader<&[u8]>,
         element: &BytesStart<'_>,
         category: IdentifierXmlCategory,
-        part_drawing_ids: &mut HashMap<u32, usize>,
-    ) -> Result<()> {
+    ) -> Result<Option<IdentifierDefinition>> {
         for attribute in element.attributes() {
             let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
             let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
@@ -5113,49 +5393,41 @@ impl DocumentIdentifiers {
             let value = attribute
                 .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
                 .map_err(|error| Error::Other(error.to_string()))?;
-            match category {
+            let definition = match category {
                 IdentifierXmlCategory::Drawing => {
                     let value = value
                         .parse::<u32>()
                         .map_err(|_| Error::Other(format!("invalid drawing id {value}")))?;
-                    *part_drawing_ids.entry(value).or_default() += 1;
+                    IdentifierDefinition::Drawing(value)
                 }
                 IdentifierXmlCategory::Bookmark => {
                     let value = value
                         .parse::<i32>()
                         .map_err(|_| Error::Other(format!("invalid bookmark id {value}")))?;
-                    Self::insert_unique(&mut self.bookmark_ids, value, "bookmark")?;
+                    IdentifierDefinition::Bookmark(value)
                 }
                 IdentifierXmlCategory::Comment => {
                     let value = value
                         .parse::<i32>()
                         .map_err(|_| Error::Other(format!("invalid comment id {value}")))?;
-                    Self::insert_unique(&mut self.comment_ids, value, "comment")?;
+                    IdentifierDefinition::Comment(value)
                 }
                 IdentifierXmlCategory::AbstractNumbering => {
                     let value = value.parse::<u32>().map_err(|_| {
                         Error::Other(format!("invalid abstract numbering id {value}"))
                     })?;
-                    Self::insert_unique(
-                        &mut self.abstract_numbering_ids,
-                        value,
-                        "abstract numbering",
-                    )?;
+                    IdentifierDefinition::AbstractNumbering(value)
                 }
                 IdentifierXmlCategory::NumberingInstance => {
                     let value = value.parse::<u32>().map_err(|_| {
                         Error::Other(format!("invalid numbering instance id {value}"))
                     })?;
-                    Self::insert_unique(
-                        &mut self.numbering_instance_ids,
-                        value,
-                        "numbering instance",
-                    )?;
+                    IdentifierDefinition::NumberingInstance(value)
                 }
-            }
-            break;
+            };
+            return Ok(Some(definition));
         }
-        Ok(())
+        Ok(None)
     }
 
     /// Refuse a `wp:docPr/@id` occurrence that a staged edit added to an id
@@ -5757,6 +6029,106 @@ fn intersect_relationship_registry(
         .collect()
 }
 
+fn read_child_canonical_facts(
+    xml: &[u8],
+    child_start: usize,
+    child_end: usize,
+    frame: &CanonicalFrameProof,
+) -> Option<CanonicalChildFacts> {
+    if child_start > child_end || child_end > xml.len() {
+        return None;
+    }
+    let child = child_start..child_end;
+    note_canonical_fragment(xml.len());
+    let bound =
+        xml_relationship_ids_in_collection_range(xml, &frame.body_bindings, Some(child.clone()))
+            .ok()?;
+    let plain = if frame.body_bindings.is_empty() {
+        bound.clone()
+    } else {
+        note_canonical_fragment(xml.len());
+        xml_relationship_ids_in_collection_range(xml, &[], Some(child)).ok()?
+    };
+    note_canonical_fragment(xml.len());
+    let (mut drawings, error) = drawing_occurrences(xml);
+    if error.is_some() {
+        return None;
+    }
+    for drawing in &mut drawings {
+        if let Some((_, span)) = &mut drawing.doc_pr {
+            if span.start < child_start || span.end > child_end || span.start > span.end {
+                return None;
+            }
+            *span = span.start - child_start..span.end - child_start;
+        }
+    }
+    note_canonical_fragment(xml.len());
+    let drawing_ids = drawing_ids_in_xml(xml).ok()?;
+    Some(CanonicalChildFacts {
+        root_declarations: frame.root_declarations.clone(),
+        body_declarations: frame.body_declarations.clone(),
+        body_bindings: frame.body_bindings.clone(),
+        head: Arc::clone(&frame.head),
+        tail: Arc::clone(&frame.tail),
+        bound_relationship_ids: bound,
+        plain_relationship_ids: plain,
+        drawings,
+        drawing_ids,
+    })
+}
+
+/// Drawing facts on a frame stay on the whole scanner. A relationship id does
+/// not. The note is the scan that actually runs.
+fn frame_drawings_are_absent(xml: &[u8]) -> bool {
+    note_canonical_fragment(xml.len());
+    let (drawings, error) = drawing_occurrences(xml);
+    if error.is_some() || !drawings.is_empty() {
+        return false;
+    }
+    note_canonical_fragment(xml.len());
+    drawing_ids_in_xml(xml)
+        .ok()
+        .is_some_and(|ids| ids.is_empty())
+}
+
+/// First-seen relationship ids of `shell`, split at `head_len`.
+///
+/// The shell scan is the old validator. The head scan uses that same function
+/// and the same bindings. Head ids must be that shell result's prefix, and the
+/// tail is the remaining suffix. A head-scan error or a prefix mismatch
+/// declines. It does not publish a second error.
+fn split_relationship_ids_at_head(
+    shell: &[u8],
+    head_len: usize,
+    bindings: &[(String, String)],
+) -> Option<(Vec<String>, Vec<String>)> {
+    let head = shell.get(..head_len)?;
+    note_canonical_fragment(shell.len());
+    let shell_ids = xml_relationship_ids_in_order_with_bindings(shell, bindings).ok()?;
+    note_canonical_fragment(head.len());
+    let head_ids = xml_relationship_ids_in_order_with_bindings(head, bindings).ok()?;
+    let tail_start = head_ids.len();
+    if shell_ids.get(..tail_start) != Some(head_ids.as_slice()) {
+        return None;
+    }
+    let tail_len = shell_ids.len() - tail_start;
+    let tail_ids = shell_ids[tail_start..tail_start + tail_len].to_vec();
+    Some((head_ids, tail_ids))
+}
+
+fn scan_identifier_definitions(
+    xml: &[u8],
+    categories: &HashSet<IdentifierXmlCategory>,
+) -> Option<Vec<IdentifierDefinition>> {
+    if !identifier_xml_is_well_formed(xml) {
+        return None;
+    }
+    let mut definitions = Vec::new();
+    DocumentIdentifiers::scan_xml_definitions(xml, categories, &mut definitions)
+        .ok()
+        .map(|()| definitions)
+}
+
 fn identifier_xml_is_well_formed(xml: &[u8]) -> bool {
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
@@ -5769,7 +6141,7 @@ fn identifier_xml_is_well_formed(xml: &[u8]) -> bool {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum IdentifierXmlCategory {
     Drawing,
     Bookmark,
@@ -5939,13 +6311,35 @@ fn xml_relationship_ids_in_order_with_bindings(
     xml: &[u8],
     inherited_bindings: &[(String, String)],
 ) -> Result<Vec<String>> {
+    xml_relationship_ids_in_collection_range(xml, inherited_bindings, None)
+}
+
+/// First-seen relationship ids. `collect` `None` is the whole part.
+///
+/// Every relationship attribute is parsed and decoded before the range filter.
+/// A malformed attribute outside `collect` is still an error. Only an attribute
+/// whose event lies entirely inside the range is collected.
+fn xml_relationship_ids_in_collection_range(
+    xml: &[u8],
+    inherited_bindings: &[(String, String)],
+    collect: Option<Range<usize>>,
+) -> Result<Vec<String>> {
+    if let Some(range) = collect.as_ref()
+        && (range.start > range.end || range.end > xml.len())
+    {
+        return Err(Error::Other(
+            "invalid story XML: relationship collection range".to_owned(),
+        ));
+    }
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
     let mut ids = Vec::new();
     loop {
+        let before = reader.buffer_position() as usize;
         let (_, event) = reader
             .read_resolved_event_into(&mut buffer)
             .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+        let after = reader.buffer_position() as usize;
         match event {
             Event::Start(element) | Event::Empty(element) => {
                 for attribute in element.attributes() {
@@ -5976,7 +6370,10 @@ fn xml_relationship_ids_in_order_with_bindings(
                                 Error::Other(format!("invalid story relationship id: {error}"))
                             })?
                             .into_owned();
-                        if !ids.contains(&id) {
+                        let inside = collect
+                            .as_ref()
+                            .is_none_or(|range| before >= range.start && after <= range.end);
+                        if inside && !ids.contains(&id) {
                             ids.push(id);
                         }
                     }
@@ -6045,32 +6442,39 @@ fn rewrite_authored_doc_pr_ids(xml: &[u8], occupied: &mut HashSet<u32>) -> Resul
     Ok(updated)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AuthoredMainDrawing {
     Modeled,
     Nested,
 }
 
-fn authored_drawing_slots_in_source_order(
-    xml: &[u8],
-    modeled_ids: &[u32],
-    nested_image_relationship_ids: &HashSet<String>,
-) -> Result<Vec<(AuthoredMainDrawing, Range<usize>, u32)>> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DrawingOccurrence {
+    doc_pr: Option<(u32, Range<usize>)>,
+    embeds: Vec<String>,
+}
+
+/// Outermost drawings in order. A scan error keeps the drawings completed
+/// before it and does not turn that error into an empty success.
+fn drawing_occurrences(xml: &[u8]) -> (Vec<DrawingOccurrence>, Option<Error>) {
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
-    let mut modeled_remaining = HashMap::new();
-    for id in modeled_ids {
-        *modeled_remaining.entry(*id).or_insert(0usize) += 1;
-    }
+    let mut drawings = Vec::new();
     let mut depth = 0usize;
     let mut current_depth = None;
     let mut current_doc_pr = None;
-    let mut current_is_nested = false;
-    let mut ordered = Vec::new();
+    let mut current_embeds = Vec::new();
     loop {
         let before = reader.buffer_position() as usize;
-        let event = reader
-            .read_event_into(&mut buffer)
-            .map_err(|error| Error::Other(format!("invalid story XML: {error}")))?;
+        let event = match reader.read_event_into(&mut buffer) {
+            Ok(event) => event,
+            Err(error) => {
+                return (
+                    drawings,
+                    Some(Error::Other(format!("invalid story XML: {error}"))),
+                );
+            }
+        };
         let after = reader.buffer_position() as usize;
         match event {
             Event::Start(ref element) | Event::Empty(ref element) => {
@@ -6088,48 +6492,68 @@ fn authored_drawing_slots_in_source_order(
                 if current_depth.is_some() {
                     if word_drawing && local.as_ref() == b"docPr" {
                         for attribute in element.attributes() {
-                            let attribute = attribute.map_err(|error| {
-                                Error::Other(format!("invalid story XML: {error}"))
-                            })?;
+                            let attribute = match attribute {
+                                Ok(attribute) => attribute,
+                                Err(error) => {
+                                    return (
+                                        drawings,
+                                        Some(Error::Other(format!("invalid story XML: {error}"))),
+                                    );
+                                }
+                            };
                             let (namespace, local) =
                                 reader.resolver().resolve_attribute(attribute.key);
                             if matches!(namespace, ResolveResult::Unbound)
                                 && local.as_ref() == b"id"
                             {
-                                let id = attribute
+                                let id = match attribute
                                     .decoded_and_normalized_value(
                                         XmlVersion::Implicit1_0,
                                         reader.decoder(),
                                     )
                                     .map_err(|error| {
                                         Error::Other(format!("invalid story drawing id: {error}"))
-                                    })?
-                                    .parse::<u32>()
-                                    .map_err(|_| {
-                                        Error::Other("invalid story drawing id".to_owned())
-                                    })?;
-                                let (start, end) = story_attribute_value_span(
+                                    })
+                                    .and_then(|id| {
+                                        id.parse::<u32>().map_err(|_| {
+                                            Error::Other("invalid story drawing id".to_owned())
+                                        })
+                                    }) {
+                                    Ok(id) => id,
+                                    Err(error) => return (drawings, Some(error)),
+                                };
+                                let Some((start, end)) = story_attribute_value_span(
                                     &xml[before..after],
                                     attribute.key.as_ref(),
-                                )
-                                .ok_or_else(|| {
-                                    Error::Other("story drawing id source was not found".to_owned())
-                                })?;
+                                ) else {
+                                    return (
+                                        drawings,
+                                        Some(Error::Other(
+                                            "story drawing id source was not found".to_owned(),
+                                        )),
+                                    );
+                                };
                                 current_doc_pr = Some((id, before + start..before + end));
                             }
                         }
                     }
                     if drawing && local.as_ref() == b"blip" {
                         for attribute in element.attributes() {
-                            let attribute = attribute.map_err(|error| {
-                                Error::Other(format!("invalid story XML: {error}"))
-                            })?;
+                            let attribute = match attribute {
+                                Ok(attribute) => attribute,
+                                Err(error) => {
+                                    return (
+                                        drawings,
+                                        Some(Error::Other(format!("invalid story XML: {error}"))),
+                                    );
+                                }
+                            };
                             let (namespace, local) =
                                 reader.resolver().resolve_attribute(attribute.key);
                             if matches!(namespace, ResolveResult::Bound(value) if value.as_ref() == drawing_ns::R.as_bytes())
                                 && local.as_ref() == b"embed"
                             {
-                                let id = attribute
+                                let id = match attribute
                                     .decoded_and_normalized_value(
                                         XmlVersion::Implicit1_0,
                                         reader.decoder(),
@@ -6138,10 +6562,11 @@ fn authored_drawing_slots_in_source_order(
                                         Error::Other(format!(
                                             "invalid story relationship id: {error}"
                                         ))
-                                    })?;
-                                if nested_image_relationship_ids.contains(id.as_ref()) {
-                                    current_is_nested = true;
-                                }
+                                    }) {
+                                    Ok(id) => id.into_owned(),
+                                    Err(error) => return (drawings, Some(error)),
+                                };
+                                current_embeds.push(id);
                             }
                         }
                     }
@@ -6159,30 +6584,57 @@ fn authored_drawing_slots_in_source_order(
                     && current_depth == Some(depth)
                 {
                     current_depth = None;
-                    let Some((id, span)) = current_doc_pr.take() else {
-                        if current_is_nested {
-                            return Err(Error::Other(
-                                "authored picture has no wp:docPr identity".to_owned(),
-                            ));
-                        }
-                        buffer.clear();
-                        continue;
-                    };
-                    if current_is_nested {
-                        ordered.push((AuthoredMainDrawing::Nested, span, id));
-                    } else if let Some(remaining) = modeled_remaining.get_mut(&id)
-                        && *remaining > 0
-                    {
-                        *remaining -= 1;
-                        ordered.push((AuthoredMainDrawing::Modeled, span, id));
-                    }
-                    current_is_nested = false;
+                    drawings.push(DrawingOccurrence {
+                        doc_pr: current_doc_pr.take(),
+                        embeds: std::mem::take(&mut current_embeds),
+                    });
                 }
             }
-            Event::Eof => break,
+            Event::Eof => return (drawings, None),
             _ => {}
         }
         buffer.clear();
+    }
+}
+
+type AuthoredDrawingSlot = (AuthoredMainDrawing, Range<usize>, u32);
+type AuthoredDrawingSlots = Vec<AuthoredDrawingSlot>;
+
+fn select_authored_drawing_slots(
+    drawings: &[DrawingOccurrence],
+    error: Option<Error>,
+    modeled_ids: &[u32],
+    nested_image_relationship_ids: &HashSet<String>,
+) -> Result<AuthoredDrawingSlots> {
+    let mut modeled_remaining = HashMap::new();
+    for id in modeled_ids {
+        *modeled_remaining.entry(*id).or_insert(0usize) += 1;
+    }
+    let mut ordered = Vec::new();
+    for drawing in drawings {
+        let nested = drawing
+            .embeds
+            .iter()
+            .any(|id| nested_image_relationship_ids.contains(id));
+        let Some((id, span)) = drawing.doc_pr.clone() else {
+            if nested {
+                return Err(Error::Other(
+                    "authored picture has no wp:docPr identity".to_owned(),
+                ));
+            }
+            continue;
+        };
+        if nested {
+            ordered.push((AuthoredMainDrawing::Nested, span, id));
+        } else if let Some(remaining) = modeled_remaining.get_mut(&id)
+            && *remaining > 0
+        {
+            *remaining -= 1;
+            ordered.push((AuthoredMainDrawing::Modeled, span, id));
+        }
+    }
+    if let Some(error) = error {
+        return Err(error);
     }
     if modeled_remaining.values().any(|remaining| *remaining != 0) {
         return Err(Error::Other(
@@ -6190,6 +6642,15 @@ fn authored_drawing_slots_in_source_order(
         ));
     }
     Ok(ordered)
+}
+
+fn authored_drawing_slots_in_source_order(
+    xml: &[u8],
+    modeled_ids: &[u32],
+    nested_image_relationship_ids: &HashSet<String>,
+) -> Result<AuthoredDrawingSlots> {
+    let (drawings, error) = drawing_occurrences(xml);
+    select_authored_drawing_slots(&drawings, error, modeled_ids, nested_image_relationship_ids)
 }
 
 fn drawing_ids_in_xml(xml: &[u8]) -> Result<HashSet<u32>> {
@@ -6234,6 +6695,134 @@ fn drawing_ids_in_xml(xml: &[u8]) -> Result<HashSet<u32>> {
         }
         buffer.clear();
     }
+}
+
+#[cfg(any(test, debug_assertions))]
+thread_local! {
+    /// Forces the whole-input canonical scanners. Production release stays off.
+    /// Debug oracles and reference tests, including release tests, turn it on.
+    static CANONICAL_BLOCK_PROOF_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn block_proofs_enabled() -> bool {
+    #[cfg(any(test, debug_assertions))]
+    {
+        !CANONICAL_BLOCK_PROOF_OFF.with(|cell| cell.get())
+    }
+    #[cfg(not(any(test, debug_assertions)))]
+    {
+        true
+    }
+}
+
+fn offered_canonical_blocks(blocks: Option<&MainPartBlocks>) -> Option<&MainPartBlocks> {
+    block_proofs_enabled().then_some(blocks).flatten()
+}
+
+/// Restores the previous switch on return and on unwind.
+#[cfg(any(test, debug_assertions))]
+struct CanonicalBlockProofOff {
+    previous: bool,
+}
+
+#[cfg(any(test, debug_assertions))]
+impl CanonicalBlockProofOff {
+    fn enter() -> Self {
+        Self {
+            previous: CANONICAL_BLOCK_PROOF_OFF.with(|cell| cell.replace(true)),
+        }
+    }
+}
+
+#[cfg(any(test, debug_assertions))]
+impl Drop for CanonicalBlockProofOff {
+    fn drop(&mut self) {
+        CANONICAL_BLOCK_PROOF_OFF.with(|cell| cell.set(self.previous));
+    }
+}
+
+/// Replayed bytes stay authoritative. Block proof is used only when it is the
+/// same byte string.
+fn relationship_xml_from_replayed(
+    replayed: Vec<u8>,
+    blocked: Result<(Vec<u8>, Option<MainPartBlocks>)>,
+) -> (Vec<u8>, Option<MainPartBlocks>) {
+    match blocked {
+        Ok((xml, Some(record))) if xml == replayed => (replayed, Some(record)),
+        _ => (replayed, None),
+    }
+}
+
+fn relationship_ids_by_blocks(
+    xml: &[u8],
+    blocks: Option<&MainPartBlocks>,
+    bindings: &[(String, String)],
+) -> Result<Vec<String>> {
+    let blocks = offered_canonical_blocks(blocks);
+    if let Some(ids) = blocks.and_then(|blocks| blocks.proved_relationship_ids(xml, bindings)) {
+        #[cfg(debug_assertions)]
+        without_staging_work(|| {
+            let scanned = xml_relationship_ids_in_order_with_bindings(xml, bindings).ok();
+            assert_eq!(
+                scanned.as_deref(),
+                Some(ids.as_slice()),
+                "relationship proof disagrees with a whole scan"
+            );
+        });
+        return Ok(ids);
+    }
+    note_staging_work(|work| work.canonicalized += xml.len());
+    xml_relationship_ids_in_order_with_bindings(xml, bindings)
+}
+
+fn authored_drawing_slots_by_blocks(
+    xml: &[u8],
+    blocks: Option<&MainPartBlocks>,
+    modeled_ids: &[u32],
+    nested_image_relationship_ids: &HashSet<String>,
+) -> Result<AuthoredDrawingSlots> {
+    let blocks = offered_canonical_blocks(blocks);
+    if let Some(slots) = blocks.and_then(|blocks| {
+        blocks.proved_drawing_slots(xml, modeled_ids, nested_image_relationship_ids)
+    }) {
+        #[cfg(debug_assertions)]
+        without_staging_work(|| {
+            let scanned = authored_drawing_slots_in_source_order(
+                xml,
+                modeled_ids,
+                nested_image_relationship_ids,
+            );
+            let shown = |result: &Result<AuthoredDrawingSlots>| match result {
+                Ok(slots) => format!("{slots:?}"),
+                Err(error) => error.to_string(),
+            };
+            assert_eq!(
+                shown(&slots),
+                shown(&scanned),
+                "drawing-slot proof disagrees with a whole scan"
+            );
+        });
+        return slots;
+    }
+    note_staging_work(|work| work.canonicalized += xml.len());
+    authored_drawing_slots_in_source_order(xml, modeled_ids, nested_image_relationship_ids)
+}
+
+fn drawing_ids_by_blocks(xml: &[u8], blocks: Option<&MainPartBlocks>) -> Option<HashSet<u32>> {
+    let blocks = offered_canonical_blocks(blocks);
+    if let Some(ids) = blocks.and_then(|blocks| blocks.proved_drawing_ids(xml)) {
+        #[cfg(debug_assertions)]
+        without_staging_work(|| {
+            assert_eq!(
+                drawing_ids_in_xml(xml).ok().as_ref(),
+                Some(&ids),
+                "drawing-id proof disagrees with a whole scan"
+            );
+        });
+        return Some(ids);
+    }
+    note_staging_work(|work| work.canonicalized += xml.len());
+    drawing_ids_in_xml(xml).ok()
 }
 
 pub(crate) fn remap_xml_relationship_ids(
@@ -6334,6 +6923,25 @@ fn remap_xml_relationship_ids_with_bindings(
     if remap.is_empty() {
         return Ok(xml.to_vec());
     }
+    note_staging_work(|work| work.canonicalized += xml.len());
+    let mut updated = xml.to_vec();
+    for (start, end, value) in relationship_remap_edits(xml, remap, inherited_bindings)?
+        .into_iter()
+        .rev()
+    {
+        updated.splice(start..end, value);
+    }
+    Ok(updated)
+}
+
+fn relationship_remap_edits(
+    xml: &[u8],
+    remap: &HashMap<String, String>,
+    inherited_bindings: &[(String, String)],
+) -> Result<Vec<(usize, usize, Vec<u8>)>> {
+    if remap.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
     let mut edits = Vec::new();
@@ -6390,12 +6998,8 @@ fn remap_xml_relationship_ids_with_bindings(
         }
         buffer.clear();
     }
-    let mut updated = xml.to_vec();
     edits.sort_by_key(|(start, _, _)| *start);
-    for (start, end, replacement) in edits.into_iter().rev() {
-        updated.splice(start..end, replacement);
-    }
-    Ok(updated)
+    Ok(edits)
 }
 
 fn story_attribute_value_span(element: &[u8], attribute_name: &[u8]) -> Option<(usize, usize)> {
@@ -6484,6 +7088,20 @@ pub struct Document {
     /// The opened or saved package retains a shadowed serializer prefix, so a
     /// plain child edit must use the staged transaction instead of a local write.
     plain_local_edit_blocked: bool,
+    /// Save failure a checked body edit must return before it changes the model.
+    /// Cleared when the typed body or the saved main part changes.
+    unsavable_body_edit_cache: OnceLock<Option<String>>,
+    /// The package and main-part reads from the last open. A staged clone
+    /// shares this record. Reopening builds another one.
+    parsed: Option<Arc<Parsed>>,
+    /// Scans of the current main-part body children. A staged clone shares
+    /// this record. A frame change replaces it. It is not a chain of older
+    /// documents.
+    main_body_scans: Arc<Mutex<MainBodyScans>>,
+    /// The current main-part serialization record. A staged clone shares this
+    /// value. Reopen keeps it only when the reopened part bytes match. It is
+    /// not a chain of older documents.
+    main_part_blocks: Option<MainPartBlocks>,
     pub(crate) styles: CT_Styles,
     pub(crate) numbering: Option<CT_Numbering>,
     /// Boxed, because debug builds keep many copies of `Document` on deep
@@ -6572,6 +7190,94 @@ pub struct Document {
     deterministic_layout_cache: Mutex<Option<Arc<rdocx_layout::WordLayoutResult>>>,
     /// Reusable bundled-font engine with caller faces at highest priority.
     bundled_fallback_layout_engine: Mutex<Option<rdocx_layout::engine::Engine>>,
+}
+
+/// Package and main-part reads kept for the document opened from them.
+/// The record is the current opening only.
+struct Parsed {
+    package: OpcPackage,
+    /// `OpcPackage::reread` applies only to a package read from bytes.
+    read_from_bytes: bool,
+    main_part: String,
+    root_namespace_declarations: Vec<(String, String)>,
+    body_namespace_declarations: Vec<(String, String)>,
+    body_namespace_bindings: Vec<(String, String)>,
+    /// `document.to_xml()` at open. Later reuse must serialize to these bytes.
+    serialization_proof: Option<Vec<u8>>,
+    main_document: OnceLock<Option<CT_Document>>,
+    nested_namespace_owners: OnceLock<Option<Vec<NestedNamespaceOwner>>>,
+    unchanged_main_part: OnceLock<Option<UnchangedMainPart>>,
+}
+
+/// Main-part reads taken while canonicalizing a part with nothing to renumber.
+#[derive(Clone, PartialEq)]
+struct UnchangedMainPart {
+    xml: Vec<u8>,
+    body_namespace_bindings: Vec<(String, String)>,
+    drawing_ids: Option<HashSet<u32>>,
+}
+
+impl Parsed {
+    fn of(
+        package: &OpcPackage,
+        main_part: &str,
+        read_from_bytes: bool,
+        root_namespace_declarations: Vec<(String, String)>,
+        body_namespace_declarations: Vec<(String, String)>,
+        body_namespace_bindings: Vec<(String, String)>,
+        serialization_proof: Option<Vec<u8>>,
+    ) -> Self {
+        Self {
+            package: package.clone(),
+            read_from_bytes,
+            main_part: main_part.to_owned(),
+            root_namespace_declarations,
+            body_namespace_declarations,
+            body_namespace_bindings,
+            serialization_proof,
+            main_document: OnceLock::new(),
+            nested_namespace_owners: OnceLock::new(),
+            unchanged_main_part: OnceLock::new(),
+        }
+    }
+
+    fn main_part_xml(&self) -> Option<&[u8]> {
+        self.package.get_part(&self.main_part)
+    }
+
+    fn main_document(&self) -> Option<&CT_Document> {
+        self.main_document
+            .get_or_init(|| {
+                let xml = self.main_part_xml()?;
+                note_staging_work(|work| work.parsed += xml.len());
+                note_reopen_work(|work| work.main_parses += 1);
+                CT_Document::from_xml(xml).ok()
+            })
+            .as_ref()
+    }
+
+    fn nested_namespace_owners(&self) -> Option<&[NestedNamespaceOwner]> {
+        self.nested_namespace_owners
+            .get_or_init(|| {
+                let xml = self.main_part_xml()?;
+                nested_modeled_namespace_owners(xml).ok()
+            })
+            .as_deref()
+    }
+}
+
+fn section_references_are_canonical(section: &CT_SectPr, preserved: &HashSet<String>) -> bool {
+    section
+        .header_refs
+        .iter()
+        .chain(&section.footer_refs)
+        .all(|reference| preserved.contains(&reference.rel_id))
+        && section
+            .header_refs
+            .is_sorted_by_key(|reference| hdr_ftr_type_order(reference.hdr_ftr_type))
+        && section
+            .footer_refs
+            .is_sorted_by_key(|reference| hdr_ftr_type_order(reference.hdr_ftr_type))
 }
 
 enum ChartPackageSource<'a> {
@@ -6683,6 +7389,339 @@ thread_local! {
 #[doc(hidden)]
 pub fn take_direct_fragment_bytes() -> usize {
     DIRECT_FRAGMENT_BYTES.with(|cell| cell.replace(0))
+}
+
+/// Bytes staging touched on this thread. `serialized_children` counts child
+/// writes on the main-part block path, including a whole-writer fallback.
+/// `children_read` counts each one-child read attempt, including a failed
+/// attempt and a retry. A zero there is not skipped work. An empty-body frame
+/// parse, a frame copy and a frame write are separate and are not in these
+/// six slots. Model walks, hashes, copies and whole serialization stay
+/// separate costs.
+#[derive(Clone, Copy, Default)]
+struct StagingWork {
+    parsed: usize,
+    scanned: usize,
+    canonicalized: usize,
+    zip_written: usize,
+    serialized_children: usize,
+    children_read: usize,
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    static STAGING_WORK: std::cell::Cell<StagingWork> = const { std::cell::Cell::new(StagingWork {
+        parsed: 0,
+        scanned: 0,
+        canonicalized: 0,
+        zip_written: 0,
+        serialized_children: 0,
+        children_read: 0,
+    }) };
+    static STAGING_WORK_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// Bytes of a namespace shell or a declaring child wrapper passed to the
+    /// empty-owner proof. A closed-body rejection still records the wrapper it
+    /// was given. This is not `StagingWork.scanned` and not `children_read`.
+    static FRAME_NAMESPACE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn note_frame_namespace_scan(bytes: usize) {
+    #[cfg(debug_assertions)]
+    FRAME_NAMESPACE_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    #[cfg(not(debug_assertions))]
+    let _ = bytes;
+}
+
+#[cfg(all(test, debug_assertions))]
+fn take_frame_namespace_bytes() -> usize {
+    FRAME_NAMESPACE_BYTES.with(|cell| cell.replace(0))
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// Bytes passed to `document_namespace_scopes` while proving empty nested
+    /// owners. This is not a staging slot and not frame owner-walk input.
+    static NAMESPACE_SCOPE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn note_namespace_scope_bytes(bytes: usize) {
+    #[cfg(debug_assertions)]
+    NAMESPACE_SCOPE_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    #[cfg(not(debug_assertions))]
+    let _ = bytes;
+}
+
+#[cfg(all(test, debug_assertions))]
+fn take_namespace_scope_bytes() -> usize {
+    NAMESPACE_SCOPE_BYTES.with(|cell| cell.replace(0))
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// Bytes read to prove one canonical frame or child. This is not one of
+    /// the six staging slots.
+    static CANONICAL_FRAGMENT_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn note_canonical_fragment(bytes: usize) {
+    #[cfg(debug_assertions)]
+    CANONICAL_FRAGMENT_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    #[cfg(not(debug_assertions))]
+    let _ = bytes;
+}
+
+#[cfg(all(test, debug_assertions))]
+fn take_canonical_fragment_bytes() -> usize {
+    CANONICAL_FRAGMENT_BYTES.with(|cell| cell.replace(0))
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// HashSet inserts while composing cached relationship ids. Each insert is
+    /// one membership operation. This is not a staging slot.
+    static RELATIONSHIP_MEMBERSHIP_OPS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+fn note_relationship_membership() {
+    #[cfg(debug_assertions)]
+    RELATIONSHIP_MEMBERSHIP_OPS.with(|cell| cell.set(cell.get() + 1));
+}
+
+#[cfg(all(test, debug_assertions))]
+fn take_relationship_membership_ops() -> usize {
+    RELATIONSHIP_MEMBERSHIP_OPS.with(|cell| cell.replace(0))
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// Bytes passed to the closed-body guard. This is not reopen identifier
+    /// input and not one of the six staging slots.
+    static CLOSED_BODY_GUARD_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn note_closed_body_guard(bytes: usize) {
+    #[cfg(debug_assertions)]
+    CLOSED_BODY_GUARD_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    #[cfg(not(debug_assertions))]
+    let _ = bytes;
+}
+
+#[cfg(all(test, debug_assertions))]
+fn take_closed_body_guard_bytes() -> usize {
+    CLOSED_BODY_GUARD_BYTES.with(|cell| cell.replace(0))
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// Bytes passed to a modeled-owner span parse of one frame shell or one
+    /// wrapped child. This is not `StagingWork.scanned` and not one of the
+    /// six staging slots. A cache hit adds nothing.
+    static NAMESPACE_SPAN_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn note_namespace_span_bytes(bytes: usize) {
+    #[cfg(debug_assertions)]
+    NAMESPACE_SPAN_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    #[cfg(not(debug_assertions))]
+    let _ = bytes;
+}
+
+#[cfg(all(test, debug_assertions))]
+fn take_namespace_span_bytes() -> usize {
+    NAMESPACE_SPAN_BYTES.with(|cell| cell.replace(0))
+}
+
+fn note_staging_work(count: impl FnOnce(&mut StagingWork)) {
+    #[cfg(debug_assertions)]
+    if !STAGING_WORK_PAUSED.with(std::cell::Cell::get) {
+        STAGING_WORK.with(|cell| {
+            let mut work = cell.get();
+            count(&mut work);
+            cell.set(work);
+        });
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = count;
+}
+
+/// Parsed, namespace-scanned, canonicalized and ZIP bytes, then serialized
+/// children and children read. Debug builds only. Reading resets all six.
+/// The first four slots are whole-part byte work. `children_read` is the
+/// one-child read attempts on the block path. Frame parse, copy and write
+/// are not added to that slot.
+#[doc(hidden)]
+#[cfg(debug_assertions)]
+pub fn take_staging_work() -> [usize; 6] {
+    let work = STAGING_WORK.with(|cell| cell.replace(StagingWork::default()));
+    [
+        work.parsed,
+        work.scanned,
+        work.canonicalized,
+        work.zip_written,
+        work.serialized_children,
+        work.children_read,
+    ]
+}
+
+/// ZIP writes, main-part parses, and identifier-part bytes scanned while
+/// reopening a staged package. A hit skips the XML identifier scan.
+/// Byte proof, model serialization, copying, and other validation are
+/// separate. Namespace input bytes are on the staging scan slot.
+#[derive(Clone, Copy, Default)]
+struct ReopenWork {
+    zip_writes: usize,
+    main_parses: usize,
+    scanned: usize,
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    static REOPEN_WORK: std::cell::Cell<ReopenWork> = const { std::cell::Cell::new(ReopenWork {
+        zip_writes: 0,
+        main_parses: 0,
+        scanned: 0,
+    }) };
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    static REOPEN_WORK_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn note_reopen_work(count: impl FnOnce(&mut ReopenWork)) {
+    #[cfg(debug_assertions)]
+    if !REOPEN_WORK_PAUSED.with(std::cell::Cell::get) {
+        REOPEN_WORK.with(|cell| {
+            let mut work = cell.get();
+            count(&mut work);
+            cell.set(work);
+        });
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = count;
+}
+
+#[cfg(any(test, debug_assertions))]
+thread_local! {
+    /// Main-part body children scanned for story lookup since the thread
+    /// started. Reading does not reset it. Callers record a delta. A failed
+    /// attempt is included. The frame scan, part serialization, fingerprint
+    /// hash, and debug agreement scans are not included.
+    static MAIN_BODY_BLOCK_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MAIN_BODY_BLOCK_SCANS_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(any(test, debug_assertions))]
+fn note_main_body_block_scans(children: usize) {
+    if !MAIN_BODY_BLOCK_SCANS_PAUSED.with(std::cell::Cell::get) {
+        MAIN_BODY_BLOCK_SCANS.with(|cell| cell.set(cell.get() + children));
+    }
+}
+
+/// Run `scan` without adding its body-child scans to the debug counter.
+fn uncounted_scan<T>(scan: impl FnOnce() -> T) -> T {
+    #[cfg(any(test, debug_assertions))]
+    {
+        let paused = MAIN_BODY_BLOCK_SCANS_PAUSED.with(|cell| cell.replace(true));
+        let result = scan();
+        MAIN_BODY_BLOCK_SCANS_PAUSED.with(|cell| cell.set(paused));
+        result
+    }
+    #[cfg(not(any(test, debug_assertions)))]
+    scan()
+}
+
+#[cfg(debug_assertions)]
+fn without_reopen_work<T>(run: impl FnOnce() -> T) -> T {
+    let paused = REOPEN_WORK_PAUSED.with(|cell| cell.replace(true));
+    let result = run();
+    REOPEN_WORK_PAUSED.with(|cell| cell.set(paused));
+    result
+}
+
+#[cfg(debug_assertions)]
+fn assert_same_reopen(reopened: &Result<Document>, through_zip: &Result<Document>) {
+    match (reopened, through_zip) {
+        (Ok(reopened), Ok(expected)) => {
+            assert_eq!(reopened.document, expected.document);
+            assert_eq!(reopened.identifiers, expected.identifiers);
+            assert!(reopened.package.same_package_as(&expected.package));
+            let saved = |document: &Document| {
+                let mut copy = document.clone_for_staging();
+                copy.parsed = None;
+                without_reopen_work(|| without_staging_work(|| copy.to_bytes()))
+                    .map_err(|error| error.to_string())
+            };
+            assert_eq!(saved(reopened), saved(expected));
+        }
+        (Err(reopened), Err(expected)) => {
+            assert_eq!(reopened.to_string(), expected.to_string());
+        }
+        (reopened, expected) => panic!(
+            "in-memory reopen {} zip {}",
+            reopened.as_ref().map(|_| "ok").unwrap_or("err"),
+            expected
+                .as_ref()
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "ok".to_string())
+        ),
+    }
+}
+
+/// ZIP package writes, main document parses, then identifier-part bytes
+/// scanned. Debug builds only. Reading resets all three. The count is the
+/// work at those sites, not a constant per entry.
+#[doc(hidden)]
+#[cfg(debug_assertions)]
+pub fn take_reopen_work() -> [usize; 3] {
+    let work = REOPEN_WORK.with(|cell| cell.replace(ReopenWork::default()));
+    [work.zip_writes, work.main_parses, work.scanned]
+}
+
+/// Keep a debug comparison from counting as staging work.
+#[cfg(debug_assertions)]
+#[allow(dead_code)]
+fn without_staging_work<T>(run: impl FnOnce() -> T) -> T {
+    let paused = STAGING_WORK_PAUSED.with(|cell| cell.replace(true));
+    let result = run();
+    STAGING_WORK_PAUSED.with(|cell| cell.set(paused));
+    result
+}
+
+#[cfg(debug_assertions)]
+fn assert_same_canonicalization(
+    document: &Document,
+    result: &Result<()>,
+    full: &Document,
+    full_result: &Result<()>,
+) {
+    match (result, full_result) {
+        (Ok(()), Ok(())) => {}
+        (Err(error), Err(full_error)) => assert_eq!(error.to_string(), full_error.to_string()),
+        (result, full_result) => panic!(
+            "canonicalizing beside the unchanged main part gives {result:?} where the whole \
+             canonicalization gives {full_result:?}"
+        ),
+    }
+    assert!(
+        document.document == full.document
+            && document.document.to_xml().ok() == full.document.to_xml().ok(),
+        "canonicalizing beside the unchanged main part changes the model otherwise"
+    );
+    assert!(
+        document.package.same_package_as(&full.package),
+        "canonicalizing beside the unchanged main part changes the package otherwise"
+    );
+    assert!(
+        document.identifiers == full.identifiers,
+        "canonicalizing beside the unchanged main part changes the identifiers otherwise"
+    );
 }
 
 fn note_direct_fragment_bytes(bytes: usize) {
@@ -6962,6 +8001,2177 @@ struct StoryItemSpan {
     sdt_context: Option<StorySdtContext>,
 }
 
+impl StoryItemSpan {
+    fn moved(&self, to: impl Fn(usize, bool) -> usize) -> Self {
+        Self {
+            full: to(self.full.start, false)..to(self.full.end, true),
+            scan: to(self.scan.start, false)..to(self.scan.end, true),
+            complex_ancestors: self
+                .complex_ancestors
+                .iter()
+                .map(|at| to(*at, false))
+                .collect(),
+            ..self.clone()
+        }
+    }
+}
+
+/// Scans of the current main-part body children.
+///
+/// Each record is the exact child bytes plus the head and tail passed to
+/// `scan_body_block`. Those slices are the scanner input. A field, tab, or
+/// bookmark changes the child bytes, so the next lookup cannot treat the old
+/// record as the same input. A namespace or body-frame change changes the
+/// head or tail and drops the record. Reopen copies this record only when
+/// the reopened part serializes that same head and tail. It does not copy
+/// model field caches or relationship checks, and it does not keep blocks
+/// from an older child list.
+#[derive(Clone, Default)]
+struct MainBodyScans {
+    head: Vec<u8>,
+    tail: Vec<u8>,
+    frame: Option<Arc<BodyBlockScan>>,
+    blocks: Vec<Arc<BodyBlockScan>>,
+    fingerprint: Option<u64>,
+    /// Current writer-produced pieces. This is not a flushed package part.
+    /// It keeps no assembled part bytes and never supplies unread owner facts.
+    serialized: Option<MainPartBlocks>,
+}
+
+#[derive(Clone)]
+struct BodyBlockScan {
+    bytes: Vec<u8>,
+    owners: Vec<StoryOwnerSpan>,
+    items: Option<Vec<StoryItemSpan>>,
+    /// The body child that an actual writer proved serializes to these bytes.
+    /// Layout and source-only read scans leave this empty. Equality with the
+    /// live child is not a parsed model.
+    staged: Option<BodyContent>,
+    /// One parse of `bytes` under the root and body bindings recorded with it.
+    /// Empty until a read. `None` inside means that read could not prove one child.
+    proved: OnceLock<ParsedChild>,
+    /// `xmlns` occurs in `bytes`. This is a byte fact for these exact bytes.
+    declares_namespace: bool,
+    /// Definitions in `bytes` under one root and body scope. `None` is a failed
+    /// scan and is not an empty success.
+    identifier_proof: OnceLock<Option<IdentifierChildProof>>,
+    /// Successful relationship and drawing facts for `bytes` under one scope.
+    /// `None` is a failed scan, not an empty success.
+    canonical_read: OnceLock<Option<CanonicalChildFacts>>,
+    /// Successful empty nested-owner proof for these exact bytes under one
+    /// root, body, head and tail. `None` is nonempty, failed, or unproved.
+    /// It is not an empty owner list. Q22 already covers this namespace layer.
+    empty_namespace_owners: OnceLock<Option<EmptyNamespaceChildProof>>,
+    /// Successful modeled-owner spans for these exact bytes under one root,
+    /// body, head and tail. Offsets are relative to `bytes`. `None` is an
+    /// ineligible or failed parse, not an empty span list.
+    namespace_spans: OnceLock<Option<NamespaceSpanProof>>,
+    decodes: OnceLock<bool>,
+}
+
+#[derive(Clone)]
+/// Head and tail relationship ids under one closed frame.
+///
+/// `bound` uses the body bindings. `plain` uses none. Empty body bindings
+/// store the same ids in both. A drawing, an invalid shell, or a head scan
+/// that is not a prefix of the shell is not stored.
+struct CanonicalFrameProof {
+    root_declarations: Vec<(String, String)>,
+    body_declarations: Vec<(String, String)>,
+    body_bindings: Vec<(String, String)>,
+    head: Arc<Vec<u8>>,
+    tail: Arc<Vec<u8>>,
+    head_bound_relationship_ids: Vec<String>,
+    tail_bound_relationship_ids: Vec<String>,
+    head_plain_relationship_ids: Vec<String>,
+    tail_plain_relationship_ids: Vec<String>,
+}
+
+/// The empty-body head and tail produced no nested owners under the old policy.
+/// A later child proof may use this context only while its head, tail and
+/// root and body scopes are these exact values.
+#[derive(Clone)]
+struct FrameNamespacePolicyEmpty {
+    root_declarations: Vec<(String, String)>,
+    body_declarations: Vec<(String, String)>,
+    body_bindings: Vec<(String, String)>,
+    head: Arc<Vec<u8>>,
+    tail: Arc<Vec<u8>>,
+}
+
+/// One child whose wrapped bytes produced no nested owners. The stored scopes
+/// and frame bytes are the context of that success. A different context declines.
+#[derive(Clone)]
+struct EmptyNamespaceChildProof {
+    root_declarations: Vec<(String, String)>,
+    body_declarations: Vec<(String, String)>,
+    body_bindings: Vec<(String, String)>,
+    head: Arc<Vec<u8>>,
+    tail: Arc<Vec<u8>>,
+}
+
+/// Modeled owner spans of one piece. Offsets are relative to that piece.
+/// The stored scopes and frame bytes are the context of that success.
+#[derive(Clone)]
+struct NamespaceSpanProof {
+    root_declarations: Vec<(String, String)>,
+    body_declarations: Vec<(String, String)>,
+    body_bindings: Vec<(String, String)>,
+    head: Arc<Vec<u8>>,
+    tail: Arc<Vec<u8>>,
+    spans: Vec<ModeledOwnerSpan>,
+}
+
+/// Modeled owner spans of the empty-body head and tail. Head offsets are
+/// part offsets. Tail offsets are relative to the tail. A span that crosses
+/// the insertion gap is not stored.
+#[derive(Clone)]
+struct NamespaceFrameSpans {
+    root_declarations: Vec<(String, String)>,
+    body_declarations: Vec<(String, String)>,
+    body_bindings: Vec<(String, String)>,
+    head: Arc<Vec<u8>>,
+    tail: Arc<Vec<u8>>,
+    head_spans: Vec<ModeledOwnerSpan>,
+    tail_spans: Vec<ModeledOwnerSpan>,
+}
+
+#[derive(Clone)]
+struct CanonicalChildFacts {
+    root_declarations: Vec<(String, String)>,
+    body_declarations: Vec<(String, String)>,
+    body_bindings: Vec<(String, String)>,
+    head: Arc<Vec<u8>>,
+    tail: Arc<Vec<u8>>,
+    bound_relationship_ids: Vec<String>,
+    plain_relationship_ids: Vec<String>,
+    /// `doc_pr` spans are relative to this child's bytes.
+    drawings: Vec<DrawingOccurrence>,
+    drawing_ids: HashSet<u32>,
+}
+
+#[derive(Clone)]
+struct IdentifierChildProof {
+    root_declarations: Vec<(String, String)>,
+    body_declarations: Vec<(String, String)>,
+    body_bindings: Vec<(String, String)>,
+    head: Arc<Vec<u8>>,
+    tail: Arc<Vec<u8>>,
+    definitions: Vec<IdentifierDefinition>,
+}
+
+#[derive(Clone)]
+struct FrameIdentifierProof {
+    root_declarations: Vec<(String, String)>,
+    body_declarations: Vec<(String, String)>,
+    body_bindings: Vec<(String, String)>,
+    head: Arc<Vec<u8>>,
+    tail: Arc<Vec<u8>>,
+    definitions: Vec<IdentifierDefinition>,
+}
+
+#[derive(Clone)]
+struct ParsedChild {
+    root_declarations: Vec<(String, String)>,
+    body_declarations: Vec<(String, String)>,
+    body_bindings: Vec<(String, String)>,
+    parsed: Option<BodyContent>,
+}
+
+impl BodyBlockScan {
+    fn identifier_definitions(
+        &self,
+        frame: &FrameIdentifierProof,
+        categories: &HashSet<IdentifierXmlCategory>,
+    ) -> Option<Vec<IdentifierDefinition>> {
+        let head = frame.head.as_slice();
+        let tail = frame.tail.as_slice();
+        if let Some(cached) = self.identifier_proof.get() {
+            return match cached {
+                Some(proof)
+                    if proof.root_declarations == frame.root_declarations
+                        && proof.body_declarations == frame.body_declarations
+                        && proof.body_bindings == frame.body_bindings
+                        && proof.head.as_slice() == head
+                        && proof.tail.as_slice() == tail =>
+                {
+                    Some(proof.definitions.clone())
+                }
+                _ => None,
+            };
+        }
+        let child_start = head.len();
+        let child_end = child_start.checked_add(self.bytes.len())?;
+        let mut xml = Vec::with_capacity(child_end + tail.len());
+        xml.extend_from_slice(head);
+        xml.extend_from_slice(&self.bytes);
+        xml.extend_from_slice(tail);
+        if closed_word_body(&xml, child_start..child_end).is_none() {
+            let _ = self.identifier_proof.set(None);
+            return None;
+        }
+        note_reopen_work(|work| work.scanned += xml.len());
+        let definitions = scan_identifier_definitions(&xml, categories);
+        let stored = definitions
+            .as_ref()
+            .map(|definitions| IdentifierChildProof {
+                root_declarations: frame.root_declarations.clone(),
+                body_declarations: frame.body_declarations.clone(),
+                body_bindings: frame.body_bindings.clone(),
+                head: Arc::clone(&frame.head),
+                tail: Arc::clone(&frame.tail),
+                definitions: definitions.clone(),
+            });
+        let _ = self.identifier_proof.set(stored);
+        definitions
+    }
+
+    fn canonical_child_facts(
+        &self,
+        head: &[u8],
+        tail: &[u8],
+        frame: &CanonicalFrameProof,
+    ) -> Option<&CanonicalChildFacts> {
+        if frame.head.as_slice() != head || frame.tail.as_slice() != tail {
+            return None;
+        }
+        if let Some(cached) = self.canonical_read.get() {
+            return match cached {
+                Some(facts)
+                    if facts.root_declarations == frame.root_declarations
+                        && facts.body_declarations == frame.body_declarations
+                        && facts.body_bindings == frame.body_bindings
+                        && facts.head.as_slice() == head
+                        && facts.tail.as_slice() == tail =>
+                {
+                    Some(facts)
+                }
+                _ => None,
+            };
+        }
+        let child_start = head.len();
+        let Some(child_end) = child_start.checked_add(self.bytes.len()) else {
+            let _ = self.canonical_read.set(None);
+            return None;
+        };
+        let mut xml = Vec::with_capacity(child_end + tail.len());
+        xml.extend_from_slice(head);
+        xml.extend_from_slice(&self.bytes);
+        xml.extend_from_slice(tail);
+        note_canonical_fragment(xml.len());
+        if closed_word_body(&xml, child_start..child_end).is_none() {
+            let _ = self.canonical_read.set(None);
+            return None;
+        }
+        let stored = read_child_canonical_facts(&xml, child_start, child_end, frame);
+        let _ = self.canonical_read.set(stored);
+        self.canonical_read.get().and_then(Option::as_ref)
+    }
+
+    fn items(&self) -> &[StoryItemSpan] {
+        self.items
+            .as_deref()
+            .expect("a layout built to read items holds them")
+    }
+
+    /// Empty nested owners for this child under `frame`.
+    ///
+    /// A child with no namespace declaration uses that byte fact only after
+    /// `closed_word_body` covers it and the wrapped root and body scopes are
+    /// `frame`. A child that declares a namespace is decided by
+    /// `modeled_owner_spans` and `namespace_owners_from_spans` on the wrapped
+    /// head, child and tail. Nonempty, failed and unproved results decline.
+    fn empty_namespace_owner(&self, frame: &FrameNamespacePolicyEmpty) -> Option<()> {
+        if let Some(cached) = self.empty_namespace_owners.get() {
+            return cached.as_ref().and_then(|proof| {
+                (proof.root_declarations == frame.root_declarations
+                    && proof.body_declarations == frame.body_declarations
+                    && proof.body_bindings == frame.body_bindings
+                    && proof.head.as_slice() == frame.head.as_slice()
+                    && proof.tail.as_slice() == frame.tail.as_slice())
+                .then_some(())
+            });
+        }
+        let head = frame.head.as_slice();
+        let tail = frame.tail.as_slice();
+        let child_start = head.len();
+        let child_end = child_start.checked_add(self.bytes.len())?;
+        let mut xml = Vec::with_capacity(child_end.checked_add(tail.len())?);
+        xml.extend_from_slice(head);
+        xml.extend_from_slice(&self.bytes);
+        xml.extend_from_slice(tail);
+        if closed_word_body(&xml, child_start..child_end).is_none() {
+            let _ = self.empty_namespace_owners.set(None);
+            return None;
+        }
+        note_namespace_scope_bytes(xml.len());
+        let context_matches = document_namespace_scopes(&xml).ok().is_some_and(|scopes| {
+            scopes.root_declarations == frame.root_declarations
+                && scopes.body_declarations == frame.body_declarations
+                && scopes.body_bindings == frame.body_bindings
+        });
+        if !context_matches {
+            let _ = self.empty_namespace_owners.set(None);
+            return None;
+        }
+        let proved_empty = if self.declares_namespace {
+            note_frame_namespace_scan(xml.len());
+            matches!(
+                modeled_owner_spans(&xml)
+                    .and_then(|spans| namespace_owners_from_spans(&xml, &spans)),
+                Ok(owners) if owners.is_empty()
+            )
+        } else {
+            true
+        };
+        if !proved_empty {
+            let _ = self.empty_namespace_owners.set(None);
+            return None;
+        }
+        let _ = self
+            .empty_namespace_owners
+            .set(Some(EmptyNamespaceChildProof {
+                root_declarations: frame.root_declarations.clone(),
+                body_declarations: frame.body_declarations.clone(),
+                body_bindings: frame.body_bindings.clone(),
+                head: Arc::clone(&frame.head),
+                tail: Arc::clone(&frame.tail),
+            }));
+        Some(())
+    }
+
+    /// Modeled owner spans of this child, relative to `bytes`.
+    ///
+    /// A hit requires the same root, body, head and tail. The caller proves
+    /// the current part partition and the closed parent before using a hit.
+    /// The fill parses the head, this child and the tail. A word body inside
+    /// the child, a scope that does not close, or a parser error stores
+    /// `None` and is not an empty span list.
+    fn namespace_span_proof(
+        &self,
+        head: &[u8],
+        tail: &[u8],
+        scopes: &DocumentNamespaceScopes,
+    ) -> Option<&NamespaceSpanProof> {
+        if let Some(cached) = self.namespace_spans.get() {
+            return cached.as_ref().filter(|proof| {
+                proof.root_declarations == scopes.root_declarations
+                    && proof.body_declarations == scopes.body_declarations
+                    && proof.body_bindings == scopes.body_bindings
+                    && proof.head.as_slice() == head
+                    && proof.tail.as_slice() == tail
+            });
+        }
+        let child_start = head.len();
+        let Some(child_end) = child_start.checked_add(self.bytes.len()) else {
+            let _ = self.namespace_spans.set(None);
+            return None;
+        };
+        let Some(wrapped_len) = child_end.checked_add(tail.len()) else {
+            let _ = self.namespace_spans.set(None);
+            return None;
+        };
+        let mut xml = Vec::with_capacity(wrapped_len);
+        xml.extend_from_slice(head);
+        xml.extend_from_slice(&self.bytes);
+        xml.extend_from_slice(tail);
+        if closed_word_body(&xml, child_start..child_end).is_none() {
+            let _ = self.namespace_spans.set(None);
+            return None;
+        }
+        note_namespace_scope_bytes(xml.len());
+        let context_matches = document_namespace_scopes(&xml).ok().is_some_and(|wrapped| {
+            wrapped.root_declarations == scopes.root_declarations
+                && wrapped.body_declarations == scopes.body_declarations
+                && wrapped.body_bindings == scopes.body_bindings
+        });
+        if !context_matches {
+            let _ = self.namespace_spans.set(None);
+            return None;
+        }
+        note_namespace_span_bytes(xml.len());
+        let relative = match modeled_owner_piece_spans(&xml, Some(child_start..child_end)) {
+            Ok(Some(spans)) => {
+                let mut relative = Vec::new();
+                let mut contained = true;
+                for span in spans {
+                    if span.end <= child_start || span.start >= child_end {
+                        continue;
+                    }
+                    if span.start < child_start || span.end > child_end {
+                        contained = false;
+                        break;
+                    }
+                    relative.push(ModeledOwnerSpan {
+                        start: span.start - child_start,
+                        end: span.end - child_start,
+                        ..span
+                    });
+                }
+                contained.then_some(relative)
+            }
+            Ok(None) | Err(_) => None,
+        };
+        let _ = self
+            .namespace_spans
+            .set(relative.map(|spans| NamespaceSpanProof {
+                root_declarations: scopes.root_declarations.clone(),
+                body_declarations: scopes.body_declarations.clone(),
+                body_bindings: scopes.body_bindings.clone(),
+                head: Arc::new(head.to_vec()),
+                tail: Arc::new(tail.to_vec()),
+                spans,
+            }));
+        self.namespace_spans.get().and_then(Option::as_ref)
+    }
+
+    /// Same child bytes and staged model, with no carried frame facts.
+    ///
+    /// Copying the bytes is not a child serialization. The new locks are empty,
+    /// including after a failed `None`, so this piece can record the new frame.
+    fn fresh_context_piece(self: &Arc<Self>) -> Arc<Self> {
+        Arc::new(Self {
+            bytes: self.bytes.clone(),
+            owners: self.owners.clone(),
+            items: self.items.clone(),
+            staged: self.staged.clone(),
+            proved: OnceLock::new(),
+            declares_namespace: self.declares_namespace,
+            identifier_proof: OnceLock::new(),
+            canonical_read: OnceLock::new(),
+            empty_namespace_owners: OnceLock::new(),
+            namespace_spans: OnceLock::new(),
+            decodes: OnceLock::new(),
+        })
+    }
+}
+
+/// One current main-part byte partition, from a writer or a checked source.
+/// `frame` is this head and tail actually parsed as an empty-body shell. A
+/// producer whitespace frame must normalize to the proved canonical shell.
+/// This is not a second whole-body AST. A serialized child is not that shell,
+/// and a source-only parsed child does not supply writer reuse.
+struct MainPartBlocks {
+    head: Vec<u8>,
+    root: std::ops::Range<usize>,
+    tail: Vec<u8>,
+    blocks: Vec<Arc<BodyBlockScan>>,
+    part: Option<Arc<Vec<u8>>>,
+    /// Head and tail parsed with an empty body, when that shell proves.
+    frame: std::sync::OnceLock<Option<CT_Document>>,
+    /// Nested owners for `part`, when a scan or an empty proved carry filled them.
+    nested_namespace_owners: std::sync::OnceLock<Option<Vec<NestedNamespaceOwner>>>,
+    /// Identifier definitions in the empty-body head and tail. `None` is an
+    /// unproved shell, not an empty definition list.
+    identifier_frame: std::sync::OnceLock<Option<FrameIdentifierProof>>,
+    /// Relationship ids contributed by this head and tail. Drawings stay absent.
+    canonical_frame: std::sync::OnceLock<Option<CanonicalFrameProof>>,
+    /// Empty nested-owner policy for this head and tail. `None` is an unproved
+    /// shell, not an empty owner list. Q22 already covers this namespace layer.
+    /// The added state is this fact plus `BodyBlockScan::empty_namespace_owners`.
+    namespace_frame: std::sync::OnceLock<Option<FrameNamespacePolicyEmpty>>,
+    /// Modeled owner spans of this head and tail. `None` is an unproved shell,
+    /// not an empty span list. Q22 already covers this namespace layer.
+    namespace_frame_spans: std::sync::OnceLock<Option<NamespaceFrameSpans>>,
+}
+
+impl Clone for MainPartBlocks {
+    fn clone(&self) -> Self {
+        let frame = std::sync::OnceLock::new();
+        if let Some(value) = self.frame.get() {
+            let _ = frame.set(value.clone());
+        }
+        let nested_namespace_owners = std::sync::OnceLock::new();
+        if let Some(value) = self.nested_namespace_owners.get() {
+            let _ = nested_namespace_owners.set(value.clone());
+        }
+        let identifier_frame = std::sync::OnceLock::new();
+        if let Some(value) = self.identifier_frame.get() {
+            let _ = identifier_frame.set(value.clone());
+        }
+        let canonical_frame = std::sync::OnceLock::new();
+        if let Some(value) = self.canonical_frame.get() {
+            let _ = canonical_frame.set(value.clone());
+        }
+        let namespace_frame = std::sync::OnceLock::new();
+        if let Some(value) = self.namespace_frame.get() {
+            let _ = namespace_frame.set(value.clone());
+        }
+        let namespace_frame_spans = std::sync::OnceLock::new();
+        if let Some(value) = self.namespace_frame_spans.get() {
+            let _ = namespace_frame_spans.set(value.clone());
+        }
+        Self {
+            head: self.head.clone(),
+            root: self.root.clone(),
+            tail: self.tail.clone(),
+            blocks: self.blocks.clone(),
+            part: self.part.clone(),
+            frame,
+            nested_namespace_owners,
+            identifier_frame,
+            canonical_frame,
+            namespace_frame,
+            namespace_frame_spans,
+        }
+    }
+}
+
+fn holds_field_words(xml: &[u8]) -> bool {
+    xml.windows(b"fldChar".len())
+        .any(|window| window == b"fldChar")
+        || xml
+            .windows(b"fldSimple".len())
+            .any(|window| window == b"fldSimple")
+}
+
+fn root_start_tag(head: &[u8]) -> Option<std::ops::Range<usize>> {
+    let decl = head.windows(2).position(|window| window == b"?>")?;
+    let start = decl + 2;
+    let end = head[start..].iter().position(|byte| *byte == b'>')? + start + 1;
+    Some(start..end)
+}
+
+impl MainPartBlocks {
+    fn child_starts(&self) -> Option<(Vec<usize>, usize)> {
+        let mut at = self.head.len();
+        let mut starts = Vec::with_capacity(self.blocks.len());
+        for block in &self.blocks {
+            starts.push(at);
+            at = at.checked_add(block.bytes.len())?;
+        }
+        Some((starts, at))
+    }
+
+    fn bytes(&self) -> Vec<u8> {
+        let mut bytes = self.head.clone();
+        for block in &self.blocks {
+            bytes.extend_from_slice(&block.bytes);
+        }
+        bytes.extend_from_slice(&self.tail);
+        bytes
+    }
+
+    fn edited(&self, edits: &[(usize, usize, Vec<u8>)]) -> Option<Self> {
+        let (starts, content_end) = self.child_starts()?;
+        let total = content_end.checked_add(self.tail.len())?;
+        let mut previous = 0;
+        for (start, end, _) in edits {
+            if *start < previous || *start > *end || *end > total || *start < self.head.len() {
+                return None;
+            }
+            previous = *end;
+        }
+        let mut result = self.clone();
+        result.part = None;
+        result.nested_namespace_owners = OnceLock::new();
+        let mut tail_changed = false;
+        for (start, end, value) in edits.iter().rev() {
+            if *start >= content_end {
+                let range = start.checked_sub(content_end)?..end.checked_sub(content_end)?;
+                result.tail.get(range.clone())?;
+                result.tail.splice(range, value.iter().copied());
+                tail_changed = true;
+            } else {
+                let index = starts.partition_point(|at| at <= start).checked_sub(1)?;
+                let at = *starts.get(index)?;
+                if *end > at.checked_add(self.blocks.get(index)?.bytes.len())? {
+                    return None;
+                }
+                let range = start.checked_sub(at)?..end.checked_sub(at)?;
+                let mut bytes = result.blocks.get(index)?.bytes.clone();
+                bytes.get(range.clone())?;
+                bytes.splice(range, value.iter().copied());
+                result.blocks[index] = Arc::new(BodyBlockScan::from_source(bytes));
+            }
+        }
+        if tail_changed {
+            result.blocks = result
+                .blocks
+                .iter()
+                .map(BodyBlockScan::fresh_context_piece)
+                .collect();
+            let shell = [result.head.as_slice(), result.tail.as_slice()].concat();
+            closed_word_body(&shell, result.head.len()..result.head.len())?;
+            let frame = CT_Document::from_xml(&shell).ok()?;
+            if !frame.body.content.is_empty() {
+                return None;
+            }
+            result.frame = OnceLock::from(Some(frame));
+            result.identifier_frame = OnceLock::new();
+            result.canonical_frame = OnceLock::new();
+            result.namespace_frame = OnceLock::new();
+            result.namespace_frame_spans = OnceLock::new();
+        }
+        result.part = Some(Arc::new(result.bytes()));
+        Some(result)
+    }
+
+    fn parsed_document(&mut self) -> Option<CT_Document> {
+        let xml = self.part.as_ref()?.clone();
+        if !self.part_partition_matches(&xml) {
+            return None;
+        }
+        let scopes = document_namespace_scopes(&xml).ok()?;
+        for block in &mut self.blocks {
+            if block.proved.get().is_none() {
+                Arc::make_mut(block).read_source_child(&self.head, &self.tail, &scopes)?;
+            }
+        }
+        let parsed = self.proved_document(&xml)?;
+        parsed.validate_resource_limits().ok()?;
+        Some(parsed)
+    }
+
+    fn relationship_remap_edits(
+        &self,
+        remap: &HashMap<String, String>,
+        bindings: &[(String, String)],
+    ) -> Option<Vec<(usize, usize, Vec<u8>)>> {
+        if remap.is_empty() {
+            return Some(Vec::new());
+        }
+        let xml = self.part.as_deref()?;
+        if !self.part_partition_matches(xml) {
+            return None;
+        }
+        let root = self.head.get(self.root.clone())?;
+        let facts = self.canonical_child_facts(xml, bindings)?;
+        let shell = [self.head.as_slice(), self.tail.as_slice()].concat();
+        let frame = self.canonical_frame_proof(&shell)?;
+        if !frame.head_plain_relationship_ids.is_empty()
+            || !frame.head_bound_relationship_ids.is_empty()
+            || !xml_decodes(&shell)
+        {
+            return None;
+        }
+        let (starts, content_end) = self.child_starts()?;
+        let mut edits = Vec::new();
+        for ((block, fact), start) in self.blocks.iter().zip(facts).zip(starts) {
+            let ids = if bindings.is_empty() {
+                &fact.plain_relationship_ids
+            } else {
+                &fact.bound_relationship_ids
+            };
+            if ids
+                .iter()
+                .any(|id| remap.get(id).is_some_and(|value| value != id))
+            {
+                let mut part = self.head.clone();
+                part.extend_from_slice(&block.bytes);
+                part.extend_from_slice(&self.tail);
+                note_canonical_fragment(part.len());
+                for (first, last, value) in relationship_remap_edits(&part, remap, bindings).ok()? {
+                    if first < self.head.len()
+                        || last > self.head.len().checked_add(block.bytes.len())?
+                    {
+                        return None;
+                    }
+                    edits.push((
+                        start.checked_add(first.checked_sub(self.head.len())?)?,
+                        start.checked_add(last.checked_sub(self.head.len())?)?,
+                        value,
+                    ));
+                }
+            } else if !block.decodes(root) {
+                return None;
+            }
+        }
+        note_canonical_fragment(shell.len());
+        for (first, last, value) in relationship_remap_edits(&shell, remap, bindings).ok()? {
+            if first < self.head.len() || last > shell.len() {
+                return None;
+            }
+            edits.push((
+                content_end.checked_add(first.checked_sub(self.head.len())?)?,
+                content_end.checked_add(last.checked_sub(self.head.len())?)?,
+                value,
+            ));
+        }
+        edits.sort_by_key(|(start, _, _)| *start);
+        Some(edits)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn canonical_retained(
+        &self,
+        remap: &HashMap<String, String>,
+        modeled: &[u32],
+        nested: &HashSet<String>,
+        ids: &[(u32, u32)],
+    ) -> Option<Option<(Vec<u8>, Self, CT_Document)>> {
+        let mut remapped = self.edited(&self.relationship_remap_edits(remap, &[])?)?;
+        let xml = remapped.bytes();
+        let slots =
+            authored_drawing_slots_by_blocks(&xml, Some(&remapped), modeled, nested).ok()?;
+        if slots.len() != ids.len()
+            || slots
+                .iter()
+                .zip(ids)
+                .any(|((_, _, old), (expected, _))| old != expected)
+        {
+            return Some(None);
+        }
+        let edits = slots
+            .into_iter()
+            .zip(ids)
+            .map(|((_, span, _), (_, id))| (span.start, span.end, id.to_string().into_bytes()))
+            .collect::<Vec<_>>();
+        remapped = remapped.edited(&edits)?;
+        let document = remapped.parsed_document()?;
+        Some(Some((remapped.bytes(), remapped, document)))
+    }
+
+    fn serialize(
+        frame: &CT_Document,
+        content: &[BodyContent],
+        kept: Option<&MainPartBlocks>,
+    ) -> Result<(Vec<u8>, Self)> {
+        let kept_root = kept
+            .map(|kept| kept.head[kept.root.clone()].to_vec())
+            .unwrap_or_default();
+        let kept_blocks = kept.map(|kept| kept.blocks.as_slice()).unwrap_or(&[]);
+        let aligned =
+            |item: &BodyContent, block: &BodyBlockScan| block.staged.as_ref() == Some(item);
+        let reusable = |item: &BodyContent, block: &BodyBlockScan| {
+            aligned(item, block)
+                && item.owner_facts_reusable_by_value()
+                && !holds_field_words(&block.bytes)
+        };
+        let prefix = content
+            .iter()
+            .zip(kept_blocks)
+            .take_while(|(item, block)| aligned(item, block))
+            .count();
+        let suffix = content[prefix..]
+            .iter()
+            .rev()
+            .zip(kept_blocks[prefix..].iter().rev())
+            .take_while(|(item, block)| aligned(item, block))
+            .count();
+        let reusable_blocks = kept_blocks[..prefix]
+            .iter()
+            .map(Some)
+            .chain(std::iter::repeat_n(None, content.len() - prefix - suffix))
+            .chain(kept_blocks[kept_blocks.len() - suffix..].iter().map(Some));
+        let mut blocks = Vec::with_capacity(content.len());
+        let mut reused = false;
+        for (item, block) in content.iter().zip(reusable_blocks) {
+            if let Some(block) = block.filter(|block| reusable(item, block)) {
+                reused = true;
+                blocks.push(Arc::clone(block));
+            } else {
+                note_staging_work(|work| work.serialized_children += 1);
+                let xml = frame.body_item_xml(item)?;
+                let declares_namespace = bytes_declare_namespace(&xml);
+                blocks.push(Arc::new(BodyBlockScan {
+                    bytes: xml,
+                    owners: Vec::new(),
+                    items: None,
+                    staged: Some(item.clone()),
+                    proved: OnceLock::new(),
+                    declares_namespace,
+                    identifier_proof: OnceLock::new(),
+                    canonical_read: OnceLock::new(),
+                    empty_namespace_owners: OnceLock::new(),
+                    namespace_spans: OnceLock::new(),
+                    decodes: OnceLock::new(),
+                }));
+            }
+        }
+        let kept_frame = kept.map(|kept| (kept.head.as_slice(), kept.tail.as_slice()));
+        match Self::assemble(
+            frame,
+            blocks,
+            reused.then_some(kept_root.as_slice()),
+            kept_frame,
+        )? {
+            Some(assembled) => Ok(assembled),
+            None if reused => Self::serialize(frame, content, None),
+            None => {
+                note_staging_work(|work| work.serialized_children += content.len());
+                let xml = frame.to_xml()?;
+                Ok((
+                    xml,
+                    Self {
+                        head: Vec::new(),
+                        root: 0..0,
+                        tail: Vec::new(),
+                        blocks: Vec::new(),
+                        part: None,
+                        frame: std::sync::OnceLock::new(),
+                        nested_namespace_owners: std::sync::OnceLock::new(),
+                        identifier_frame: std::sync::OnceLock::new(),
+                        canonical_frame: std::sync::OnceLock::new(),
+                        namespace_frame: std::sync::OnceLock::new(),
+                        namespace_frame_spans: std::sync::OnceLock::new(),
+                    },
+                ))
+            }
+        }
+    }
+
+    fn assemble(
+        frame: &CT_Document,
+        blocks: Vec<Arc<BodyBlockScan>>,
+        kept_root: Option<&[u8]>,
+        kept_frame: Option<(&[u8], &[u8])>,
+    ) -> Result<Option<(Vec<u8>, Self)>> {
+        let (head, tail) = frame.body_frame_xml()?;
+        let Some(root) = root_start_tag(&head) else {
+            return Ok(None);
+        };
+        let mut xml = Vec::with_capacity(
+            head.len() + blocks.iter().map(|block| block.bytes.len()).sum::<usize>() + tail.len(),
+        );
+        xml.extend_from_slice(&head);
+        for block in &blocks {
+            xml.extend_from_slice(&block.bytes);
+        }
+        xml.extend_from_slice(&tail);
+        let written = xml.len();
+        rdocx_oxml::text::declare_w14_on_part_root(&mut xml)?;
+        let declared = xml.len() - written;
+        let head = xml[..head.len() + declared].to_vec();
+        let root = root.start..root.end + declared;
+        if kept_root.is_some_and(|kept| !kept.is_empty() && kept != &head[root.clone()]) {
+            return Ok(None);
+        }
+        let tail = xml[head.len() + blocks.iter().map(|block| block.bytes.len()).sum::<usize>()..]
+            .to_vec();
+        // Final head includes conditional `w14`. A different kept frame gets new
+        // pieces. The old arcs stay on the previous record.
+        let blocks = match kept_frame {
+            Some((kept_head, kept_tail))
+                if kept_head != head.as_slice() || kept_tail != tail.as_slice() =>
+            {
+                blocks
+                    .iter()
+                    .map(BodyBlockScan::fresh_context_piece)
+                    .collect()
+            }
+            _ => blocks,
+        };
+        let frame = std::sync::OnceLock::new();
+        let _ = frame.set(prove_empty_body_frame(&head, &tail));
+        Ok(Some((
+            xml,
+            Self {
+                head,
+                root,
+                tail,
+                blocks,
+                part: None,
+                frame,
+                nested_namespace_owners: std::sync::OnceLock::new(),
+                identifier_frame: std::sync::OnceLock::new(),
+                canonical_frame: std::sync::OnceLock::new(),
+                namespace_frame: std::sync::OnceLock::new(),
+                namespace_frame_spans: std::sync::OnceLock::new(),
+            },
+        )))
+    }
+
+    /// The live main part, when `part` is exactly `doc_xml` and every child
+    /// has a positive one-child read under this frame. `None` leaves the
+    /// whole parser authoritative.
+    fn proved_document(&self, doc_xml: &[u8]) -> Option<CT_Document> {
+        let part = self.part.as_deref()?;
+        if part.as_slice() != doc_xml || self.head.is_empty() {
+            return None;
+        }
+        let scopes = document_namespace_scopes(doc_xml).ok()?;
+        let shell_xml = [self.head.as_slice(), self.tail.as_slice()].concat();
+        let shell_scopes = document_namespace_scopes(&shell_xml).ok()?;
+        if shell_scopes.root_declarations != scopes.root_declarations
+            || shell_scopes.body_declarations != scopes.body_declarations
+            || shell_scopes.body_bindings != scopes.body_bindings
+        {
+            return None;
+        }
+        let shell = self.frame.get().and_then(Option::as_ref)?;
+        if !shell.body.content.is_empty() {
+            return None;
+        }
+        let mut cursor = self.head.len();
+        for block in &self.blocks {
+            let end = cursor.checked_add(block.bytes.len())?;
+            if doc_xml.get(cursor..end) != Some(block.bytes.as_slice()) {
+                return None;
+            }
+            cursor = end;
+        }
+        if doc_xml.get(cursor..) != Some(self.tail.as_slice()) {
+            return None;
+        }
+        let mut content = Vec::with_capacity(self.blocks.len());
+        for block in &self.blocks {
+            content.push(block.read_child(&self.head, &self.tail, &scopes)?);
+        }
+        let mut document = shell.clone();
+        document.body.content = content;
+        self.store_empty_namespace_owners();
+        Some(document)
+    }
+
+    /// Empty nested owners for these exact part bytes, when the frame policy
+    /// and every child proof are empty. A missing proof is unavailable.
+    fn retained_nested_owners(&self, doc_xml: &[u8]) -> Option<Vec<NestedNamespaceOwner>> {
+        let part = self.part.as_deref()?;
+        if part.as_slice() != doc_xml {
+            return None;
+        }
+        self.store_empty_namespace_owners();
+        if self.nested_namespace_owners.get().is_none() {
+            self.store_proved_namespace_owners(doc_xml);
+        }
+        self.nested_namespace_owners
+            .get()
+            .and_then(|owners| owners.clone())
+    }
+
+    /// Main-part identifier definitions when the frame contributes none and
+    /// every child proof matches this scope. `None` keeps the whole-part scan.
+    fn identifier_hint(
+        &self,
+        doc_xml: &[u8],
+        scopes: &DocumentNamespaceScopes,
+    ) -> Option<ScannedIdentifierPart> {
+        let part = self.part.as_ref()?;
+        if part.as_slice() != doc_xml || self.head.is_empty() {
+            return None;
+        }
+        let mut cursor = self.head.len();
+        for block in &self.blocks {
+            let end = cursor.checked_add(block.bytes.len())?;
+            if doc_xml.get(cursor..end) != Some(block.bytes.as_slice()) {
+                return None;
+            }
+            cursor = end;
+        }
+        if doc_xml.get(cursor..) != Some(self.tail.as_slice()) {
+            return None;
+        }
+        let shell = [self.head.as_slice(), self.tail.as_slice()].concat();
+        let frame = self.frame_identifier_proof(&shell)?;
+        if frame.root_declarations != scopes.root_declarations
+            || frame.body_declarations != scopes.body_declarations
+            || frame.body_bindings != scopes.body_bindings
+            || frame.head.as_slice() != self.head.as_slice()
+            || frame.tail.as_slice() != self.tail.as_slice()
+            || !frame.definitions.is_empty()
+        {
+            return None;
+        }
+        let mut categories = HashSet::new();
+        categories.insert(IdentifierXmlCategory::Bookmark);
+        categories.insert(IdentifierXmlCategory::Drawing);
+        let mut definitions = Vec::new();
+        for block in &self.blocks {
+            definitions.extend(block.identifier_definitions(frame, &categories)?);
+        }
+        Some(ScannedIdentifierPart {
+            bytes: Arc::clone(part),
+            categories,
+            definitions: Some(definitions),
+        })
+    }
+
+    fn frame_identifier_proof(&self, shell: &[u8]) -> Option<&FrameIdentifierProof> {
+        self.identifier_frame
+            .get_or_init(|| {
+                if self.head.is_empty() || shell.len() != self.head.len() + self.tail.len() {
+                    return None;
+                }
+                let gap = self.head.len()..self.head.len();
+                closed_word_body(shell, gap)?;
+                note_reopen_work(|work| work.scanned += shell.len());
+                let scopes = document_namespace_scopes(shell).ok()?;
+                let mut categories = HashSet::new();
+                categories.insert(IdentifierXmlCategory::Bookmark);
+                categories.insert(IdentifierXmlCategory::Drawing);
+                let definitions = scan_identifier_definitions(shell, &categories)?;
+                Some(FrameIdentifierProof {
+                    root_declarations: scopes.root_declarations,
+                    body_declarations: scopes.body_declarations,
+                    body_bindings: scopes.body_bindings,
+                    head: Arc::new(self.head.clone()),
+                    tail: Arc::new(self.tail.clone()),
+                    definitions,
+                })
+            })
+            .as_ref()
+    }
+
+    fn canonical_child_facts<'a>(
+        &'a self,
+        xml: &[u8],
+        bindings: &[(String, String)],
+    ) -> Option<Vec<&'a CanonicalChildFacts>> {
+        if self.head.is_empty()
+            || (!bindings.is_empty() && {
+                let shell = [self.head.as_slice(), self.tail.as_slice()].concat();
+                self.canonical_frame_proof(&shell)
+                    .is_none_or(|frame| bindings != frame.body_bindings.as_slice())
+            })
+        {
+            return None;
+        }
+        let mut cursor = self.head.len();
+        for block in &self.blocks {
+            let end = cursor.checked_add(block.bytes.len())?;
+            if xml.get(cursor..end) != Some(block.bytes.as_slice()) {
+                return None;
+            }
+            cursor = end;
+        }
+        if xml.get(cursor..) != Some(self.tail.as_slice()) {
+            return None;
+        }
+        let shell = [self.head.as_slice(), self.tail.as_slice()].concat();
+        let frame = self.canonical_frame_proof(&shell)?;
+        if !bindings.is_empty() && bindings != frame.body_bindings.as_slice() {
+            return None;
+        }
+        let mut facts = Vec::with_capacity(self.blocks.len());
+        for block in &self.blocks {
+            facts.push(block.canonical_child_facts(&self.head, &self.tail, frame)?);
+        }
+        Some(facts)
+    }
+
+    fn proved_relationship_ids(
+        &self,
+        xml: &[u8],
+        bindings: &[(String, String)],
+    ) -> Option<Vec<String>> {
+        let facts = self.canonical_child_facts(xml, bindings)?;
+        let shell = [self.head.as_slice(), self.tail.as_slice()].concat();
+        let frame = self.canonical_frame_proof(&shell)?;
+        let (head_ids, tail_ids) = if bindings.is_empty() {
+            (
+                frame.head_plain_relationship_ids.as_slice(),
+                frame.tail_plain_relationship_ids.as_slice(),
+            )
+        } else {
+            (
+                frame.head_bound_relationship_ids.as_slice(),
+                frame.tail_bound_relationship_ids.as_slice(),
+            )
+        };
+        let mut ids = Vec::new();
+        let mut seen = HashSet::new();
+        let mut push = |id: &String| {
+            note_relationship_membership();
+            let owned = id.clone();
+            if seen.insert(owned.clone()) {
+                ids.push(owned);
+            }
+        };
+        for id in head_ids {
+            push(id);
+        }
+        for child in facts {
+            let child_ids = if bindings.is_empty() {
+                &child.plain_relationship_ids
+            } else {
+                &child.bound_relationship_ids
+            };
+            for id in child_ids {
+                push(id);
+            }
+        }
+        for id in tail_ids {
+            push(id);
+        }
+        Some(ids)
+    }
+
+    fn proved_drawing_slots(
+        &self,
+        xml: &[u8],
+        modeled_ids: &[u32],
+        nested_image_relationship_ids: &HashSet<String>,
+    ) -> Option<Result<AuthoredDrawingSlots>> {
+        let facts = self.canonical_child_facts(xml, &[])?;
+        let mut drawings = Vec::new();
+        let mut cursor = self.head.len();
+        for (child, block) in facts.into_iter().zip(&self.blocks) {
+            for drawing in &child.drawings {
+                let doc_pr = match &drawing.doc_pr {
+                    Some((id, span)) => {
+                        if span.start > span.end || span.end > block.bytes.len() {
+                            return None;
+                        }
+                        let start = cursor.checked_add(span.start)?;
+                        let end = cursor.checked_add(span.end)?;
+                        if end > xml.len() {
+                            return None;
+                        }
+                        Some((*id, start..end))
+                    }
+                    None => None,
+                };
+                drawings.push(DrawingOccurrence {
+                    doc_pr,
+                    embeds: drawing.embeds.clone(),
+                });
+            }
+            cursor = cursor.checked_add(block.bytes.len())?;
+        }
+        if xml.get(cursor..) != Some(self.tail.as_slice()) {
+            return None;
+        }
+        Some(select_authored_drawing_slots(
+            &drawings,
+            None,
+            modeled_ids,
+            nested_image_relationship_ids,
+        ))
+    }
+
+    fn proved_drawing_ids(&self, xml: &[u8]) -> Option<HashSet<u32>> {
+        let facts = self.canonical_child_facts(xml, &[])?;
+        let mut ids = HashSet::new();
+        for child in facts {
+            ids.extend(child.drawing_ids.iter().copied());
+        }
+        Some(ids)
+    }
+
+    fn canonical_frame_proof(&self, shell: &[u8]) -> Option<&CanonicalFrameProof> {
+        self.canonical_frame
+            .get_or_init(|| {
+                if self.head.is_empty()
+                    || shell.len() != self.head.len() + self.tail.len()
+                    || shell.get(..self.head.len()) != Some(self.head.as_slice())
+                    || shell.get(self.head.len()..) != Some(self.tail.as_slice())
+                {
+                    return None;
+                }
+                let gap = self.head.len()..self.head.len();
+                note_canonical_fragment(shell.len());
+                closed_word_body(shell, gap)?;
+                let scopes = document_namespace_scopes(shell).ok()?;
+                let bindings = scopes.body_bindings.as_slice();
+                note_canonical_fragment(shell.len());
+                let shell_bound =
+                    xml_relationship_ids_in_order_with_bindings(shell, bindings).ok()?;
+                if !frame_drawings_are_absent(shell) {
+                    return None;
+                }
+                note_canonical_fragment(self.head.len());
+                let head_bound =
+                    xml_relationship_ids_in_order_with_bindings(&self.head, bindings).ok()?;
+                if shell_bound.get(..head_bound.len()) != Some(head_bound.as_slice()) {
+                    return None;
+                }
+                let tail_bound = shell_bound[head_bound.len()..].to_vec();
+                let (head_plain, tail_plain) = if bindings.is_empty() {
+                    (head_bound.clone(), tail_bound.clone())
+                } else {
+                    let (head_plain, tail_plain) =
+                        split_relationship_ids_at_head(shell, self.head.len(), &[])?;
+                    (head_plain, tail_plain)
+                };
+                Some(CanonicalFrameProof {
+                    root_declarations: scopes.root_declarations,
+                    body_declarations: scopes.body_declarations,
+                    body_bindings: scopes.body_bindings,
+                    head: Arc::new(self.head.clone()),
+                    tail: Arc::new(self.tail.clone()),
+                    head_bound_relationship_ids: head_bound,
+                    tail_bound_relationship_ids: tail_bound,
+                    head_plain_relationship_ids: head_plain,
+                    tail_plain_relationship_ids: tail_plain,
+                })
+            })
+            .as_ref()
+    }
+
+    /// Empty-owner policy for this head and tail. The owner walk is the old
+    /// `modeled_owner_spans` and `namespace_owners_from_spans` pair. One Word
+    /// body must cover the empty insertion gap. A nonempty or failed result
+    /// stays `None` and does not publish an empty owner list.
+    fn frame_namespace_policy(&self, shell: &[u8]) -> Option<&FrameNamespacePolicyEmpty> {
+        self.namespace_frame
+            .get_or_init(|| {
+                if self.head.is_empty() || shell.len() != self.head.len() + self.tail.len() {
+                    return None;
+                }
+                note_frame_namespace_scan(shell.len());
+                let gap = self.head.len()..self.head.len();
+                closed_word_body(shell, gap)?;
+                note_namespace_scope_bytes(shell.len());
+                let scopes = document_namespace_scopes(shell).ok()?;
+                let spans = modeled_owner_spans(shell).ok()?;
+                let owners = namespace_owners_from_spans(shell, &spans).ok()?;
+                if !owners.is_empty() {
+                    return None;
+                }
+                Some(FrameNamespacePolicyEmpty {
+                    root_declarations: scopes.root_declarations,
+                    body_declarations: scopes.body_declarations,
+                    body_bindings: scopes.body_bindings,
+                    head: Arc::new(self.head.clone()),
+                    tail: Arc::new(self.tail.clone()),
+                })
+            })
+            .as_ref()
+    }
+
+    fn store_empty_namespace_owners(&self) {
+        if self.nested_namespace_owners.get().is_some() {
+            return;
+        }
+        let Some(shell) = self.frame.get().and_then(Option::as_ref) else {
+            return;
+        };
+        if !shell.body.content.is_empty() {
+            return;
+        }
+        let shell_xml = [self.head.as_slice(), self.tail.as_slice()].concat();
+        let Some(policy) = self.frame_namespace_policy(&shell_xml).cloned() else {
+            return;
+        };
+        if policy.head.as_slice() != self.head.as_slice()
+            || policy.tail.as_slice() != self.tail.as_slice()
+        {
+            return;
+        }
+        for block in &self.blocks {
+            if block.empty_namespace_owner(&policy).is_none() {
+                return;
+            }
+        }
+        let _ = self
+            .nested_namespace_owners
+            .set(Some(Vec::<NestedNamespaceOwner>::new()));
+    }
+
+    fn namespace_context_matches(
+        proof_root: &[(String, String)],
+        proof_body: &[(String, String)],
+        proof_bindings: &[(String, String)],
+        proof_head: &[u8],
+        proof_tail: &[u8],
+        scopes: &DocumentNamespaceScopes,
+        head: &[u8],
+        tail: &[u8],
+    ) -> bool {
+        proof_root == scopes.root_declarations.as_slice()
+            && proof_body == scopes.body_declarations.as_slice()
+            && proof_bindings == scopes.body_bindings.as_slice()
+            && proof_head == head
+            && proof_tail == tail
+    }
+
+    /// Frame spans for this head and tail. Scopes come from that shell.
+    /// Head spans keep part offsets. Tail spans are relative to the tail.
+    /// A background or section-tail owner stays in this split. The empty-body
+    /// gap is a closed-body certificate. A span across that gap declines.
+    fn frame_namespace_spans(&self) -> Option<&NamespaceFrameSpans> {
+        if let Some(cached) = self.namespace_frame_spans.get() {
+            return cached.as_ref().filter(|proof| {
+                proof.head.as_slice() == self.head.as_slice()
+                    && proof.tail.as_slice() == self.tail.as_slice()
+            });
+        }
+        if self.head.is_empty() {
+            let _ = self.namespace_frame_spans.set(None);
+            return None;
+        }
+        let shell = [self.head.as_slice(), self.tail.as_slice()].concat();
+        let gap = self.head.len()..self.head.len();
+        if closed_word_body(&shell, gap).is_none() {
+            let _ = self.namespace_frame_spans.set(None);
+            return None;
+        }
+        note_namespace_scope_bytes(shell.len());
+        let Some(scopes) = document_namespace_scopes(&shell).ok() else {
+            let _ = self.namespace_frame_spans.set(None);
+            return None;
+        };
+        note_namespace_span_bytes(shell.len());
+        let split = match modeled_owner_spans(&shell) {
+            Ok(spans) => {
+                let mut head_spans = Vec::new();
+                let mut tail_spans = Vec::new();
+                let mut contained = true;
+                for span in spans {
+                    if span.end <= self.head.len() {
+                        head_spans.push(span);
+                    } else if span.start >= self.head.len() {
+                        let shift = self.head.len();
+                        tail_spans.push(ModeledOwnerSpan {
+                            start: span.start - shift,
+                            end: span.end - shift,
+                            ..span
+                        });
+                    } else {
+                        contained = false;
+                        break;
+                    }
+                }
+                contained.then_some((head_spans, tail_spans))
+            }
+            Err(_) => None,
+        };
+        let _ = self
+            .namespace_frame_spans
+            .set(split.map(|(head_spans, tail_spans)| NamespaceFrameSpans {
+                root_declarations: scopes.root_declarations,
+                body_declarations: scopes.body_declarations,
+                body_bindings: scopes.body_bindings,
+                head: Arc::new(self.head.clone()),
+                tail: Arc::new(self.tail.clone()),
+                head_spans,
+                tail_spans,
+            }));
+        self.namespace_frame_spans.get().and_then(Option::as_ref)
+    }
+
+    fn part_partition_matches(&self, xml: &[u8]) -> bool {
+        let part = self.part.as_deref();
+        if part.is_none_or(|part| part.as_slice() != xml) || self.head.is_empty() {
+            return false;
+        }
+        let mut cursor = self.head.len();
+        if xml.get(..cursor) != Some(self.head.as_slice()) {
+            return false;
+        }
+        for block in &self.blocks {
+            let Some(end) = cursor.checked_add(block.bytes.len()) else {
+                return false;
+            };
+            if xml.get(cursor..end) != Some(block.bytes.as_slice()) {
+                return false;
+            }
+            cursor = end;
+        }
+        xml.get(cursor..) == Some(self.tail.as_slice())
+    }
+
+    /// Every modeled owner span of `xml`, in physical order.
+    ///
+    /// The exact part partition, the cached frame-gap certificate and each
+    /// cached closed-child certificate compose the parent proof. Frame scopes
+    /// come from the head and tail shell. A child hit still requires that
+    /// frame context. Child spans are rebased onto the part. Frame head
+    /// spans, including a background owner, stay first. Frame tail spans,
+    /// including a section-tail owner, stay last. One ineligible piece
+    /// declines the whole list.
+    fn proved_namespace_spans(&self, xml: &[u8]) -> Option<Vec<ModeledOwnerSpan>> {
+        if offered_canonical_blocks(Some(self)).is_none() || !self.part_partition_matches(xml) {
+            return None;
+        }
+        let content_end = xml.len().checked_sub(self.tail.len())?;
+        if content_end < self.head.len() {
+            return None;
+        }
+        let frame = self.frame_namespace_spans()?;
+        let scopes = DocumentNamespaceScopes {
+            root_declarations: frame.root_declarations.clone(),
+            body_declarations: frame.body_declarations.clone(),
+            body_bindings: frame.body_bindings.clone(),
+        };
+        let mut spans = frame.head_spans.clone();
+        let mut cursor = self.head.len();
+        for block in &self.blocks {
+            let proof = block.namespace_span_proof(&self.head, &self.tail, &scopes)?;
+            if !Self::namespace_context_matches(
+                &proof.root_declarations,
+                &proof.body_declarations,
+                &proof.body_bindings,
+                proof.head.as_slice(),
+                proof.tail.as_slice(),
+                &scopes,
+                &self.head,
+                &self.tail,
+            ) {
+                return None;
+            }
+            for span in &proof.spans {
+                let start = cursor.checked_add(span.start)?;
+                let end = cursor.checked_add(span.end)?;
+                if start > end || end > content_end {
+                    return None;
+                }
+                spans.push(ModeledOwnerSpan {
+                    start,
+                    end,
+                    ..span.clone()
+                });
+            }
+            cursor = cursor.checked_add(block.bytes.len())?;
+        }
+        if cursor != content_end {
+            return None;
+        }
+        for span in &frame.tail_spans {
+            let start = cursor.checked_add(span.start)?;
+            let end = cursor.checked_add(span.end)?;
+            if start > end || end > xml.len() {
+                return None;
+            }
+            spans.push(ModeledOwnerSpan {
+                start,
+                end,
+                ..span.clone()
+            });
+        }
+        #[cfg(debug_assertions)]
+        without_staging_work(|| {
+            let scanned = modeled_owner_spans(xml).ok();
+            assert_eq!(
+                format!("{:?}", Some(&spans)),
+                format!("{scanned:?}"),
+                "proved namespace spans differ from the old parser"
+            );
+        });
+        Some(spans)
+    }
+
+    /// Positive nested owners for these exact part bytes.
+    ///
+    /// Spans from every piece are combined first. Owner ambiguity is the old
+    /// `namespace_owners_from_spans` policy over that full list. A failed or
+    /// unproved list leaves the cache unset. It does not store an empty owner
+    /// vector. The empty proof remains the only writer of an empty success.
+    fn store_proved_namespace_owners(&self, xml: &[u8]) {
+        if self.nested_namespace_owners.get().is_some() {
+            return;
+        }
+        let Some(spans) = self.proved_namespace_spans(xml) else {
+            return;
+        };
+        if let Ok(owners) = namespace_owners_from_spans(xml, &spans) {
+            let _ = self.nested_namespace_owners.set(Some(owners));
+        }
+    }
+}
+
+fn bytes_declare_namespace(bytes: &[u8]) -> bool {
+    bytes
+        .windows(b"xmlns".len())
+        .any(|window| window == b"xmlns")
+}
+
+/// Normalize one actual source child twice under exact source and writer frames.
+fn normalized_scoped_child(
+    document: &CT_Document,
+    source: &MainPartBlocks,
+    normal: &MainPartBlocks,
+    bytes: &[u8],
+) -> Option<(BodyContent, Vec<u8>)> {
+    let read = |record: &MainPartBlocks, bytes: &[u8]| -> Option<BodyContent> {
+        let mut xml = record.head.clone();
+        let end = xml.len().checked_add(bytes.len())?;
+        xml.extend_from_slice(bytes);
+        xml.extend_from_slice(&record.tail);
+        closed_word_body(&xml, record.head.len()..end)?;
+        note_staging_work(|work| work.children_read += 1);
+        let mut parsed = CT_Document::from_xml(&xml).ok()?;
+        if parsed.body.content.len() != 1 {
+            return None;
+        }
+        let item = parsed.body.content.pop()?;
+        if parsed.to_xml().ok()? != record.frame.get()?.as_ref()?.to_xml().ok()? {
+            return None;
+        }
+        Some(item)
+    };
+    let item = read(source, bytes)?;
+    let written = document.body_item_xml(&item).ok()?;
+    let root = normal.head.get(normal.root.clone())?;
+    if !root.windows(10).any(|bytes| bytes == b"xmlns:w14=")
+        && written.windows(5).any(|bytes| {
+            matches!(bytes[0], b'<' | b'/' | b' ' | b'\t' | b'\r' | b'\n') && &bytes[1..] == b"w14:"
+        })
+    {
+        return None;
+    }
+    let item = read(normal, &written)?;
+    let rewritten = document.body_item_xml(&item).ok()?;
+    Some((item, rewritten))
+}
+
+fn prove_empty_body_frame(head: &[u8], tail: &[u8]) -> Option<CT_Document> {
+    if head.is_empty() {
+        return None;
+    }
+    let shell = [head, tail].concat();
+    let parsed = CT_Document::from_xml(&shell).ok()?;
+    if !parsed.body.content.is_empty() {
+        return None;
+    }
+    (parsed.to_xml().ok().as_deref() == Some(shell.as_slice())).then_some(parsed)
+}
+
+fn parse_one_child(head: &[u8], tail: &[u8], child: &[u8]) -> Option<BodyContent> {
+    if child.is_empty() {
+        return None;
+    }
+    let mut xml = Vec::with_capacity(head.len() + child.len() + tail.len());
+    xml.extend_from_slice(head);
+    xml.extend_from_slice(child);
+    xml.extend_from_slice(tail);
+    let mut parsed = CT_Document::from_xml(&xml).ok()?;
+    if parsed.body.content.len() != 1 {
+        return None;
+    }
+    let again = parsed.body_item_xml(&parsed.body.content[0]).ok()?;
+    if again.as_slice() != child {
+        return None;
+    }
+    parsed.body.content.pop()
+}
+
+impl BodyBlockScan {
+    fn from_source(bytes: Vec<u8>) -> Self {
+        Self {
+            declares_namespace: bytes_declare_namespace(&bytes),
+            bytes,
+            owners: Vec::new(),
+            items: None,
+            staged: None,
+            proved: OnceLock::new(),
+            identifier_proof: OnceLock::new(),
+            canonical_read: OnceLock::new(),
+            empty_namespace_owners: OnceLock::new(),
+            namespace_spans: OnceLock::new(),
+            decodes: OnceLock::new(),
+        }
+    }
+
+    fn decodes(&self, root: &[u8]) -> bool {
+        *self.decodes.get_or_init(|| {
+            let mut xml = root.to_vec();
+            xml.extend_from_slice(b"<w:body>");
+            xml.extend_from_slice(&self.bytes);
+            xml.extend_from_slice(b"</w:body></w:document>");
+            note_canonical_fragment(xml.len());
+            xml_decodes(&xml)
+        })
+    }
+
+    /// Read one source child that may normalize on write. Only an exact
+    /// writer round trip supplies `staged`, so a parsed source never grants
+    /// serialization reuse by value. Private owner facts keep the full path
+    /// when that exact writer proof is unavailable.
+    fn read_source_child(
+        &mut self,
+        head: &[u8],
+        tail: &[u8],
+        scopes: &DocumentNamespaceScopes,
+    ) -> Option<BodyContent> {
+        let end = head.len().checked_add(self.bytes.len())?;
+        let mut xml = Vec::with_capacity(end.checked_add(tail.len())?);
+        xml.extend_from_slice(head);
+        xml.extend_from_slice(&self.bytes);
+        xml.extend_from_slice(tail);
+        closed_word_body(&xml, head.len()..end)?;
+        note_staging_work(|work| work.children_read += 1);
+        let mut parsed = CT_Document::from_xml(&xml).ok()?;
+        if parsed.body.content.len() != 1 {
+            return None;
+        }
+        let item = parsed.body.content.pop()?;
+        let round_trips = parsed.body_item_xml(&item).ok()? == self.bytes;
+        if !round_trips
+            && (self.bytes.contains(&b'&')
+                || holds_field_words(&self.bytes)
+                || !item.owner_facts_reusable_by_value())
+        {
+            return None;
+        }
+        let shell = CT_Document::from_xml(&[head, tail].concat()).ok()?;
+        if !shell.body.content.is_empty() || parsed.to_xml().ok()? != shell.to_xml().ok()? {
+            return None;
+        }
+        self.proved = OnceLock::from(ParsedChild {
+            root_declarations: scopes.root_declarations.clone(),
+            body_declarations: scopes.body_declarations.clone(),
+            body_bindings: scopes.body_bindings.clone(),
+            parsed: Some(item.clone()),
+        });
+        self.staged = round_trips.then(|| item.clone());
+        Some(item)
+    }
+
+    fn reads_anew(&self) -> bool {
+        holds_field_words(&self.bytes)
+            || self
+                .staged
+                .as_ref()
+                .is_some_and(|item| !item.owner_facts_reusable_by_value())
+    }
+
+    fn read_child(
+        &self,
+        head: &[u8],
+        tail: &[u8],
+        scopes: &DocumentNamespaceScopes,
+    ) -> Option<BodyContent> {
+        if self.reads_anew() {
+            note_staging_work(|work| work.children_read += 1);
+            return parse_one_child(head, tail, &self.bytes);
+        }
+        let cached = self.proved.get_or_init(|| {
+            note_staging_work(|work| work.children_read += 1);
+            ParsedChild {
+                root_declarations: scopes.root_declarations.clone(),
+                body_declarations: scopes.body_declarations.clone(),
+                body_bindings: scopes.body_bindings.clone(),
+                parsed: parse_one_child(head, tail, &self.bytes),
+            }
+        });
+        if cached.root_declarations != scopes.root_declarations
+            || cached.body_declarations != scopes.body_declarations
+            || cached.body_bindings != scopes.body_bindings
+        {
+            note_staging_work(|work| work.children_read += 1);
+            return parse_one_child(head, tail, &self.bytes);
+        }
+        cached.parsed.clone()
+    }
+}
+
+struct MainStoryLayout {
+    content: Range<usize>,
+    frame: Arc<BodyBlockScan>,
+    blocks: Vec<(usize, Arc<BodyBlockScan>)>,
+    fingerprint: Option<u64>,
+}
+
+fn holds(start: usize, block: &BodyBlockScan, range: &Range<usize>) -> bool {
+    let end = start + block.bytes.len();
+    start <= range.start && range.start < end && range.end <= end
+}
+
+impl MainStoryLayout {
+    fn owner_kinds(&self) -> Vec<StoryKind> {
+        let (head, tail) = self.frame_owners();
+        head.iter()
+            .chain(
+                self.blocks
+                    .iter()
+                    .flat_map(|(_, block)| block.owners.iter()),
+            )
+            .chain(&tail)
+            .map(|owner| owner.kind)
+            .collect()
+    }
+
+    fn frame_offset(&self, at: usize, is_end: bool) -> usize {
+        let head = self.content.start;
+        if at > head || (at == head && !is_end) {
+            at - head + self.content.end
+        } else {
+            at
+        }
+    }
+
+    fn frame_owners(&self) -> (Vec<StoryOwnerSpan>, Vec<StoryOwnerSpan>) {
+        self.frame
+            .owners
+            .iter()
+            .map(|owner| StoryOwnerSpan {
+                full: self.frame_offset(owner.full.start, false)
+                    ..self.frame_offset(owner.full.end, true),
+                ..owner.clone()
+            })
+            .partition(|owner| owner.full.start < self.content.start)
+    }
+
+    fn owners(&self, xml: &[u8]) -> Result<Vec<StoryOwnerSpan>> {
+        let (head, tail) = self.frame_owners();
+        let mut owners = head;
+        for (start, block) in &self.blocks {
+            owners.extend(block.owners.iter().map(|owner| StoryOwnerSpan {
+                full: owner.full.start + start..owner.full.end + start,
+                ..owner.clone()
+            }));
+        }
+        owners.extend(tail);
+        let mut counts = HashMap::new();
+        for owner in &mut owners {
+            let count = counts.entry(owner.kind).or_insert(0usize);
+            owner.owner_index = *count;
+            *count += 1;
+            if owner.kind == StoryKind::Body {
+                owner.fingerprint = self.body_fingerprint(xml, &owner.full)?;
+            }
+        }
+        Ok(owners)
+    }
+
+    fn body_fingerprint(&self, xml: &[u8], full: &Range<usize>) -> Result<u64> {
+        match self.fingerprint {
+            Some(fingerprint) => Ok(fingerprint),
+            None => structural_fingerprint(&xml[full.clone()]),
+        }
+    }
+
+    fn owner(&self, xml: &[u8], kind: StoryKind, index: usize) -> Result<Option<StoryOwnerSpan>> {
+        let (head, tail) = self.frame_owners();
+        let blocks = self.blocks.iter().flat_map(|(start, block)| {
+            block.owners.iter().map(move |owner| StoryOwnerSpan {
+                full: owner.full.start + start..owner.full.end + start,
+                ..owner.clone()
+            })
+        });
+        let Some(mut owner) = head
+            .into_iter()
+            .chain(blocks)
+            .chain(tail)
+            .filter(|owner| owner.kind == kind)
+            .nth(index)
+        else {
+            return Ok(None);
+        };
+        owner.owner_index = index;
+        if kind == StoryKind::Body {
+            owner.fingerprint = self.body_fingerprint(xml, &owner.full)?;
+        }
+        Ok(Some(owner))
+    }
+
+    fn frame_items(&self) -> impl Iterator<Item = StoryItemSpan> + '_ {
+        self.frame
+            .items()
+            .iter()
+            .map(|item| item.moved(|at, is_end| self.frame_offset(at, is_end)))
+    }
+
+    fn body_items(&self) -> Vec<StoryItemSpan> {
+        let mut items = Vec::new();
+        for (start, block) in &self.blocks {
+            items.extend(
+                block
+                    .items()
+                    .iter()
+                    .map(|item| item.moved(|at, _| at + start)),
+            );
+        }
+        items.extend(self.frame_items());
+        items
+    }
+
+    fn body_item(&self, index: usize) -> (Option<StoryItemSpan>, usize) {
+        let mut before = 0;
+        let mut found = None;
+        for (start, block) in &self.blocks {
+            if found.is_none()
+                && let Some(item) = index
+                    .checked_sub(before)
+                    .and_then(|local| block.items().get(local))
+            {
+                found = Some(item.moved(|at, _| at + start));
+            }
+            before += block.items().len();
+        }
+        if found.is_none() {
+            found = index
+                .checked_sub(before)
+                .and_then(|local| self.frame_items().nth(local));
+        }
+        (found, before + self.frame.items().len())
+    }
+
+    fn is_section_properties(&self, xml: &[u8], item: &StoryItemSpan) -> Result<bool> {
+        if item.kind != StoryItemKind::PreservedNode {
+            return Ok(false);
+        }
+        match self.block_source(xml, &item.full) {
+            Some((source, shift)) => content_fragment_root_is_section_properties(
+                &source,
+                &item.moved(|at, _| at - shift),
+            ),
+            None => content_fragment_root_is_section_properties(xml, item),
+        }
+    }
+
+    fn direct_body_item(
+        &self,
+        xml: &[u8],
+        slot: usize,
+        content: bool,
+    ) -> Result<Option<(usize, StoryItemSpan)>> {
+        let blocks = self.blocks.iter().flat_map(|(start, block)| {
+            block
+                .items()
+                .iter()
+                .map(move |item| item.moved(|at, _| at + start))
+        });
+        let mut direct = 0;
+        for (index, item) in blocks.chain(self.frame_items()).enumerate() {
+            if !item.direct_owner_child || (content && self.is_section_properties(xml, &item)?) {
+                continue;
+            }
+            if direct == slot {
+                return Ok(Some((index, item)));
+            }
+            direct += 1;
+        }
+        Ok(None)
+    }
+
+    fn child_holding(&self, range: &Range<usize>) -> Option<usize> {
+        let index = self
+            .blocks
+            .partition_point(|(start, _)| *start <= range.start)
+            .checked_sub(1)?;
+        let (start, block) = &self.blocks[index];
+        holds(*start, block, range).then_some(index)
+    }
+
+    fn joined_source(&self, xml: &[u8], start: usize, bytes: &[u8]) -> (Vec<u8>, usize) {
+        let mut source = Vec::with_capacity(xml.len() - self.content.len() + bytes.len());
+        source.extend_from_slice(&xml[..self.content.start]);
+        source.extend_from_slice(bytes);
+        source.extend_from_slice(&xml[self.content.end..]);
+        (source, start - self.content.start)
+    }
+
+    fn child_source(&self, xml: &[u8], index: usize) -> (Vec<u8>, usize) {
+        let (start, block) = &self.blocks[index];
+        self.joined_source(xml, *start, &block.bytes)
+    }
+
+    fn block_source(&self, xml: &[u8], range: &Range<usize>) -> Option<(Vec<u8>, usize)> {
+        if self.content.end <= range.start {
+            return Some(self.joined_source(xml, self.content.end, &[]));
+        }
+        Some(self.child_source(xml, self.child_holding(range)?))
+    }
+
+    fn owner_items(&self, xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemSpan>> {
+        if owner.kind == StoryKind::Body {
+            return Ok(self.body_items());
+        }
+        let Some((source, shift)) = self.block_source(xml, &owner.full) else {
+            return scan_story_items(xml, owner, None);
+        };
+        let local = StoryOwnerSpan {
+            full: owner.full.start - shift..owner.full.end - shift,
+            ..owner.clone()
+        };
+        Ok(scan_story_items(&source, &local, None)?
+            .iter()
+            .map(|item| item.moved(|at, _| at + shift))
+            .collect())
+    }
+}
+
+/// One Word body covers `covered`. A scan error, a missing body, or another
+/// body is an unproved wrapper. Callers keep the whole scanner and publish
+/// no new error.
+fn closed_word_body(xml: &[u8], covered: Range<usize>) -> Option<()> {
+    note_closed_body_guard(xml.len());
+    let owners = scan_story_owners(xml, StoryKind::Body).ok()?;
+    single_frame_body(&owners, Some(covered)).ok().map(|_| ())
+}
+
+/// The cache represents one frame body. More than one body, or one body that
+/// does not cover `covered`, is a layout miss. Callers then use the old reader.
+fn single_frame_body(
+    owners: &[StoryOwnerSpan],
+    covered: Option<Range<usize>>,
+) -> Result<&StoryOwnerSpan> {
+    let mut body = None;
+    for owner in owners {
+        if owner.kind != StoryKind::Body {
+            continue;
+        }
+        if body.is_some() {
+            return Err(Error::Other(
+                "main part body frame does not match the scanned body owners".to_owned(),
+            ));
+        }
+        body = Some(owner);
+    }
+    let body =
+        body.ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
+    if let Some(covered) = covered
+        && (covered.start < body.full.start || covered.end > body.full.end)
+    {
+        return Err(Error::Other(
+            "main part body frame does not match the scanned body owners".to_owned(),
+        ));
+    }
+    Ok(body)
+}
+
+fn scan_body_block(
+    head: &[u8],
+    block: Option<&[u8]>,
+    tail: &[u8],
+    items: bool,
+) -> Result<BodyBlockScan> {
+    let xml = [head, block.unwrap_or_default(), tail].concat();
+    let owners = scan_story_owners(&xml, StoryKind::Body)?;
+    let covered = block.map(|block| head.len()..head.len() + block.len());
+    let body = single_frame_body(&owners, covered.clone())?;
+    let body_items = items
+        .then(|| scan_story_items(&xml, body, None))
+        .transpose()?;
+    let Some(block) = block else {
+        return Ok(BodyBlockScan {
+            bytes: Vec::new(),
+            owners,
+            items: body_items,
+            staged: None,
+            proved: OnceLock::new(),
+            declares_namespace: bytes_declare_namespace(block.unwrap_or_default()),
+            identifier_proof: OnceLock::new(),
+            canonical_read: OnceLock::new(),
+            empty_namespace_owners: OnceLock::new(),
+            namespace_spans: OnceLock::new(),
+            decodes: OnceLock::new(),
+        });
+    };
+    let range = head.len()..head.len() + block.len();
+    Ok(child_scan(&range, block, &owners, body_items.as_deref()))
+}
+
+#[cfg(test)]
+thread_local! {
+    static BODY_COVERAGE_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn note_body_coverage_step() {
+    BODY_COVERAGE_STEPS.with(|cell| cell.set(cell.get() + 1));
+}
+
+#[cfg(test)]
+fn body_coverage_steps() -> usize {
+    BODY_COVERAGE_STEPS.with(std::cell::Cell::get)
+}
+
+/// One forward sweep over spans already ordered by start. Children are
+/// contiguous and ordered. Each span is compared with the one child that can
+/// still contain its start. A span that overlaps that child and extends
+/// outside it crosses a raw block boundary.
+fn span_crosses_child(
+    children: &[Range<usize>],
+    spans: impl Iterator<Item = Range<usize>>,
+) -> bool {
+    let mut index = 0;
+    for span in spans {
+        #[cfg(test)]
+        note_body_coverage_step();
+        while index < children.len() && children[index].end <= span.start {
+            #[cfg(test)]
+            note_body_coverage_step();
+            index += 1;
+        }
+        if let Some(child) = children.get(index) {
+            #[cfg(test)]
+            note_body_coverage_step();
+            let overlaps = span.start < child.end && child.start < span.end;
+            let contains = child.start <= span.start && span.end <= child.end;
+            if overlaps && !contains {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn body_spans_cross_children(
+    children: &[Range<usize>],
+    owners: &[StoryOwnerSpan],
+    items: Option<&[StoryItemSpan]>,
+) -> bool {
+    span_crosses_child(
+        children,
+        owners
+            .iter()
+            .filter(|owner| owner.kind != StoryKind::Body)
+            .map(|owner| owner.full.clone()),
+    ) || items.is_some_and(|items| {
+        span_crosses_child(children, items.iter().map(|item| item.full.clone()))
+    })
+}
+
+fn child_scan(
+    range: &Range<usize>,
+    bytes: &[u8],
+    owners: &[StoryOwnerSpan],
+    items: Option<&[StoryItemSpan]>,
+) -> BodyBlockScan {
+    let contains = |span: &Range<usize>| range.start <= span.start && span.end <= range.end;
+    let first = owners.partition_point(|owner| owner.full.start < range.start);
+    BodyBlockScan {
+        bytes: bytes.to_vec(),
+        owners: owners[first..]
+            .iter()
+            .take_while(|owner| owner.full.start < range.end)
+            .filter(|owner| owner.kind != StoryKind::Body && contains(&owner.full))
+            .map(|owner| StoryOwnerSpan {
+                full: owner.full.start - range.start..owner.full.end - range.start,
+                ..owner.clone()
+            })
+            .collect(),
+        items: items.map(|items| {
+            let first = items.partition_point(|item| item.full.start < range.start);
+            items[first..]
+                .iter()
+                .take_while(|item| item.full.start < range.end)
+                .filter(|item| contains(&item.full))
+                .map(|item| item.moved(|at, _| at - range.start))
+                .collect()
+        }),
+        staged: None,
+        proved: OnceLock::new(),
+        declares_namespace: bytes_declare_namespace(bytes),
+        identifier_proof: OnceLock::new(),
+        canonical_read: OnceLock::new(),
+        empty_namespace_owners: OnceLock::new(),
+        namespace_spans: OnceLock::new(),
+        decodes: OnceLock::new(),
+    }
+}
+
+fn scan_body_children(
+    xml: &[u8],
+    children: &[Range<usize>],
+    todo: &[usize],
+    items: bool,
+) -> Result<(Vec<BodyBlockScan>, u64)> {
+    let owners = scan_story_owners(xml, StoryKind::Body)?;
+    let covered = children
+        .first()
+        .map(|first| first.start..children.last().expect("last child").end);
+    let body = single_frame_body(&owners, covered)?;
+    let body_items = items
+        .then(|| scan_story_items(xml, body, None))
+        .transpose()?;
+    if body_spans_cross_children(children, &owners, body_items.as_deref()) {
+        return Err(Error::Other(
+            "body block scan does not cover a span that crosses child ranges".to_owned(),
+        ));
+    }
+    let scans = todo
+        .iter()
+        .map(|index| {
+            let range = &children[*index];
+            child_scan(range, &xml[range.clone()], &owners, body_items.as_deref())
+        })
+        .collect();
+    Ok((scans, body.fingerprint))
+}
+
+fn full_direct_body_item_location(
+    xml: &[u8],
+    part_name: &str,
+    slot: usize,
+) -> Result<Option<ContentLocation>> {
+    let owners = scan_story_owners(xml, StoryKind::Body)?;
+    let body = owners
+        .iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
+    let items = scan_story_items(xml, body, None)?;
+    let direct = direct_story_content_items(xml, body)?;
+    let Some(item) = direct.get(slot) else {
+        return Ok(None);
+    };
+    let index = items
+        .iter()
+        .position(|candidate| candidate.full == item.full)
+        .ok_or_else(|| {
+            Error::Other("direct body item is missing from the body story".to_owned())
+        })?;
+    Ok(Some(ContentLocation::new(
+        StoryId {
+            kind: StoryKind::Body,
+            part_name: part_name.to_owned(),
+            owner_index: body.owner_index,
+            fingerprint: body.fingerprint,
+        },
+        item.kind,
+        vec![index],
+    )))
+}
+
+fn story_owner_items(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    layout: Option<&MainStoryLayout>,
+) -> Result<Vec<StoryItemSpan>> {
+    match layout {
+        Some(layout) => layout.owner_items(xml, owner),
+        None => scan_story_items(xml, owner, None),
+    }
+}
+
+fn story_owner_item(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    layout: Option<&MainStoryLayout>,
+    index: usize,
+) -> Result<(Option<StoryItemSpan>, usize)> {
+    if let Some(layout) = layout
+        && owner.kind == StoryKind::Body
+    {
+        return Ok(layout.body_item(index));
+    }
+    let items = story_owner_items(xml, owner, layout)?;
+    Ok((items.get(index).cloned(), items.len()))
+}
+
+fn story_control_paragraphs(
+    xml: &[u8],
+    control: &StoryItemSpan,
+    layout: Option<&MainStoryLayout>,
+) -> Result<Vec<Range<usize>>> {
+    let Some((source, shift)) = layout.and_then(|layout| layout.block_source(xml, &control.full))
+    else {
+        return scan_story_control_paragraphs(xml, control);
+    };
+    let local = control.moved(|at, _| at - shift);
+    Ok(scan_story_control_paragraphs(&source, &local)?
+        .into_iter()
+        .map(|paragraph| paragraph.start + shift..paragraph.end + shift)
+        .collect())
+}
+
+#[cfg(debug_assertions)]
+fn assert_main_story_layout(xml: &[u8], layout: &MainStoryLayout, items: bool) {
+    let whole = scan_story_owners(xml, StoryKind::Body).expect("the main part scans whole");
+    let owners = layout
+        .owners(xml)
+        .expect("the main story layout gives its owners");
+    let key = |owner: &StoryOwnerSpan| {
+        (
+            owner.kind,
+            owner.owner_index,
+            owner.full.clone(),
+            owner.fingerprint,
+        )
+    };
+    assert_eq!(
+        owners.iter().map(key).collect::<Vec<_>>(),
+        whole.iter().map(key).collect::<Vec<_>>()
+    );
+    if !items {
+        return;
+    }
+    let body = whole
+        .iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .expect("body");
+    let whole_items = scan_story_items(xml, body, None).expect("body items");
+    let item_key = |item: &StoryItemSpan| (item.kind, item.full.clone(), item.direct_owner_child);
+    assert_eq!(
+        layout.body_items().iter().map(item_key).collect::<Vec<_>>(),
+        whole_items.iter().map(item_key).collect::<Vec<_>>()
+    );
+}
+
 // Paired source events prove physical correspondence while permitting only
 // namespace declarations to differ. Non-namespace source remains exact.
 #[allow(clippy::type_complexity)] // Concrete physical map and changed namespace offsets form one proof.
@@ -7144,6 +10354,119 @@ struct XmlElementFrame {
     word_prefixes: Vec<String>,
     opaque: bool,
     typed_sdt_content_seen: bool,
+}
+
+fn xml_decodes(xml: &[u8]) -> bool {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element) | Event::Empty(element)) => {
+                for attribute in element.attributes() {
+                    let Ok(attribute) = attribute else {
+                        return false;
+                    };
+                    if attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .is_err()
+                        || attribute
+                            .key
+                            .as_ref()
+                            .strip_prefix(b"xmlns:")
+                            .is_some_and(|prefix| std::str::from_utf8(prefix).is_err())
+                    {
+                        return false;
+                    }
+                }
+            }
+            Ok(Event::Eof) => return true,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+        buffer.clear();
+    }
+}
+
+fn scoped_proof_marker(original: &[u8], restored: &[u8]) -> Result<String> {
+    let mut identity = 0usize;
+    loop {
+        let marker = format!("rdocxScopedPositionProof{identity}");
+        if !original
+            .windows(marker.len())
+            .any(|bytes| bytes == marker.as_bytes())
+            && !restored
+                .windows(marker.len())
+                .any(|bytes| bytes == marker.as_bytes())
+        {
+            return Ok(marker);
+        }
+        identity = identity
+            .checked_add(1)
+            .ok_or_else(|| Error::Other("scoped source proof identity exhausted".into()))?;
+    }
+}
+
+fn scoped_proof_sentinel(selected_closed: &[u8], marker: &str) -> Result<String> {
+    let mut reader = NsReader::from_reader(selected_closed);
+    let (namespace, event) = reader
+        .read_resolved_event()
+        .map_err(|error| Error::Other(error.to_string()))?;
+    let root = match event {
+        Event::Start(element) | Event::Empty(element) => element,
+        _ => return Err(Error::Other("scoped source proof has no root".into())),
+    };
+    if !word_element(&namespace) {
+        return Err(Error::Other(
+            "scoped source proof needs a qualified Word block".into(),
+        ));
+    }
+    let paragraph =
+        format!(r#"<w:p xmlns:w="{WORD_NAMESPACE}"><w:r><w:t>{marker}</w:t></w:r></w:p>"#);
+    Ok(match root.local_name().as_ref() {
+        b"p" => paragraph,
+        b"tbl" => format!(
+            r#"<w:tbl xmlns:w="{WORD_NAMESPACE}"><w:tr><w:tc>{paragraph}</w:tc></w:tr></w:tbl>"#
+        ),
+        b"tc" => format!(r#"<w:tc xmlns:w="{WORD_NAMESPACE}">{paragraph}</w:tc>"#),
+        b"sdt" => format!(
+            r#"<w:sdt xmlns:w="{WORD_NAMESPACE}"><w:sdtPr/><w:sdtContent>{paragraph}</w:sdtContent></w:sdt>"#
+        ),
+        _ => return Err(Error::Other("unsupported scoped source proof kind".into())),
+    })
+}
+
+fn canonical_retained_main_part(
+    retained: &[u8],
+    remap: &HashMap<String, String>,
+    modeled_drawing_ids: &[u32],
+    nested_image_relationship_ids: &HashSet<String>,
+    canonical_drawing_ids: &[(u32, u32)],
+) -> Result<Option<(Vec<u8>, CT_Document)>> {
+    let mut retained = remap_xml_relationship_ids(retained, remap)?;
+    note_staging_work(|work| work.canonicalized += retained.len());
+    let slots = authored_drawing_slots_in_source_order(
+        &retained,
+        modeled_drawing_ids,
+        nested_image_relationship_ids,
+    )?;
+    if slots.len() != canonical_drawing_ids.len()
+        || slots
+            .iter()
+            .zip(canonical_drawing_ids)
+            .any(|((_, _, old), (expected, _))| old != expected)
+    {
+        return Ok(None);
+    }
+    for ((_, span, _), (_, id)) in slots
+        .into_iter()
+        .rev()
+        .zip(canonical_drawing_ids.iter().rev())
+    {
+        retained.splice(span, id.to_string().into_bytes());
+    }
+    note_staging_work(|work| work.parsed += retained.len());
+    let document = CT_Document::from_xml(&retained)?;
+    Ok(Some((retained, document)))
 }
 
 fn word_element(namespace: &ResolveResult<'_>) -> bool {
@@ -8937,8 +12260,16 @@ fn content_fragment_root_is_section_properties(xml: &[u8], item: &StoryItemSpan)
 }
 
 fn direct_story_content_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemSpan>> {
+    direct_story_content_items_in(xml, owner, scan_story_items(xml, owner, None)?)
+}
+
+fn direct_story_content_items_in(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    story_items: Vec<StoryItemSpan>,
+) -> Result<Vec<StoryItemSpan>> {
     let mut items = Vec::new();
-    for item in scan_story_items(xml, owner, None)? {
+    for item in story_items {
         if !item.direct_owner_child {
             continue;
         }
@@ -10433,12 +13764,44 @@ pub(crate) fn set_story_source_xml(
         let mut xml = xml;
         declare_w14_on_part_root(&mut xml)?;
         let namespace_scopes = document_namespace_scopes(&xml)?;
-        document.document = CT_Document::from_xml(&xml)?;
-        document.plain_local_edit_blocked = plain_local_edit_is_blocked(
+        let xml = Arc::new(xml);
+        let rebuilt = document.source_blocks(&xml);
+        let (parsed, blocks) = match rebuilt {
+            Some((parsed, blocks)) => (parsed, Some(blocks)),
+            None => {
+                note_staging_work(|work| work.parsed += xml.len());
+                (CT_Document::from_xml(&xml)?, None)
+            }
+        };
+        #[cfg(debug_assertions)]
+        if blocks.is_some() {
+            without_staging_work(|| {
+                let whole = CT_Document::from_xml(&xml).expect("proved source parses whole");
+                assert_eq!(parsed, whole, "source pieces changed the parsed model");
+                assert_eq!(
+                    parsed.to_xml().ok(),
+                    whole.to_xml().ok(),
+                    "source normalization changed"
+                );
+            });
+        }
+        let nested_namespace_owners = OnceLock::new();
+        if let Some(owners) = blocks
+            .as_ref()
+            .and_then(|blocks| blocks.retained_nested_owners(&xml))
+        {
+            let _ = nested_namespace_owners.set(Some(owners));
+        }
+        let (blocked, unsavable) = plain_local_edit_facts(
             &namespace_scopes.root_declarations,
             &namespace_scopes.body_declarations,
             &xml,
+            &nested_namespace_owners,
         );
+        document.plain_local_edit_blocked = blocked;
+        document.unsavable_body_edit_cache = unsavable;
+        document.document = parsed;
+        document.main_part_blocks = blocks;
         document.package.set_part(part_name, xml);
         document.root_namespace_declarations = namespace_scopes.root_declarations;
         document.body_namespace_declarations = namespace_scopes.body_declarations;
@@ -15668,6 +19031,158 @@ fn modeled_main_cell_route(xml: &[u8], target: &StoryOwnerSpan) -> Result<(usize
     Ok((content_index, cell_index))
 }
 
+/// The body story path of each paragraph of `body`, in
+/// [`CT_Body::paragraphs`] order, as [`Document::paragraph_story_location`]
+/// resolves it from the body story items `items`, or `None` where it gives
+/// no location.
+fn body_paragraph_routes(body: &CT_Body, items: &[StoryItemSpan]) -> Vec<Option<Vec<usize>>> {
+    let mut targets = HashMap::new();
+    for (slot, child) in body.content.iter().enumerate() {
+        match child {
+            BodyContent::Paragraph(paragraph) => {
+                targets
+                    .entry(paragraph.as_ref() as *const CT_P)
+                    .or_insert((slot, None));
+            }
+            BodyContent::ContentControl(control) => {
+                for (ordinal, paragraph) in control
+                    .content
+                    .iter()
+                    .filter_map(|child| match child {
+                        SdtContent::Paragraph(paragraph) => Some(paragraph),
+                        _ => None,
+                    })
+                    .enumerate()
+                {
+                    targets
+                        .entry(paragraph as *const CT_P)
+                        .or_insert((slot, Some(ordinal)));
+                }
+            }
+            _ => {}
+        }
+    }
+    let direct = items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.direct_owner_child)
+        .collect::<Vec<_>>();
+    body.paragraphs()
+        .map(|paragraph| {
+            let (slot, ordinal) = *targets.get(&(paragraph as *const CT_P))?;
+            let (item_index, item) = direct.get(slot)?;
+            let expected_kind = if ordinal.is_some() {
+                StoryItemKind::ContentControl
+            } else {
+                StoryItemKind::Paragraph
+            };
+            (item.kind == expected_kind)
+                .then(|| std::iter::once(*item_index).chain(ordinal).collect())
+        })
+        .collect()
+}
+
+/// [`Document::cell_paragraph_story_locations`] of `body`, serialized as
+/// `xml` with the story owners `owners` in the main part `part_name`, and
+/// whether it routed every table cell owner. Like the single lookup, which
+/// fails on the first owner it cannot route, the inventory stops there.
+#[allow(clippy::type_complexity)] // The located paragraphs of each cell and one fact.
+fn cell_paragraph_routes(
+    body: &mut CT_Body,
+    xml: &[u8],
+    owners: &[StoryOwnerSpan],
+    part_name: &str,
+) -> Result<(HashMap<(usize, usize, usize), Vec<ContentLocation>>, bool)> {
+    let mut addresses = HashMap::<*const CT_Tc, (usize, usize, usize)>::new();
+    for (table_index, table) in body.tables().enumerate() {
+        for (row_index, row) in table.rows.iter().enumerate() {
+            for (cell_index, cell) in row.cells.iter().enumerate() {
+                addresses.entry(cell as *const CT_Tc).or_insert((
+                    table_index,
+                    row_index,
+                    cell_index,
+                ));
+            }
+        }
+    }
+    let body_owner = owners
+        .iter()
+        .find(|owner| owner.kind == StoryKind::Body)
+        .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
+    let direct_items = direct_story_content_items(xml, body_owner)?;
+    let mut ordinals = HashMap::<usize, usize>::new();
+    let mut selected = Vec::new();
+    let mut seen = HashSet::new();
+    let mut complete = true;
+    for owner in owners
+        .iter()
+        .filter(|owner| owner.kind == StoryKind::TableCell)
+    {
+        // The single lookup fails on the first owner it cannot route,
+        // whatever its target, so the inventory stops there too.
+        let Some((content, direct_item)) = direct_items.iter().enumerate().find(|(_, item)| {
+            item.full.start <= owner.full.start && owner.full.end <= item.full.end
+        }) else {
+            complete = false;
+            break;
+        };
+        if !matches!(
+            direct_item.kind,
+            StoryItemKind::Table | StoryItemKind::ContentControl
+        ) {
+            complete = false;
+            break;
+        }
+        let counter = ordinals.entry(content).or_insert(0);
+        let mut ordinal = *counter;
+        *counter += 1;
+        let modeled = match body.content.get_mut(content) {
+            Some(BodyContent::Table(table)) => nth_cell_in_table(table.as_mut(), &mut ordinal),
+            Some(BodyContent::ContentControl(control)) => {
+                nth_cell_in_control(control.as_mut(), &mut ordinal)
+            }
+            _ => None,
+        };
+        let Some((pointer, count)) =
+            modeled.map(|cell| (&*cell as *const CT_Tc, cell.paragraphs().len()))
+        else {
+            continue;
+        };
+        let Some(address) = addresses.get(&pointer) else {
+            continue;
+        };
+        if !seen.insert(*address) {
+            continue;
+        }
+        let story = StoryId {
+            kind: owner.kind,
+            part_name: part_name.to_owned(),
+            owner_index: owner.owner_index,
+            fingerprint: owner.fingerprint,
+        };
+        selected.push((*address, count, (story, owner.clone())));
+    }
+    let pairs = selected
+        .iter()
+        .map(|(_, _, pair)| pair.clone())
+        .collect::<Vec<_>>();
+    let spans = story_range_paragraph_spans(xml, &pairs)?;
+    let mut result = HashMap::with_capacity(selected.len());
+    for ((address, count, _), mut paragraphs) in selected.into_iter().zip(spans) {
+        paragraphs.sort_by_key(|(_, span)| span.start);
+        if paragraphs.len() == count {
+            result.insert(
+                address,
+                paragraphs
+                    .into_iter()
+                    .map(|(location, _)| location)
+                    .collect(),
+            );
+        }
+    }
+    Ok((result, complete))
+}
+
 fn nth_cell_in_control<'a>(control: &'a mut CT_Sdt, index: &mut usize) -> Option<&'a mut CT_Tc> {
     for child in &mut control.content {
         let cell = match child {
@@ -17326,6 +20841,7 @@ impl Document {
             body_namespace_declarations: Vec::new(),
             body_namespace_bindings: Vec::new(),
             plain_local_edit_blocked: false,
+            unsavable_body_edit_cache: OnceLock::from(None),
             styles,
             numbering: None,
             core_properties,
@@ -17377,6 +20893,9 @@ impl Document {
             normal_layout_engine: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
             bundled_fallback_layout_engine: Mutex::new(None),
+            parsed: None,
+            main_body_scans: Arc::new(Mutex::new(MainBodyScans::default())),
+            main_part_blocks: None,
         }
     }
 
@@ -17413,6 +20932,15 @@ impl Document {
             body_namespace_declarations: self.body_namespace_declarations.clone(),
             body_namespace_bindings: self.body_namespace_bindings.clone(),
             plain_local_edit_blocked: self.plain_local_edit_blocked,
+            parsed: self.parsed.clone(),
+            main_body_scans: Arc::clone(&self.main_body_scans),
+            main_part_blocks: self.main_part_blocks.clone(),
+            unsavable_body_edit_cache: self
+                .unsavable_body_edit_cache
+                .get()
+                .cloned()
+                .map(OnceLock::from)
+                .unwrap_or_default(),
             styles: self.styles.clone(),
             numbering: self.numbering.clone(),
             core_properties: self.core_properties.clone(),
@@ -17665,32 +21193,161 @@ impl Document {
         // typed story can inventory its exact retained source, including opaque
         // property-root attributes that canonical serialization cannot replay.
         // Dirty stories and modeled relationships still need the checked mask.
+        // The serialization shortcut still requires the opened model. Namespace
+        // owners follow the opened part bytes after that model changes.
+        let source_kept = self.kept_main_part();
+        let model_kept = source_kept
+            .clone()
+            .filter(|_| self.opened_main_still_serializes());
         if modeled_relationships.is_empty()
             && let Some(source) = self.package.get_part(&self.doc_part_name)
             && {
-                #[cfg(test)]
-                eprintln!("FX211_DRAWING_STAGE opaque-reparse-before");
-                let matches = CT_Document::from_xml(source).ok().as_ref() == Some(&self.document);
-                #[cfg(test)]
-                eprintln!("FX211_DRAWING_STAGE opaque-reparse-after");
+                let matches = if model_kept.is_some() {
+                    true
+                } else if let Some(parsed) = source_kept.as_deref().and_then(Parsed::main_document)
+                {
+                    // The live model may differ, but these retained source
+                    // bytes still have the exact parse from their opening.
+                    parsed == &self.document
+                } else if let Some(proved) = self
+                    .main_part_blocks
+                    .as_ref()
+                    .and_then(|blocks| blocks.proved_document(source))
+                {
+                    #[cfg(debug_assertions)]
+                    without_staging_work(|| {
+                        let fresh = CT_Document::from_xml(source).ok();
+                        assert_eq!(
+                            fresh.as_ref(),
+                            Some(&proved),
+                            "the proved main part disagrees with a fresh parse"
+                        );
+                    });
+                    proved == self.document
+                } else {
+                    #[cfg(test)]
+                    eprintln!("FX211_DRAWING_STAGE opaque-reparse-before");
+                    note_staging_work(|work| work.parsed += source.len());
+                    let matches =
+                        CT_Document::from_xml(source).ok().as_ref() == Some(&self.document);
+                    #[cfg(test)]
+                    eprintln!("FX211_DRAWING_STAGE opaque-reparse-after");
+                    matches
+                };
+                #[cfg(debug_assertions)]
+                if let Some(kept) = model_kept.as_deref() {
+                    without_staging_work(|| {
+                        let cached = kept.main_document();
+                        let fresh = CT_Document::from_xml(source).ok();
+                        let cached_matches = cached == Some(&self.document);
+                        let fresh_matches = fresh.as_ref() == Some(&self.document);
+                        assert_eq!(
+                            cached_matches, fresh_matches,
+                            "the kept main part parse disagrees with a fresh parse"
+                        );
+                        assert!(
+                            fresh_matches,
+                            "opened-main serialization proof disagrees with a parse"
+                        );
+                    });
+                }
                 matches
             }
         {
-            return xml_relationship_ids_in_order(source);
+            return relationship_ids_by_blocks(source, self.main_part_blocks.as_ref(), &[]);
         }
-        let nested_namespace_owners = self
-            .package
-            .get_part(&self.doc_part_name)
-            .map(nested_modeled_namespace_owners)
-            .transpose()?
-            .unwrap_or_default();
+        let scanned;
+        let nested_namespace_owners = match source_kept
+            .as_deref()
+            .and_then(Parsed::nested_namespace_owners)
+        {
+            Some(owners) => {
+                #[cfg(debug_assertions)]
+                {
+                    let source = self.package.get_part(&self.doc_part_name);
+                    without_staging_work(|| {
+                        assert_eq!(
+                            format!("{owners:?}"),
+                            format!(
+                                "{:?}",
+                                source
+                                    .map(nested_modeled_namespace_owners)
+                                    .transpose()
+                                    .ok()
+                                    .flatten()
+                                    .unwrap_or_default()
+                            ),
+                            "the kept nested namespace owners differ from a scan"
+                        );
+                    });
+                }
+                owners
+            }
+            None => {
+                let nested_source = self.package.get_part(&self.doc_part_name);
+                let proved_owners = nested_source.and_then(|xml| {
+                    self.main_part_blocks
+                        .as_ref()
+                        .and_then(|blocks| blocks.retained_nested_owners(xml))
+                });
+                if let Some(owners) = proved_owners {
+                    #[cfg(debug_assertions)]
+                    without_staging_work(|| {
+                        let fresh = nested_source
+                            .map(nested_modeled_namespace_owners)
+                            .transpose()
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
+                        assert_eq!(
+                            format!("{owners:?}"),
+                            format!("{fresh:?}"),
+                            "the proved nested owners differ from a scan"
+                        );
+                    });
+                    scanned = owners;
+                    &scanned
+                } else {
+                    scanned = nested_source
+                        .map(nested_modeled_namespace_owners)
+                        .transpose()?
+                        .unwrap_or_default();
+                    &scanned
+                }
+            }
+        };
         let serialize = |document: &CT_Document| -> Result<Vec<u8>> {
             let xml = document.to_xml()?;
-            replay_nested_namespace_declarations(&xml, &nested_namespace_owners)
+            let spans = self
+                .main_part_blocks
+                .as_ref()
+                .and_then(|blocks| blocks.proved_namespace_spans(&xml));
+            replay_nested_namespace_declarations_with_spans(
+                &xml,
+                nested_namespace_owners,
+                spans.as_deref(),
+            )
         };
+        let owners_empty = nested_namespace_owners.is_empty();
+        if modeled_relationships.is_empty() {
+            if owners_empty {
+                let (current_xml, current_blocks) = self.canonical_source()?;
+                return relationship_ids_by_blocks(&current_xml, current_blocks.as_ref(), &[]);
+            }
+            let replayed = serialize(&self.document)?;
+            let (current_xml, current_blocks) =
+                relationship_xml_from_replayed(replayed, self.canonical_source());
+            return relationship_ids_by_blocks(&current_xml, current_blocks.as_ref(), &[]);
+        }
 
-        let current_xml = serialize(&self.document)?;
-        let current_relationships = xml_relationship_ids_in_order(&current_xml)?;
+        let (current_xml, current_blocks) = if owners_empty {
+            self.canonical_source()?
+        } else {
+            let replayed = serialize(&self.document)?;
+            relationship_xml_from_replayed(replayed, self.canonical_source())
+        };
+        let current_relationships =
+            relationship_ids_by_blocks(&current_xml, current_blocks.as_ref(), &[])?;
         let mut masked = self.document.clone();
         let mut masked_values = HashSet::new();
         let mut remap = HashMap::new();
@@ -17758,11 +21415,21 @@ impl Document {
             }
         }
 
-        let masked_xml = serialize(&masked)?;
-        Ok(xml_relationship_ids_in_order(&masked_xml)?
-            .into_iter()
-            .filter(|id| !masked_values.contains(id) && current_relationships.contains(id))
-            .collect())
+        let (masked_xml, masked_blocks) = if owners_empty {
+            Self::canonical_source_from(&masked, current_blocks.as_ref())?
+        } else {
+            let replayed = serialize(&masked)?;
+            relationship_xml_from_replayed(
+                replayed,
+                Self::canonical_source_from(&masked, current_blocks.as_ref()),
+            )
+        };
+        Ok(
+            relationship_ids_by_blocks(&masked_xml, masked_blocks.as_ref(), &[])?
+                .into_iter()
+                .filter(|id| !masked_values.contains(id) && current_relationships.contains(id))
+                .collect(),
+        )
     }
 
     /// Keep a main-part relationship id from staging renumbering until the
@@ -17778,6 +21445,194 @@ impl Document {
     }
 
     fn canonicalize_drawing_ids(&mut self) -> Result<()> {
+        let Some(kept) = self.unchanged_main_part() else {
+            return self.canonicalize_all_drawing_ids();
+        };
+        let unchanged = kept
+            .unchanged_main_part
+            .get()
+            .and_then(Option::as_ref)
+            .expect("checked unchanged main part");
+        #[cfg(debug_assertions)]
+        let mut full = self.clone_for_staging();
+        #[cfg(debug_assertions)]
+        {
+            full.parsed = None;
+        }
+        let result = self.canonicalize_beside_unchanged_main_part(unchanged);
+        #[cfg(debug_assertions)]
+        {
+            let _proof_off = CanonicalBlockProofOff::enter();
+            let full_result = without_staging_work(|| full.canonicalize_all_drawing_ids());
+            assert_same_canonicalization(self, &result, &full, &full_result);
+        }
+        result
+    }
+
+    fn opened_main_still_serializes(&self) -> bool {
+        let Some(kept) = self.kept_main_part() else {
+            return false;
+        };
+        let Some(expected) = kept.serialization_proof.as_deref() else {
+            return false;
+        };
+        let Ok(current) = self.document.to_xml() else {
+            return false;
+        };
+        kept.root_namespace_declarations == self.root_namespace_declarations
+            && kept.body_namespace_declarations == self.body_namespace_declarations
+            && kept.body_namespace_bindings == self.body_namespace_bindings
+            && current.as_slice() == expected
+            && kept.main_document() == Some(&self.document)
+    }
+
+    fn unchanged_main_part(&self) -> Option<Arc<Parsed>> {
+        if !self.opened_main_still_serializes() {
+            return None;
+        }
+        let kept = self.kept_main_part()?;
+        let owner_identity = relationship_owner_identity(&self.doc_part_name);
+        if self
+            .identifiers
+            .pending_relationship_ids
+            .get(&owner_identity)
+            .is_some_and(|ids| !ids.is_empty())
+        {
+            return None;
+        }
+        if self
+            .identifiers
+            .authored_nested_story_relationship_ids
+            .get(&owner_identity)
+            .is_some_and(|ids| !ids.is_empty())
+        {
+            return None;
+        }
+        let preserved = self
+            .identifiers
+            .preserved_relationship_ids
+            .get(&owner_identity)
+            .cloned()
+            .unwrap_or_default();
+        if self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .is_some_and(|relationships| {
+                !relationships
+                    .items
+                    .iter()
+                    .all(|relationship| preserved.contains(&relationship.id))
+            })
+        {
+            return None;
+        }
+        if let Some(section) = &self.document.body.sect_pr
+            && !section_references_are_canonical(section, &preserved)
+        {
+            return None;
+        }
+        let mut paragraph_sections_ok = true;
+        visit_body_paragraphs(&self.document.body.content, false, &mut |paragraph| {
+            if let Some(section) = paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.sect_pr.as_ref())
+                && !section_references_are_canonical(section, &preserved)
+            {
+                paragraph_sections_ok = false;
+            }
+        });
+        if !paragraph_sections_ok {
+            return None;
+        }
+        let mut authored_drawing = false;
+        visit_authored_drawings(&self.document.body.content, &mut |_| {
+            authored_drawing = true;
+        });
+        if authored_drawing {
+            return None;
+        }
+        let unchanged = kept
+            .unchanged_main_part
+            .get_or_init(|| self.unchanged_main_part_checks().ok())
+            .as_ref()?;
+        if unchanged.body_namespace_bindings != self.body_namespace_bindings
+            || self.document.to_xml().ok().as_deref() != Some(unchanged.xml.as_slice())
+        {
+            return None;
+        }
+        Some(kept)
+    }
+
+    fn unchanged_main_part_checks(&self) -> Result<UnchangedMainPart> {
+        let mut modeled_story_relationships = Vec::new();
+        collect_relationship_ids(
+            &self.document.body.content,
+            &mut modeled_story_relationships,
+        );
+        if let Some(section) = &self.document.body.sect_pr {
+            for reference in section.header_refs.iter().chain(&section.footer_refs) {
+                if !modeled_story_relationships.contains(&reference.rel_id) {
+                    modeled_story_relationships.push(reference.rel_id.clone());
+                }
+            }
+        }
+        visit_body_paragraphs(&self.document.body.content, false, &mut |paragraph| {
+            if let Some(section) = paragraph
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.sect_pr.as_ref())
+            {
+                for reference in section.header_refs.iter().chain(&section.footer_refs) {
+                    if !modeled_story_relationships.contains(&reference.rel_id) {
+                        modeled_story_relationships.push(reference.rel_id.clone());
+                    }
+                }
+            }
+        });
+        self.opaque_relationship_ids_from_serialized_story(&modeled_story_relationships)?;
+        let (xml, blocks) = self.canonical_source()?;
+        relationship_ids_by_blocks(&xml, blocks.as_ref(), &self.body_namespace_bindings)?;
+        authored_drawing_slots_by_blocks(&xml, blocks.as_ref(), &[], &HashSet::new())?;
+        let drawing_ids = drawing_ids_by_blocks(&xml, blocks.as_ref());
+        relationship_ids_by_blocks(&xml, blocks.as_ref(), &[])?;
+        Ok(UnchangedMainPart {
+            xml,
+            body_namespace_bindings: self.body_namespace_bindings.clone(),
+            drawing_ids,
+        })
+    }
+
+    fn canonicalize_beside_unchanged_main_part(
+        &mut self,
+        unchanged: &UnchangedMainPart,
+    ) -> Result<()> {
+        let owner_identity = relationship_owner_identity(&self.doc_part_name);
+        self.identifiers
+            .authored_nested_story_relationship_ids
+            .remove(&owner_identity);
+        let related_parts = self.related_story_parts();
+        let mut occupied_drawings = self.identifiers.preserved_drawing_ids.clone();
+        if let Some(live_ids) = &unchanged.drawing_ids {
+            occupied_drawings.extend(live_ids);
+        }
+        for part in &related_parts {
+            if !self.identifiers.authored_story_parts.contains(part)
+                && let Some(xml) = self.package.get_part(part)
+                && let Ok(live_ids) = drawing_ids_in_xml(xml)
+            {
+                occupied_drawings.extend(live_ids);
+            }
+        }
+        self.identifiers
+            .authored_nested_story_drawing_ids
+            .remove(&owner_identity);
+        self.canonicalize_related_story_relationships(&related_parts, &mut occupied_drawings)?;
+        self.identifiers.drawing_ids = occupied_drawings;
+        self.canonicalize_image_parts(true)
+    }
+
+    fn canonicalize_all_drawing_ids(&mut self) -> Result<()> {
         let owner = self.doc_part_name.clone();
         let owner_identity = relationship_owner_identity(&owner);
         // Story picture insertion keeps current producer XML. Patch its
@@ -17786,12 +21641,28 @@ impl Document {
             .package
             .get_part(&owner)
             .filter(|xml| {
-                self.identifiers
+                let authored = self
+                    .identifiers
                     .authored_nested_story_relationship_ids
                     .get(&owner_identity)
-                    .is_some_and(|ids| !ids.is_empty())
-                    && CT_Document::from_xml(xml).ok().as_ref() == Some(&self.document)
-                    && self.document.to_xml().ok().as_deref() != Some(*xml)
+                    .is_some_and(|ids| !ids.is_empty());
+                if !authored {
+                    return false;
+                }
+                let kept = self.kept_main_part();
+                let matches = if let Some(parsed) = self
+                    .main_part_blocks
+                    .as_ref()
+                    .and_then(|blocks| blocks.proved_document(xml))
+                {
+                    parsed == self.document
+                } else if let Some(parsed) = kept.as_deref().and_then(Parsed::main_document) {
+                    parsed == &self.document
+                } else {
+                    note_staging_work(|work| work.parsed += xml.len());
+                    CT_Document::from_xml(xml).ok().as_ref() == Some(&self.document)
+                };
+                matches && self.document.to_xml().ok().as_deref() != Some(*xml)
             })
             .map(|xml| xml.to_vec());
         if let Some(section) = &mut self.document.body.sect_pr {
@@ -18132,14 +22003,15 @@ impl Document {
             })
             .map(|relationship| relationship.id.clone())
             .collect::<HashSet<_>>();
-        let current_document_xml = self.document.to_xml()?;
-        let authored_drawing_slots = authored_drawing_slots_in_source_order(
+        let (current_document_xml, blocks) = self.canonical_source()?;
+        let authored_drawing_slots = authored_drawing_slots_by_blocks(
             &current_document_xml,
+            blocks.as_ref(),
             &modeled_drawing_ids,
             &nested_image_relationship_ids,
         )?;
         let mut occupied_drawings = self.identifiers.preserved_drawing_ids.clone();
-        if let Ok(live_ids) = drawing_ids_in_xml(&current_document_xml) {
+        if let Some(live_ids) = drawing_ids_by_blocks(&current_document_xml, blocks.as_ref()) {
             occupied_drawings.extend(live_ids);
         }
         for (_, _, id) in &authored_drawing_slots {
@@ -18170,30 +22042,48 @@ impl Document {
             for (start, end, replacement) in drawing_edits.into_iter().rev() {
                 updated.splice(start..end, replacement);
             }
-            self.document = CT_Document::from_xml(&updated)?;
-        }
-        if let Some(retained_main_xml) = retained_main_xml {
-            let mut retained = remap_xml_relationship_ids(&retained_main_xml, &relationship_remap)?;
-            let slots = authored_drawing_slots_in_source_order(
-                &retained,
-                &modeled_drawing_ids,
-                &nested_image_relationship_ids,
-            )?;
-            if slots.len() == canonical_drawing_ids.len()
-                && slots
-                    .iter()
-                    .zip(&canonical_drawing_ids)
-                    .all(|((_, _, old), (expected, _))| old == expected)
+            let updated = Arc::new(updated);
+            if let Some((parsed, mut record)) =
+                offered_canonical_blocks(blocks.as_ref()).and_then(|blocks| {
+                    self.source_blocks_in(blocks.part.as_deref()?, blocks.clone(), &updated)
+                })
             {
-                for ((_, span, _), (_, id)) in slots
-                    .into_iter()
-                    .rev()
-                    .zip(canonical_drawing_ids.iter().rev())
-                {
-                    retained.splice(span, id.to_string().into_bytes());
-                }
-                self.document = CT_Document::from_xml(&retained)?;
-                self.package.set_part(&owner, retained);
+                self.document = parsed;
+                // This is a current writer memo, not a published package part.
+                record.part = None;
+                self.main_body_scans
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .serialized = Some(record);
+            } else {
+                note_staging_work(|work| work.parsed += updated.len());
+                self.document = CT_Document::from_xml(&updated)?;
+            }
+        }
+        if let Some(retained) = retained_main_xml {
+            let fast = self.package_main_part_blocks().and_then(|record| {
+                record.canonical_retained(
+                    &relationship_remap,
+                    &modeled_drawing_ids,
+                    &nested_image_relationship_ids,
+                    &canonical_drawing_ids,
+                )
+            });
+            let canonical = match fast {
+                Some(value) => value.map(|(xml, record, document)| (xml, Some(record), document)),
+                None => canonical_retained_main_part(
+                    &retained,
+                    &relationship_remap,
+                    &modeled_drawing_ids,
+                    &nested_image_relationship_ids,
+                    &canonical_drawing_ids,
+                )?
+                .map(|(xml, document)| (xml, None, document)),
+            };
+            if let Some((xml, record, document)) = canonical {
+                self.document = document;
+                self.package.set_part(&owner, xml);
+                self.main_part_blocks = record;
             }
         }
         if canonical_nested_drawing_ids.is_empty() {
@@ -18207,7 +22097,7 @@ impl Document {
         }
         self.canonicalize_related_story_relationships(&related_parts, &mut occupied_drawings)?;
         self.identifiers.drawing_ids = occupied_drawings;
-        self.canonicalize_image_parts()?;
+        self.canonicalize_image_parts(false)?;
         Ok(())
     }
 
@@ -18229,21 +22119,38 @@ impl Document {
         registered: &HashSet<String>,
         relationship_remap: &HashMap<String, String>,
     ) -> Result<bool> {
-        let xml = self.document.to_xml()?;
+        let (xml, blocks) = self.canonical_source()?;
         let occurrences =
-            xml_relationship_ids_in_order_with_bindings(&xml, &self.body_namespace_bindings)?;
+            relationship_ids_by_blocks(&xml, blocks.as_ref(), &self.body_namespace_bindings)?;
         let live = registered
             .iter()
             .filter(|id| occurrences.contains(id))
             .cloned()
             .collect::<HashSet<_>>();
         if !relationship_remap.is_empty() && !live.is_empty() {
-            let updated = remap_xml_relationship_ids_with_bindings(
-                &xml,
-                relationship_remap,
-                &self.body_namespace_bindings,
-            )?;
-            self.document = CT_Document::from_xml(&updated)?;
+            let fast = offered_canonical_blocks(blocks.as_ref()).and_then(|record| {
+                let edits = record
+                    .relationship_remap_edits(relationship_remap, &self.body_namespace_bindings)?;
+                let mut edited = record.edited(&edits)?;
+                let document = edited.parsed_document()?;
+                Some((document, edited))
+            });
+            if let Some((document, mut record)) = fast {
+                self.document = document;
+                record.part = None;
+                self.main_body_scans
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .serialized = Some(record);
+            } else {
+                let updated = remap_xml_relationship_ids_with_bindings(
+                    &xml,
+                    relationship_remap,
+                    &self.body_namespace_bindings,
+                )?;
+                note_staging_work(|work| work.parsed += updated.len());
+                self.document = CT_Document::from_xml(&updated)?;
+            }
         }
         if live.is_empty() {
             self.identifiers
@@ -18303,8 +22210,22 @@ impl Document {
             .cloned()
             .chain(nested.iter().cloned())
             .collect::<HashSet<_>>();
-        if let Ok(xml) = self.document.to_xml()
-            && let Some(ordered) = authored_relationship_ids_in_source_order(&xml, &semantic)
+        if let Ok((xml, blocks)) = self.canonical_source()
+            && let Some(ordered) = {
+                if let Some(all) = offered_canonical_blocks(blocks.as_ref())
+                    .and_then(|blocks| blocks.proved_relationship_ids(&xml, &[]))
+                {
+                    let mut seen = HashSet::new();
+                    let ordered = all
+                        .into_iter()
+                        .filter(|id| semantic.contains(id) && seen.insert(id.clone()))
+                        .collect::<Vec<_>>();
+                    (ordered.len() == semantic.len()).then_some(ordered)
+                } else {
+                    note_staging_work(|work| work.canonicalized += xml.len());
+                    authored_relationship_ids_in_source_order(&xml, &semantic)
+                }
+            }
         {
             return ordered;
         }
@@ -18507,13 +22428,34 @@ impl Document {
         Ok(())
     }
 
-    fn canonicalize_image_parts(&mut self) -> Result<()> {
+    fn canonicalize_image_parts(&mut self, main_checked: bool) -> Result<()> {
         let mut ordered = Vec::new();
-        let main_xml = self.document.to_xml()?;
-        let mut owners = vec![(
-            self.doc_part_name.clone(),
-            xml_relationship_ids_in_order(&main_xml)?,
-        )];
+        let main_moves_nothing = main_checked
+            && self
+                .package
+                .get_part_rels(&self.doc_part_name)
+                .is_none_or(|relationships| {
+                    relationships
+                        .items
+                        .iter()
+                        .filter(|relationship| relationship.rel_type == rel_types::IMAGE)
+                        .all(|relationship| {
+                            self.identifiers
+                                .part_is_preserved(&OpcPackage::resolve_rel_target(
+                                    &self.doc_part_name,
+                                    &relationship.target,
+                                ))
+                        })
+                });
+        let main_ids = if main_moves_nothing {
+            Vec::new()
+        } else {
+            {
+                let (xml, blocks) = self.canonical_source()?;
+                relationship_ids_by_blocks(&xml, blocks.as_ref(), &[])?
+            }
+        };
+        let mut owners = vec![(self.doc_part_name.clone(), main_ids)];
         for owner in self.related_story_parts() {
             let owner_identity = relationship_owner_identity(&owner);
             if self.identifiers.authored_story_parts.contains(&owner)
@@ -18655,14 +22597,14 @@ impl Document {
     ) -> Result<Self> {
         let cursor = std::io::Cursor::new(bytes);
         let package = OpcPackage::from_encrypted_reader_with_limits(cursor, password, limits)?;
-        Self::from_package(package)
+        Self::from_opened_package(package, true)
     }
 
     /// Open a document from bytes while bounding OPC archive expansion.
     pub fn from_bytes_with_limits(bytes: &[u8], limits: PackageReadLimits) -> Result<Self> {
         let cursor = std::io::Cursor::new(bytes);
         let package = OpcPackage::from_reader_with_limits(cursor, limits)?;
-        Self::from_package(package)
+        Self::from_opened_package(package, true)
     }
 
     /// Return the exact Word package class declared for the main document part.
@@ -18745,18 +22687,62 @@ impl Document {
     }
 
     pub(crate) fn from_package(package: OpcPackage) -> Result<Self> {
+        Self::from_opened_package(package, false)
+    }
+
+    fn from_opened_package(package: OpcPackage, read_from_bytes: bool) -> Result<Self> {
+        Self::from_package_reusing(package, read_from_bytes, None, None)
+    }
+
+    fn from_package_reusing(
+        package: OpcPackage,
+        read_from_bytes: bool,
+        staged: Option<(&DocumentIdentifiers, &Parsed)>,
+        blocks: Option<&MainPartBlocks>,
+    ) -> Result<Self> {
         let (doc_part_name, _) = validated_word_package_class(&package)?;
 
         let doc_xml = package
             .get_part(&doc_part_name)
             .ok_or(Error::NoDocumentPart)?;
         let namespace_scopes = document_namespace_scopes(doc_xml)?;
-        let plain_local_edit_blocked = plain_local_edit_is_blocked(
+        let kept = staged.map(|(_, parsed)| parsed).filter(|parsed| {
+            parsed.main_part == doc_part_name
+                && parsed.main_part_xml().is_some_and(|kept| kept == doc_xml)
+                && parsed.root_namespace_declarations == namespace_scopes.root_declarations
+                && parsed.body_namespace_declarations == namespace_scopes.body_declarations
+                && parsed.body_namespace_bindings == namespace_scopes.body_bindings
+        });
+        let hinted = blocks.and_then(|blocks| blocks.proved_document(doc_xml));
+        let nested_namespace_owners = OnceLock::new();
+        if let Some(kept) = kept
+            && let Some(owners) = kept.nested_namespace_owners.get()
+        {
+            let _ = nested_namespace_owners.set((*owners).clone());
+        }
+        if nested_namespace_owners.get().is_none()
+            && let Some(owners) = blocks.and_then(|blocks| blocks.retained_nested_owners(doc_xml))
+        {
+            let _ = nested_namespace_owners.set(Some(owners));
+        }
+        let (plain_local_edit_blocked, unsavable_body_edit_cache) = plain_local_edit_facts(
             &namespace_scopes.root_declarations,
             &namespace_scopes.body_declarations,
             doc_xml,
+            &nested_namespace_owners,
         );
-        let document = CT_Document::from_xml(doc_xml)?;
+        let document = if let Some(document) = hinted {
+            document
+        } else {
+            match kept.and_then(|kept| kept.main_document().cloned()) {
+                Some(document) => document,
+                None => {
+                    note_reopen_work(|work| work.main_parses += 1);
+                    note_staging_work(|work| work.parsed += doc_xml.len());
+                    CT_Document::from_xml(doc_xml)?
+                }
+            }
+        };
 
         // Resolve the part a relationship of the given type points at.
         let resolve_part = |rel_type: &str| -> Option<String> {
@@ -18905,7 +22891,43 @@ impl Document {
 
         let package_signatures_invalidated =
             crate::embedded::known_invalid_package_signature_on_open(&package);
-        let identifiers = DocumentIdentifiers::scan(&package)?;
+        let identifier_hint =
+            blocks.and_then(|blocks| blocks.identifier_hint(doc_xml, &namespace_scopes));
+        let identifiers = DocumentIdentifiers::scan_reusing(
+            &package,
+            staged.map(|(identifiers, _)| identifiers),
+            identifier_hint.as_ref(),
+        )?;
+        let serialization_proof = document.to_xml().ok();
+        let mut parsed_record = Parsed::of(
+            &package,
+            &doc_part_name,
+            read_from_bytes,
+            namespace_scopes.root_declarations.clone(),
+            namespace_scopes.body_declarations.clone(),
+            namespace_scopes.body_bindings.clone(),
+            serialization_proof,
+        );
+        parsed_record.nested_namespace_owners = nested_namespace_owners;
+        if let Some(kept) = kept {
+            let relationships = package
+                .get_part_rels(&doc_part_name)
+                .map(|relationships| &relationships.items);
+            let kept_relationships = kept
+                .package
+                .get_part_rels(&kept.main_part)
+                .map(|relationships| &relationships.items);
+            if relationships == kept_relationships
+                && let Some(unchanged) = kept.unchanged_main_part.get()
+            {
+                parsed_record.unchanged_main_part = OnceLock::from((*unchanged).clone());
+            }
+        }
+        // Every branch above obtained an actual parse of these exact source
+        // bytes, either fresh or from a qualified source proof. Keep it at
+        // this opening instead of parsing a fresh source a second time later.
+        parsed_record.main_document = OnceLock::from(Some(document.clone()));
+        let parsed = Some(Arc::new(parsed_record));
         Ok(Document {
             package,
             document,
@@ -18913,6 +22935,7 @@ impl Document {
             body_namespace_declarations: namespace_scopes.body_declarations,
             body_namespace_bindings: namespace_scopes.body_bindings,
             plain_local_edit_blocked,
+            unsavable_body_edit_cache,
             styles,
             numbering,
             core_properties,
@@ -18958,11 +22981,19 @@ impl Document {
             normal_layout_engine: Mutex::new(None),
             deterministic_layout_cache: Mutex::new(None),
             bundled_fallback_layout_engine: Mutex::new(None),
+            parsed,
+            main_body_scans: Arc::new(Mutex::new(MainBodyScans::default())),
+            main_part_blocks: None,
         })
     }
 
     /// Clear layouts derived from the current document state.
     pub(crate) fn invalidate_layout(&mut self) {
+        // Checked body refusal reads this cache. A later typed edit that
+        // already drops derived layout must not keep a savable or unsavable
+        // answer from the previous model. The refusal check itself does not
+        // call this function.
+        self.unsavable_body_edit_cache = OnceLock::new();
         self.layout_cache
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -19119,8 +23150,57 @@ impl Document {
         Ok(())
     }
 
-    /// Save the document to a byte vector.
-    pub fn to_bytes(&mut self) -> Result<Vec<u8>> {
+    /// Whether this document and `other` save the same bytes.
+    ///
+    /// This save is prepared first, then `other`. The first error is returned.
+    /// Packages opened from bytes are compared by [`OpcPackage::reread`].
+    /// A new, in-memory, or Flat OPC package is written and compared as a ZIP.
+    #[doc(hidden)]
+    pub fn saves_as(&self, other: &Document) -> Result<bool> {
+        let same: Result<bool> = (|| match (self.read_package(), other.read_package()) {
+            (Some(read), Some(other_read)) => Ok(self
+                .saved_package()?
+                .reread(read)?
+                .same_package_as(&other.saved_package()?.reread(other_read)?)),
+            _ => {
+                let mut bytes = std::io::Cursor::new(Vec::new());
+                self.saved_package()?.write_to(&mut bytes)?;
+                let mut other_bytes = std::io::Cursor::new(Vec::new());
+                other.saved_package()?.write_to(&mut other_bytes)?;
+                note_staging_work(|work| {
+                    work.zip_written += bytes.get_ref().len() + other_bytes.get_ref().len();
+                });
+                Ok(bytes.into_inner() == other_bytes.into_inner())
+            }
+        })();
+        #[cfg(debug_assertions)]
+        {
+            let forgetting = |document: &Document| -> Result<Document> {
+                document.validate_model_resource_limits()?;
+                let mut copy = document.clone_for_staging();
+                copy.parsed = None;
+                Ok(copy)
+            };
+            let bytes = without_staging_work(|| -> Result<bool> {
+                Ok(forgetting(self)?.to_bytes()? == forgetting(other)?.to_bytes()?)
+            });
+            match (&same, bytes) {
+                (Ok(same), Ok(bytes)) => assert_eq!(*same, bytes, "saves_as differs from to_bytes"),
+                (Err(same), Err(bytes)) => assert_eq!(same.to_string(), bytes.to_string()),
+                (same, bytes) => panic!("saves_as gives {same:?} where to_bytes gives {bytes:?}"),
+            }
+        }
+        same
+    }
+
+    fn read_package(&self) -> Option<&OpcPackage> {
+        self.parsed
+            .as_deref()
+            .filter(|parsed| parsed.read_from_bytes)
+            .map(|parsed| &parsed.package)
+    }
+
+    fn saved_package(&self) -> Result<OpcPackage> {
         #[cfg(test)]
         eprintln!("FX211_SAVE_STAGE resource-before");
         self.validate_model_resource_limits()?;
@@ -19140,9 +23220,16 @@ impl Document {
             &mut candidate.package,
             candidate.package_signatures_invalidated,
         )?;
+        Ok(candidate.package)
+    }
+
+    /// Save the document to a byte vector.
+    pub fn to_bytes(&mut self) -> Result<Vec<u8>> {
         let mut buf = std::io::Cursor::new(Vec::new());
-        candidate.package.write_to(&mut buf)?;
-        Ok(buf.into_inner())
+        self.saved_package()?.write_to(&mut buf)?;
+        let bytes = buf.into_inner();
+        note_staging_work(|work| work.zip_written += bytes.len());
+        Ok(bytes)
     }
 
     /// Serialize the bytes that [`Document::save`] writes to `path`.
@@ -19292,6 +23379,64 @@ impl Document {
         self,
         limits: PackageReadLimits,
     ) -> Result<Self> {
+        let in_memory = limits == PackageReadLimits::UNBOUNDED && self.read_package().is_some();
+        #[cfg(debug_assertions)]
+        let through_zip = in_memory.then(|| {
+            let mut copy = self.clone_for_staging();
+            copy.parsed = None;
+            copy
+        });
+        let reopened = self.reopen_staged(in_memory, limits);
+        #[cfg(debug_assertions)]
+        if let Some(copy) = through_zip {
+            let expected =
+                without_reopen_work(|| without_staging_work(|| copy.reopen_staged(false, limits)));
+            assert_same_reopen(&reopened, &expected);
+        }
+        reopened
+    }
+
+    fn install_carried_body_scans(&self, carried: MainBodyScans) {
+        // Writer eligibility is checked against the current model and frame
+        // when offered. It is independent of the stricter address-scan carry.
+        // A changed owner span must not discard that current writer memo.
+        self.main_body_scans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .serialized = carried.serialized.clone();
+        if carried.frame.is_none() {
+            return;
+        }
+        let Ok((xml, content, children)) = self.document.to_xml_with_body_spans() else {
+            return;
+        };
+        if carried.head.as_slice() != &xml[..content.start]
+            || carried.tail.as_slice() != &xml[content.end..]
+            || carried.blocks.len() != children.len()
+        {
+            return;
+        }
+        if carried
+            .blocks
+            .iter()
+            .zip(&children)
+            .any(|(scan, range)| scan.bytes.as_slice() != &xml[range.clone()])
+        {
+            return;
+        }
+        *self
+            .main_body_scans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = carried;
+    }
+
+    fn reopen_staged(self, in_memory: bool, limits: PackageReadLimits) -> Result<Self> {
+        let carried_scans = self
+            .main_body_scans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let carried_blocks = self.main_part_blocks.clone();
         let provenance = self.identifiers.clone();
         let custom_properties_owned = self.custom_properties_owned;
         let settings_owned = self.settings_owned;
@@ -19302,9 +23447,22 @@ impl Document {
         let comments_extended_owned = self.comments_extended_owned;
         let embedded_invalidated_signatures = self.embedded_invalidated_signatures.clone();
         let package_signatures_invalidated = self.package_signatures_invalidated;
-        let mut output = std::io::Cursor::new(Vec::new());
-        self.package.write_to(&mut output)?;
-        let mut reopened = Self::from_bytes_with_limits(output.get_ref(), limits)?;
+        let opened = self.parsed.as_deref().filter(|_| in_memory);
+        let mut reopened = match opened {
+            Some(opened) => Self::from_package_reusing(
+                self.package.reread(&opened.package)?,
+                true,
+                Some((&provenance, opened)),
+                carried_blocks.as_ref(),
+            )?,
+            None => {
+                let mut output = std::io::Cursor::new(Vec::new());
+                self.package.write_to(&mut output)?;
+                note_reopen_work(|work| work.zip_writes += 1);
+                note_staging_work(|work| work.zip_written += output.get_ref().len());
+                Self::from_bytes_with_limits(output.get_ref(), limits)?
+            }
+        };
         reopened
             .identifiers
             .reject_new_repeated_drawing_ids(&provenance)?;
@@ -19322,7 +23480,327 @@ impl Document {
         reopened.comments_extended_owned = comments_extended_owned;
         reopened.embedded_invalidated_signatures = embedded_invalidated_signatures;
         reopened.package_signatures_invalidated = package_signatures_invalidated;
+        reopened.install_carried_body_scans(carried_scans);
+        reopened.install_carried_blocks(carried_blocks);
         Ok(reopened)
+    }
+
+    /// Current writer bytes and pieces, without claiming a flushed part.
+    fn serialized_main_part(&self) -> Result<(Vec<u8>, Option<MainPartBlocks>)> {
+        self.document.validate_resource_limits()?;
+        let mut scans = self
+            .main_body_scans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (xml, record) = MainPartBlocks::serialize(
+            &self.document,
+            &self.document.body.content,
+            offered_canonical_blocks(scans.serialized.as_ref().or(self.main_part_blocks.as_ref())),
+        )?;
+        if offered_canonical_blocks(Some(&record)).is_some() {
+            scans.serialized = (!record.head.is_empty()).then(|| record.clone());
+        }
+        drop(scans);
+        Ok((xml, (!record.head.is_empty()).then_some(record)))
+    }
+
+    /// Temporary main-part bytes for canonicalization. The returned record
+    /// proves these bytes, without replacing the package or flushed record.
+    fn canonical_source(&self) -> Result<(Vec<u8>, Option<MainPartBlocks>)> {
+        let (xml, mut record) = self.serialized_main_part()?;
+        if let Some(record) = &mut record {
+            record.part = Some(Arc::new(xml.clone()));
+        }
+        Ok((xml, record))
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn main_part_with_body_spans(&self) -> Result<(Vec<u8>, Range<usize>, Vec<Range<usize>>)> {
+        let (xml, record) = self.serialized_main_part()?;
+        if let Some(record) = record {
+            let start = record.head.len();
+            let mut end = start;
+            let mut children = Vec::with_capacity(record.blocks.len());
+            for block in &record.blocks {
+                let next = end.checked_add(block.bytes.len()).ok_or_else(|| {
+                    Error::Other("main-part body span exceeds addressable bytes".to_owned())
+                })?;
+                children.push(end..next);
+                end = next;
+            }
+            #[cfg(debug_assertions)]
+            without_staging_work(|| {
+                assert_eq!(
+                    self.document.to_xml_with_body_spans().ok(),
+                    Some((xml.clone(), start..end, children.clone())),
+                    "serialized pieces changed the body spans"
+                );
+            });
+            return Ok((xml, start..end, children));
+        }
+        note_staging_work(|work| {
+            work.serialized_children += self.document.body.content.len();
+        });
+        self.document.to_xml_with_body_spans().map_err(Error::from)
+    }
+
+    /// Reconstruct a source edit from actual parsed child facts. A changed
+    /// frame, an unclosed element or an unproved child declines and
+    /// leaves the whole parser authoritative.
+    fn source_blocks(&self, xml: &Arc<Vec<u8>>) -> Option<(CT_Document, MainPartBlocks)> {
+        if !block_proofs_enabled() {
+            return None;
+        }
+        if let Some(record) = &self.main_part_blocks
+            && let Some(current) = &record.part
+            && self.package.get_part(&self.doc_part_name) == Some(current.as_slice())
+            && let Some(found) = self.source_blocks_in(current, record.clone(), xml)
+        {
+            return Some(found);
+        }
+        let (mut current, record) = self.canonical_source().ok()?;
+        let record = record?;
+        if let Some(found) = self.source_blocks_in(&current, record.clone(), xml) {
+            return Some(found);
+        }
+        // Bootstrap a producer's body-leading whitespace under the exact
+        // canonical root and body start. Root aliases and other frame changes
+        // still require the whole reader. The empty frame is actually parsed
+        // and its normalized output must match the proved canonical shell.
+        if !xml.starts_with(&record.head) {
+            return None;
+        }
+        let after_head = xml.get(record.head.len()..)?;
+        let whitespace = after_head
+            .iter()
+            .take_while(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+            .count();
+        if whitespace == 0 {
+            return None;
+        }
+        let gap = after_head.get(..whitespace)?;
+        let mut head = record.head.clone();
+        head.extend_from_slice(gap);
+        let shell =
+            CT_Document::from_xml(&[head.as_slice(), record.tail.as_slice()].concat()).ok()?;
+        let canonical_shell = record.frame.get()?.as_ref()?;
+        if !shell.body.content.is_empty()
+            || shell.to_xml().ok()? != canonical_shell.to_xml().ok()?
+        {
+            return None;
+        }
+        current.splice(record.head.len()..record.head.len(), gap.iter().copied());
+        let retained = MainPartBlocks {
+            head,
+            root: record.root,
+            tail: record.tail,
+            blocks: record
+                .blocks
+                .iter()
+                .map(BodyBlockScan::fresh_context_piece)
+                .collect(),
+            part: Some(Arc::new(current.clone())),
+            frame: OnceLock::from(Some(shell)),
+            nested_namespace_owners: OnceLock::new(),
+            identifier_frame: OnceLock::new(),
+            canonical_frame: OnceLock::new(),
+            namespace_frame: OnceLock::new(),
+            namespace_frame_spans: OnceLock::new(),
+        };
+        self.source_blocks_in(&current, retained, xml)
+    }
+
+    /// Rebuild one exact source partition. Kept children supply actual parse
+    /// facts, and replacing children are read under this same source frame.
+    fn source_blocks_in(
+        &self,
+        current: &[u8],
+        mut record: MainPartBlocks,
+        xml: &Arc<Vec<u8>>,
+    ) -> Option<(CT_Document, MainPartBlocks)> {
+        let mut parsed = record.proved_document(current)?;
+        let head = record.head.len();
+        let content_end = current.len().checked_sub(record.tail.len())?;
+        let new_content_end = xml.len().checked_sub(record.tail.len())?;
+        let same = current
+            .iter()
+            .zip(xml.iter())
+            .take_while(|(a, b)| a == b)
+            .count()
+            .min(content_end)
+            .min(new_content_end);
+        if same < head {
+            return None;
+        }
+        let suffix = current
+            .get(same..)?
+            .iter()
+            .rev()
+            .zip(xml.get(same..)?.iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        if suffix < record.tail.len() {
+            return None;
+        }
+        let mut boundaries = Vec::with_capacity(record.blocks.len() + 1);
+        boundaries.push(head);
+        for block in &record.blocks {
+            boundaries.push(boundaries.last()?.checked_add(block.bytes.len())?);
+        }
+        if boundaries.last().copied()? != content_end {
+            return None;
+        }
+        let first = boundaries[1..].partition_point(|end| *end <= same);
+        let changed_end = current.len().checked_sub(suffix)?;
+        let last = boundaries[..record.blocks.len()]
+            .partition_point(|start| *start < changed_end)
+            .max(first);
+        let start = *boundaries.get(first)?;
+        let end = *boundaries.get(last)?;
+        let new_end = xml.len().checked_sub(current.len().checked_sub(end)?)?;
+        let replacing = xml.get(start..new_end)?;
+        let scopes = document_namespace_scopes(current).ok()?;
+        let mut reader = quick_xml::Reader::from_reader(replacing);
+        let mut buffer = Vec::new();
+        let mut depth = 0usize;
+        let mut element = 0usize;
+        let mut ranges = Vec::new();
+        loop {
+            let at = reader.buffer_position() as usize;
+            let event = reader.read_event_into(&mut buffer).ok()?;
+            let after = reader.buffer_position() as usize;
+            match event {
+                Event::Eof if depth == 0 => break,
+                Event::Eof => return None,
+                Event::Start(_) => {
+                    if depth == 0 {
+                        element = at;
+                    }
+                    depth = depth.checked_add(1)?;
+                }
+                Event::End(_) => {
+                    depth = depth.checked_sub(1)?;
+                    if depth == 0 {
+                        ranges.push(element..after);
+                    }
+                }
+                Event::Empty(_) if depth == 0 => ranges.push(at..after),
+                _ if depth == 0 => return None,
+                _ => {}
+            }
+            buffer.clear();
+        }
+        let mut items = Vec::with_capacity(ranges.len());
+        let mut replacement_blocks = Vec::with_capacity(ranges.len());
+        for range in ranges {
+            let bytes = replacing.get(range)?.to_vec();
+            let mut block = BodyBlockScan::from_source(bytes);
+            let item = block.read_source_child(&record.head, &record.tail, &scopes)?;
+            items.push(item);
+            replacement_blocks.push(Arc::new(block));
+        }
+        parsed.body.content.splice(first..last, items);
+        parsed.validate_resource_limits().ok()?;
+        record.blocks.splice(first..last, replacement_blocks);
+        record.part = Some(Arc::clone(xml));
+        record.nested_namespace_owners = OnceLock::new();
+        if !record.part_partition_matches(xml) {
+            return None;
+        }
+        Some((parsed, record))
+    }
+
+    fn package_main_part_blocks(&self) -> Option<MainPartBlocks> {
+        if !block_proofs_enabled() {
+            return None;
+        }
+        let source = self.package.get_part(&self.doc_part_name)?;
+        if let Some(record) = &self.main_part_blocks
+            && record
+                .part
+                .as_deref()
+                .is_some_and(|bytes| bytes.as_slice() == source)
+        {
+            return Some(record.clone());
+        }
+        self.source_blocks(&Arc::new(source.to_vec()))
+            .map(|(_, record)| record)
+    }
+
+    fn main_part_parses_to_model(&self, kept: Option<&Parsed>) -> bool {
+        let Some(source) = self.package.get_part(&self.doc_part_name) else {
+            return false;
+        };
+        if let Some(parsed) = offered_canonical_blocks(self.main_part_blocks.as_ref())
+            .and_then(|record| record.proved_document(source))
+        {
+            return parsed == self.document;
+        }
+        if let Some(parsed) = kept
+            .filter(|kept| {
+                kept.main_part == self.doc_part_name && kept.main_part_xml() == Some(source)
+            })
+            .and_then(Parsed::main_document)
+        {
+            return parsed == &self.document;
+        }
+        note_staging_work(|work| work.parsed += source.len());
+        CT_Document::from_xml(source).ok().as_ref() == Some(&self.document)
+    }
+
+    /// Same temporary record for a document that is not `self.document`.
+    /// `kept` supplies neighbor bytes only. It is not stored as history.
+    fn canonical_source_from(
+        document: &CT_Document,
+        kept: Option<&MainPartBlocks>,
+    ) -> Result<(Vec<u8>, Option<MainPartBlocks>)> {
+        document.validate_resource_limits()?;
+        let (xml, mut record) = MainPartBlocks::serialize(
+            document,
+            &document.body.content,
+            offered_canonical_blocks(kept),
+        )?;
+        record.part = Some(Arc::new(xml.clone()));
+        Ok((xml, (!record.head.is_empty()).then_some(record)))
+    }
+
+    /// The main part bytes from the current block record, or the whole writer
+    /// when the frame or a child cannot be proved. A writer error is returned.
+    /// It is not an empty part.
+    fn main_part_xml(&mut self) -> Result<Vec<u8>> {
+        let (xml, record) = self.canonical_source()?;
+        if let Some(record) = &record {
+            let _ = record.proved_document(&xml);
+        }
+        self.main_part_blocks = record;
+        Ok(xml)
+    }
+
+    fn install_carried_blocks(&mut self, carried: Option<MainPartBlocks>) {
+        let Some(carried) = carried else {
+            return;
+        };
+        let Some(part) = carried.part.as_deref() else {
+            return;
+        };
+        let Some(current) = self.package.get_part(&self.doc_part_name) else {
+            return;
+        };
+        if current != part.as_slice() {
+            return;
+        }
+        let Ok(xml) = self.document.to_xml() else {
+            return;
+        };
+        // A retained source child may normalize on write. Its actual parse
+        // must normalize to this reopened model before its read facts carry.
+        let Some(parsed) = carried.proved_document(current) else {
+            return;
+        };
+        if parsed.to_xml().ok().as_ref() != Some(&xml) {
+            return;
+        }
+        self.main_part_blocks = Some(carried);
     }
 
     fn preflight_flush_required_bundles(&mut self) -> Result<()> {
@@ -19671,31 +24149,131 @@ impl Document {
         // producer's complete scopes and every retained raw subtree byte for
         // byte. A modified document fails closed when canonical serialization
         // could change the meaning or bytes of retained content.
+        // A main part that still holds its opened bytes is reused only when
+        // the namespace context and the current serialization match that open.
+        let kept = self.kept_main_part();
         let existing_document_xml = self.package.get_part(&self.doc_part_name);
-        #[cfg(test)]
-        let typed_document_is_unchanged = {
+        let typed_document_is_unchanged = if kept.is_some() && self.opened_main_still_serializes() {
+            #[cfg(debug_assertions)]
+            without_staging_work(|| {
+                let cached = kept.as_deref().and_then(Parsed::main_document);
+                let fresh = existing_document_xml.and_then(|xml| CT_Document::from_xml(xml).ok());
+                let cached_matches = cached == Some(&self.document);
+                let fresh_matches = fresh.as_ref() == Some(&self.document);
+                assert_eq!(
+                    cached_matches, fresh_matches,
+                    "the kept main part parse disagrees with a fresh parse"
+                );
+                assert!(
+                    fresh_matches,
+                    "opened-main serialization proof disagrees with a parse"
+                );
+            });
+            true
+        } else if let Some(parsed) = kept.as_deref().and_then(Parsed::main_document) {
+            #[cfg(debug_assertions)]
+            without_staging_work(|| {
+                let fresh = existing_document_xml.and_then(|xml| CT_Document::from_xml(xml).ok());
+                assert_eq!(
+                    fresh.as_ref(),
+                    Some(parsed),
+                    "the retained source parse disagrees with a fresh parse"
+                );
+            });
+            parsed == &self.document
+        } else if let Some(proved) = existing_document_xml.and_then(|xml| {
+            self.main_part_blocks
+                .as_ref()
+                .and_then(|blocks| blocks.proved_document(xml))
+        }) {
+            #[cfg(debug_assertions)]
+            without_staging_work(|| {
+                let fresh = existing_document_xml.and_then(|xml| CT_Document::from_xml(xml).ok());
+                assert_eq!(
+                    fresh.as_ref(),
+                    Some(&proved),
+                    "the proved existing part disagrees with a fresh parse"
+                );
+            });
+            proved == self.document
+        } else {
+            #[cfg(test)]
             eprintln!("FX211_FLUSH_STAGE reparse-before");
+            note_staging_work(|work| {
+                work.parsed += existing_document_xml.map_or(0, <[u8]>::len);
+            });
             let parsed = existing_document_xml.and_then(|xml| CT_Document::from_xml(xml).ok());
+            #[cfg(test)]
             eprintln!("FX211_FLUSH_STAGE reparse-after");
+            #[cfg(test)]
             eprintln!("FX211_FLUSH_STAGE equality-before");
             let unchanged = parsed.as_ref() == Some(&self.document);
+            #[cfg(test)]
             eprintln!("FX211_FLUSH_STAGE equality-after");
+            #[cfg(test)]
             eprintln!("FX211_FLUSH_STAGE temporary-drop-before");
             drop(parsed);
+            #[cfg(test)]
             eprintln!("FX211_FLUSH_STAGE temporary-drop-after");
             unchanged
         };
-        #[cfg(not(test))]
-        let typed_document_is_unchanged = existing_document_xml
-            .and_then(|xml| CT_Document::from_xml(xml).ok())
-            .as_ref()
-            == Some(&self.document);
         #[cfg(test)]
         eprintln!("FX211_FLUSH_STAGE nested-scopes-before");
-        let nested_namespace_owners = existing_document_xml
-            .map(nested_modeled_namespace_owners)
-            .transpose()?
-            .unwrap_or_default();
+        let scanned;
+        let nested_namespace_owners =
+            match kept.as_deref().and_then(Parsed::nested_namespace_owners) {
+                Some(owners) => {
+                    #[cfg(debug_assertions)]
+                    without_staging_work(|| {
+                        assert_eq!(
+                            format!("{owners:?}"),
+                            format!(
+                                "{:?}",
+                                existing_document_xml
+                                    .map(nested_modeled_namespace_owners)
+                                    .transpose()
+                                    .ok()
+                                    .flatten()
+                                    .unwrap_or_default()
+                            ),
+                            "the kept nested namespace owners differ from a scan"
+                        );
+                    });
+                    owners
+                }
+                None => {
+                    let proved_owners = existing_document_xml.and_then(|xml| {
+                        self.main_part_blocks
+                            .as_ref()
+                            .and_then(|blocks| blocks.retained_nested_owners(xml))
+                    });
+                    if let Some(owners) = proved_owners {
+                        #[cfg(debug_assertions)]
+                        without_staging_work(|| {
+                            let fresh = existing_document_xml
+                                .map(nested_modeled_namespace_owners)
+                                .transpose()
+                                .ok()
+                                .flatten()
+                                .unwrap_or_default();
+                            assert_eq!(
+                                format!("{owners:?}"),
+                                format!("{fresh:?}"),
+                                "the proved nested owners differ from a scan"
+                            );
+                        });
+                        scanned = owners;
+                        &scanned
+                    } else {
+                        // `nested_modeled_namespace_owners` notes this scan itself.
+                        scanned = existing_document_xml
+                            .map(nested_modeled_namespace_owners)
+                            .transpose()?
+                            .unwrap_or_default();
+                        &scanned
+                    }
+                }
+            };
         #[cfg(test)]
         eprintln!("FX211_FLUSH_STAGE nested-scopes-after");
         let unsafe_prefix = unsafe_serializer_namespace_prefix(
@@ -19703,11 +24281,10 @@ impl Document {
             &self.body_namespace_declarations,
             existing_document_xml,
         )
-        .or_else(|| unsafe_nested_namespace_prefix(&nested_namespace_owners));
+        .or_else(|| unsafe_nested_namespace_prefix(nested_namespace_owners));
+        let kept_xml = existing_document_xml.map(<[u8]>::to_vec);
         let doc_xml = if typed_document_is_unchanged {
-            existing_document_xml
-                .expect("compared existing document XML")
-                .to_vec()
+            None
         } else {
             if let Some(prefix) = unsafe_prefix {
                 return Err(Error::Other(format!(
@@ -19716,18 +24293,45 @@ impl Document {
             }
             #[cfg(test)]
             eprintln!("FX211_FLUSH_STAGE serialize-before");
-            let serialized = self.document.to_xml()?;
+            let serialized = self.main_part_xml()?;
             #[cfg(test)]
             eprintln!("FX211_FLUSH_STAGE serialize-after");
-            replay_nested_namespace_declarations(&serialized, &nested_namespace_owners)?
+            let spans = self
+                .main_part_blocks
+                .as_ref()
+                .and_then(|blocks| blocks.proved_namespace_spans(&serialized));
+            Some(replay_nested_namespace_declarations_with_spans(
+                &serialized,
+                nested_namespace_owners,
+                spans.as_deref(),
+            )?)
         };
-        let namespace_scopes = document_namespace_scopes(&doc_xml)?;
-        self.package.set_part(&self.doc_part_name, doc_xml);
+        let namespace_scopes = document_namespace_scopes(
+            doc_xml
+                .as_deref()
+                .or(kept_xml.as_deref())
+                .expect("compared existing document XML"),
+        )?;
+        if let Some(doc_xml) = doc_xml {
+            self.package.set_part(&self.doc_part_name, doc_xml);
+        }
         self.root_namespace_declarations = namespace_scopes.root_declarations;
         self.body_namespace_declarations = namespace_scopes.body_declarations;
         self.body_namespace_bindings = namespace_scopes.body_bindings;
         self.plain_local_edit_blocked = typed_document_is_unchanged && unsafe_prefix.is_some();
+        if !typed_document_is_unchanged {
+            self.unsavable_body_edit_cache = OnceLock::new();
+        }
         Ok(())
+    }
+
+    /// The last opening, while the main part still holds those bytes.
+    fn kept_main_part(&self) -> Option<Arc<Parsed>> {
+        let parsed = self.parsed.as_ref()?;
+        let kept = parsed.main_part_xml()?;
+        let current = self.package.get_part(&self.doc_part_name)?;
+        (parsed.main_part == self.doc_part_name && (std::ptr::eq(kept, current) || kept == current))
+            .then(|| Arc::clone(parsed))
     }
 
     fn refresh_related_story_caches(&mut self) -> Result<()> {
@@ -20292,13 +24896,41 @@ impl Document {
     }
 
     fn story_sources(&self) -> Result<Vec<StorySource<'_>>> {
+        Ok(self.spanned_story_sources()?.0)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn spanned_story_sources(
+        &self,
+    ) -> Result<(Vec<StorySource<'_>>, Range<usize>, Vec<Range<usize>>)> {
         #[cfg(test)]
         STORY_SOURCE_BUILDS.set(STORY_SOURCE_BUILDS.get() + 1);
+        let (main, content, children) = self.main_part_with_body_spans()?;
         let mut sources = vec![StorySource {
             root_kind: StoryKind::Body,
             part_name: self.doc_part_name.clone(),
-            xml: Cow::Owned(self.document.to_xml()?),
+            xml: Cow::Owned(main),
         }];
+        sources.extend(self.related_story_sources()?);
+        Ok((sources, content, children))
+    }
+
+    fn story_sources_and_main_layout(
+        &self,
+        items: bool,
+    ) -> Result<(Vec<StorySource<'_>>, Option<MainStoryLayout>, usize)> {
+        let (sources, content, children) = self.spanned_story_sources()?;
+        let child_count = children.len();
+        let layout = self
+            .main_story_layout(&sources[0].xml, &content, &children, items)
+            .ok();
+        Ok((sources, layout, child_count))
+    }
+
+    /// The story sources after the main part, in [`Self::story_sources`]
+    /// order, read from the package without serializing the main part.
+    fn related_story_sources(&self) -> Result<Vec<StorySource<'_>>> {
+        let mut sources = Vec::new();
         let mut seen = HashSet::new();
         seen.insert((StoryKind::Body, self.doc_part_name.clone()));
 
@@ -20368,8 +25000,19 @@ impl Document {
     pub fn stories(&self) -> Result<Vec<StoryId>> {
         let mut stories = Vec::new();
         let mut seen = HashSet::new();
-        for source in self.story_sources()? {
-            for owner in scan_story_owners(&source.xml, source.root_kind)? {
+        let (sources, main, _child_count) = self.story_sources_and_main_layout(false)?;
+        for (index, source) in sources.into_iter().enumerate() {
+            let owners = match main.as_ref().filter(|_| index == 0) {
+                Some(layout) => layout.owners(&source.xml)?,
+                None => {
+                    if index == 0 {
+                        #[cfg(any(test, debug_assertions))]
+                        note_main_body_block_scans(_child_count);
+                    }
+                    scan_story_owners(&source.xml, source.root_kind)?
+                }
+            };
+            for owner in owners {
                 let identity = (owner.kind, source.part_name.clone(), owner.owner_index);
                 if seen.insert(identity) {
                     stories.push(StoryId {
@@ -20388,14 +25031,36 @@ impl Document {
         &'a self,
         story: &StoryId,
     ) -> Result<(StorySource<'a>, StoryOwnerSpan)> {
-        let mut sources = self.story_sources()?;
+        let (source, owner, _) = self.story_source_owner_and_layout(story, false)?;
+        Ok((source, owner))
+    }
+
+    fn story_source_owner_and_layout<'a>(
+        &'a self,
+        story: &StoryId,
+        items: bool,
+    ) -> Result<(StorySource<'a>, StoryOwnerSpan, Option<MainStoryLayout>)> {
+        let (mut sources, content, children) = self.spanned_story_sources()?;
         let source = sources.iter().position(|source| {
             source.part_name == story.part_name
                 && (source.root_kind == story.kind
                     || matches!(story.kind, StoryKind::TableCell | StoryKind::TextBox))
         });
-        let source = match source {
-            Some(index) => sources.swap_remove(index),
+        let (source, layout) = match source {
+            Some(index) => {
+                let source = sources.swap_remove(index);
+                let layout = if index == 0 {
+                    self.main_story_layout(&source.xml, &content, &children, items)
+                        .ok()
+                } else {
+                    None
+                };
+                if index == 0 && layout.is_none() {
+                    #[cfg(any(test, debug_assertions))]
+                    note_main_body_block_scans(children.len());
+                }
+                (source, layout)
+            }
             None => {
                 if let Some(actual) = sources
                     .iter()
@@ -20414,19 +25079,147 @@ impl Document {
                 .into());
             }
         };
-        let owner = scan_story_owners(&source.xml, source.root_kind)?
-            .into_iter()
-            .find(|owner| owner.kind == story.kind && owner.owner_index == story.owner_index)
-            .ok_or_else(|| StoryError::OwnerNotFound {
-                story: story.clone(),
-            })?;
+        let owner = match &layout {
+            Some(layout) => layout.owner(&source.xml, story.kind, story.owner_index)?,
+            None => scan_story_owners(&source.xml, source.root_kind)?
+                .into_iter()
+                .find(|owner| owner.kind == story.kind && owner.owner_index == story.owner_index),
+        }
+        .ok_or_else(|| StoryError::OwnerNotFound {
+            story: story.clone(),
+        })?;
         if story.fingerprint != owner.fingerprint {
             return Err(StoryError::Stale {
                 story: story.clone(),
             }
             .into());
         }
-        Ok((source, owner))
+        Ok((source, owner, layout))
+    }
+
+    fn main_story_layout(
+        &self,
+        xml: &[u8],
+        content: &Range<usize>,
+        children: &[Range<usize>],
+        items: bool,
+    ) -> Result<MainStoryLayout> {
+        let (head, tail) = (&xml[..content.start], &xml[content.end..]);
+        let mut scans = self
+            .main_body_scans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let frame = match &scans.frame {
+            Some(frame) if scans.head == head && scans.tail == tail => Arc::clone(frame),
+            _ => {
+                let serialized = scans.serialized.take();
+                *scans = MainBodyScans::default();
+                let frame = Arc::new(uncounted_scan(|| scan_body_block(head, None, tail, true))?);
+                *scans = MainBodyScans {
+                    head: head.to_vec(),
+                    tail: tail.to_vec(),
+                    frame: Some(Arc::clone(&frame)),
+                    blocks: Vec::new(),
+                    fingerprint: None,
+                    serialized,
+                };
+                frame
+            }
+        };
+        let old = std::mem::take(&mut scans.blocks);
+        // Owners-only scans have no items. An item lookup must read those
+        // children again. An owners-only lookup keeps a scan that already
+        // holds items.
+        let same = |scan: &Arc<BodyBlockScan>, range: &Range<usize>| {
+            scan.bytes == xml[range.clone()] && (!items || scan.items.is_some())
+        };
+        let prefix = old
+            .iter()
+            .zip(children)
+            .take_while(|(scan, range)| same(scan, range))
+            .count();
+        let suffix = old[prefix..]
+            .iter()
+            .rev()
+            .zip(children[prefix..].iter().rev())
+            .take_while(|(scan, range)| same(scan, range))
+            .count();
+        let mut blocks = children
+            .iter()
+            .enumerate()
+            .map(|(index, _range)| {
+                if index < prefix {
+                    Some(Arc::clone(&old[index]))
+                } else if suffix > 0 && index >= children.len() - suffix {
+                    Some(Arc::clone(&old[old.len() - (children.len() - index)]))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        let todo = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, scan)| scan.is_none())
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let alone = todo
+            .iter()
+            .map(|index| head.len() + children[*index].len() + tail.len())
+            .sum::<usize>();
+        if prefix != children.len() || prefix != old.len() {
+            scans.fingerprint = None;
+        }
+        let whole_walk = alone >= xml.len();
+        let scanned = if !whole_walk {
+            let mut scanned = Vec::with_capacity(todo.len());
+            for index in &todo {
+                #[cfg(any(test, debug_assertions))]
+                note_main_body_block_scans(1);
+                let bytes = &xml[children[*index].clone()];
+                match scan_body_block(head, Some(bytes), tail, items) {
+                    Ok(scan) => scanned.push(scan),
+                    Err(error) => {
+                        scans.blocks = old;
+                        return Err(error);
+                    }
+                }
+            }
+            scanned
+        } else {
+            #[cfg(any(test, debug_assertions))]
+            note_main_body_block_scans(children.len());
+            match scan_body_children(xml, children, &todo, items) {
+                Ok((scanned, fingerprint)) => {
+                    scans.fingerprint = Some(fingerprint);
+                    scanned
+                }
+                Err(error) => {
+                    scans.blocks = old;
+                    return Err(error);
+                }
+            }
+        };
+        for (index, scan) in todo.into_iter().zip(scanned) {
+            blocks[index] = Some(Arc::new(scan));
+        }
+        let blocks = blocks.into_iter().flatten().collect::<Vec<_>>();
+        scans.blocks = blocks.clone();
+        let fingerprint = scans.fingerprint;
+        drop(scans);
+        let layout = MainStoryLayout {
+            content: content.clone(),
+            frame,
+            blocks: children
+                .iter()
+                .map(|range| range.start)
+                .zip(blocks)
+                .collect(),
+            fingerprint,
+        };
+        #[cfg(debug_assertions)]
+        uncounted_scan(|| assert_main_story_layout(xml, &layout, items));
+        Ok(layout)
     }
 
     /// Bind an existing control to a snapshot-checked placeholder entry.
@@ -20451,7 +25244,8 @@ impl Document {
         }
         let mut candidate = self.clone_for_staging();
         candidate.prepare_staged_package()?;
-        let (source, owner) = candidate.fragment_story_source_and_owner(&control.story)?;
+        let (source, owner, _) =
+            candidate.fragment_story_source_owner_and_owners(&control.story)?;
         let part = source.part_name.clone();
         let mut xml = source.xml.into_owned();
         let item = scan_story_items(&xml, &owner, None)?
@@ -20538,10 +25332,10 @@ impl Document {
         Ok(())
     }
 
-    fn fragment_story_source_and_owner<'a>(
+    fn fragment_story_source_owner_and_owners<'a>(
         &'a self,
         story: &StoryId,
-    ) -> Result<(StorySource<'a>, StoryOwnerSpan)> {
+    ) -> Result<(StorySource<'a>, StoryOwnerSpan, Vec<StoryOwnerSpan>)> {
         let (canonical, _) = self.story_source_and_owner(story)?;
         let xml = self.package.get_part(&canonical.part_name).ok_or_else(|| {
             Error::Other(format!(
@@ -20549,9 +25343,11 @@ impl Document {
                 canonical.part_name
             ))
         })?;
-        let owner = scan_story_owners(xml, canonical.root_kind)?
-            .into_iter()
+        let owners = scan_story_owners(xml, canonical.root_kind)?;
+        let owner = owners
+            .iter()
             .find(|owner| owner.kind == story.kind && owner.owner_index == story.owner_index)
+            .cloned()
             .ok_or_else(|| StoryError::OwnerNotFound {
                 story: story.clone(),
             })?;
@@ -20561,6 +25357,7 @@ impl Document {
                 ..canonical
             },
             owner,
+            owners,
         ))
     }
 
@@ -21353,19 +26150,16 @@ impl Document {
         &'a self,
         location: &ContentLocation,
     ) -> Result<(StorySource<'a>, StoryItemSpan)> {
-        let (source, owner) = self.story_source_and_owner(&location.story)?;
+        let (source, owner, layout) = self.story_source_owner_and_layout(&location.story, true)?;
         if location.index_path.len() != 1 {
             return Err(StoryError::InvalidPath {
                 path: location.index_path.clone(),
             }
             .into());
         }
-        let items = scan_story_items(source.xml.as_ref(), &owner, None)?;
         let index = location.index_path[0];
-        let item = items.get(index).cloned().ok_or(StoryError::OutOfBounds {
-            index,
-            len: items.len(),
-        })?;
+        let (item, len) = story_owner_item(source.xml.as_ref(), &owner, layout.as_ref(), index)?;
+        let item = item.ok_or(StoryError::OutOfBounds { index, len })?;
         if item.kind != location.item_kind {
             return Err(StoryError::KindMismatch {
                 expected: location.item_kind,
@@ -21480,8 +26274,8 @@ impl Document {
             }
             .into());
         }
-        let (source, owner) = self.story_source_and_owner(&location.story)?;
-        let items = scan_story_items(source.xml.as_ref(), &owner, None)?;
+        let (source, owner, layout) = self.story_source_owner_and_layout(&location.story, true)?;
+        let items = story_owner_items(source.xml.as_ref(), &owner, layout.as_ref())?;
         let control_index = location.index_path[0];
         let control = items.get(control_index).ok_or(StoryError::OutOfBounds {
             index: control_index,
@@ -21494,7 +26288,7 @@ impl Document {
             }
             .into());
         }
-        let paragraphs = scan_story_control_paragraphs(source.xml.as_ref(), control)?;
+        let paragraphs = story_control_paragraphs(source.xml.as_ref(), control, layout.as_ref())?;
         let paragraph_index = location.index_path[1];
         let full = paragraphs
             .get(paragraph_index)
@@ -21520,8 +26314,8 @@ impl Document {
     /// Traverse one story's supported content without constructing a second
     /// document tree.
     pub fn story_items<'a>(&'a self, story: &StoryId) -> Result<Vec<StoryItemRef<'a>>> {
-        let (source, owner) = self.story_source_and_owner(story)?;
-        let spans = scan_story_items(&source.xml, &owner, None)?;
+        let (source, owner, layout) = self.story_source_owner_and_layout(story, true)?;
+        let spans = story_owner_items(source.xml.as_ref(), &owner, layout.as_ref())?;
         Ok(spans
             .into_iter()
             .enumerate()
@@ -21952,6 +26746,67 @@ impl Document {
                 })
                 .collect(),
         ))
+    }
+
+    /// Main-part body children this thread actually scanned. The count is
+    /// cumulative and is not reset on read. An independent scan adds one
+    /// child when that scan starts, including a scan that fails. A whole-part
+    /// walk adds every child in that part when the walk starts. A checked
+    /// full fallback in story listing, story lookup, or this method adds that
+    /// same whole-part child count. The frame scan, part serialization, and
+    /// body fingerprint hash are not included. Debug agreement scans are not
+    /// included. Debug builds only.
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn main_body_block_scans() -> usize {
+        MAIN_BODY_BLOCK_SCANS.with(std::cell::Cell::get)
+    }
+
+    /// The body story location of the direct body child at `slot`.
+    /// `Ok(None)` is absence. A scan that cannot be proved uses the whole
+    /// story snapshot lookup. The error is that lookup's error.
+    #[doc(hidden)]
+    pub fn direct_body_item_location(&self, slot: usize) -> Result<Option<ContentLocation>> {
+        let (xml, content, children) = self.main_part_with_body_spans()?;
+        let Ok(layout) = self.main_story_layout(&xml, &content, &children, true) else {
+            #[cfg(any(test, debug_assertions))]
+            note_main_body_block_scans(children.len());
+            return full_direct_body_item_location(&xml, &self.doc_part_name, slot);
+        };
+        let owner = layout
+            .owner(&xml, StoryKind::Body, 0)?
+            .ok_or_else(|| Error::Other("main document body owner was not found".to_owned()))?;
+        let story = StoryId {
+            kind: StoryKind::Body,
+            part_name: self.doc_part_name.clone(),
+            owner_index: 0,
+            fingerprint: owner.fingerprint,
+        };
+        let located = layout.direct_body_item(&xml, slot, true).map(|item| {
+            item.map(|(index, item)| ContentLocation::new(story, item.kind, vec![index]))
+        });
+        #[cfg(debug_assertions)]
+        {
+            let whole =
+                uncounted_scan(|| full_direct_body_item_location(&xml, &self.doc_part_name, slot));
+            match (&located, &whole) {
+                (Ok(actual), Ok(expected)) => {
+                    assert_eq!(actual, expected, "direct body item location {slot}")
+                }
+                (Err(actual), Err(expected)) => assert_eq!(
+                    actual.to_string(),
+                    expected.to_string(),
+                    "direct body item location {slot}"
+                ),
+                (Ok(actual), Err(expected)) => panic!(
+                    "direct body item location {slot}: fast Ok {actual:?} hid full error {expected}"
+                ),
+                (Err(actual), Ok(expected)) => panic!(
+                    "direct body item location {slot}: fast error {actual} but full Ok {expected:?}"
+                ),
+            }
+        }
+        located
     }
 
     /// Materialize every story item after building each package source once.
@@ -22462,8 +27317,8 @@ impl Document {
         // use the retained main part when it still describes the current model.
         if part_name == candidate.doc_part_name
             && let Some(retained) = candidate.package.get_part(&part_name)
-            && CT_Document::from_xml(retained).ok().as_ref() == Some(&candidate.document)
             && retained != source_xml
+            && candidate.main_part_parses_to_model(candidate.kept_main_part().as_deref())
         {
             source_xml = retained.to_vec();
             story_owner = scan_story_owners(&source_xml, StoryKind::Body)?
@@ -23942,22 +28797,43 @@ impl Document {
         Ok(Some(scan_story_items(&part, &owner, None)?.len()))
     }
 
-    /// Whether removal takes the direct body child at `slot` alone: a plain
-    /// paragraph, as [`Self::plain_direct_paragraph`] reads it, that owns no
-    /// section. A plain paragraph holds no comment anchor, so a comments
-    /// part does not matter here as it does for a local replacement.
+    /// The number of paragraphs [`Self::paragraphs`] counts before body child
+    /// `slot`, without reading the body's XML.
+    #[doc(hidden)]
+    pub fn paragraph_count_before_content(&self, slot: usize) -> usize {
+        self.document.body.paragraph_count_before(slot)
+    }
+
+    /// Whether removal takes the direct body child at `slot` alone.
+    ///
+    /// A plain paragraph with no section qualifies. Retained `w:sdt`
+    /// namespace owners whose current replay still saves keep that removal
+    /// local. Any other unsavable body stays on the checked staged path.
     #[doc(hidden)]
     pub fn plain_removable_paragraph(&self, slot: usize) -> bool {
-        !self.plain_local_edit_blocked
-            && matches!(
-                self.document.body.content.get(slot),
-                Some(BodyContent::Paragraph(paragraph))
-                    if paragraph_is_plain(paragraph)
-                        && paragraph
-                            .properties
-                            .as_ref()
-                            .is_none_or(|properties| properties.sect_pr.is_none())
-            )
+        let plain = matches!(
+            self.document.body.content.get(slot),
+            Some(BodyContent::Paragraph(paragraph))
+                if paragraph_is_plain(paragraph)
+                    && paragraph
+                        .properties
+                        .as_ref()
+                        .is_none_or(|properties| properties.sect_pr.is_none())
+        );
+        if !plain || self.unsavable_body_edit().is_some() {
+            return false;
+        }
+        if !self.plain_local_edit_blocked {
+            return true;
+        }
+        let Some(xml) = self.package.get_part(&self.doc_part_name) else {
+            return false;
+        };
+        nested_modeled_namespace_owners(xml)
+            .ok()
+            .is_some_and(|owners| {
+                !owners.is_empty() && owners.iter().all(|owner| owner.local_name == "sdt")
+            })
     }
 
     /// Namespace-complete XML for an existing physical table owner.
@@ -24382,7 +29258,7 @@ impl Document {
         Vec<(ContentLocation, Vec<u8>)>,
         Vec<(ContentLocation, LinkInfo)>,
     )> {
-        self.owner_snapshots_of(self.story_sources()?)
+        self.owner_snapshots_of(self.story_sources()?, false)
     }
 
     /// [`Self::story_owner_snapshots`] of a main part whose body holds only
@@ -24405,18 +29281,156 @@ impl Document {
     )> {
         let (part, xml) =
             self.standalone_body_item(&BodyContent::Table(Box::new(table.clone())))?;
-        let snapshots = self.owner_snapshots_of(vec![StorySource {
-            root_kind: StoryKind::Body,
-            part_name: self.doc_part_name.clone(),
-            xml: Cow::Owned(part),
-        }])?;
+        let snapshots = self.owner_snapshots_of(
+            vec![StorySource {
+                root_kind: StoryKind::Body,
+                part_name: self.doc_part_name.clone(),
+                xml: Cow::Owned(part),
+            }],
+            false,
+        )?;
         Ok((xml, snapshots))
+    }
+
+    /// The checked Word owners of a main part whose body holds only `item`,
+    /// placed as a direct body child of this document.
+    ///
+    /// Body story items count from the item, and table cell and text box
+    /// stories from its first of each, and each snapshot's XML is
+    /// namespace-complete. Equal items
+    /// give equal owners while [`Self::body_item_context`] is equal, up to
+    /// the hyperlink relationships, which they do not check again.
+    #[doc(hidden)]
+    pub fn body_item_owners(&self, item: &BodyContent) -> Result<BodyItemOwners> {
+        // The whole body admits each of its children alone.
+        let mut alone = CT_Body {
+            content: vec![item.clone()],
+            sect_pr: None,
+        };
+        alone.validate_resource_limits()?;
+        let part = self.document.standalone_body_item_xml(item)?;
+        #[cfg(test)]
+        STANDALONE_BODY_ITEM_BYTES.set(STANDALONE_BODY_ITEM_BYTES.get() + part.len());
+        let (snapshots, cells, paragraphs, links) = self.owner_snapshots_of(
+            vec![StorySource {
+                root_kind: StoryKind::Body,
+                part_name: self.doc_part_name.clone(),
+                xml: Cow::Borrowed(&part),
+            }],
+            true,
+        )?;
+        let owners = scan_story_owners(&part, StoryKind::Body)?;
+        let body = owners
+            .iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .ok_or_else(|| Error::Other("standalone body item has no body owner".into()))?;
+        let items = scan_story_items(&part, body, None)?;
+        let count = |kind| owners.iter().filter(|owner| owner.kind == kind).count();
+        Ok(BodyItemOwners {
+            snapshots,
+            cells,
+            paragraphs,
+            links,
+            cell_stories: count(StoryKind::TableCell),
+            text_boxes: count(StoryKind::TextBox),
+            paragraph_routes: body_paragraph_routes(&alone, &items),
+            tables: alone.tables().count(),
+            cell_paragraphs: cell_paragraph_routes(&mut alone, &part, &owners, &self.doc_part_name)
+                .ok(),
+            holds_field: holds_field_words(&part),
+        })
+    }
+
+    /// What [`Self::body_item_owners`] reads besides the item: the main
+    /// part's name and root, and the namespace facts of the opened package.
+    #[doc(hidden)]
+    pub fn body_item_context(&self) -> BodyItemContext {
+        BodyItemContext {
+            part_name: self.doc_part_name.clone(),
+            root: [
+                self.document.extra_namespaces.clone(),
+                self.document.root_attributes.clone(),
+                self.root_namespace_declarations.clone(),
+                self.body_namespace_declarations.clone(),
+                self.body_namespace_bindings.clone(),
+            ],
+            plain_local_edit_blocked: self.plain_local_edit_blocked,
+        }
+    }
+
+    /// The direct body children, as [`Self::body_item_owners`] takes them.
+    #[doc(hidden)]
+    pub fn body_children(&self) -> &[BodyContent] {
+        &self.document.body.content
+    }
+
+    /// The story parts after the main part, in the order of
+    /// [`Self::story_owner_snapshots`]: the root story kind, the part name
+    /// and the bytes of each, read without serializing the main part.
+    #[doc(hidden)]
+    #[allow(clippy::type_complexity)] // The kind, name and bytes of each part.
+    pub fn story_part_sources(&self) -> Result<Vec<(StoryKind, String, Cow<'_, [u8]>)>> {
+        Ok(self
+            .related_story_sources()?
+            .into_iter()
+            .map(|source| (source.root_kind, source.part_name, source.xml))
+            .collect())
+    }
+
+    /// [`Self::story_owner_snapshots`] of one part that
+    /// [`Self::story_part_sources`] lists, each snapshot's XML
+    /// namespace-complete.
+    #[doc(hidden)]
+    #[allow(clippy::type_complexity)] // The four owned families of one part.
+    pub fn story_part_owner_snapshots(
+        &self,
+        kind: StoryKind,
+        part_name: &str,
+        xml: &[u8],
+    ) -> Result<(
+        Vec<StoryItemSnapshot>,
+        Vec<(ContentLocation, usize, usize, StoryId)>,
+        Vec<(ContentLocation, Vec<u8>)>,
+        Vec<(ContentLocation, LinkInfo)>,
+    )> {
+        self.owner_snapshots_of(
+            vec![StorySource {
+                root_kind: kind,
+                part_name: part_name.to_owned(),
+                xml: Cow::Borrowed(xml),
+            }],
+            true,
+        )
+    }
+
+    /// The relationship IDs of `part_name` that a hyperlink of a story in
+    /// that part may name: the first relationship of each ID, when it is an
+    /// external hyperlink, as the owner snapshots check a link's
+    /// relationship.
+    #[doc(hidden)]
+    pub fn story_hyperlink_relationships(&self, part_name: &str) -> HashSet<&str> {
+        let mut seen = HashSet::new();
+        let mut valid = HashSet::new();
+        for relationship in self
+            .package
+            .get_part_rels(part_name)
+            .map_or(&[][..], |relationships| relationships.items.as_slice())
+        {
+            if seen.insert(relationship.id.as_str())
+                && relationship.rel_type == rel_types::HYPERLINK
+                && relationship.target_mode.as_deref() == Some("External")
+            {
+                valid.insert(relationship.id.as_str());
+            }
+        }
+        valid
     }
 
     #[allow(clippy::type_complexity)] // One cross-crate projection carries four existing owned families.
     fn owner_snapshots_of(
         &self,
         sources: Vec<StorySource<'_>>,
+        standalone: bool,
     ) -> Result<(
         Vec<StoryItemSnapshot>,
         Vec<(ContentLocation, usize, usize, StoryId)>,
@@ -24530,6 +29544,11 @@ impl Document {
                     let text = story_item_text_with_scope(&source.xml, item, scope, items)?;
                     let xml = if item.complex_field {
                         complex_story_field_xml(&source.xml, item)?
+                    } else if standalone {
+                        let scope = scopes.get(&item.full.start).ok_or_else(|| {
+                            Error::Other("story item namespace scope was not inventoried".into())
+                        })?;
+                        close_content_fragment_namespaces(&source.xml[item.full.clone()], scope)?
                     } else {
                         source.xml[item.full.clone()].to_vec()
                     };
@@ -25371,7 +30390,8 @@ impl Document {
     ) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
-        let (source, owner) = candidate.fragment_story_source_and_owner(&destination.story)?;
+        let (source, owner, _) =
+            candidate.fragment_story_source_owner_and_owners(&destination.story)?;
         let part_name = source.part_name.clone();
         let mut source_xml = source.xml.into_owned();
         let (mut owner, mut boundary, _, _) =
@@ -25399,8 +30419,8 @@ impl Document {
             || candidate.note_part_name(StoryKind::Footnote)?.as_deref() == Some(&part_name)
             || candidate.note_part_name(StoryKind::Endnote)?.as_deref() == Some(&part_name);
         if companion_owner {
-            let (updated_source, updated_owner) =
-                candidate.fragment_story_source_and_owner(&destination.story)?;
+            let (updated_source, updated_owner, _) =
+                candidate.fragment_story_source_owner_and_owners(&destination.story)?;
             source_xml = updated_source.xml.into_owned();
             let (updated_owner, updated_boundary, _, _) =
                 fragment_content_boundary(&source_xml, &updated_owner, destination)?;
@@ -27302,6 +32322,107 @@ impl Document {
     }
 
     // ---- Content insertion ----
+
+    /// The error a save of this body would return after a typed edit, when the
+    /// retained nested owners cannot be replayed or a serializer prefix is
+    /// shadowed. `None` is not a general proof that the document is savable.
+    #[doc(hidden)]
+    pub fn unsavable_body_edit(&self) -> Option<&str> {
+        if self.unsavable_body_edit_cache.get().is_none() {
+            let computed = self.compute_unsavable_body_edit();
+            let _ = self.unsavable_body_edit_cache.set(computed);
+        }
+        self.unsavable_body_edit_cache
+            .get()
+            .and_then(Option::as_deref)
+    }
+
+    fn compute_unsavable_body_edit(&self) -> Option<String> {
+        let xml = self.package.get_part(&self.doc_part_name)?;
+        if let Some(prefix) = unsafe_serializer_namespace_prefix(
+            &self.root_namespace_declarations,
+            &self.body_namespace_declarations,
+            Some(xml),
+        ) {
+            return Some(shadowed_namespace_diagnostic(&prefix));
+        }
+        if let Some(reason) = replay_unsavable_body_edit(xml, &self.document) {
+            return Some(reason);
+        }
+        let owners = nested_modeled_namespace_owners(xml).ok()?;
+        if owners.is_empty() {
+            return None;
+        }
+        // The untouched model can still replay. A real body insertion is what
+        // makes the same owners unsavable, so prove that on a discarded clone.
+        let mut probe = self.clone_for_staging();
+        probe.add_paragraph("");
+        match probe.flush_document_to_package() {
+            Err(error) => {
+                let message = error.to_string();
+                message.contains("namespace").then_some(message)
+            }
+            Ok(_) => None,
+        }
+    }
+
+    fn refuse_unsavable_body_edit(&self) -> Result<()> {
+        match self.unsavable_body_edit() {
+            Some(reason) => Err(Error::Other(reason.to_owned())),
+            None => Ok(()),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn preflight_checked_paragraph(&self, index: Option<usize>, text: &str) -> Result<()> {
+        if let Some(index) = index
+            && index > self.content_count()
+        {
+            return Err(Error::Other("content index out of range".to_owned()));
+        }
+        oxml_core::xml::reject_non_xml_characters("paragraph text", text)?;
+        self.refuse_unsavable_body_edit()
+    }
+
+    fn preflight_checked_table(&self, index: Option<usize>) -> Result<()> {
+        if let Some(index) = index
+            && index > self.content_count()
+        {
+            return Err(Error::Other("content index out of range".to_owned()));
+        }
+        self.refuse_unsavable_body_edit()
+    }
+
+    /// Checked [`Self::add_paragraph`]. An out of range insert index, a
+    /// character XML cannot carry, or a namespace owner that would make the
+    /// save fail returns before the model changes.
+    pub fn try_add_paragraph(&mut self, text: &str) -> Result<Paragraph<'_>> {
+        self.preflight_checked_paragraph(None, text)?;
+        Ok(self.add_paragraph(text))
+    }
+
+    /// Checked [`Self::insert_paragraph`]. The index is tested first.
+    pub fn try_insert_paragraph(&mut self, index: usize, text: &str) -> Result<Paragraph<'_>> {
+        self.preflight_checked_paragraph(Some(index), text)?;
+        Ok(self.insert_paragraph(index, text))
+    }
+
+    /// Checked [`Self::add_table`]. Zero rows and zero columns stay accepted.
+    pub fn try_add_table(&mut self, rows: usize, cols: usize) -> Result<Table<'_>> {
+        self.preflight_checked_table(None)?;
+        Ok(self.add_table(rows, cols))
+    }
+
+    /// Checked [`Self::insert_table`]. The index is tested first.
+    pub fn try_insert_table(
+        &mut self,
+        index: usize,
+        rows: usize,
+        cols: usize,
+    ) -> Result<Table<'_>> {
+        self.preflight_checked_table(Some(index))?;
+        Ok(self.insert_table(index, rows, cols))
+    }
 
     /// Get the number of body content elements (paragraphs + tables).
     pub fn content_count(&self) -> usize {
@@ -36364,17 +41485,21 @@ impl Document {
         };
         // Flush only the private candidate before choosing the preserved physical span.
         candidate.prepare_staged_package()?;
-        let (canonical, canonical_owner) = candidate.story_source_and_owner(&story)?;
-        let (source, owner) = candidate.fragment_story_source_and_owner(&story)?;
-        let canonical_owners = scan_story_owners(&canonical.xml, canonical.root_kind)?;
-        let actual_owners = scan_story_owners(&source.xml, source.root_kind)?;
+        let (canonical, canonical_owner, layout) =
+            candidate.story_source_owner_and_layout(&story, path.is_some())?;
+        let (source, owner, actual_owners) =
+            candidate.fragment_story_source_owner_and_owners(&story)?;
+        let canonical_owners = match &layout {
+            Some(layout) => layout.owner_kinds(),
+            None => scan_story_owners(&canonical.xml, canonical.root_kind)?
+                .iter()
+                .map(|owner| owner.kind)
+                .collect(),
+        };
         if canonical_owners
-            .iter()
-            .map(|o| (o.kind, o.owner_index))
-            .collect::<Vec<_>>()
             != actual_owners
                 .iter()
-                .map(|o| (o.kind, o.owner_index))
+                .map(|owner| owner.kind)
                 .collect::<Vec<_>>()
         {
             return Err(Error::Other(
@@ -36382,7 +41507,10 @@ impl Document {
             ));
         }
         let (canonical_span, span) = if let Some(location) = path {
-            let canonical_items = scan_story_items(&canonical.xml, &canonical_owner, None)?;
+            let canonical_items = match &layout {
+                Some(layout) => layout.owner_items(&canonical.xml, &canonical_owner)?,
+                None => scan_story_items(&canonical.xml, &canonical_owner, None)?,
+            };
             let index = location.index_path[0];
             let selected = canonical_items.get(index).ok_or(StoryError::OutOfBounds {
                 index,
@@ -36393,7 +41521,11 @@ impl Document {
                     "scoped replacement requires a block owner item".into(),
                 ));
             }
-            let canonical_direct = direct_story_content_items(&canonical.xml, &canonical_owner)?;
+            let canonical_direct = direct_story_content_items_in(
+                &canonical.xml,
+                &canonical_owner,
+                canonical_items.clone(),
+            )?;
             let actual_direct = direct_story_content_items(&source.xml, &owner)?;
             let slot = canonical_direct
                 .iter()
@@ -36510,6 +41642,198 @@ impl Document {
         original: &[u8],
         retained_span: Range<usize>,
     ) -> Result<()> {
+        if self.scoped_main_source_by_blocks(canonical, &canonical_span, original, &retained_span) {
+            #[cfg(debug_assertions)]
+            without_staging_work(|| {
+                self.prove_whole_scoped_main_source(
+                    canonical,
+                    canonical_span,
+                    original,
+                    retained_span,
+                )
+            })
+            .expect("the child proof differs from the whole scoped proof");
+            return Ok(());
+        }
+        self.prove_whole_scoped_main_source(canonical, canonical_span, original, retained_span)
+    }
+
+    fn scoped_main_source_by_blocks(
+        &self,
+        canonical: &[u8],
+        canonical_span: &Range<usize>,
+        original: &[u8],
+        retained_span: &Range<usize>,
+    ) -> bool {
+        if !block_proofs_enabled() {
+            return false;
+        }
+        let Some(held) = self.package_main_part_blocks() else {
+            return false;
+        };
+        let Ok((xml, Some(serialized))) = self.canonical_source() else {
+            return false;
+        };
+        if xml != canonical
+            || !held.part_partition_matches(original)
+            || !serialized.part_partition_matches(canonical)
+            || held.blocks.len() != serialized.blocks.len()
+        {
+            return false;
+        }
+        let Some(source_frame) = held.frame.get().and_then(Option::as_ref) else {
+            return false;
+        };
+        let Some(normal_frame) = serialized.frame.get().and_then(Option::as_ref) else {
+            return false;
+        };
+        if source_frame.to_xml().ok() != normal_frame.to_xml().ok() {
+            return false;
+        }
+        let reads = |record: &MainPartBlocks| -> bool {
+            let Some(root) = record.head.get(record.root.clone()) else {
+                return false;
+            };
+            xml_decodes(&[record.head.as_slice(), record.tail.as_slice()].concat())
+                && record.blocks.iter().all(|block| block.decodes(root))
+        };
+        if !reads(&held) || !reads(&serialized) {
+            return false;
+        }
+        let child = |record: &MainPartBlocks, span: &Range<usize>| -> Option<(usize, usize)> {
+            let (starts, _) = record.child_starts()?;
+            record
+                .blocks
+                .iter()
+                .zip(starts)
+                .enumerate()
+                .find_map(|(i, (block, at))| holds(at, block, span).then_some((i, at)))
+        };
+        let closed =
+            |record: &MainPartBlocks, span: &Range<usize>, part: &[u8]| -> Option<Vec<u8>> {
+                let (index, at) = child(record, span)?;
+                let mut wrapped = record.head.clone();
+                wrapped.extend_from_slice(&record.blocks.get(index)?.bytes);
+                wrapped.extend_from_slice(&record.tail);
+                let position = record.head.len().checked_add(span.start.checked_sub(at)?)?;
+                let scope = story_namespace_scope_at(&wrapped, position).ok()?;
+                close_content_fragment_namespaces(part.get(span.clone())?, &scope).ok()
+            };
+        let Some(owners) = held.retained_nested_owners(original) else {
+            return false;
+        };
+        let Some(targets) = serialized.proved_namespace_spans(canonical) else {
+            return false;
+        };
+        for owner in owners {
+            let Some(original_owner) = closed(&held, &owner.source, original) else {
+                return false;
+            };
+            let mut redundant = 0;
+            for target in targets.iter().filter(|target| {
+                target.local_name == owner.local_name
+                    && owner
+                        .declarations
+                        .iter()
+                        .all(|value| target.declarations.contains(value))
+            }) {
+                let Some(target_owner) =
+                    closed(&serialized, &(target.start..target.end), canonical)
+                else {
+                    return false;
+                };
+                match comment_namespace_source_boundaries(&original_owner, &target_owner) {
+                    Ok(Some((_, changed))) if changed.is_empty() => redundant += 1,
+                    Ok(_) => {}
+                    Err(_) => return false,
+                }
+            }
+            if redundant != 1 {
+                return false;
+            }
+        }
+        let Ok(marker) = scoped_proof_marker(original, canonical) else {
+            return false;
+        };
+        let occurrences = |bytes: &[u8]| {
+            bytes
+                .windows(marker.len())
+                .filter(|value| *value == marker.as_bytes())
+                .count()
+        };
+        let Ok(source_scopes) = document_namespace_scopes(original) else {
+            return false;
+        };
+        let Ok(normal_scopes) = document_namespace_scopes(canonical) else {
+            return false;
+        };
+        for (block, normal) in held.blocks.iter().zip(&serialized.blocks) {
+            if block.bytes == normal.bytes
+                && block.staged.is_some()
+                && normal.staged.is_some()
+                && !block.reads_anew()
+                && !normal.reads_anew()
+                && block
+                    .read_child(&held.head, &held.tail, &source_scopes)
+                    .is_some()
+                && normal
+                    .read_child(&serialized.head, &serialized.tail, &normal_scopes)
+                    .is_some()
+            {
+                continue;
+            }
+            match (
+                normalized_scoped_child(&self.document, &held, &serialized, &block.bytes),
+                normalized_scoped_child(&self.document, &serialized, &serialized, &normal.bytes),
+            ) {
+                (Some((left, a)), Some((right, b)))
+                    if left == right && a == b && occurrences(&a) + occurrences(&b) == 0 => {}
+                _ => return false,
+            }
+        }
+        let (Some((index, at)), Some((retained_index, retained_at))) = (
+            child(&serialized, canonical_span),
+            child(&held, retained_span),
+        ) else {
+            return false;
+        };
+        if index != retained_index {
+            return false;
+        }
+        let Some(selected) = closed(&serialized, canonical_span, canonical) else {
+            return false;
+        };
+        let Ok(sentinel) = scoped_proof_sentinel(&selected, &marker) else {
+            return false;
+        };
+        let probe = |record: &MainPartBlocks,
+                     span: &Range<usize>,
+                     at: usize|
+         -> Option<(BodyContent, Vec<u8>)> {
+            let mut bytes = record.blocks.get(index)?.bytes.clone();
+            let range = span.start.checked_sub(at)?..span.end.checked_sub(at)?;
+            bytes.get(range.clone())?;
+            bytes.splice(range, sentinel.bytes());
+            normalized_scoped_child(&self.document, record, &serialized, &bytes)
+        };
+        match (
+            probe(&serialized, canonical_span, at),
+            probe(&held, retained_span, retained_at),
+        ) {
+            (Some((left, a)), Some((right, b))) => {
+                left == right && a == b && occurrences(&a) == 1 && occurrences(&b) == 1
+            }
+            _ => false,
+        }
+    }
+
+    fn prove_whole_scoped_main_source(
+        &self,
+        canonical: &[u8],
+        canonical_span: Range<usize>,
+        original: &[u8],
+        retained_span: Range<usize>,
+    ) -> Result<()> {
         let restored = self.namespace_restored_main_source()?;
         let (boundaries, _) = comment_namespace_source_boundaries(canonical, &restored)?
             .ok_or_else(|| {
@@ -36524,9 +41848,10 @@ impl Document {
         // One typed serialization establishes the same canonical defaults and
         // root namespace inventory on both sides before model comparison.
         let normalize = |xml: &[u8]| -> Result<CT_Document> {
-            Ok(CT_Document::from_xml(
-                &CT_Document::from_xml(xml)?.to_xml()?,
-            )?)
+            note_staging_work(|work| work.parsed += xml.len());
+            let written = CT_Document::from_xml(xml)?.to_xml()?;
+            note_staging_work(|work| work.parsed += written.len());
+            Ok(CT_Document::from_xml(&written)?)
         };
         let baseline = normalize(original)?;
         if normalize(&self.document.to_xml()?)? != baseline || normalize(&restored)? != baseline {
@@ -36534,50 +41859,10 @@ impl Document {
                 "scoped source has no equivalent checked model projection".into(),
             ));
         }
-        let mut identity = 0usize;
-        let marker = loop {
-            let marker = format!("rdocxScopedPositionProof{identity}");
-            if !original
-                .windows(marker.len())
-                .any(|bytes| bytes == marker.as_bytes())
-                && !restored
-                    .windows(marker.len())
-                    .any(|bytes| bytes == marker.as_bytes())
-            {
-                break marker;
-            }
-            identity = identity
-                .checked_add(1)
-                .ok_or_else(|| Error::Other("scoped source proof identity exhausted".into()))?;
-        };
+        let marker = scoped_proof_marker(original, &restored)?;
         let scope = story_namespace_scope_at(&restored, start)?;
         let selected_closed = close_content_fragment_namespaces(&restored[start..end], &scope)?;
-        let mut reader = NsReader::from_reader(selected_closed.as_slice());
-        let (namespace, event) = reader
-            .read_resolved_event()
-            .map_err(|error| Error::Other(error.to_string()))?;
-        let root = match event {
-            Event::Start(element) | Event::Empty(element) => element,
-            _ => return Err(Error::Other("scoped source proof has no root".into())),
-        };
-        if !word_element(&namespace) {
-            return Err(Error::Other(
-                "scoped source proof needs a qualified Word block".into(),
-            ));
-        }
-        let paragraph =
-            format!(r#"<w:p xmlns:w="{WORD_NAMESPACE}"><w:r><w:t>{marker}</w:t></w:r></w:p>"#);
-        let sentinel = match root.local_name().as_ref() {
-            b"p" => paragraph,
-            b"tbl" => format!(
-                r#"<w:tbl xmlns:w="{WORD_NAMESPACE}"><w:tr><w:tc>{paragraph}</w:tc></w:tr></w:tbl>"#
-            ),
-            b"tc" => format!(r#"<w:tc xmlns:w="{WORD_NAMESPACE}">{paragraph}</w:tc>"#),
-            b"sdt" => format!(
-                r#"<w:sdt xmlns:w="{WORD_NAMESPACE}"><w:sdtPr/><w:sdtContent>{paragraph}</w:sdtContent></w:sdt>"#
-            ),
-            _ => return Err(Error::Other("unsupported scoped source proof kind".into())),
-        };
+        let sentinel = scoped_proof_sentinel(&selected_closed, &marker)?;
         let mut checked_probe = restored;
         checked_probe.splice(start..end, sentinel.bytes());
         let mut retained_probe = original.to_vec();
@@ -41204,6 +46489,4099 @@ fn has_consistent_sfnt_header(data: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn owners_only_story_list_then_item_lookup_matches_the_full_reader() {
+        for count in [0usize, 1, 3] {
+            let mut document = Document::new();
+            document.document.body.content.clear();
+            for index in 0..count {
+                document.add_paragraph(&format!("paragraph {index}"));
+            }
+            let stories = document.stories().expect("owners");
+            let body = stories
+                .iter()
+                .find(|story| story.kind() == StoryKind::Body)
+                .expect("body story");
+            let items = document.story_items(body).expect("items after owners");
+            let snapshots = document.story_item_snapshots().expect("full snapshots");
+            let body_snapshots = snapshots
+                .iter()
+                .filter(|snapshot| snapshot.location().story().kind() == StoryKind::Body)
+                .filter(|snapshot| snapshot.location().index_path().len() == 1)
+                .collect::<Vec<_>>();
+            assert_eq!(items.len(), body_snapshots.len());
+            for (item, snapshot) in items.iter().zip(&body_snapshots) {
+                assert_eq!(item.location().item_kind(), snapshot.location().item_kind());
+                assert_eq!(
+                    item.location().index_path(),
+                    snapshot.location().index_path()
+                );
+            }
+            let xml = document.document.to_xml().expect("full bytes");
+            for slot in 0..=count {
+                let fast = document
+                    .direct_body_item_location(slot)
+                    .expect("fast lookup");
+                let full = full_direct_body_item_location(&xml, &document.doc_part_name, slot)
+                    .expect("full lookup");
+                assert_eq!(fast, full);
+            }
+        }
+    }
+
+    fn assert_old_body_result(document: &Document) {
+        let xml = document.document.to_xml().expect("writer bytes");
+        let owners = scan_story_owners(&xml, StoryKind::Body).expect("old owners");
+        let body = owners
+            .iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .expect("old body");
+        let direct = direct_story_content_items(&xml, body).expect("old direct");
+        let stories = document.stories().expect("stories");
+        let sources = document.story_sources().expect("sources");
+        let mut old_owner_count = 0;
+        for source in &sources {
+            old_owner_count += scan_story_owners(source.xml.as_ref(), source.root_kind)
+                .expect("source owners")
+                .len();
+        }
+        assert_eq!(stories.len(), old_owner_count);
+        for story in &stories {
+            let (source, owner) = document.story_source_and_owner(story).expect("owner");
+            let old = scan_story_owners(source.xml.as_ref(), source.root_kind)
+                .expect("old source owners")
+                .into_iter()
+                .find(|old| old.kind == story.kind && old.owner_index == story.owner_index)
+                .expect("old owner");
+            assert_eq!(owner.kind, old.kind);
+            assert_eq!(owner.owner_index, old.owner_index);
+            assert_eq!(owner.fingerprint, old.fingerprint);
+            assert_eq!(owner.full, old.full);
+            assert_eq!(story.fingerprint, old.fingerprint);
+            let old_items = scan_story_items(source.xml.as_ref(), &old, None).expect("old items");
+            let items = document.story_items(story).expect("items");
+            assert_eq!(items.len(), old_items.len());
+            for (ordinal, (item, old_item)) in items.iter().zip(&old_items).enumerate() {
+                assert_eq!(item.location().index_path(), &[ordinal]);
+                let (_source, span) = document.story_item_source(item.location()).expect("span");
+                assert_eq!(span.kind, old_item.kind);
+                assert_eq!(span.full, old_item.full);
+                assert_eq!(span.scan, old_item.scan);
+                assert_eq!(span.direct_owner_child, old_item.direct_owner_child);
+                assert_eq!(span.complex_field, old_item.complex_field);
+                assert_eq!(span.complex_ancestors, old_item.complex_ancestors);
+                assert!(span.sdt_context == old_item.sdt_context);
+                assert_eq!(item.location().story.clone(), story.clone());
+            }
+        }
+        for slot in 0..=direct.len() {
+            let fast = document.direct_body_item_location(slot);
+            let full = full_direct_body_item_location(&xml, &document.doc_part_name, slot);
+            match (&fast, &full) {
+                (Ok(actual), Ok(expected)) => {
+                    assert_eq!(actual, expected, "slot {slot}");
+                    if slot == direct.len() {
+                        assert!(actual.is_none(), "slot {slot} is absence");
+                    }
+                }
+                (Err(actual), Err(expected)) => {
+                    assert_eq!(actual.to_string(), expected.to_string(), "slot {slot}")
+                }
+                (Ok(actual), Err(expected)) => {
+                    panic!("slot {slot}: fast Ok {actual:?} hid full error {expected}")
+                }
+                (Err(actual), Ok(expected)) => {
+                    panic!("slot {slot}: fast error {actual} but full Ok {expected:?}")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn main_part_blocks_probe_root_mismatch_counts_the_field_retry() {
+        let mut document = Document::new();
+        for index in 0..4 {
+            let mut paragraph = rdocx_oxml::text::CT_P::new();
+            paragraph.add_run(&format!("row {index}"));
+            document
+                .document
+                .body
+                .content
+                .push(BodyContent::Paragraph(Box::new(paragraph)));
+        }
+        document.document.body.content.insert(
+            2,
+            BodyContent::RawXml(Box::new(
+                br#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:p>"#.to_vec(),
+            )),
+        );
+        let children = document.document.body.content.len();
+        assert_eq!(children, 5);
+        let _ = document.main_part_xml().unwrap();
+        document.document.root_attributes = vec![("producer".to_owned(), "changed".to_owned())];
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        let written = document.main_part_xml().unwrap();
+        let full = document.document.to_xml().map_err(Error::from).unwrap();
+        assert_eq!(written, full);
+        #[cfg(debug_assertions)]
+        assert_eq!(take_staging_work()[4], children + 1);
+    }
+
+    #[test]
+    fn main_part_blocks_probe_root_range_keeps_a_quoted_angle() {
+        fn root_by_reader(head: &[u8]) -> std::ops::Range<usize> {
+            let mut reader = quick_xml::Reader::from_reader(head);
+            reader.config_mut().trim_text(false);
+            let mut buf = Vec::new();
+            loop {
+                let start = reader.buffer_position() as usize;
+                match reader.read_event_into(&mut buf) {
+                    Ok(quick_xml::events::Event::Start(_)) => {
+                        return start..reader.buffer_position() as usize;
+                    }
+                    Ok(quick_xml::events::Event::Eof) => panic!("head has no root start"),
+                    Ok(_) => buf.clear(),
+                    Err(error) => panic!("head reader: {error}"),
+                }
+            }
+        }
+        let mut frame = CT_Document::new();
+        frame.root_attributes = vec![("producer".to_owned(), "a>b".to_owned())];
+        let (head, _) = frame.body_frame_xml().unwrap();
+        let quoted = br#"producer="a>b""#;
+        let preserved = head.windows(quoted.len()).any(|window| window == quoted);
+        let naive = root_start_tag(&head).expect("naive root");
+        let read = root_by_reader(&head);
+        eprintln!(
+            "quoted_gt_preserved={preserved} naive={}..{} reader={}..{} head={}",
+            naive.start,
+            naive.end,
+            read.start,
+            read.end,
+            String::from_utf8_lossy(&head)
+        );
+        if preserved {
+            assert_eq!(naive.clone(), read.clone(), "first > truncated the root");
+        } else {
+            assert_eq!(naive.clone(), read.clone());
+        }
+        let mut other = CT_Document::new();
+        other.root_attributes = vec![("producer".to_owned(), "a>c".to_owned())];
+        let (other_head, _) = other.body_frame_xml().unwrap();
+        let other_naive = root_start_tag(&other_head).expect("other root");
+        let other_read = root_by_reader(&other_head);
+        assert_ne!(&head[read.clone()], &other_head[other_read.clone()]);
+        assert_eq!(
+            &head[naive.clone()],
+            &head[read.clone()],
+            "suffix after > is outside the kept root"
+        );
+        assert_eq!(&other_head[other_naive], &other_head[other_read]);
+    }
+
+    #[test]
+    fn main_part_blocks_reuse_proved_neighbors_and_rewrite_fields() {
+        fn child(text: &str) -> BodyContent {
+            let mut paragraph = rdocx_oxml::text::CT_P::new();
+            paragraph.add_run(text);
+            BodyContent::Paragraph(Box::new(paragraph))
+        }
+        fn replace(document: &mut Document, index: usize, text: &str) {
+            document.document.body.content[index] = child(text);
+        }
+        for paragraphs in [50usize, 200] {
+            let mut document = Document::new();
+            for index in 0..paragraphs {
+                document
+                    .document
+                    .body
+                    .content
+                    .push(child(&format!("row {index}")));
+            }
+            document.document.body.content.push(child("same"));
+            document.document.body.content.insert(1, child("same"));
+            #[cfg(debug_assertions)]
+            let _ = take_staging_work();
+            let oracle = document.document.to_xml().unwrap();
+            let written = document.main_part_xml().unwrap();
+            assert_eq!(written, oracle);
+            #[cfg(debug_assertions)]
+            {
+                let cold = take_staging_work()[4];
+                assert_eq!(cold, document.document.body.content.len());
+            }
+            replace(&mut document, 10, "warm-a");
+            let warm_a = document.main_part_xml().unwrap();
+            assert_eq!(warm_a, document.document.to_xml().unwrap());
+            replace(&mut document, 11, "warm-b");
+            let warm_b = document.main_part_xml().unwrap();
+            assert_eq!(warm_b, document.document.to_xml().unwrap());
+            #[cfg(debug_assertions)]
+            let _ = take_staging_work();
+            replace(&mut document, 12, "sample-a");
+            let sample_a = document.main_part_xml().unwrap();
+            assert_eq!(sample_a, document.document.to_xml().unwrap());
+            #[cfg(debug_assertions)]
+            let writes_a = take_staging_work()[4];
+            replace(&mut document, 13, "sample-b");
+            let sample_b = document.main_part_xml().unwrap();
+            assert_eq!(sample_b, document.document.to_xml().unwrap());
+            #[cfg(debug_assertions)]
+            {
+                let writes_b = take_staging_work()[4];
+                assert_eq!((writes_a, writes_b), (1, 1), "{paragraphs}");
+            }
+            let same = document
+                .document
+                .body
+                .content
+                .iter()
+                .filter(|item| matches!(item, BodyContent::Paragraph(paragraph) if paragraph.text() == "same"))
+                .count();
+            assert_eq!(same, 2);
+
+            let ns = rdocx_oxml::namespace::W_NS;
+            let field = format!(
+                r#"<w:document xmlns:w="{ns}"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> DATE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#
+            );
+            let field = CT_Document::from_xml(field.as_bytes())
+                .unwrap()
+                .body
+                .content
+                .remove(0);
+            let tab = format!(
+                r#"<w:document xmlns:w="{ns}"><w:body><w:p><w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr><w:r><w:t>tab</w:t></w:r></w:p></w:body></w:document>"#
+            );
+            let tab = CT_Document::from_xml(tab.as_bytes())
+                .unwrap()
+                .body
+                .content
+                .remove(0);
+            let mark = format!(
+                r#"<w:document xmlns:w="{ns}"><w:body><w:p><w:bookmarkStart w:id="1" w:name="a"/><w:r><w:t>mark</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p></w:body></w:document>"#
+            );
+            let mark = CT_Document::from_xml(mark.as_bytes())
+                .unwrap()
+                .body
+                .content
+                .remove(0);
+            document.document.body.content[4] = field;
+            document.document.body.content[5] = tab;
+            document.document.body.content[6] = mark;
+            let _ = document.main_part_xml().unwrap();
+            #[cfg(debug_assertions)]
+            let _ = take_staging_work();
+            replace(&mut document, 3, "neighbor");
+            assert_eq!(
+                document.main_part_xml().unwrap(),
+                document.document.to_xml().unwrap()
+            );
+            #[cfg(debug_assertions)]
+            assert_eq!(take_staging_work()[4], 4, "{paragraphs}");
+            document.main_part_blocks = None;
+            #[cfg(debug_assertions)]
+            let _ = take_staging_work();
+            let again = document.main_part_xml().unwrap();
+            assert_eq!(again, document.document.to_xml().unwrap());
+            #[cfg(debug_assertions)]
+            assert_eq!(take_staging_work()[4], document.document.body.content.len());
+            document
+                .document
+                .extra_namespaces
+                .push(("xmlns:q".into(), ns.into()));
+            #[cfg(debug_assertions)]
+            let _ = take_staging_work();
+            assert_eq!(
+                document.main_part_xml().unwrap(),
+                document.document.to_xml().unwrap()
+            );
+            #[cfg(debug_assertions)]
+            assert_eq!(
+                take_staging_work()[4],
+                document.document.body.content.len() + 3,
+                "{paragraphs}"
+            );
+        }
+        let mut deep = Document::new();
+        fn nested(depth: usize) -> rdocx_oxml::table::CT_Tbl {
+            let mut table = rdocx_oxml::table::CT_Tbl::new();
+            if depth > 1 {
+                let mut row = rdocx_oxml::table::CT_Row::new();
+                let mut cell = rdocx_oxml::table::CT_Tc::new();
+                cell.content
+                    .push(rdocx_oxml::table::CellContent::Table(nested(depth - 1)));
+                row.cells.push(cell);
+                table.rows.push(row);
+            }
+            table
+        }
+        deep.document
+            .body
+            .content
+            .push(BodyContent::Table(Box::new(nested(33))));
+        let full = deep
+            .document
+            .to_xml()
+            .map_err(Error::from)
+            .unwrap_err()
+            .to_string();
+        let blocked = deep.main_part_xml().unwrap_err().to_string();
+        assert_eq!(blocked, full);
+        #[cfg(debug_assertions)]
+        assert_eq!(take_staging_work()[4], 0);
+    }
+
+    #[test]
+    fn main_part_blocks_read_proved_children_match_the_whole_parser() {
+        fn paragraph(text: &str) -> BodyContent {
+            let mut paragraph = rdocx_oxml::text::CT_P::new();
+            paragraph.add_run(text);
+            BodyContent::Paragraph(Box::new(paragraph))
+        }
+        let mut document = Document::new();
+        document.document.body.content.clear();
+        document.document.body.content.push(paragraph("one"));
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Table(Box::new(Document::detached_table(1, 1))));
+        let written = document.main_part_xml().unwrap();
+        let blocks = document.main_part_blocks.as_ref().unwrap();
+        let proved = blocks.proved_document(&written).expect("safe children");
+        let parsed = CT_Document::from_xml(&written).unwrap();
+        assert_eq!(proved, parsed);
+        assert_eq!(written, document.document.to_xml().unwrap());
+        #[cfg(debug_assertions)]
+        {
+            let _ = take_staging_work();
+            assert!(blocks.proved_document(&written).is_some());
+            assert_eq!(
+                take_staging_work()[5],
+                0,
+                "a warm safe child is not read again"
+            );
+        }
+        let mut empty = Document::new();
+        empty.document.body.content.clear();
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        let empty_xml = empty.main_part_xml().unwrap();
+        assert_eq!(empty_xml, empty.document.to_xml().unwrap());
+        assert!(empty.document.body.content.is_empty());
+        #[cfg(debug_assertions)]
+        assert_eq!(take_staging_work()[5], 0, "an empty body reads no child");
+
+        let ns = rdocx_oxml::namespace::W_NS;
+        let field = format!(
+            r#"<w:document xmlns:w="{ns}"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:p></w:body></w:document>"#
+        );
+        document.document.body.content[0] = CT_Document::from_xml(field.as_bytes())
+            .unwrap()
+            .body
+            .content
+            .remove(0);
+        let written = document.main_part_xml().unwrap();
+        let blocks = document.main_part_blocks.as_ref().unwrap();
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        assert!(blocks.proved_document(&written).is_some());
+        assert!(blocks.proved_document(&written).is_some());
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(
+                take_staging_work()[5],
+                2,
+                "the field child is read twice and the warm neighbor is not"
+            );
+        }
+
+        for raw in [Vec::new(), b"<w:p/><w:p/>".to_vec()] {
+            document.document.body.content.clear();
+            document
+                .document
+                .body
+                .content
+                .push(BodyContent::RawXml(Box::new(raw)));
+            let old = document
+                .document
+                .to_xml()
+                .map_err(|error| error.to_string());
+            let written = document.main_part_xml().map_err(|error| error.to_string());
+            assert_eq!(written, old);
+            if let Ok(written) = written {
+                assert!(
+                    document
+                        .main_part_blocks
+                        .as_ref()
+                        .and_then(|blocks| blocks.proved_document(&written))
+                        .is_none(),
+                    "one child cannot prove this raw block"
+                );
+                let parsed = |xml: &[u8]| {
+                    CT_Document::from_xml(xml)
+                        .map(|parsed| parsed.to_xml().ok())
+                        .map_err(|error| error.to_string())
+                };
+                assert_eq!(parsed(&written), parsed(old.as_ref().unwrap()));
+            }
+        }
+    }
+
+    #[test]
+    fn main_part_blocks_read_table_row_skips_the_main_parse() {
+        #[cfg(debug_assertions)]
+        let mut recorded = Vec::new();
+        for rows in [50usize, 200] {
+            let mut source = Document::new();
+            source.add_table(rows, 1);
+            let mut document = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+            let edit = |document: &mut Document, text: &str| {
+                let table = document
+                    .document
+                    .body
+                    .content
+                    .iter_mut()
+                    .find_map(|item| match item {
+                        BodyContent::Table(table) => Some(table),
+                        _ => None,
+                    })
+                    .expect("opened table");
+                table.rows[0].cells[0].content[0] = CellContent::Paragraph({
+                    let mut paragraph = rdocx_oxml::text::CT_P::new();
+                    paragraph.add_run(text);
+                    paragraph
+                });
+            };
+            for text in ["warm-a", "warm-b"] {
+                edit(&mut document, text);
+                document = document.prepare_and_reopen_staged().unwrap();
+            }
+            for text in ["sample-a", "sample-b"] {
+                edit(&mut document, text);
+                let mut zip_ref = document.clone_for_staging();
+                zip_ref.parsed = None;
+                zip_ref.main_part_blocks = None;
+                #[cfg(debug_assertions)]
+                {
+                    let _ = take_reopen_work();
+                    let _ = take_staging_work();
+                }
+                let mut fast = document.prepare_and_reopen_staged().unwrap();
+                #[cfg(debug_assertions)]
+                let staging = take_staging_work();
+                #[cfg(debug_assertions)]
+                let reopen = take_reopen_work();
+                #[cfg(debug_assertions)]
+                {
+                    let _ = take_reopen_work();
+                    let _ = take_staging_work();
+                }
+                let mut slow = zip_ref.prepare_and_reopen_staged().unwrap();
+                assert_eq!(fast.document, slow.document);
+                assert_eq!(fast.to_bytes().unwrap(), slow.to_bytes().unwrap());
+                assert_eq!(fast.identifiers, slow.identifiers);
+                document = fast;
+                #[cfg(debug_assertions)]
+                recorded.push((rows, staging, reopen));
+            }
+        }
+        #[cfg(debug_assertions)]
+        {
+            println!("read-model {recorded:?}");
+            for (rows, staging, reopen) in &recorded {
+                assert_eq!(reopen[1], 0, "main parse rows={rows} {recorded:?}");
+                assert!(staging[5] > 0, "child reads rows={rows} {recorded:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn main_part_blocks_namespace_shell_probe() {
+        fn plain() -> BodyContent {
+            let mut paragraph = rdocx_oxml::text::CT_P::new();
+            paragraph.add_run("plain");
+            BodyContent::Paragraph(Box::new(paragraph))
+        }
+        fn local_owner(label: &str) -> String {
+            format!(
+                r#"<w:body><w:p xmlns:localRel="{}"><w:r><w:t>{label}</w:t><w:custom localRel:id="rId&#52;0"/></w:r></w:p></w:body>"#,
+                drawing_ns::R
+            )
+        }
+        fn assert_shell(mut document: Document, empty_fact: bool) {
+            let old_xml = document.document.to_xml().expect("old writer");
+            #[cfg(debug_assertions)]
+            {
+                let _ = take_staging_work();
+                let _ = take_frame_namespace_bytes();
+            }
+            let written = document.main_part_xml().expect("block writer");
+            assert_eq!(written, old_xml);
+            #[cfg(debug_assertions)]
+            {
+                let staging = take_staging_work();
+                let frame = take_frame_namespace_bytes();
+                assert_eq!(staging[1], 0, "frame proof is not a whole-part scan");
+                assert!(frame > 0, "frame proof discloses its own bytes");
+            }
+            CT_Document::from_xml(&written).expect("old parser");
+            let old = nested_modeled_namespace_owners(&written).expect("old owners");
+            let blocks = document.main_part_blocks.as_ref().expect("block record");
+            assert!(blocks.proved_document(&written).is_some());
+            let retained = blocks.retained_nested_owners(&written);
+            if empty_fact {
+                assert!(old.is_empty());
+                assert_eq!(format!("{retained:?}"), format!("{:?}", Some(old)));
+            } else {
+                assert_eq!(old.len(), 1);
+                let retained = retained.expect("frame background or section-tail owner omitted");
+                assert_eq!(format!("{retained:?}"), format!("{old:?}"));
+            }
+        }
+
+        let mut plain_document = Document::new();
+        plain_document.document.body.content.clear();
+        plain_document.document.body.content.push(plain());
+        assert_shell(plain_document, true);
+
+        let mut background = Document::new();
+        background.document.background_xml = Some(
+            format!("<w:background>{}</w:background>", local_owner("background")).into_bytes(),
+        );
+        background.document.body.content.clear();
+        background.document.body.content.push(plain());
+        assert_shell(background, false);
+
+        let mut tail = Document::new();
+        tail.document.body.content.clear();
+        tail.document.body.content.push(plain());
+        let section = tail.document.body.sect_pr.as_mut().expect("section tail");
+        section
+            .extra_xml
+            .push(format!("<w:custom>{}</w:custom>", local_owner("tail")).into_bytes());
+        assert_shell(tail, false);
+    }
+
+    #[test]
+    fn empty_namespace_owner_proof_uses_old_policy_under_closed_parent() {
+        fn raw_document(children: &[&str]) -> Document {
+            let mut document = Document::new();
+            document.document.body.content.clear();
+            for child in children {
+                document
+                    .document
+                    .body
+                    .content
+                    .push(BodyContent::RawXml(Box::new(child.as_bytes().to_vec())));
+            }
+            document
+        }
+        fn assert_matches_old_policy(label: &str, document: &mut Document) {
+            let xml = document.main_part_xml().expect(label);
+            let blocks = document
+                .main_part_blocks
+                .as_ref()
+                .unwrap_or_else(|| panic!("{label} block record"));
+            let retained = blocks.retained_nested_owners(&xml);
+            match nested_modeled_namespace_owners(&xml) {
+                Ok(old) if old.is_empty() => {
+                    assert!(
+                        retained.as_ref().is_some_and(Vec::is_empty),
+                        "{label} empty proof {retained:?} old owners {}",
+                        old.len()
+                    );
+                    let replayed = replay_nested_namespace_declarations(
+                        &xml,
+                        retained.as_deref().unwrap_or_default(),
+                    )
+                    .unwrap_or_else(|error| panic!("{label} replay {error}"));
+                    let legacy = replay_nested_namespace_declarations(&xml, &old)
+                        .unwrap_or_else(|error| panic!("{label} legacy replay {error}"));
+                    assert_eq!(replayed, legacy, "{label} replay admission");
+                    println!("{label} empty owners part {}", xml.len());
+                }
+                Ok(old) => {
+                    if let Some(retained_owners) = &retained {
+                        assert_eq!(
+                            format!("{retained_owners:?}"),
+                            format!("{old:?}"),
+                            "{label} proved owners"
+                        );
+                        let spans = blocks.proved_namespace_spans(&xml);
+                        let proved = replay_nested_namespace_declarations_with_spans(
+                            &xml,
+                            retained_owners,
+                            spans.as_deref(),
+                        );
+                        let legacy = replay_nested_namespace_declarations(&xml, &old);
+                        match (proved, legacy) {
+                            (Ok(proved), Ok(legacy)) => {
+                                assert_eq!(proved, legacy, "{label} replay bytes")
+                            }
+                            (Err(proved), Err(legacy)) => assert_eq!(
+                                proved.to_string(),
+                                legacy.to_string(),
+                                "{label} replay error"
+                            ),
+                            (proved, legacy) => {
+                                panic!("{label} replay split proved {proved:?} legacy {legacy:?}")
+                            }
+                        }
+                    }
+                    match replay_nested_namespace_declarations(&xml, &old) {
+                        Ok(legacy) => {
+                            let false_empty = replay_nested_namespace_declarations(&xml, &[])
+                                .unwrap_or_else(|error| {
+                                    panic!("{label} false empty replay {error}")
+                                });
+                            if false_empty != legacy {
+                                println!("{label} empty success would change replay admission");
+                            }
+                            println!(
+                                "{label} fallback old owners {} part {}",
+                                old.len(),
+                                xml.len()
+                            );
+                        }
+                        Err(error) => {
+                            println!(
+                                "{label} fallback old owners {} replay error {error}",
+                                old.len()
+                            );
+                            match replay_nested_namespace_declarations(&xml, &[]) {
+                                Ok(_) => println!(
+                                    "{label} empty success would replace the old replay error"
+                                ),
+                                Err(empty_error) => {
+                                    println!("{label} empty replay also errors {empty_error}")
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    assert!(
+                        retained.is_none(),
+                        "{label} scan error must stay unavailable, not empty: {error}"
+                    );
+                    println!("{label} fallback scan error {error}");
+                }
+            }
+        }
+
+        let w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
+        let mut redundant = raw_document(&[&format!(
+            r#"<w:p xmlns:w14="{w14}" w14:paraId="0000AAAA"><w:r><w:t>redundant</w:t></w:r></w:p>"#
+        )]);
+        assert_matches_old_policy("redundant canonical w14", &mut redundant);
+        let redundant_xml = redundant
+            .main_part_blocks
+            .as_ref()
+            .and_then(|blocks| blocks.part.as_deref().map(|part| part.as_slice().to_vec()))
+            .expect("redundant part");
+        let w14_decl = b"xmlns:w14";
+        assert!(
+            redundant_xml
+                .windows(w14_decl.len())
+                .filter(|window| *window == w14_decl)
+                .count()
+                >= 2,
+            "root and child both declare w14"
+        );
+        let redundant_blocks = redundant
+            .main_part_blocks
+            .as_ref()
+            .expect("redundant blocks");
+        assert!(
+            redundant_blocks
+                .blocks
+                .iter()
+                .any(|block| block.declares_namespace),
+            "redundant w14 is a declaring child, not the byte-absence shortcut"
+        );
+        let old_redundant =
+            nested_modeled_namespace_owners(&redundant_xml).expect("redundant old policy");
+        assert!(
+            old_redundant.is_empty(),
+            "same-URI w14 must be empty under the old policy, got {old_redundant:?}"
+        );
+        let policy = redundant_blocks
+            .namespace_frame
+            .get()
+            .and_then(Option::as_ref)
+            .expect("redundant frame policy")
+            .clone();
+        let declaring = redundant_blocks
+            .blocks
+            .iter()
+            .find(|block| block.declares_namespace)
+            .expect("declaring child");
+        let mut shifted = policy.clone();
+        shifted
+            .root_declarations
+            .push((String::from("xmlns:extra"), String::from("urn:extra")));
+        assert!(
+            declaring.empty_namespace_owner(&shifted).is_none(),
+            "a changed root context must decline"
+        );
+        #[cfg(debug_assertions)]
+        {
+            let _ = take_frame_namespace_bytes();
+            let _ = take_namespace_scope_bytes();
+            let _ = take_closed_body_guard_bytes();
+        }
+        assert!(declaring.empty_namespace_owner(&policy).is_some());
+        assert!(
+            redundant_blocks
+                .retained_nested_owners(&redundant_xml)
+                .is_some_and(|owners| owners.is_empty())
+        );
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(take_frame_namespace_bytes(), 0, "context cache hit");
+            assert_eq!(take_namespace_scope_bytes(), 0, "scope cache hit");
+            assert_eq!(take_closed_body_guard_bytes(), 0, "guard cache hit");
+        }
+
+        let mut used = raw_document(&[&format!(
+            r#"<w:p xmlns:localRel="{}"><w:r><w:t>used</w:t><w:custom localRel:id="rId40"/></w:r></w:p>"#,
+            drawing_ns::R
+        )]);
+        let used_xml = used.main_part_xml().expect("used part");
+        let used_old = nested_modeled_namespace_owners(&used_xml).expect("used old policy");
+        assert!(
+            !used_old.is_empty(),
+            "a used local producer declaration must stay nonempty"
+        );
+        let used_blocks = used.main_part_blocks.as_ref().expect("used blocks");
+        assert_eq!(
+            format!("{:?}", used_blocks.retained_nested_owners(&used_xml)),
+            format!("{:?}", Some(used_old)),
+            "used local producer owners"
+        );
+        assert_matches_old_policy("used local producer", &mut used);
+
+        let mut unused =
+            raw_document(&[r#"<w:p xmlns:unused="urn:unused"><w:r><w:t>unused</w:t></w:r></w:p>"#]);
+        assert_matches_old_policy("unused declaration", &mut unused);
+
+        let mut rebound = raw_document(&[
+            r#"<w:p xmlns:w14="urn:not-wordml" w14:paraId="0000BBBB"><w:r><w:t>rebound</w:t></w:r></w:p>"#,
+        ]);
+        assert_matches_old_policy("rebound w14 uri", &mut rebound);
+
+        let mut alias = raw_document(&[&format!(
+            r#"<w:p xmlns:wAlias="{w14}" wAlias:paraId="0000CCCC"><w:r><w:t>alias</w:t></w:r></w:p>"#
+        )]);
+        assert_matches_old_policy("root alias", &mut alias);
+        let mut default_ns =
+            raw_document(&[r#"<w:p xmlns="urn:default"><w:r><w:t>default</w:t></w:r></w:p>"#]);
+        assert_matches_old_policy("default namespace", &mut default_ns);
+        let mut shadow =
+            raw_document(&[r#"<w:p xmlns:w="urn:shadow"><w:r><w:t>shadow</w:t></w:r></w:p>"#]);
+        assert_matches_old_policy("shadowed word prefix", &mut shadow);
+        let sdt = |text: &str| {
+            format!(
+                r#"<w:sdt xmlns:x="urn:x"><w:sdtPr><x:meta/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+            )
+        };
+        let mut collision = raw_document(&[&sdt("left"), &sdt("left")]);
+        assert_matches_old_policy("sdt collision", &mut collision);
+
+        let mut crossed = Document::new();
+        crossed.document.body.content.clear();
+        crossed
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(
+                format!(
+                    "</w:body><w:body xmlns:q=\"{}\" xmlns:s=\"{}\">",
+                    drawing_ns::WP,
+                    drawing_ns::R
+                )
+                .into_bytes(),
+            )));
+        crossed
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(
+                br#"<q:docPr id="37" name="opaque"/><w:custom s:id="rId7"/>"#.to_vec(),
+            )));
+        let (crossed_xml, crossed_record) = crossed
+            .canonical_source()
+            .expect("cross body still has a canonical record");
+        let crossed_record = crossed_record.expect("cross body record");
+        crossed_record.store_empty_namespace_owners();
+        match crossed_record.nested_namespace_owners.get() {
+            None | Some(None) => {}
+            Some(Some(owners)) => panic!("cross body published owners {owners:?}"),
+        }
+        assert!(
+            crossed_record
+                .retained_nested_owners(&crossed_xml)
+                .is_none()
+        );
+        match nested_modeled_namespace_owners(&crossed_xml) {
+            Ok(old) => println!(
+                "cross body old owners {} part {}",
+                old.len(),
+                crossed_xml.len()
+            ),
+            Err(error) => println!("cross body old scan error {error}"),
+        }
+
+        let mut fast = issue407_document(&issue407_varied_body(""), false);
+        let table = fast.tables().len() - 1;
+        fast.add_empty_table_row(table).expect("warmup row");
+        let mut slow = fast.clone_for_staging();
+        slow.main_part_blocks = None;
+        slow.parsed = None;
+        slow.main_body_scans = std::sync::Arc::new(std::sync::Mutex::new(MainBodyScans::default()));
+        #[cfg(debug_assertions)]
+        {
+            let _ = take_staging_work();
+            let _ = take_frame_namespace_bytes();
+            let _ = take_namespace_scope_bytes();
+            let _ = take_closed_body_guard_bytes();
+        }
+        fast.add_empty_table_row(table).expect("measured row");
+        #[cfg(debug_assertions)]
+        {
+            let stage = take_staging_work();
+            let frame = take_frame_namespace_bytes();
+            let scope = take_namespace_scope_bytes();
+            let guard = take_closed_body_guard_bytes();
+            let part = fast
+                .package
+                .get_part(&fast.doc_part_name)
+                .map(<[u8]>::len)
+                .unwrap_or(0);
+            println!(
+                "new part second row stage {stage:?} frame {frame} scope {scope} guard {guard} part {part}"
+            );
+            assert_eq!(
+                stage[1], 0,
+                "new part whole namespace scan remained, part {part}"
+            );
+        }
+        let proof_off = CanonicalBlockProofOff::enter();
+        slow.add_empty_table_row(table).expect("reference row");
+        drop(proof_off);
+        assert_eq!(fast.document, slow.document, "new part model admission");
+        let mut fast_bytes = fast.clone_for_staging();
+        let mut slow_bytes = slow.clone_for_staging();
+        assert_eq!(
+            fast_bytes.to_bytes().expect("fast bytes"),
+            slow_bytes.to_bytes().expect("slow bytes"),
+            "new part byte admission"
+        );
+        assert_eq!(fast.identifiers, slow.identifiers, "new part identifiers");
+    }
+
+    #[test]
+    fn positive_namespace_owner_spans_match_the_old_policy() {
+        fn rows_sdt() -> String {
+            let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            format!(
+                r#"<w:sdt xmlns:w="{word}" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w:sdtPr><w:tag w:val="rows"/><w15:repeatingSection/></w:sdtPr><w:sdtContent><w:sdt><w:sdtPr><w15:repeatingSectionItem/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>row</w:t></w:r></w:p></w:sdtContent></w:sdt></w:sdtContent></w:sdt>"#
+            )
+        }
+        fn replay_result(
+            xml: &[u8],
+            owners: &[NestedNamespaceOwner],
+            spans: Option<&[ModeledOwnerSpan]>,
+        ) -> std::result::Result<Vec<u8>, String> {
+            replay_nested_namespace_declarations_with_spans(xml, owners, spans)
+                .map_err(|error| error.to_string())
+        }
+        fn assert_owner_replay(label: &str, document: &Document) {
+            let blocks = document.main_part_blocks.as_ref().expect(label);
+            let xml = blocks.part.as_deref().expect(label).as_slice().to_vec();
+            let retained = blocks.retained_nested_owners(&xml);
+            let old = nested_modeled_namespace_owners(&xml);
+            match (&retained, &old) {
+                (Some(retained), Ok(old)) => {
+                    assert_eq!(
+                        format!("{retained:?}"),
+                        format!("{old:?}"),
+                        "{label} owners"
+                    );
+                    let spans = blocks.proved_namespace_spans(&xml);
+                    assert!(spans.is_some(), "{label} proved spans");
+                    assert_eq!(
+                        replay_result(&xml, retained, spans.as_deref()),
+                        replay_result(&xml, old, None),
+                        "{label} replay"
+                    );
+                }
+                (None, Err(error)) => {
+                    let again = nested_modeled_namespace_owners(&xml).expect_err(label);
+                    assert_eq!(again.to_string(), error.to_string(), "{label} scan error");
+                }
+                (retained, old) => panic!("{label} retained {retained:?} old {old:?}"),
+            }
+        }
+
+        let mut producer = issue407_document(&rows_sdt(), false);
+        producer.main_part_xml().expect("producer part");
+        let producer_xml = producer
+            .main_part_blocks
+            .as_ref()
+            .expect("producer blocks")
+            .part
+            .as_deref()
+            .expect("producer part bytes")
+            .to_vec();
+        let producer_old =
+            nested_modeled_namespace_owners(&producer_xml).expect("producer old owners");
+        assert!(
+            !producer_old.is_empty(),
+            "local w15 repeating section must stay a retained owner"
+        );
+        assert_owner_replay("producer w15", &producer);
+
+        let collision = format!(
+            "{}{}",
+            rows_sdt().replace("row", "left"),
+            rows_sdt().replace("row", "left")
+        );
+        let mut siblings = issue407_document(&collision, false);
+        siblings.main_part_xml().expect("sibling part");
+        assert_owner_replay("sibling duplicate markers", &siblings);
+        let sibling_xml = siblings
+            .main_part_blocks
+            .as_ref()
+            .expect("sibling blocks")
+            .part
+            .as_deref()
+            .expect("sibling part bytes")
+            .to_vec();
+        let sibling_owners = nested_modeled_namespace_owners(&sibling_xml).expect("sibling owners");
+        let legacy_replay = replay_nested_namespace_declarations(&sibling_xml, &sibling_owners);
+        assert!(
+            legacy_replay.is_err(),
+            "duplicate marker collision must keep the old replay error"
+        );
+        let sibling_blocks = siblings.main_part_blocks.as_ref().expect("sibling blocks");
+        #[cfg(debug_assertions)]
+        {
+            let _ = take_namespace_span_bytes();
+        }
+        let hit = sibling_blocks.retained_nested_owners(&sibling_xml);
+        assert_eq!(format!("{hit:?}"), format!("{:?}", Some(&sibling_owners)));
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            take_namespace_span_bytes(),
+            0,
+            "unchanged context cache hit"
+        );
+        let declaring = sibling_blocks
+            .blocks
+            .iter()
+            .find(|block| block.declares_namespace)
+            .expect("declaring sibling");
+        let mut shifted = document_namespace_scopes(&sibling_xml).expect("sibling scopes");
+        shifted
+            .root_declarations
+            .push((String::from("xmlns:extra"), String::from("urn:extra")));
+        assert!(
+            declaring
+                .namespace_span_proof(&sibling_blocks.head, &sibling_blocks.tail, &shifted)
+                .is_none(),
+            "changed root context must decline"
+        );
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            take_namespace_span_bytes(),
+            0,
+            "changed context must not rescan a filled piece"
+        );
+
+        let inner = format!(
+            r#"<w:custom><w:body><w:p xmlns:localRel="{}"><w:r><w:t>inner</w:t><w:custom localRel:id="rId40"/></w:r></w:p></w:body></w:custom>"#,
+            drawing_ns::R
+        );
+        let mut opaque = Document::new();
+        opaque.document.body.content.clear();
+        opaque
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(inner.into_bytes())));
+        let opaque_xml = opaque.main_part_xml().expect("opaque inner part");
+        let opaque_blocks = opaque.main_part_blocks.as_ref().expect("opaque blocks");
+        assert!(
+            opaque_blocks.retained_nested_owners(&opaque_xml).is_none(),
+            "opaque inner body must not publish piece owners"
+        );
+        let story_bodies = scan_story_owners(&opaque_xml, StoryKind::Body)
+            .expect("opaque story scan")
+            .iter()
+            .filter(|owner| owner.kind == StoryKind::Body)
+            .count();
+        let child = &opaque_blocks.blocks[0];
+        let mut wrapped = Vec::new();
+        wrapped.extend_from_slice(&opaque_blocks.head);
+        wrapped.extend_from_slice(&child.bytes);
+        wrapped.extend_from_slice(&opaque_blocks.tail);
+        let child_range = opaque_blocks.head.len()..opaque_blocks.head.len() + child.bytes.len();
+        let piece = modeled_owner_piece_spans(&wrapped, Some(child_range)).expect("piece parse");
+        println!("opaque inner body story bodies {story_bodies} piece spans {piece:?}");
+        assert!(
+            piece.is_none(),
+            "word body inside the opaque child is not eligible"
+        );
+        let old_opaque = nested_modeled_namespace_owners(&opaque_xml);
+        println!("opaque inner body old scan {old_opaque:?}");
+
+        let mut malformed = Document::new();
+        malformed.document.body.content.clear();
+        malformed
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(
+                br#"<w:p xmlns:localRel><w:r><w:t>bad</w:t></w:r></w:p>"#.to_vec(),
+            )));
+        let bad_xml = malformed.main_part_xml().expect("malformed writer");
+        let bad_blocks = malformed
+            .main_part_blocks
+            .as_ref()
+            .expect("malformed blocks");
+        let bad_retained = bad_blocks.retained_nested_owners(&bad_xml);
+        let bad_old = nested_modeled_namespace_owners(&bad_xml);
+        match (&bad_retained, &bad_old) {
+            (None, Err(_)) => {}
+            (Some(retained), Ok(old)) => {
+                assert_eq!(format!("{retained:?}"), format!("{old:?}"))
+            }
+            (retained, old) => panic!("malformed retained {retained:?} old {old:?}"),
+        }
+        if bad_old.is_err() {
+            assert!(
+                bad_retained.is_none(),
+                "malformed scan must not become an empty owner cache"
+            );
+        }
+        let bad_again = nested_modeled_namespace_owners(&bad_xml);
+        assert_eq!(
+            bad_again
+                .as_ref()
+                .map(|owners| format!("{owners:?}"))
+                .unwrap_or_else(|_| "err".into()),
+            bad_old
+                .as_ref()
+                .map(|owners| format!("{owners:?}"))
+                .unwrap_or_else(|_| "err".into())
+        );
+        if let (Err(again), Err(old)) = (&bad_again, &bad_old) {
+            assert_eq!(again.to_string(), old.to_string());
+        }
+
+        #[cfg(debug_assertions)]
+        let mut scanned = Vec::new();
+        for count in [50usize, 200] {
+            let body = format!(
+                "{}{}{}",
+                issue407_runs(count),
+                issue407_varied_body(""),
+                rows_sdt()
+            );
+            let mut document = issue407_document(&body, false);
+            let table = document.tables().len() - 1;
+            document.add_empty_table_row(table).expect("warmup row");
+            document.add_empty_table_row(table).expect("second warmup");
+            let mut slow = document.clone_for_staging();
+            slow.main_part_blocks = None;
+            slow.parsed = None;
+            slow.main_body_scans =
+                std::sync::Arc::new(std::sync::Mutex::new(MainBodyScans::default()));
+            #[cfg(debug_assertions)]
+            {
+                let _ = take_staging_work();
+                let _ = take_namespace_span_bytes();
+                let _ = take_namespace_scope_bytes();
+                let _ = take_closed_body_guard_bytes();
+            }
+            document.add_empty_table_row(table).expect("measured row");
+            #[cfg(debug_assertions)]
+            let fast_stage = take_staging_work();
+            #[cfg(debug_assertions)]
+            let fast_spans = take_namespace_span_bytes();
+            #[cfg(debug_assertions)]
+            let fast_scope = take_namespace_scope_bytes();
+            #[cfg(debug_assertions)]
+            let fast_guard = take_closed_body_guard_bytes();
+            let proof_off = CanonicalBlockProofOff::enter();
+            slow.add_empty_table_row(table).expect("reference row");
+            drop(proof_off);
+            #[cfg(debug_assertions)]
+            let slow_stage = take_staging_work();
+            assert_eq!(document.document, slow.document, "rows={count}");
+            assert_eq!(
+                document.to_bytes().expect("fast bytes"),
+                slow.to_bytes().expect("slow bytes"),
+                "rows={count}"
+            );
+            assert_owner_replay("warm rows", &document);
+            #[cfg(debug_assertions)]
+            {
+                println!(
+                    "warm rows {count} fast {fast_stage:?} spans {fast_spans} scope {fast_scope} guard {fast_guard} slow {slow_stage:?}"
+                );
+                assert_eq!(fast_stage.len(), 6, "rows={count} staging slots");
+                assert_eq!(fast_stage[1], 0, "rows={count} whole namespace scan");
+                assert!(slow_stage[1] > fast_stage[1], "rows={count} cache-off scan");
+                let paired = document
+                    .main_part_blocks
+                    .as_ref()
+                    .expect("warm blocks")
+                    .part
+                    .as_deref()
+                    .expect("warm part");
+                assert!(
+                    fast_guard < paired.len(),
+                    "rows={count} closed guard scanned the full part {fast_guard} {}",
+                    paired.len()
+                );
+                scanned.push((
+                    count,
+                    fast_stage,
+                    slow_stage[1],
+                    fast_spans,
+                    fast_scope,
+                    fast_guard,
+                ));
+            }
+        }
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(scanned[0].1[1], scanned[1].1[1], "{scanned:?}");
+            assert_eq!(scanned[0].3, scanned[1].3, "{scanned:?}");
+            assert_eq!(scanned[0].4, scanned[1].4, "{scanned:?}");
+            assert_eq!(scanned[0].5, scanned[1].5, "{scanned:?}");
+            assert!(scanned[1].2 > scanned[0].2, "{scanned:?}");
+        }
+    }
+
+    #[test]
+    fn canonical_pairing_after_positive_namespace_spans() {
+        let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        let rows = format!(
+            r#"<w:sdt xmlns:w="{word}" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w:sdtPr><w:tag w:val="rows"/><w15:repeatingSection/></w:sdtPr><w:sdtContent><w:sdt><w:sdtPr><w15:repeatingSectionItem/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>row</w:t></w:r></w:p></w:sdtContent></w:sdt></w:sdtContent></w:sdt>"#
+        );
+        let mut lines = Vec::new();
+        let mut pending = Vec::new();
+        for count in [50usize, 200] {
+            let body = format!("{}{}{rows}", issue407_runs(count), issue407_varied_body(""));
+            let mut document = issue407_document(&body, false);
+            document.set_header("header");
+            document.set_footer("footer");
+            let table = document.tables().len() - 1;
+            let frame_snap = |document: &Document| {
+                let Some(blocks) = document.main_part_blocks.as_ref() else {
+                    return "blocks-none".to_string();
+                };
+                match blocks.canonical_frame.get() {
+                    None => format!(
+                        "lock None head {} tail {} children {}",
+                        blocks.head.len(),
+                        blocks.tail.len(),
+                        blocks.blocks.len()
+                    ),
+                    Some(None) => format!(
+                        "lock SomeNone head {} tail {} children {}",
+                        blocks.head.len(),
+                        blocks.tail.len(),
+                        blocks.blocks.len()
+                    ),
+                    Some(Some(frame)) => format!(
+                        "lock SomeFacts head {} tail {} frame-head {} frame-tail {} head-eq {} tail-eq {} root {} bodydecl {} bind {} head-plain {} tail-plain {}",
+                        blocks.head.len(),
+                        blocks.tail.len(),
+                        frame.head.len(),
+                        frame.tail.len(),
+                        frame.head.as_slice() == blocks.head.as_slice(),
+                        frame.tail.as_slice() == blocks.tail.as_slice(),
+                        frame.root_declarations.len(),
+                        frame.body_declarations.len(),
+                        frame.body_bindings.len(),
+                        frame.head_plain_relationship_ids.len(),
+                        frame.tail_plain_relationship_ids.len()
+                    ),
+                }
+            };
+            document.add_empty_table_row(table).unwrap();
+            let warmup_one = frame_snap(&document);
+            document.add_empty_table_row(table).unwrap();
+            let warmup_two = frame_snap(&document);
+            #[cfg(debug_assertions)]
+            {
+                let _ = take_staging_work();
+                let _ = take_canonical_fragment_bytes();
+            }
+            document.add_empty_table_row(table).unwrap();
+            #[cfg(debug_assertions)]
+            let stage = take_staging_work();
+            #[cfg(not(debug_assertions))]
+            let stage = [0usize; 6];
+            #[cfg(debug_assertions)]
+            let fragments = take_canonical_fragment_bytes();
+            #[cfg(not(debug_assertions))]
+            let fragments = 0usize;
+            let bare = document.canonical_source().expect("bare canonical");
+            let record = bare.1.as_ref().expect("canonical record");
+            let part = record.part.as_deref().expect("canonical record part");
+            assert_eq!(
+                part.as_slice(),
+                bare.0.as_slice(),
+                "record part is the bare xml"
+            );
+            let owners =
+                nested_modeled_namespace_owners(part.as_slice()).expect("diagnostic owners");
+            let replayed = replay_nested_namespace_declarations(part.as_slice(), &owners);
+            let shell = [record.head.as_slice(), record.tail.as_slice()].concat();
+            let shell_relationships = xml_relationship_ids_in_order(&shell).unwrap_or_default();
+            let measured_frame = frame_snap(&document);
+            let proof = record.canonical_frame_proof(&shell);
+            let mut rejections = 0usize;
+            if let Some(frame) = proof {
+                for (index, block) in record.blocks.iter().enumerate() {
+                    let before = block.canonical_read.get();
+                    let declines = match before {
+                        Some(Some(facts)) => {
+                            facts.root_declarations != frame.root_declarations
+                                || facts.body_declarations != frame.body_declarations
+                                || facts.body_bindings != frame.body_bindings
+                                || facts.head.as_slice() != record.head.as_slice()
+                                || facts.tail.as_slice() != record.tail.as_slice()
+                        }
+                        Some(None) => true,
+                        None => block
+                            .canonical_child_facts(&record.head, &record.tail, frame)
+                            .is_none(),
+                    };
+                    if !declines {
+                        continue;
+                    }
+                    rejections += 1;
+                    let kind = block
+                        .staged
+                        .as_ref()
+                        .map(|item| match item {
+                            BodyContent::Paragraph(_) => "paragraph",
+                            BodyContent::Table(_) => "table",
+                            BodyContent::ContentControl(_) => "sdt",
+                            BodyContent::RawXml(_) => "raw",
+                        })
+                        .unwrap_or("unstaged");
+                    let (
+                        lock,
+                        root_eq,
+                        body_eq,
+                        bind_eq,
+                        head_eq,
+                        tail_eq,
+                        cached_head,
+                        cached_tail,
+                    ) = match before {
+                        None => ("None", false, false, false, false, false, 0, 0),
+                        Some(None) => ("SomeNone", false, false, false, false, false, 0, 0),
+                        Some(Some(facts)) => (
+                            "SomeFacts",
+                            facts.root_declarations == frame.root_declarations,
+                            facts.body_declarations == frame.body_declarations,
+                            facts.body_bindings == frame.body_bindings,
+                            facts.head.as_slice() == record.head.as_slice(),
+                            facts.tail.as_slice() == record.tail.as_slice(),
+                            facts.head.len(),
+                            facts.tail.len(),
+                        ),
+                    };
+                    println!(
+                        "decline count {count} block {index} kind {kind} bytes {} declares {} lock {lock} root-eq {root_eq} bodydecl-eq {body_eq} bind-eq {bind_eq} cached-head {cached_head} current-head {} head-eq {head_eq} cached-tail {cached_tail} current-tail {} tail-eq {tail_eq}",
+                        block.bytes.len(),
+                        block.declares_namespace,
+                        record.head.len(),
+                        record.tail.len()
+                    );
+                }
+            }
+            println!(
+                "decline-count count {count} rejections {rejections} children {}",
+                record.blocks.len()
+            );
+            println!(
+                "frame-stability count {count} warmup1 [{warmup_one}] warmup2 [{warmup_two}] measured [{measured_frame}] warmup-same {} measured-same-as-warmup2 {}",
+                warmup_one == warmup_two,
+                measured_frame == warmup_two
+            );
+            let relationship = record.proved_relationship_ids(part.as_slice(), &[]);
+            let whole = xml_relationship_ids_in_order(part.as_slice());
+            let (fresh_xml, fresh_record) =
+                Document::canonical_source_from(&document.document, None).expect("fresh canonical");
+            assert_eq!(
+                fresh_xml, bare.0,
+                "fresh canonical bytes differ from the kept bare xml"
+            );
+            let fresh = fresh_record.expect("fresh canonical record");
+            let fresh_relationship = fresh.proved_relationship_ids(fresh_xml.as_slice(), &[]);
+            let fresh_whole = xml_relationship_ids_in_order(fresh_xml.as_slice());
+            let kept_eq_fresh = relationship == fresh_relationship;
+            let fresh_eq_whole = fresh_relationship.as_deref() == fresh_whole.as_deref().ok();
+            println!(
+                "fresh-vs-kept count {count} kept {relationship:?} fresh {fresh_relationship:?} whole {whole:?} fresh-whole {fresh_whole:?} kept-eq-fresh {kept_eq_fresh} fresh-eq-whole {fresh_eq_whole}"
+            );
+            assert_eq!(
+                rejections, 0,
+                "count {count} canonical children still declined the stable frame"
+            );
+            assert_eq!(stage[2], 0, "count {count} canonical slot");
+            assert_eq!(
+                relationship, fresh_relationship,
+                "count {count} kept and fresh relationship vectors"
+            );
+            assert_eq!(
+                fresh_relationship.as_deref(),
+                fresh_whole.as_deref().ok(),
+                "count {count} fresh vector"
+            );
+            assert_eq!(
+                relationship.as_deref(),
+                whole.as_deref().ok(),
+                "count {count} kept vector"
+            );
+            assert_eq!(warmup_one, warmup_two, "count {count} warmup frame");
+            assert_eq!(measured_frame, warmup_two, "count {count} measured frame");
+            let frame = proof.is_some();
+            let replay_error = replayed.as_ref().err().map(ToString::to_string);
+            let same_bytes = replayed.as_ref().ok() == Some(&bare.0);
+            let mismatch = replayed.as_ref().ok().and_then(|replayed| {
+                bare.0
+                    .iter()
+                    .zip(replayed)
+                    .position(|(left, right)| left != right)
+                    .or_else(|| {
+                        (bare.0.len() != replayed.len()).then_some(bare.0.len().min(replayed.len()))
+                    })
+            });
+            let cause = if !same_bytes {
+                "bare-vs-replayed-bytes"
+            } else if relationship.is_none() && !frame && !shell_relationships.is_empty() {
+                "empty-frame-header-footer-relationship-ids"
+            } else if relationship.is_none() || !frame || stage[2] != 0 {
+                "another-cause"
+            } else if whole.as_ref().ok() != relationship.as_ref() {
+                "frame-relationship-order"
+            } else {
+                "frame-relationship-proof"
+            };
+            lines.push(format!(
+                "count {count} cause {cause} stage {stage:?} fragments {fragments} owners {} bare {} replay {} same {same_bytes} mismatch {mismatch:?} replay-error {replay_error:?} relationship {} frame {frame:?} shell-relationships {}",
+                owners.len(),
+                bare.0.len(),
+                replayed.as_ref().map(Vec::len).unwrap_or(0),
+                relationship.as_ref().map(Vec::len).unwrap_or(0),
+                shell_relationships.len()
+            ));
+            assert!(!cause.is_empty());
+            if cause == "bare-vs-replayed-bytes" {
+                assert!(!same_bytes);
+                assert!(stage[2] > 0);
+            }
+            if cause == "empty-frame-header-footer-relationship-ids" {
+                assert!(same_bytes);
+                assert!(relationship.is_none());
+                assert!(!frame);
+                assert!(!shell_relationships.is_empty());
+                assert!(stage[2] > 0);
+            }
+            assert!(
+                same_bytes,
+                "header and footer pairing changed replayed bytes"
+            );
+            assert!(
+                !shell_relationships.is_empty(),
+                "header and footer contributed no shell relationship ids: {shell_relationships:?}"
+            );
+            pending.push((count, cause, stage, relationship, whole.ok()));
+        }
+        for (count, cause, stage, relationship, whole) in &pending {
+            assert_eq!(*cause, "frame-relationship-proof", "{lines:?}");
+            assert_eq!(stage[2], 0, "canonical slot stayed on the whole scanner");
+            assert_eq!(relationship.as_deref(), whole.as_deref(), "count {count}");
+        }
+        assert_eq!(
+            lines[0]
+                .split("stage ")
+                .nth(1)
+                .and_then(|rest| rest.split(" fragments").next()),
+            lines[1]
+                .split("stage ")
+                .nth(1)
+                .and_then(|rest| rest.split(" fragments").next()),
+            "canonical stage grew with the paragraph count"
+        );
+        for line in &lines {
+            println!("canonical-pairing {line}");
+        }
+    }
+
+    #[test]
+    fn serialized_piece_memo_keeps_current_model_without_publishing_source() {
+        let mut document = Document::new();
+        document.add_paragraph("left");
+        document.add_paragraph("right");
+        let stored = document
+            .package
+            .get_part(&document.doc_part_name)
+            .unwrap()
+            .to_vec();
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        let (first, _) = document.canonical_source().unwrap();
+        #[cfg(debug_assertions)]
+        assert_eq!(take_staging_work()[4], 2);
+        assert_eq!(first, document.document.to_xml().unwrap());
+        assert!(document.main_part_blocks.is_none());
+        assert!(
+            document
+                .main_body_scans
+                .lock()
+                .unwrap()
+                .serialized
+                .as_ref()
+                .is_some_and(|pieces| pieces.part.is_none())
+        );
+        document
+            .paragraph_mut(1)
+            .unwrap()
+            .set_text("changed")
+            .unwrap();
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        let (changed, _) = document.canonical_source().unwrap();
+        #[cfg(debug_assertions)]
+        assert_eq!(take_staging_work()[4], 1);
+        assert_eq!(changed, document.document.to_xml().unwrap());
+        assert_ne!(first, changed);
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        assert_eq!(
+            document.main_part_with_body_spans().unwrap(),
+            document.document.to_xml_with_body_spans().unwrap()
+        );
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            take_staging_work()[4],
+            0,
+            "span lookup kept the writer pieces"
+        );
+        assert_eq!(
+            document.package.get_part(&document.doc_part_name),
+            Some(stored.as_slice())
+        );
+        assert!(document.main_part_blocks.is_none());
+
+        let mut candidate = document.clone_for_staging();
+        candidate
+            .paragraph_mut(0)
+            .unwrap()
+            .set_text("candidate")
+            .unwrap();
+        let (candidate_xml, _) = candidate.canonical_source().unwrap();
+        assert_ne!(candidate_xml, changed);
+        assert_eq!(document.canonical_source().unwrap().0, changed);
+        assert_eq!(
+            document.package.get_part(&document.doc_part_name),
+            Some(stored.as_slice())
+        );
+
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        let off = CanonicalBlockProofOff::enter();
+        assert_eq!(document.canonical_source().unwrap().0, changed);
+        drop(off);
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            take_staging_work()[4],
+            2,
+            "the whole reference wrote both children"
+        );
+        assert_eq!(document.canonical_source().unwrap().0, changed);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn scoped_cache_off_reads_growing_whole_inputs() {
+        let mut samples = Vec::new();
+        for count in [50, 200] {
+            let mut seed = Document::new();
+            for index in 0..count {
+                seed.add_paragraph(&format!("unaffected {index}"));
+            }
+            seed.add_paragraph("alpha");
+            let mut document = Document::from_bytes(&seed.to_bytes().unwrap()).unwrap();
+            let main = document.doc_part_name.clone();
+            let source = String::from_utf8(document.package.get_part(&main).unwrap().to_vec())
+                .unwrap()
+                .replace("<w:body>", "<w:body>\n");
+            document.package.set_part(&main, source.into_bytes());
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            document.package.write_to(&mut bytes).unwrap();
+            let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+            for (from, to) in [("alpha", "omega"), ("omega", "alpha")] {
+                let location = document.paragraph_story_location(count).unwrap().unwrap();
+                assert_eq!(
+                    document
+                        .try_replace_text_at(&location, from, to, Some(1))
+                        .unwrap()
+                        .unwrap(),
+                    1
+                );
+            }
+            let location = document.paragraph_story_location(count).unwrap().unwrap();
+            let mut reference = document.clone_for_staging();
+            let _ = take_staging_work();
+            assert_eq!(
+                document
+                    .try_replace_text_at(&location, "alpha", "omega", Some(1))
+                    .unwrap()
+                    .unwrap(),
+                1
+            );
+            let fast = take_staging_work();
+            let off = CanonicalBlockProofOff::enter();
+            assert_eq!(
+                reference
+                    .try_replace_text_at(&location, "alpha", "omega", Some(1))
+                    .unwrap()
+                    .unwrap(),
+                1
+            );
+            drop(off);
+            let slow = take_staging_work();
+            assert_eq!(document.package.parts, reference.package.parts);
+            assert_eq!(
+                document.document.to_xml().unwrap(),
+                reference.document.to_xml().unwrap()
+            );
+            assert_eq!(fast[..4], [0; 4]);
+            assert!(slow[0] > 0);
+            eprintln!("scope mutant {count}: fast {fast:?} whole {slow:?}");
+            samples.push((fast, slow));
+        }
+        assert_eq!(samples[0].0, samples[1].0);
+        assert!(samples[1].1[0] > samples[0].1[0]);
+    }
+
+    #[test]
+    fn scoped_proof_distinguishes_duplicates_markers_and_source_contexts() {
+        let mut seed = Document::new();
+        seed.add_paragraph("same");
+        seed.add_paragraph("same");
+        seed.add_paragraph("rdocxScopedPositionProof0");
+        let mut document = Document::from_bytes(&seed.to_bytes().unwrap()).unwrap();
+        let main = document.doc_part_name.clone();
+        let raw = String::from_utf8(document.package.get_part(&main).unwrap().to_vec())
+            .unwrap()
+            .replace("<w:body>", "<w:body>\n");
+        document.package.set_part(&main, raw.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        document.package.write_to(&mut bytes).unwrap();
+        let document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let (canonical, _, children) = document.main_part_with_body_spans().unwrap();
+        let original = document.package.get_part(&main).unwrap();
+        let owner = scan_story_owners(original, StoryKind::Body)
+            .unwrap()
+            .into_iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .unwrap();
+        let items = direct_story_content_items(original, &owner).unwrap();
+        assert!(document.scoped_main_source_by_blocks(
+            &canonical,
+            &children[0],
+            original,
+            &items[0].full
+        ));
+        assert!(!document.scoped_main_source_by_blocks(
+            &canonical,
+            &children[0],
+            original,
+            &items[1].full
+        ));
+        for target in [0, 1] {
+            let actual = document.prove_scoped_main_source(
+                &canonical,
+                children[0].clone(),
+                original,
+                items[target].full.clone(),
+            );
+            let expected = document.prove_whole_scoped_main_source(
+                &canonical,
+                children[0].clone(),
+                original,
+                items[target].full.clone(),
+            );
+            assert_eq!(
+                actual.as_ref().err().map(ToString::to_string),
+                expected.as_ref().err().map(ToString::to_string)
+            );
+            assert_eq!(actual.is_ok(), target == 0);
+        }
+        let word = rdocx_oxml::namespace::W_NS;
+        let cases = [
+            format!(r#"<q:p xmlns:q="{word}"><q:r><q:t>same</q:t></q:r></q:p>"#),
+            format!(r#"<p xmlns="{word}"><r><t>same</t></r></p>"#),
+            r#"<w:p xmlns:w14="urn:foreign" w14:foo="keep"><w:r><w:t>same</w:t></w:r></w:p>"#.to_owned(),
+            r#"<w:p><w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr><w:bookmarkStart w:id="4" w:name="keep"/><w:r><w:t>same</w:t></w:r><w:bookmarkEnd w:id="4"/></w:p>"#.to_owned(),
+            r#"<w:p><w:fldSimple w:instr=" PAGE "><w:r><w:t>cached</w:t></w:r></w:fldSimple><w:r><w:t>same</w:t></w:r></w:p>"#.to_owned(),
+        ];
+        for body in cases {
+            let mut document = issue407_document(&body, false);
+            let body_story = document
+                .stories()
+                .unwrap()
+                .into_iter()
+                .find(|story| story.kind == StoryKind::Body)
+                .unwrap();
+            let location = ContentLocation::new(body_story, StoryItemKind::Paragraph, vec![0]);
+            let mut reference = document.clone_for_staging();
+            let actual = document.try_replace_text_at(&location, "same", "different", Some(1));
+            let off = CanonicalBlockProofOff::enter();
+            let expected = reference.try_replace_text_at(&location, "same", "different", Some(1));
+            drop(off);
+            assert_eq!(
+                actual.as_ref().err().map(ToString::to_string),
+                expected.as_ref().err().map(ToString::to_string)
+            );
+            // Independent parses allocate distinct source/owner IDs. Compare
+            // every other private field, including raw XML and cache facts.
+            let stable_debug = |value: &CT_Document| {
+                let mut id = false;
+                format!("{value:?}")
+                    .split_whitespace()
+                    .map(|token| {
+                        let result = if id {
+                            "fresh_source_id,".to_owned()
+                        } else {
+                            token.to_owned()
+                        };
+                        id = matches!(token, "source_id:" | "owner_id:");
+                        result
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            assert_eq!(
+                stable_debug(&document.document),
+                stable_debug(&reference.document)
+            );
+            assert_eq!(
+                document.document.to_xml().unwrap(),
+                reference.document.to_xml().unwrap()
+            );
+            assert_eq!(document.package.parts, reference.package.parts);
+        }
+        for head in [true, false] {
+            let mut bad = document.clone_for_staging();
+            let part = String::from_utf8(original.to_vec()).unwrap();
+            let part = if head {
+                part.replacen(
+                    "<w:document ",
+                    r#"<w:document xmlns:x="urn:x" x:a="&headbogus;" "#,
+                    1,
+                )
+            } else {
+                part.replacen(
+                    "<w:sectPr>",
+                    r#"<w:sectPr xmlns:x="urn:x" x:a="&tailbogus;">"#,
+                    1,
+                )
+            }
+            .into_bytes();
+            assert_ne!(part, original);
+            bad.package.set_part(&main, part.clone());
+            let selected = &canonical[children[0].clone()];
+            let start = part
+                .windows(selected.len())
+                .position(|bytes| bytes == selected)
+                .unwrap();
+            let span = start..start + selected.len();
+            let before = format!("{:?}", bad.document);
+            let parts = bad.package.parts.clone();
+            for _ in 0..2 {
+                let actual = bad
+                    .prove_scoped_main_source(&canonical, children[0].clone(), &part, span.clone())
+                    .unwrap_err();
+                let expected = bad
+                    .prove_whole_scoped_main_source(
+                        &canonical,
+                        children[0].clone(),
+                        &part,
+                        span.clone(),
+                    )
+                    .unwrap_err();
+                assert_eq!(actual.to_string(), expected.to_string());
+                assert_eq!(format!("{:?}", bad.document), before);
+                assert_eq!(bad.package.parts, parts);
+            }
+        }
+    }
+
+    #[test]
+    fn child_edits_validate_disjoint_bounds_and_refresh_context_facts() {
+        let mut document = Document::new();
+        document.add_paragraph("first");
+        document.add_paragraph("second");
+        let (xml, record) = document.canonical_source().unwrap();
+        let record = record.unwrap();
+        let (starts, end) = record.child_starts().unwrap();
+        assert!(record.edited(&[(0, 1, Vec::new())]).is_none());
+        assert!(
+            record
+                .edited(&[(
+                    end + record.tail.len() + 1,
+                    end + record.tail.len() + 1,
+                    Vec::new()
+                )])
+                .is_none()
+        );
+        assert!(
+            record
+                .edited(&[(starts[0], starts[1] + 1, Vec::new())])
+                .is_none()
+        );
+        assert!(
+            record
+                .edited(&[
+                    (starts[1], starts[1] + 1, Vec::new()),
+                    (starts[0], starts[0] + 1, Vec::new())
+                ])
+                .is_none()
+        );
+        let a = xml.windows(5).position(|bytes| bytes == b"first").unwrap();
+        let b = xml.windows(6).position(|bytes| bytes == b"second").unwrap();
+        let edits = vec![
+            (a, a + 5, b"longer first".to_vec()),
+            (b, b + 6, b"x".to_vec()),
+        ];
+        let mut expected = xml.clone();
+        for (start, end, value) in edits.iter().rev() {
+            expected.splice(*start..*end, value.iter().copied());
+        }
+        let mut edited = record.edited(&edits).unwrap();
+        assert_eq!(edited.bytes(), expected);
+        let parsed = edited.parsed_document().unwrap();
+        assert_eq!(
+            format!("{parsed:?}"),
+            format!("{:?}", CT_Document::from_xml(&expected).unwrap())
+        );
+        assert_eq!(record.bytes(), xml);
+    }
+
+    #[test]
+    fn story_picture_decode_refusal_keeps_model_and_package_unchanged() {
+        for value in ["&bogus;", "&amp;"] {
+            let mut seed = Document::new();
+            seed.add_paragraph("kept");
+            let mut opened = Document::from_bytes(&seed.to_bytes().unwrap()).unwrap();
+            let main = opened.doc_part_name.clone();
+            let source = String::from_utf8(opened.package.get_part(&main).unwrap().to_vec())
+                .unwrap()
+                .replace("<w:body>", "<w:body>\n")
+                .replacen(
+                    "</w:r>",
+                    &format!(r#"<x:foo xmlns:x="urn:x" x:a="{value}"/></w:r>"#),
+                    1,
+                );
+            opened.package.set_part(&main, source.into_bytes());
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            opened.package.write_to(&mut bytes).unwrap();
+            let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+            let before = format!("{:?}", document.document);
+            let parts = document.package.parts.clone();
+            for _ in 0..3 {
+                let body = document
+                    .stories()
+                    .unwrap()
+                    .into_iter()
+                    .find(|story| story.kind() == StoryKind::Body)
+                    .unwrap();
+                let mut reference = document.clone_for_staging();
+                reference.main_part_blocks = None;
+                reference.main_body_scans = Arc::new(Mutex::new(MainBodyScans::default()));
+                let actual = document.add_picture_to_story(
+                    &body,
+                    super::watermark_tests::PNG,
+                    "pixel.png",
+                    Length::pt(12.0),
+                    Length::pt(12.0),
+                );
+                let off = CanonicalBlockProofOff::enter();
+                let expected = reference.add_picture_to_story(
+                    &body,
+                    super::watermark_tests::PNG,
+                    "pixel.png",
+                    Length::pt(12.0),
+                    Length::pt(12.0),
+                );
+                drop(off);
+                assert_eq!(
+                    actual.as_ref().err().map(ToString::to_string),
+                    expected.as_ref().err().map(ToString::to_string)
+                );
+                assert_eq!(document.package.parts, reference.package.parts);
+                assert_eq!(
+                    format!("{:?}", document.document),
+                    format!("{:?}", reference.document)
+                );
+                if value == "&bogus;" {
+                    assert!(actual.unwrap_err().to_string().contains("bogus"));
+                    assert_eq!(format!("{:?}", document.document), before);
+                    assert_eq!(document.package.parts, parts);
+                } else {
+                    actual.unwrap();
+                }
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn scoped_replacements_and_story_pictures_read_only_the_children_they_change() {
+        // On a main part another producer wrote, with a line break after the
+        // body start, of N and 4N paragraphs: a scoped replacement in a
+        // paragraph and in a table cell, back and forth, and a picture added
+        // to the body story, which keeps the part's bytes.
+        #[allow(clippy::type_complexity)] // Each edit with its name.
+        let edits: [(&str, fn(&mut Document, usize)); 3] = [
+            ("paragraph replacement", |document, k| {
+                let (from, to) = if k % 2 == 0 {
+                    ("alpha", "omega")
+                } else {
+                    ("omega", "alpha")
+                };
+                let index = document
+                    .paragraphs()
+                    .iter()
+                    .position(|paragraph| paragraph.text() == from)
+                    .unwrap();
+                let location = document.paragraph_story_location(index).unwrap().unwrap();
+                let replaced = document.try_replace_text_at(&location, from, to, Some(1));
+                assert_eq!(replaced.unwrap().unwrap(), 1);
+            }),
+            ("cell replacement", |document, k| {
+                let (from, to) = if k % 2 == 0 {
+                    ("alpha", "omega")
+                } else {
+                    ("omega", "alpha")
+                };
+                let table = document.tables().len() - 1;
+                let replaced =
+                    document.try_replace_text_in_cell((table, 0, 0), None, from, to, Some(1));
+                assert_eq!(replaced.unwrap().unwrap(), 1);
+            }),
+            ("story picture", |document, _| {
+                let body = document
+                    .stories()
+                    .unwrap()
+                    .into_iter()
+                    .find(|story| story.kind == StoryKind::Body)
+                    .unwrap();
+                document
+                    .insert_picture_to_story_with_options(
+                        &body,
+                        None,
+                        super::watermark_tests::PNG,
+                        "pixel.png",
+                        Some(Length::pt(12.0)),
+                        Some(Length::pt(12.0)),
+                        None,
+                    )
+                    .unwrap();
+            }),
+        ];
+        for (name, edit) in edits {
+            let mut work = Vec::new();
+            for count in [50usize, 200] {
+                let body = format!("{}{}", issue407_runs(count), issue407_varied_body(""));
+                let mut source = issue407_document(&body, false);
+                source.add_paragraph("alpha");
+                let table = source.tables().len() - 1;
+                source.try_set_cell_text(table, 0, 0, "alpha").unwrap();
+                let mut opened = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+                let part = opened.doc_part_name.clone();
+                let xml = opened.package.get_part(&part).unwrap().to_vec();
+                let at = xml
+                    .windows(8)
+                    .position(|bytes| bytes == b"<w:body>")
+                    .unwrap()
+                    + 8;
+                let mut produced = xml[..at].to_vec();
+                produced.push(b'\n');
+                produced.extend_from_slice(&xml[at..]);
+                opened.package.set_part(&part, produced);
+                let mut written = std::io::Cursor::new(Vec::new());
+                opened.package.write_to(&mut written).unwrap();
+                let mut document = Document::from_bytes(written.get_ref()).unwrap();
+                edit(&mut document, 0);
+                edit(&mut document, 1);
+                take_staging_work();
+                take_reopen_work();
+                let mut sample = Vec::new();
+                for k in 2..4 {
+                    edit(&mut document, k);
+                    sample.push((take_staging_work(), take_reopen_work()));
+                }
+                work.push(sample);
+            }
+            // The proof, the canonicalization and the reopen read only the
+            // children the edits change, as many in a body four times as
+            // large, and nothing whole.
+            assert_eq!(work[0], work[1], "{name}");
+            assert!(
+                work[0]
+                    .iter()
+                    .all(|(staging, reopen)| staging[..4] == [0; 4] && reopen[..2] == [0; 2]),
+                "{name} {work:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_relationship_edits_reuse_source_parse_facts() {
+        #[cfg(debug_assertions)]
+        let mut samples = Vec::new();
+        for count in [50, 200] {
+            let mut seed = Document::new();
+            for index in 0..count {
+                seed.add_paragraph(&format!("neighbor {index}"));
+            }
+            let mut document = Document::from_bytes(&seed.to_bytes().unwrap()).unwrap();
+            document.add_picture(
+                super::watermark_tests::PNG,
+                "pixel.png",
+                Length::pt(12.0),
+                Length::pt(12.0),
+            );
+            let owner = relationship_owner_identity(&document.doc_part_name);
+            let mut current = document
+                .package
+                .get_part_rels(&document.doc_part_name)
+                .unwrap()
+                .get_by_type(rel_types::IMAGE)
+                .unwrap()
+                .id
+                .clone();
+            #[cfg(debug_assertions)]
+            let mut observed = Vec::new();
+            for index in 0..4 {
+                let registered = HashSet::from([current.clone()]);
+                let next = format!("nestedRelationship{index}");
+                let remap = HashMap::from([(current, next.clone())]);
+                document
+                    .identifiers
+                    .authored_nested_story_relationship_ids
+                    .insert(owner.clone(), registered.clone());
+                let mut reference = document.clone_for_staging();
+                #[cfg(debug_assertions)]
+                let _ = take_staging_work();
+                assert!(
+                    document
+                        .remap_authored_nested_story_relationships(&owner, &registered, &remap)
+                        .unwrap()
+                );
+                #[cfg(debug_assertions)]
+                let work = take_staging_work();
+                let off = CanonicalBlockProofOff::enter();
+                assert!(
+                    reference
+                        .remap_authored_nested_story_relationships(&owner, &registered, &remap)
+                        .unwrap()
+                );
+                drop(off);
+                assert_eq!(document.package.parts, reference.package.parts);
+                assert_eq!(
+                    format!("{:?}", document.document),
+                    format!("{:?}", reference.document)
+                );
+                assert_eq!(
+                    document.identifiers.authored_nested_story_relationship_ids[&owner],
+                    HashSet::from([next.clone()])
+                );
+                #[cfg(debug_assertions)]
+                if index >= 2 {
+                    eprintln!("nested-remap {count}: {work:?}");
+                    assert_eq!(work[0], 0, "{count}: {work:?}");
+                    observed.push([work[0], work[4], work[5]]);
+                }
+                current = next;
+            }
+            #[cfg(debug_assertions)]
+            samples.push(observed);
+        }
+        #[cfg(debug_assertions)]
+        assert_eq!(samples[0], samples[1], "{samples:?}");
+    }
+
+    #[test]
+    fn retained_story_picture_source_matches_whole_canonicalization() {
+        for producer_whitespace in [false, true] {
+            let mut seed = Document::new();
+            for index in 0..10 {
+                seed.add_paragraph(&format!("retained {index}"));
+            }
+            let mut document = Document::from_bytes(&seed.to_bytes().unwrap()).unwrap();
+            if producer_whitespace {
+                let main = document.doc_part_name.clone();
+                let source = String::from_utf8(document.package.get_part(&main).unwrap().to_vec())
+                    .unwrap()
+                    .replace("<w:body>", "<w:body>\n");
+                document.package.set_part(&main, source.into_bytes());
+                let mut bytes = std::io::Cursor::new(Vec::new());
+                document.package.write_to(&mut bytes).unwrap();
+                document = Document::from_bytes(bytes.get_ref()).unwrap();
+            }
+            for index in 0..3 {
+                let story = document
+                    .stories()
+                    .unwrap()
+                    .into_iter()
+                    .find(|story| story.kind() == StoryKind::Body)
+                    .unwrap();
+                let mut reference = document.clone_for_staging();
+                reference.main_part_blocks = None;
+                reference.main_body_scans = Arc::new(Mutex::new(MainBodyScans::default()));
+                document
+                    .add_picture_to_story(
+                        &story,
+                        super::watermark_tests::PNG,
+                        "pixel.png",
+                        Length::pt(12.0),
+                        Length::pt(12.0),
+                    )
+                    .unwrap();
+                let off = CanonicalBlockProofOff::enter();
+                reference
+                    .add_picture_to_story(
+                        &story,
+                        super::watermark_tests::PNG,
+                        "pixel.png",
+                        Length::pt(12.0),
+                        Length::pt(12.0),
+                    )
+                    .unwrap();
+                drop(off);
+                assert_eq!(document.package.parts, reference.package.parts);
+                assert_eq!(
+                    format!("{:?}", document.document),
+                    format!("{:?}", reference.document)
+                );
+                assert_eq!(document.to_bytes().unwrap(), reference.to_bytes().unwrap());
+                assert_eq!(document.paragraphs().len(), 11 + index);
+            }
+        }
+    }
+
+    #[test]
+    fn drawing_id_edits_read_only_the_changed_body_child() {
+        #[cfg(debug_assertions)]
+        let mut samples = Vec::new();
+        for count in [50, 200] {
+            let mut seed = Document::new();
+            for index in 0..count {
+                seed.add_paragraph(&format!("neighbor {index}"));
+            }
+            let mut document = Document::from_bytes(&seed.to_bytes().unwrap()).unwrap();
+            document.add_picture(
+                super::watermark_tests::PNG,
+                "pixel.png",
+                Length::pt(12.0),
+                Length::pt(12.0),
+            );
+            #[cfg(debug_assertions)]
+            let mut observed = Vec::new();
+            for index in 0..4 {
+                visit_all_drawings_mut(&mut document.document.body.content, &mut |drawing| {
+                    if let Some(inline) = &mut drawing.inline {
+                        inline.raw_xml = None;
+                        inline.doc_pr_id = 1000 + index;
+                    }
+                });
+                let mut reference = document.clone_for_staging();
+                #[cfg(debug_assertions)]
+                let _ = take_staging_work();
+                document.canonicalize_all_drawing_ids().unwrap();
+                #[cfg(debug_assertions)]
+                let work = take_staging_work();
+                let off = CanonicalBlockProofOff::enter();
+                reference.canonicalize_all_drawing_ids().unwrap();
+                drop(off);
+                assert_eq!(document.package.parts, reference.package.parts);
+                assert_eq!(
+                    format!("{:?}", document.document),
+                    format!("{:?}", reference.document)
+                );
+                assert_eq!(
+                    document.document.to_xml().unwrap(),
+                    reference.document.to_xml().unwrap()
+                );
+                let mut ids = Vec::new();
+                visit_all_drawings(&document.document.body.content, &mut |drawing| {
+                    if let Some(inline) = &drawing.inline {
+                        ids.push(inline.doc_pr_id);
+                    }
+                });
+                assert_eq!(ids, [1]);
+                #[cfg(debug_assertions)]
+                if index >= 2 {
+                    assert_eq!(work[..4], [0, 0, 0, 0], "{count}: {work:?}");
+                    observed.push(work);
+                }
+            }
+            #[cfg(debug_assertions)]
+            samples.push(observed);
+        }
+        #[cfg(debug_assertions)]
+        assert_eq!(samples[0], samples[1], "{samples:?}");
+    }
+
+    #[test]
+    fn retained_body_whitespace_keeps_source_edits_bounded_after_reopen() {
+        #[cfg(debug_assertions)]
+        let mut samples = Vec::new();
+        for count in [50, 200] {
+            let mut seed = Document::new();
+            for index in 0..count {
+                seed.add_paragraph(&format!("neighbor {index}"));
+            }
+            seed.add_paragraph("source value 0");
+            let mut opened = Document::from_bytes(&seed.to_bytes().unwrap()).unwrap();
+            let main = opened.doc_part_name.clone();
+            let producer = String::from_utf8(opened.package.get_part(&main).unwrap().to_vec())
+                .unwrap()
+                .replace("<w:body>", "<w:body>\n");
+            opened.package.set_part(&main, producer.into_bytes());
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            opened.package.write_to(&mut bytes).unwrap();
+            let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+            #[cfg(debug_assertions)]
+            let mut observed = Vec::new();
+            for index in 0..4 {
+                let source = String::from_utf8(document.package.get_part(&main).unwrap().to_vec())
+                    .unwrap()
+                    .replace(
+                        &format!("source value {index}"),
+                        &format!("source value {}", index + 1),
+                    )
+                    .into_bytes();
+                let expected = CT_Document::from_xml(&source).unwrap();
+                #[cfg(debug_assertions)]
+                let _ = take_staging_work();
+                set_story_source_xml(&mut document, &main, source.clone()).unwrap();
+                document = document.prepare_and_reopen_staged().unwrap();
+                #[cfg(debug_assertions)]
+                let work = take_staging_work();
+                assert_eq!(document.package.get_part(&main), Some(source.as_slice()));
+                assert_eq!(format!("{:?}", document.document), format!("{expected:?}"));
+                #[cfg(debug_assertions)]
+                if index >= 2 {
+                    assert_eq!(work[..4], [0, 0, 0, 0], "{count}: {work:?}");
+                    observed.push(work);
+                }
+            }
+            #[cfg(debug_assertions)]
+            samples.push(observed);
+        }
+        #[cfg(debug_assertions)]
+        assert_eq!(samples[0], samples[1], "{samples:?}");
+    }
+
+    #[test]
+    fn source_read_proof_does_not_grant_writer_reuse() {
+        let namespace = rdocx_oxml::namespace::W_NS;
+        let mut document = Document::new();
+        document.add_paragraph("source value");
+        let (original, _, spans) = document.main_part_with_body_spans().unwrap();
+        let child = std::str::from_utf8(&original[spans[0].clone()]).unwrap();
+        let source_child = child.replacen(
+            "<w:p>",
+            &format!(
+                r#"<w:p xmlns:w="{namespace}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">"#
+            ),
+            1,
+        );
+        assert_ne!(source_child.as_bytes(), child.as_bytes());
+        let mut source = original;
+        source.splice(spans[0].clone(), source_child.bytes());
+        let source = Arc::new(source);
+        let (parsed, record) = document.source_blocks(&source).unwrap();
+        let whole = CT_Document::from_xml(&source).unwrap();
+        assert_eq!(format!("{parsed:?}"), format!("{whole:?}"));
+        assert!(record.blocks[0].staged.is_none());
+        let mut block = (*record.blocks[0]).clone();
+        let scopes = document_namespace_scopes(&source).unwrap();
+        block
+            .read_source_child(&record.head, &record.tail, &scopes)
+            .unwrap();
+        assert!(block.staged.is_none(), "a cached parse is no writer proof");
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        let (written, _) = Document::canonical_source_from(&parsed, Some(&record)).unwrap();
+        #[cfg(debug_assertions)]
+        assert_eq!(take_staging_work()[4], 1);
+        assert_eq!(written, whole.to_xml().unwrap());
+
+        // A private tab occurrence needs the old full parse when source bytes
+        // do not have the exact writer proof. Opaque source is still accepted.
+        let tab_source = source_child.replacen(
+            "<w:r>",
+            r#"<w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr><w:r>"#,
+            1,
+        );
+        let xml = format!(
+            r#"<w:document xmlns:w="{namespace}"><w:body>{tab_source}</w:body></w:document>"#
+        );
+        let parsed = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let canonical = parsed.to_xml().unwrap();
+        let shell = CT_Document::from_xml(&canonical).unwrap();
+        let (head, tail) = shell.body_frame_xml().unwrap();
+        let mut block = record.blocks[0].fresh_context_piece();
+        Arc::make_mut(&mut block).bytes = tab_source.into_bytes();
+        Arc::make_mut(&mut block).staged = None;
+        let scopes = document_namespace_scopes(&canonical).unwrap();
+        assert!(
+            Arc::make_mut(&mut block)
+                .read_source_child(&head, &tail, &scopes)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn source_piece_note_references_keep_neighbor_reads_bounded() {
+        #[cfg(debug_assertions)]
+        let mut samples = Vec::new();
+        for count in [50, 200] {
+            let mut seed = Document::new();
+            for index in 0..count {
+                seed.add_paragraph(&format!("neighbor {index}"));
+            }
+            seed.add_paragraph("note owner");
+            let mut document = Document::from_bytes(&seed.to_bytes().unwrap()).unwrap();
+            #[cfg(debug_assertions)]
+            let mut observed = Vec::new();
+            for index in 0..4 {
+                let story = document
+                    .stories()
+                    .unwrap()
+                    .into_iter()
+                    .find(|story| story.kind() == StoryKind::Body)
+                    .unwrap();
+                let location = ContentLocation::new(story, StoryItemKind::Paragraph, vec![count]);
+                #[cfg(debug_assertions)]
+                let _ = take_staging_work();
+                document
+                    .create_footnote(&location, &format!("note {index}"))
+                    .unwrap();
+                #[cfg(debug_assertions)]
+                let work = take_staging_work();
+                assert_eq!(document.footnotes().len(), index + 1);
+                #[cfg(debug_assertions)]
+                if index >= 2 {
+                    assert_eq!(work[..4], [0, 0, 0, 0], "{count}: {work:?}");
+                    observed.push(work);
+                }
+            }
+            #[cfg(debug_assertions)]
+            samples.push(observed);
+        }
+        #[cfg(debug_assertions)]
+        assert_eq!(samples[0], samples[1], "{samples:?}");
+    }
+
+    #[test]
+    fn masked_canonical_source_reuses_current_neighbors() {
+        #[cfg(debug_assertions)]
+        let mut samples = Vec::new();
+        for count in [50, 200] {
+            let mut document = Document::new();
+            for index in 0..count {
+                document.add_paragraph(&format!("neighbor {index}"));
+            }
+            let xml = format!(
+                r#"<w:document xmlns:w="{}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:hyperlink r:id="rIdLink"><w:r><w:t>linked</w:t></w:r></w:hyperlink></w:p></w:body></w:document>"#,
+                rdocx_oxml::namespace::W_NS
+            );
+            document.document.body.content.push(
+                CT_Document::from_xml(xml.as_bytes())
+                    .unwrap()
+                    .body
+                    .content
+                    .remove(0),
+            );
+            #[cfg(debug_assertions)]
+            let mut observed = Vec::new();
+            for index in 0..4 {
+                document
+                    .paragraph_mut(0)
+                    .unwrap()
+                    .set_text(&format!("changed {index}"))
+                    .unwrap();
+                #[cfg(debug_assertions)]
+                let _ = take_staging_work();
+                let actual = document
+                    .opaque_relationship_ids_from_serialized_story(&["rIdLink".to_owned()])
+                    .unwrap();
+                #[cfg(debug_assertions)]
+                let work = take_staging_work();
+                let off = CanonicalBlockProofOff::enter();
+                let expected = document
+                    .opaque_relationship_ids_from_serialized_story(&["rIdLink".to_owned()])
+                    .unwrap();
+                drop(off);
+                assert_eq!(actual, expected);
+                assert!(actual.is_empty());
+                #[cfg(debug_assertions)]
+                if index >= 2 {
+                    observed.push(work[4]);
+                }
+            }
+            #[cfg(debug_assertions)]
+            samples.push(observed);
+        }
+        #[cfg(debug_assertions)]
+        assert_eq!(samples[0], samples[1], "{samples:?}");
+    }
+
+    #[test]
+    fn retained_source_parse_survives_distinct_unflushed_model_edits() {
+        #[cfg(debug_assertions)]
+        let mut samples = Vec::new();
+        for count in [50, 200] {
+            let mut seed = Document::new();
+            for index in 0..count {
+                seed.add_paragraph(&format!("retained {index}"));
+            }
+            let bytes = seed.to_bytes().unwrap();
+            let mut live = Document::from_bytes(&bytes).unwrap();
+            let main = live.doc_part_name.clone();
+            let retained = live.package.get_part(&main).unwrap().to_vec();
+            #[cfg(debug_assertions)]
+            let mut observed = Vec::new();
+            for index in 0..4 {
+                live.add_paragraph(&format!("unflushed {index}"));
+                let mut staged = live.clone_for_staging();
+                let mut reference = live.clone_for_staging();
+                reference.parsed = None;
+                reference.main_part_blocks = None;
+                #[cfg(debug_assertions)]
+                let _ = take_staging_work();
+                staged.prepare_staged_package().unwrap();
+                #[cfg(debug_assertions)]
+                let fast = take_staging_work();
+                let off = CanonicalBlockProofOff::enter();
+                reference.prepare_staged_package().unwrap();
+                drop(off);
+                assert_eq!(staged.package.parts, reference.package.parts);
+                assert_eq!(
+                    format!("{:?}", staged.document),
+                    format!("{:?}", reference.document)
+                );
+                assert_eq!(live.package.get_part(&main), Some(retained.as_slice()));
+                #[cfg(debug_assertions)]
+                if index >= 2 {
+                    assert_eq!(fast[0], 0, "{count}: {fast:?}");
+                    observed.push(fast);
+                }
+            }
+            // Public package mutation makes the opened-byte parse unavailable.
+            let mut changed = live.document.to_xml().unwrap();
+            let mut text = String::from_utf8(changed).unwrap();
+            text = text.replace("unflushed 3", "package changed");
+            changed = text.into_bytes();
+            live.package.set_part(&main, changed);
+            assert!(live.kept_main_part().is_none());
+            let mut staged = live.clone_for_staging();
+            #[cfg(debug_assertions)]
+            let _ = take_staging_work();
+            staged.prepare_staged_package().unwrap();
+            #[cfg(debug_assertions)]
+            assert!(take_staging_work()[0] > 0);
+            #[cfg(debug_assertions)]
+            samples.push(observed);
+        }
+        #[cfg(debug_assertions)]
+        assert_eq!(samples[0], samples[1], "{samples:?}");
+    }
+
+    #[test]
+    fn source_pieces_parse_only_changed_children_and_preserve_whole_errors() {
+        fn update(document: &Document, previous: &str, value: &str) -> Vec<u8> {
+            String::from_utf8(document.document.to_xml().unwrap())
+                .unwrap()
+                .replace(&format!(">{previous}</w:t>"), &format!(">{value}</w:t>"))
+                .into_bytes()
+        }
+        #[cfg(debug_assertions)]
+        let mut samples = Vec::new();
+        for count in [50, 200] {
+            let mut document = Document::new();
+            for index in 0..count {
+                document.add_paragraph(&format!("kept {index}"));
+            }
+            document.add_paragraph("source-value-0");
+            let main = document.doc_part_name.clone();
+            for (old, new) in [("source-value-0", "x"), ("x", "a longer source value")] {
+                let xml = update(&document, old, new);
+                set_story_source_xml(&mut document, &main, xml).unwrap();
+            }
+            let xml = update(&document, "a longer source value", "short");
+            let mut reference = document.clone_for_staging();
+            #[cfg(debug_assertions)]
+            let _ = take_staging_work();
+            set_story_source_xml(&mut document, &main, xml.clone()).unwrap();
+            #[cfg(debug_assertions)]
+            let fast = take_staging_work();
+            let off = CanonicalBlockProofOff::enter();
+            set_story_source_xml(&mut reference, &main, xml).unwrap();
+            drop(off);
+            #[cfg(debug_assertions)]
+            let slow = take_staging_work();
+            assert_eq!(document.document, reference.document);
+            assert_eq!(
+                document.document.to_xml().unwrap(),
+                reference.document.to_xml().unwrap()
+            );
+            assert_eq!(
+                document.package.get_part(&main),
+                reference.package.get_part(&main)
+            );
+            assert_eq!(document.paragraphs().last().unwrap().text(), "short");
+            #[cfg(debug_assertions)]
+            {
+                assert_eq!(fast[0], 0, "{fast:?}");
+                assert_eq!(fast[1], 0, "{fast:?}");
+                assert!(slow[0] > 0, "{slow:?}");
+                samples.push((fast, slow));
+            }
+            let before = document.document.to_xml().unwrap();
+            let stored = document.package.get_part(&main).unwrap().to_vec();
+            let bad = String::from_utf8(before.clone())
+                .unwrap()
+                .replace("short", "<w:p>")
+                .into_bytes();
+            let mut reference = document.clone_for_staging();
+            let off = CanonicalBlockProofOff::enter();
+            let expected = set_story_source_xml(&mut reference, &main, bad.clone())
+                .unwrap_err()
+                .to_string();
+            drop(off);
+            let actual = set_story_source_xml(&mut document, &main, bad)
+                .unwrap_err()
+                .to_string();
+            assert_eq!(actual, expected);
+            assert_eq!(document.document.to_xml().unwrap(), before);
+            assert_eq!(document.package.get_part(&main), Some(stored.as_slice()));
+
+            let paragraph = document
+                .document
+                .body_item_xml(document.document.body.content.last().unwrap())
+                .unwrap();
+            let removed = String::from_utf8(before)
+                .unwrap()
+                .replace(std::str::from_utf8(&paragraph).unwrap(), "")
+                .into_bytes();
+            let expected = CT_Document::from_xml(&removed).unwrap();
+            set_story_source_xml(&mut document, &main, removed).unwrap();
+            assert_eq!(document.document, expected);
+            assert_eq!(document.paragraphs().len(), count);
+        }
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(samples[0].0, samples[1].0, "{samples:?}");
+            assert!(samples[1].1[0] > samples[0].1[0], "{samples:?}");
+        }
+    }
+
+    #[test]
+    fn source_piece_splices_keep_duplicate_occurrences_and_frame_fallbacks() {
+        let mut seed = Document::new();
+        for text in ["duplicate", "middle", "duplicate"] {
+            seed.add_paragraph(text);
+        }
+        let (source, body, children) = seed.main_part_with_body_spans().unwrap();
+        let inserted = seed
+            .document
+            .body_item_xml(&seed.document.body.content[1])
+            .unwrap();
+        let mut cases = Vec::new();
+        for at in [body.start, children[1].start, body.end] {
+            let mut xml = source.clone();
+            xml.splice(at..at, inserted.iter().copied());
+            cases.push((xml, true));
+        }
+        for range in [children[0].clone(), children[2].clone(), body.clone()] {
+            let mut xml = source.clone();
+            xml.drain(range);
+            cases.push((xml, true));
+        }
+        let mut xml = source.clone();
+        xml.splice(
+            children[1].clone(),
+            inserted.iter().chain(inserted.iter()).copied(),
+        );
+        cases.push((xml, true));
+        let text = std::str::from_utf8(&source).unwrap();
+        cases.push((text.replace("w:document", "q:document").into_bytes(), false));
+        cases.push((
+            text.replace("</w:body>", "&undefined;</w:body>")
+                .into_bytes(),
+            false,
+        ));
+        cases.push((text.replace("middle", "&undefined;").into_bytes(), false));
+        cases.push((text.replace("middle", "<w:p>").into_bytes(), false));
+        for (index, (xml, proved)) in cases.into_iter().enumerate() {
+            let mut actual = seed.clone_for_staging();
+            let mut reference = seed.clone_for_staging();
+            let main = actual.doc_part_name.clone();
+            assert_eq!(
+                actual.source_blocks(&Arc::new(xml.clone())).is_some(),
+                proved,
+                "case {index}"
+            );
+            let result = set_story_source_xml(&mut actual, &main, xml.clone());
+            let off = CanonicalBlockProofOff::enter();
+            let expected = set_story_source_xml(&mut reference, &main, xml);
+            drop(off);
+            assert_eq!(
+                result.as_ref().err().map(ToString::to_string),
+                expected.as_ref().err().map(ToString::to_string),
+                "case {index}"
+            );
+            assert_eq!(
+                format!("{:?}", actual.document),
+                format!("{:?}", reference.document),
+                "case {index}"
+            );
+            assert_eq!(
+                actual.document.to_xml().unwrap(),
+                reference.document.to_xml().unwrap(),
+                "case {index}"
+            );
+            assert_eq!(
+                actual.package.get_part(&main),
+                reference.package.get_part(&main),
+                "case {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn current_piece_frame_change_resets_context_facts() {
+        fn child(text: &str) -> BodyContent {
+            let mut paragraph = rdocx_oxml::text::CT_P::new();
+            paragraph.add_run(text);
+            BodyContent::Paragraph(Box::new(paragraph))
+        }
+        fn fail_context(block: &BodyBlockScan) {
+            let _ = block.proved.set(ParsedChild {
+                root_declarations: vec![("old".to_owned(), "root".to_owned())],
+                body_declarations: vec![("old".to_owned(), "body".to_owned())],
+                body_bindings: vec![("old".to_owned(), "bind".to_owned())],
+                parsed: None,
+            });
+            let _ = block.identifier_proof.set(None);
+            let _ = block.canonical_read.set(None);
+            let _ = block.empty_namespace_owners.set(None);
+            let _ = block.namespace_spans.set(None);
+            let _ = block.decodes.set(false);
+        }
+        let mut document = Document::new();
+        for index in 0..4 {
+            document
+                .document
+                .body
+                .content
+                .push(child(&format!("row {index}")));
+        }
+        let first = document.main_part_xml().unwrap();
+        assert_eq!(first, document.document.to_xml().unwrap());
+        let previous: Vec<_> = document
+            .main_part_blocks
+            .as_ref()
+            .unwrap()
+            .blocks
+            .iter()
+            .map(Arc::clone)
+            .collect();
+        let poisoned = previous[0].fresh_context_piece();
+        fail_context(&poisoned);
+        document.main_part_blocks.as_mut().unwrap().blocks[0] = Arc::clone(&poisoned);
+        document.document.background_xml = Some(br#"<w:background w:color="FF0000"/>"#.to_vec());
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        let changed = document.main_part_xml().unwrap();
+        assert_eq!(changed, document.document.to_xml().unwrap());
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            take_staging_work()[4],
+            0,
+            "a frame refresh is not a child write"
+        );
+        let refreshed = &document.main_part_blocks.as_ref().unwrap().blocks;
+        assert!(
+            poisoned
+                .proved
+                .get()
+                .is_some_and(|parsed| parsed.parsed.is_none())
+        );
+        assert!(matches!(poisoned.canonical_read.get(), Some(None)));
+        assert!(matches!(poisoned.identifier_proof.get(), Some(None)));
+        assert!(matches!(poisoned.empty_namespace_owners.get(), Some(None)));
+        assert!(matches!(poisoned.namespace_spans.get(), Some(None)));
+        assert!(previous[1].proved.get().is_some());
+        for (index, block) in refreshed.iter().enumerate() {
+            assert!(!Arc::ptr_eq(&poisoned, block), "{index}");
+            assert!(!Arc::ptr_eq(&previous[index], block), "{index}");
+            assert!(block.canonical_read.get().is_none(), "{index}");
+            assert!(block.decodes.get().is_none(), "{index}");
+            assert!(block.identifier_proof.get().is_none(), "{index}");
+            assert!(
+                !matches!(block.empty_namespace_owners.get(), Some(None)),
+                "count {index} kept a failed namespace fact"
+            );
+            assert!(block.namespace_spans.get().is_none(), "{index}");
+            assert!(
+                block
+                    .proved
+                    .get()
+                    .is_some_and(|parsed| parsed.parsed.is_some()),
+                "{index}"
+            );
+        }
+        let record = document.main_part_blocks.as_ref().unwrap();
+        let part = record.part.as_deref().unwrap();
+        let shell = [record.head.as_slice(), record.tail.as_slice()].concat();
+        let frame = record.canonical_frame_proof(&shell).expect("changed frame");
+        let block = &record.blocks[0];
+        assert!(
+            block
+                .canonical_child_facts(&record.head, b"wrong-tail", frame)
+                .is_none()
+        );
+        assert!(
+            block.canonical_read.get().is_none(),
+            "a declined probe stored a fact"
+        );
+        let proved = record
+            .proved_relationship_ids(part, &[])
+            .expect("filled frame");
+        let whole = xml_relationship_ids_in_order(part).unwrap();
+        assert_eq!(proved, whole);
+        assert!(block.canonical_read.get().is_some_and(|facts| {
+            facts
+                .as_ref()
+                .is_some_and(|facts| facts.tail.as_slice() == record.tail.as_slice())
+        }));
+        let held: Vec<_> = record.blocks.iter().map(Arc::clone).collect();
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        let again = document.main_part_xml().unwrap();
+        assert_eq!(again, changed);
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            take_staging_work()[4],
+            0,
+            "the same frame reused the current pieces"
+        );
+        let stable = &document.main_part_blocks.as_ref().unwrap().blocks;
+        for (before, after) in held.iter().zip(stable) {
+            assert!(Arc::ptr_eq(before, after));
+        }
+        assert!(
+            stable[0]
+                .canonical_read
+                .get()
+                .is_some_and(|facts| facts.is_some())
+        );
+        let bad = Arc::new(BodyBlockScan {
+            bytes: b"<w:not-a-child".to_vec(),
+            owners: Vec::new(),
+            items: None,
+            staged: None,
+            proved: OnceLock::new(),
+            declares_namespace: false,
+            identifier_proof: OnceLock::new(),
+            canonical_read: OnceLock::new(),
+            empty_namespace_owners: OnceLock::new(),
+            namespace_spans: OnceLock::new(),
+            decodes: OnceLock::new(),
+        });
+        let stable_record = document.main_part_blocks.as_ref().unwrap();
+        let stable_frame = stable_record
+            .canonical_frame_proof(&shell)
+            .expect("stable frame");
+        assert!(
+            bad.canonical_child_facts(&stable_record.head, &stable_record.tail, stable_frame)
+                .is_none()
+        );
+        assert!(matches!(bad.canonical_read.get(), Some(None)));
+        assert!(
+            stable[0]
+                .canonical_child_facts(&stable_record.head, b"other-tail", stable_frame)
+                .is_none()
+        );
+        assert!(stable[0].canonical_read.get().unwrap().is_some());
+        let strict_old = Arc::clone(&stable[0]);
+        document
+            .document
+            .root_attributes
+            .push(("producer".to_owned(), "changed".to_owned()));
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        let renamed = document.main_part_xml().unwrap();
+        assert_eq!(renamed, document.document.to_xml().unwrap());
+        #[cfg(debug_assertions)]
+        assert!(
+            take_staging_work()[4] >= document.document.body.content.len(),
+            "a new root still rewrites the children"
+        );
+        let renamed_blocks = &document.main_part_blocks.as_ref().unwrap().blocks;
+        assert!(!Arc::ptr_eq(&strict_old, &renamed_blocks[0]));
+        assert!(strict_old.canonical_read.get().unwrap().is_some());
+        let renamed_record = document.main_part_blocks.as_ref().unwrap();
+        let renamed_shell = [
+            renamed_record.head.as_slice(),
+            renamed_record.tail.as_slice(),
+        ]
+        .concat();
+        let renamed_frame = renamed_record
+            .canonical_frame_proof(&renamed_shell)
+            .expect("renamed frame");
+        assert!(
+            strict_old
+                .canonical_child_facts(&renamed_record.head, &renamed_record.tail, renamed_frame)
+                .is_none(),
+            "the previous piece accepted the new root"
+        );
+        let renamed_ids = renamed_record
+            .proved_relationship_ids(renamed_record.part.as_deref().unwrap(), &[])
+            .expect("renamed relationships");
+        assert_eq!(
+            renamed_ids,
+            xml_relationship_ids_in_order(renamed_record.part.as_deref().unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    fn canonical_frame_relationship_ids_match_the_whole_scanner() {
+        let rel = drawing_ns::R;
+        let wp = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+        let first = format!(
+            r#"<w:p xmlns:alias="{rel}"><w:custom alias:id="rId1"/><w:custom alias:id="rIdHead"/><w:nested xmlns:r="urn:other" r:id="rIdShadow"/><w:plain xmlns="{rel}" id="rIdDefault"/></w:p>"#
+        );
+        let second = format!(r#"<w:p xmlns:alias="{rel}"><w:custom alias:id="rIdLater"/></w:p>"#);
+        let mut document = Document::new();
+        document.document.background_xml = Some(br#"<w:background r:id="rIdHead"/>"#.to_vec());
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(first.into_bytes())));
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(second.into_bytes())));
+        document.set_header("header");
+        document.set_footer("footer");
+        document.main_part_blocks = None;
+        let (xml, record) = document.canonical_source().unwrap();
+        let record = record.expect("header and footer frame");
+        assert!(record.blocks.len() >= 2, "two body blocks");
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        let proved = relationship_ids_by_blocks(&xml, Some(&record), &[]).unwrap();
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            take_staging_work()[2],
+            0,
+            "a proved frame still charged the whole canonical slot"
+        );
+        assert!(record.blocks.len() >= 2, "two body blocks");
+        let whole = xml_relationship_ids_in_order(&xml).unwrap();
+        let shell = [record.head.as_slice(), record.tail.as_slice()].concat();
+        let frame = record.canonical_frame_proof(&shell).expect("frame proof");
+        assert_eq!(
+            frame.head_plain_relationship_ids,
+            vec![String::from("rIdHead")]
+        );
+        assert!(frame.tail_plain_relationship_ids.len() >= 2);
+        assert!(
+            frame
+                .tail_plain_relationship_ids
+                .iter()
+                .any(|id| id == "rId1")
+        );
+        let tail_only = frame
+            .tail_plain_relationship_ids
+            .iter()
+            .find(|id| *id != "rId1" && *id != "rIdHead")
+            .expect("tail-only id");
+        let shared_at = whole.iter().position(|id| id == "rId1").expect("shared id");
+        let later_at = whole
+            .iter()
+            .position(|id| id == "rIdLater")
+            .expect("second body id");
+        let tail_only_at = whole
+            .iter()
+            .position(|id| id == tail_only)
+            .expect("tail-only id in the whole scan");
+        assert!(shared_at < later_at && later_at < tail_only_at, "{whole:?}");
+        assert_eq!(whole.iter().filter(|id| *id == "rIdHead").count(), 1);
+        assert!(
+            !whole
+                .iter()
+                .any(|id| id == "rIdShadow" || id == "rIdDefault")
+        );
+        assert_eq!(proved, whole, "plain order");
+        let filtered_tail = frame
+            .tail_plain_relationship_ids
+            .iter()
+            .filter(|id| *id != "rId1" && *id != "rIdHead")
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            proved.ends_with(filtered_tail.as_slice()),
+            "tail-only suffix {proved:?} filtered {filtered_tail:?} frame {:?}",
+            frame.tail_plain_relationship_ids
+        );
+        let scopes = document_namespace_scopes(&xml).unwrap();
+        assert!(!scopes.body_bindings.is_empty());
+        let bound = relationship_ids_by_blocks(&xml, Some(&record), &scopes.body_bindings).unwrap();
+        assert_eq!(
+            bound,
+            xml_relationship_ids_in_order_with_bindings(&xml, &scopes.body_bindings).unwrap()
+        );
+        let odd = [(String::from("xmlns:extra"), String::from("urn:extra"))];
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        let odd_ids = relationship_ids_by_blocks(&xml, Some(&record), &odd).unwrap();
+        #[cfg(debug_assertions)]
+        assert!(take_staging_work()[2] >= xml.len());
+        assert_eq!(
+            odd_ids,
+            xml_relationship_ids_in_order_with_bindings(&xml, &odd).unwrap()
+        );
+
+        let mut malformed = Document::new();
+        malformed.document.background_xml = Some(br#"<w:background r:id="&#"/>"#.to_vec());
+        malformed.add_paragraph("body");
+        let (bad_xml, bad_record) = malformed.canonical_source().unwrap();
+        let bad_record = bad_record.expect("malformed record");
+        let fast_error = relationship_ids_by_blocks(&bad_xml, Some(&bad_record), &[])
+            .expect_err("malformed frame attribute");
+        let old_error = xml_relationship_ids_in_order(&bad_xml).expect_err("old scanner");
+        assert_eq!(fast_error.to_string(), old_error.to_string());
+        let bad_shell = [bad_record.head.as_slice(), bad_record.tail.as_slice()].concat();
+        assert!(bad_record.canonical_frame_proof(&bad_shell).is_none());
+
+        let head = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p r:id=""#;
+        let mut broken = head.to_vec();
+        broken.extend_from_slice(br#"rIdTail"/></w:body></w:document>"#);
+        assert!(xml_relationship_ids_in_order(&broken).is_ok());
+        assert!(split_relationship_ids_at_head(&broken, head.len(), &[]).is_none());
+
+        let both_bad = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p r:id="&#"/><w:sectPr><w:footerReference r:id="&not;"/></w:sectPr></w:body></w:document>"#;
+        let body_at = both_bad
+            .windows(4)
+            .position(|window| window == b"<w:p")
+            .expect("body paragraph");
+        let body_end = body_at
+            + both_bad[body_at..]
+                .windows(2)
+                .position(|window| window == b"/>")
+                .expect("body end")
+            + 2;
+        let old_first = xml_relationship_ids_in_order(both_bad).expect_err("old first error");
+        let ranged_first =
+            xml_relationship_ids_in_collection_range(both_bad, &[], Some(body_at..body_end))
+                .expect_err("ranged first error");
+        assert_eq!(ranged_first.to_string(), old_first.to_string());
+        let tail_only = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p r:id="rIdBody"/><w:sectPr><w:footerReference r:id="&not;"/></w:sectPr></w:body></w:document>"#;
+        let tail_body_at = tail_only
+            .windows(4)
+            .position(|window| window == b"<w:p")
+            .expect("tail fixture body");
+        let tail_body_end = tail_body_at
+            + tail_only[tail_body_at..]
+                .windows(2)
+                .position(|window| window == b"/>")
+                .expect("tail fixture body end")
+            + 2;
+        let tail_old = xml_relationship_ids_in_order(tail_only).expect_err("tail error");
+        let tail_ranged = xml_relationship_ids_in_collection_range(
+            tail_only,
+            &[],
+            Some(tail_body_at..tail_body_end),
+        )
+        .expect_err("outside tail still validates");
+        assert_eq!(tail_ranged.to_string(), tail_old.to_string());
+        assert_ne!(old_first.to_string(), tail_old.to_string());
+
+        let mut drawn = Document::new();
+        drawn.document.background_xml = Some(
+            format!(
+                r#"<w:background xmlns:wp="{wp}" xmlns:r="{rel}"><wp:inline><wp:docPr id="9" name="frame"/></wp:inline><w:ref r:id="rIdDrawn"/></w:background>"#
+            )
+            .into_bytes(),
+        );
+        drawn.add_paragraph("body");
+        let (drawn_xml, drawn_record) = drawn.canonical_source().unwrap();
+        let drawn_record = drawn_record.expect("drawing document");
+        let drawn_shell = [drawn_record.head.as_slice(), drawn_record.tail.as_slice()].concat();
+        assert!(drawn_record.canonical_frame_proof(&drawn_shell).is_none());
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        let drawn_ids = relationship_ids_by_blocks(&drawn_xml, Some(&drawn_record), &[]).unwrap();
+        #[cfg(debug_assertions)]
+        assert!(take_staging_work()[2] >= drawn_xml.len());
+        assert_eq!(
+            drawn_ids,
+            xml_relationship_ids_in_order(&drawn_xml).unwrap()
+        );
+        assert!(drawn_ids.iter().any(|id| id == "rIdDrawn"));
+    }
+
+    #[test]
+    fn namespace_source_facts_ignore_model_changes_but_track_source_bytes() {
+        fn open_main(xml: &str) -> Document {
+            let seed = Document::new().to_bytes().unwrap();
+            let mut package = OpcPackage::from_reader(std::io::Cursor::new(seed)).unwrap();
+            let part = package.main_document_part().unwrap();
+            package.set_part(&part, xml.as_bytes().to_vec());
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            Document::from_bytes(bytes.get_ref()).unwrap()
+        }
+        fn legacy_opaque(document: &Document) -> Result<Vec<String>> {
+            let source = document
+                .package
+                .get_part(&document.doc_part_name)
+                .expect("main part");
+            let owners = nested_modeled_namespace_owners(source)?;
+            let xml = document.document.to_xml()?;
+            let replayed = replay_nested_namespace_declarations(&xml, &owners)?;
+            xml_relationship_ids_in_order_with_bindings(&replayed, &[])
+        }
+        fn assert_same_opaque(label: &str, document: &Document) {
+            let fresh = document.opaque_relationship_ids_from_serialized_story(&[]);
+            #[cfg(debug_assertions)]
+            let legacy = without_staging_work(|| legacy_opaque(document));
+            #[cfg(not(debug_assertions))]
+            let legacy = legacy_opaque(document);
+            match (&fresh, &legacy) {
+                (Ok(fresh_ids), Ok(legacy_ids)) => assert_eq!(
+                    fresh_ids, legacy_ids,
+                    "{label} opaque ids {fresh_ids:?} legacy {legacy_ids:?}"
+                ),
+                (Err(fresh_error), Err(legacy_error)) => assert_eq!(
+                    fresh_error.to_string(),
+                    legacy_error.to_string(),
+                    "{label} refusal differs"
+                ),
+                _ => panic!("{label} fresh {fresh:?} legacy {legacy:?}"),
+            }
+        }
+        fn prime_source_facts(document: &Document) {
+            let owners = document
+                .parsed
+                .as_ref()
+                .expect("opened parse")
+                .nested_namespace_owners()
+                .expect("source namespace facts");
+            assert!(!owners.is_empty(), "prime expected a real namespace owner");
+        }
+        let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        let sdt = |text: &str| {
+            format!(
+                r#"<w:sdt xmlns:x="urn:x"><w:sdtPr><x:meta/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+            )
+        };
+        const LOCAL_RAW: &str = r#"<w:custom localRel:id="rId&#52;0"/>"#;
+        let local_xml = format!(
+            r#"<w:document xmlns:w="{word}"><w:body><w:p xmlns:localRel="{}"><w:r><w:t>kept</w:t>{LOCAL_RAW}</w:r></w:p><w:p><w:r><w:t>edit</w:t></w:r></w:p></w:body></w:document>"#,
+            drawing_ns::R,
+        );
+        let mut compatible = open_main(&local_xml);
+        prime_source_facts(&compatible);
+        compatible
+            .paragraph_mut(1)
+            .expect("local edit paragraph")
+            .set_text("changed")
+            .unwrap();
+        assert!(
+            !compatible.opened_main_still_serializes(),
+            "typed edit must leave the serialization shortcut"
+        );
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        assert_same_opaque("compatible owner after typed edit", &compatible);
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            take_staging_work()[1],
+            0,
+            "compatible owner reused source namespace facts"
+        );
+        let mut slow_compatible = compatible.clone_for_staging();
+        slow_compatible.parsed = None;
+        slow_compatible.main_part_blocks = None;
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        compatible.flush_document_to_package().unwrap();
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            take_staging_work()[1],
+            0,
+            "flush reused source namespace facts"
+        );
+        let proof_off = CanonicalBlockProofOff::enter();
+        slow_compatible.flush_document_to_package().unwrap();
+        drop(proof_off);
+        assert_eq!(
+            compatible
+                .package
+                .get_part(&compatible.doc_part_name)
+                .unwrap(),
+            slow_compatible
+                .package
+                .get_part(&slow_compatible.doc_part_name)
+                .unwrap()
+        );
+
+        let mut collided = open_main(&format!(
+            r#"<w:document xmlns:w="{word}"><w:body><w:p><w:r><w:t>keep</w:t></w:r></w:p>{}{}</w:body></w:document>"#,
+            sdt("left"),
+            sdt("right")
+        ));
+        prime_source_facts(&collided);
+        collided
+            .paragraph_mut(2)
+            .expect("right paragraph")
+            .set_text("left")
+            .unwrap();
+        assert!(!collided.opened_main_still_serializes());
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        assert_same_opaque("sdt collision after typed edit", &collided);
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            take_staging_work()[1],
+            0,
+            "sdt collision reused source namespace facts"
+        );
+        let mut slow_collided = collided.clone_for_staging();
+        slow_collided.parsed = None;
+        slow_collided.main_part_blocks = None;
+        let fast_flush = collided.flush_document_to_package();
+        let proof_off = CanonicalBlockProofOff::enter();
+        let slow_flush = slow_collided.flush_document_to_package();
+        drop(proof_off);
+        match (fast_flush, slow_flush) {
+            (Ok(()), Ok(())) => assert_eq!(
+                collided.package.get_part(&collided.doc_part_name).unwrap(),
+                slow_collided
+                    .package
+                    .get_part(&slow_collided.doc_part_name)
+                    .unwrap()
+            ),
+            (Err(fast_error), Err(slow_error)) => {
+                assert_eq!(fast_error.to_string(), slow_error.to_string())
+            }
+            (fast_flush, slow_flush) => panic!("sdt flush {fast_flush:?} legacy {slow_flush:?}"),
+        }
+
+        let mut replaced = open_main(&local_xml);
+        prime_source_facts(&replaced);
+        let replacement = format!(
+            r#"<w:document xmlns:w="{word}"><w:body><w:p><w:r><w:t>keep</w:t></w:r></w:p>{}{}</w:body></w:document>"#,
+            sdt("left"),
+            sdt("left")
+        );
+        replaced
+            .package
+            .set_part(&replaced.doc_part_name, replacement.into_bytes());
+        assert!(replaced.kept_main_part().is_none());
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        assert_same_opaque("replaced source part", &replaced);
+        #[cfg(debug_assertions)]
+        {
+            let scanned = take_staging_work()[1];
+            let current = replaced
+                .package
+                .get_part(&replaced.doc_part_name)
+                .unwrap()
+                .len();
+            println!("replaced source namespace bytes {scanned} part {current}");
+            assert_eq!(scanned, current, "replaced source must scan the new part");
+        }
+
+        println!(
+            "unavailable namespace fact setup: typed model edited, then parsed and main blocks cleared, canonical block proof off"
+        );
+        let mut unavailable = open_main(&local_xml);
+        unavailable
+            .paragraph_mut(1)
+            .expect("local edit paragraph")
+            .set_text("changed")
+            .unwrap();
+        unavailable.parsed = None;
+        unavailable.main_part_blocks = None;
+        let proof_off = CanonicalBlockProofOff::enter();
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        assert_same_opaque("unavailable cached namespace fact", &unavailable);
+        drop(proof_off);
+        #[cfg(debug_assertions)]
+        {
+            let scanned = take_staging_work()[1];
+            let current = unavailable
+                .package
+                .get_part(&unavailable.doc_part_name)
+                .unwrap()
+                .len();
+            println!("unavailable namespace bytes {scanned} part {current}");
+            assert_eq!(scanned, current);
+        }
+        let legacy_ids = legacy_opaque(&unavailable).expect("fresh local scan");
+        assert!(
+            !legacy_ids.is_empty(),
+            "cached None must not replace the fresh owner scan"
+        );
+    }
+
+    #[test]
+    fn opaque_relationship_inventory_keeps_namespace_replay_refusal() {
+        fn open_main(xml: &str) -> Document {
+            let seed = Document::new().to_bytes().unwrap();
+            let mut package = OpcPackage::from_reader(std::io::Cursor::new(seed)).unwrap();
+            let part = package.main_document_part().unwrap();
+            package.set_part(&part, xml.as_bytes().to_vec());
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            Document::from_bytes(bytes.get_ref()).unwrap()
+        }
+        fn legacy_opaque(document: &Document) -> Result<Vec<String>> {
+            let source = document
+                .package
+                .get_part(&document.doc_part_name)
+                .expect("main part");
+            let owners = nested_modeled_namespace_owners(source)?;
+            let xml = document.document.to_xml()?;
+            let replayed = replay_nested_namespace_declarations(&xml, &owners)?;
+            xml_relationship_ids_in_order_with_bindings(&replayed, &[])
+        }
+        fn assert_same(label: &str, document: &Document) {
+            let fresh = document.opaque_relationship_ids_from_serialized_story(&[]);
+            let legacy = legacy_opaque(document);
+            match (&fresh, &legacy) {
+                (Ok(fresh_ids), Ok(legacy_ids)) => assert_eq!(
+                    fresh_ids, legacy_ids,
+                    "{label} opaque ids {fresh_ids:?} legacy {legacy_ids:?}"
+                ),
+                (Err(fresh_error), Err(legacy_error)) => assert_eq!(
+                    fresh_error.to_string(),
+                    legacy_error.to_string(),
+                    "{label} refusal differs"
+                ),
+                _ => panic!("{label} fresh {fresh:?} legacy {legacy:?}"),
+            }
+        }
+
+        let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        let sdt = |text: &str| {
+            format!(
+                r#"<w:sdt xmlns:x="urn:x"><w:sdtPr><x:meta/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+            )
+        };
+        let opened = |right: &str| {
+            open_main(&format!(
+                r#"<w:document xmlns:w="{word}"><w:body><w:p><w:r><w:t>keep</w:t></w:r></w:p>{}{}</w:body></w:document>"#,
+                sdt("left"),
+                sdt(right)
+            ))
+        };
+        let mut collided = opened("right");
+        collided
+            .paragraph_mut(2)
+            .expect("right paragraph")
+            .set_text("left")
+            .unwrap();
+        assert_same("collided sdt owners", &collided);
+
+        let mut distinct = opened("right");
+        distinct
+            .paragraph_mut(2)
+            .expect("right paragraph")
+            .set_text("center")
+            .unwrap();
+        assert_same("distinct sdt owners", &distinct);
+
+        const LOCAL_RAW: &str = r#"<w:custom localRel:id="rId&#52;0"/>"#;
+        let mut local = open_main(&format!(
+            r#"<w:document xmlns:w="{word}"><w:body><w:p xmlns:localRel="{}"><w:r><w:t>kept</w:t>{LOCAL_RAW}</w:r></w:p><w:p><w:r><w:t>edit</w:t></w:r></w:p></w:body></w:document>"#,
+            drawing_ns::R,
+        ));
+        local
+            .paragraph_mut(1)
+            .expect("local edit paragraph")
+            .set_text("changed")
+            .unwrap();
+        assert_same("compatible local namespace", &local);
+    }
+
+    #[test]
+    fn main_part_blocks_read_paragraph_neighbors_skip_whole_parse_and_scan() {
+        fn paragraph(text: &str) -> BodyContent {
+            let mut paragraph = rdocx_oxml::text::CT_P::new();
+            paragraph.add_run(text);
+            BodyContent::Paragraph(Box::new(paragraph))
+        }
+        fn edit_row(document: &mut Document, text: &str) {
+            let table = document
+                .document
+                .body
+                .content
+                .iter_mut()
+                .find_map(|item| match item {
+                    BodyContent::Table(table) => Some(table),
+                    _ => None,
+                })
+                .expect("table");
+            let mut cell = rdocx_oxml::text::CT_P::new();
+            cell.add_run(text);
+            table.rows[0].cells[0].content[0] = CellContent::Paragraph(cell);
+        }
+        #[cfg(debug_assertions)]
+        let mut recorded = Vec::new();
+        for count in [50usize, 200] {
+            let mut source = Document::new();
+            source.document.body.content.clear();
+            for index in 0..count {
+                source
+                    .document
+                    .body
+                    .content
+                    .push(paragraph(&format!("before {index}")));
+            }
+            source
+                .document
+                .body
+                .content
+                .push(BodyContent::Table(Box::new(Document::detached_table(1, 1))));
+            for index in 0..count {
+                source
+                    .document
+                    .body
+                    .content
+                    .push(paragraph(&format!("after {index}")));
+            }
+            let mut document = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+            for text in ["warm-a", "warm-b"] {
+                edit_row(&mut document, text);
+                document = document.prepare_and_reopen_staged().unwrap();
+            }
+            for text in ["sample-a", "sample-b"] {
+                edit_row(&mut document, text);
+                let mut old = document.clone_for_staging();
+                #[cfg(debug_assertions)]
+                {
+                    let _ = take_reopen_work();
+                    let _ = take_staging_work();
+                    let _ = take_canonical_fragment_bytes();
+                }
+                let mut fast = document.prepare_and_reopen_staged().unwrap();
+                #[cfg(debug_assertions)]
+                let staging = take_staging_work();
+                #[cfg(debug_assertions)]
+                let reopen = take_reopen_work();
+                #[cfg(debug_assertions)]
+                let fragments = take_canonical_fragment_bytes();
+                old.main_part_blocks = None;
+                #[cfg(debug_assertions)]
+                {
+                    let _ = take_reopen_work();
+                    let _ = take_staging_work();
+                }
+                let proof_off = CanonicalBlockProofOff::enter();
+                let prepared = old.prepare_staged_package();
+                drop(proof_off);
+                prepared.unwrap();
+                #[cfg(debug_assertions)]
+                let slow_prepare = take_staging_work();
+                old.main_part_blocks = None;
+                #[cfg(debug_assertions)]
+                {
+                    let _ = take_reopen_work();
+                    let _ = take_staging_work();
+                }
+                let proof_off = CanonicalBlockProofOff::enter();
+                let reopened = old.reopen_prepared_staged();
+                drop(proof_off);
+                let mut slow = reopened.unwrap();
+                #[cfg(debug_assertions)]
+                let slow_staging = take_staging_work();
+                #[cfg(debug_assertions)]
+                let slow_reopen = take_reopen_work();
+                assert_eq!(fast.document, slow.document);
+                assert_eq!(fast.to_bytes().unwrap(), slow.to_bytes().unwrap());
+                assert_eq!(fast.identifiers, slow.identifiers);
+                document = fast;
+                #[cfg(debug_assertions)]
+                recorded.push((
+                    count,
+                    staging,
+                    reopen,
+                    fragments,
+                    slow_prepare,
+                    slow_staging,
+                    slow_reopen,
+                ));
+            }
+        }
+        #[cfg(debug_assertions)]
+        {
+            println!("canonical-read {recorded:?}");
+            for (count, staging, reopen, fragments, slow_prepare, slow_staging, slow_reopen) in
+                &recorded
+            {
+                assert_eq!(staging[0], 0, "parsed bytes count={count} {recorded:?}");
+                assert_eq!(staging[1], 0, "namespace bytes count={count} {recorded:?}");
+                assert_eq!(
+                    staging[2], 0,
+                    "canonicalized bytes count={count} {recorded:?}"
+                );
+                assert_eq!(staging[3], 0, "zip bytes count={count} {recorded:?}");
+                assert!(
+                    *fragments > 0,
+                    "canonical fragment bytes count={count} {recorded:?}"
+                );
+                assert!(
+                    slow_prepare[2] > 0,
+                    "old canonical bytes count={count} fast={staging:?} slow_prepare={slow_prepare:?}"
+                );
+                assert!(
+                    slow_staging[0] > 0
+                        || slow_staging[1] > 0
+                        || slow_reopen[1] > reopen[1]
+                        || slow_reopen[2] > reopen[2],
+                    "cache-off reopen count={count} {recorded:?}"
+                );
+            }
+            assert!(
+                recorded[2].4[2] > recorded[0].4[2],
+                "old canonical bytes grow with neighbors {recorded:?}"
+            );
+            assert_eq!(
+                recorded[0].1[4], recorded[2].1[4],
+                "serialized children 50 versus 200 {recorded:?}"
+            );
+            assert_eq!(
+                recorded[1].1[4], recorded[3].1[4],
+                "serialized children 50 versus 200 {recorded:?}"
+            );
+            assert_eq!(
+                recorded[0].1[5], recorded[2].1[5],
+                "children read 50 versus 200 {recorded:?}"
+            );
+            assert_eq!(
+                recorded[1].1[5], recorded[3].1[5],
+                "children read 50 versus 200 {recorded:?}"
+            );
+            let fast_ids = recorded
+                .iter()
+                .map(|(_, _, reopen, _, _, _, _)| reopen[2])
+                .collect::<Vec<_>>();
+            assert!(
+                (fast_ids[0] as isize - fast_ids[2] as isize).abs() <= 16,
+                "identifier input 50 versus 200 {recorded:?}"
+            );
+            assert!(
+                (fast_ids[1] as isize - fast_ids[3] as isize).abs() <= 16,
+                "identifier input 50 versus 200 {recorded:?}"
+            );
+        }
+
+        const LOCAL_RAW: &[u8] = br#"<w:custom localRel:id="rId&#52;0"/>"#;
+        let local = format!(
+            r#"<w:document xmlns:w="{W_NS}"><w:body><w:p xmlns:localRel="{}"><w:r><w:t>kept</w:t>{raw}</w:r></w:p><w:p><w:r><w:t>edit</w:t></w:r></w:p></w:body></w:document>"#,
+            drawing_ns::R,
+            raw = std::str::from_utf8(LOCAL_RAW).unwrap(),
+        );
+        let mut local_source = Document::new();
+        let bytes = local_source.to_bytes().unwrap();
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        package.set_part("/word/document.xml", local.into_bytes());
+        package.set_part("/word/opaque.bin", b"opaque relationship target".to_vec());
+        package
+            .content_types
+            .add_default("bin", "application/octet-stream");
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add_with_id("rId40", "urn:producer:opaque", "opaque.bin");
+        let mut local_document = Document::from_package(package).unwrap();
+        local_document = local_document.prepare_and_reopen_staged().unwrap();
+        local_document
+            .document
+            .body
+            .content
+            .push(paragraph("added"));
+        let mut local_old = local_document.clone_for_staging();
+        let mut local_fast = local_document.prepare_and_reopen_staged().unwrap();
+        local_old.prepare_staged_package().unwrap();
+        local_old.main_part_blocks = None;
+        let mut local_slow = local_old.reopen_prepared_staged().unwrap();
+        assert_eq!(local_fast.document, local_slow.document);
+        assert_eq!(
+            local_fast.to_bytes().unwrap(),
+            local_slow.to_bytes().unwrap()
+        );
+        let local_xml = local_fast
+            .package
+            .get_part("/word/document.xml")
+            .expect("main part");
+        let slow_xml = local_slow
+            .package
+            .get_part("/word/document.xml")
+            .expect("old main part");
+        assert_eq!(local_xml, slow_xml);
+        let marker = format!("xmlns:localRel=\"{}\"", drawing_ns::R).into_bytes();
+        assert!(
+            local_xml
+                .windows(marker.len())
+                .any(|window| window == marker)
+                && local_xml
+                    .windows(LOCAL_RAW.len())
+                    .any(|window| window == LOCAL_RAW),
+            "the retained local namespace stays in the main part"
+        );
+
+        let mut scoped = Document::new();
+        scoped.document.body.content.clear();
+        scoped.document.body.content.push(paragraph("scope"));
+        scoped = Document::from_bytes(&scoped.to_bytes().unwrap()).unwrap();
+        scoped = scoped.prepare_and_reopen_staged().unwrap();
+        scoped
+            .document
+            .extra_namespaces
+            .push(("xmlns:q".into(), W_NS.into()));
+        let mut scoped_old = scoped.clone_for_staging();
+        let scoped_fast = scoped.prepare_and_reopen_staged();
+        scoped_old.prepare_staged_package().unwrap();
+        scoped_old.main_part_blocks = None;
+        let scoped_slow = scoped_old.reopen_prepared_staged();
+        match (scoped_fast, scoped_slow) {
+            (Ok(mut fast), Ok(mut slow)) => {
+                assert_eq!(fast.document, slow.document);
+                assert_eq!(fast.to_bytes().unwrap(), slow.to_bytes().unwrap());
+            }
+            (Err(fast), Err(slow)) => assert_eq!(fast.to_string(), slow.to_string()),
+            (fast, slow) => panic!(
+                "root scope fast {} slow {}",
+                fast.as_ref().map(|_| "ok").unwrap_or("err"),
+                slow.as_ref().map(|_| "ok").unwrap_or("err")
+            ),
+        }
+
+        let mut raw = Document::new();
+        raw.document.body.content.clear();
+        raw.document.body.content.push(paragraph("neighbor"));
+        raw.document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(b"<w:p/><w:p/>".to_vec())));
+        raw = Document::from_bytes(&raw.to_bytes().unwrap()).unwrap();
+        raw.document.body.content[0] = paragraph("changed");
+        let mut raw_old = raw.clone_for_staging();
+        let mut raw_fast = raw.prepare_and_reopen_staged().unwrap();
+        raw_old.prepare_staged_package().unwrap();
+        raw_old.main_part_blocks = None;
+        let mut raw_slow = raw_old.reopen_prepared_staged().unwrap();
+        assert_eq!(raw_fast.document, raw_slow.document);
+        assert_eq!(raw_fast.to_bytes().unwrap(), raw_slow.to_bytes().unwrap());
+    }
+
+    #[test]
+    fn main_body_layout_raw_blocks_match_the_old_scanner() {
+        let mut document = Document::new();
+        document.document.body.content.clear();
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::default()));
+        assert_old_body_result(&document);
+        assert!(
+            document
+                .direct_body_item_location(0)
+                .expect("empty raw")
+                .is_none()
+        );
+
+        document.document.body.content.clear();
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(
+                b"<w:p><w:r><w:t>a</w:t></w:r></w:p><w:p><w:r><w:t>b</w:t></w:r></w:p>".to_vec(),
+            )));
+        let xml = document.document.to_xml().expect("multi root bytes");
+        let owners = scan_story_owners(&xml, StoryKind::Body).expect("multi owners");
+        let body = owners
+            .iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .expect("body");
+        let direct = direct_story_content_items(&xml, body).expect("multi direct");
+        assert_eq!(document.document.body.content.len(), 1);
+        assert_eq!(direct.len(), 2);
+        assert_old_body_result(&document);
+
+        document.document.body.content.clear();
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(
+                b"<w:proofErr w:type=\"spellStart\"/>".to_vec(),
+            )));
+        assert_old_body_result(&document);
+
+        document.document.body.content.clear();
+        document.document.background_xml = Some(
+            format!(
+                "<w:background w:color=\"auto\"><!--{}--></w:background>",
+                "x".repeat(80_000)
+            )
+            .into_bytes(),
+        );
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(
+                b"<w:p><w:r><w:t>split".to_vec(),
+            )));
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(
+                b"</w:t></w:r></w:p>".to_vec(),
+            )));
+        let xml = document.document.to_xml().expect("split bytes");
+        let owners = scan_story_owners(&xml, StoryKind::Body).expect("split still scans whole");
+        let body = owners
+            .iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .expect("body");
+        let direct = direct_story_content_items(&xml, body).expect("split direct");
+        assert_eq!(direct.len(), 1);
+        assert_old_body_result(&document);
+    }
+
+    #[test]
+    fn main_body_layout_whole_walk_and_fallback_counts() {
+        let mut document = Document::new();
+        document.document.body.content.clear();
+        let children = 30;
+        for index in 0..children {
+            document.add_paragraph(&format!("paragraph {index}"));
+        }
+        document.document.background_xml = Some(
+            format!(
+                "<w:background w:color=\"auto\"><!--{}--></w:background>",
+                "y".repeat(80_000)
+            )
+            .into_bytes(),
+        );
+        document
+            .direct_body_item_location(0)
+            .expect("warm whole")
+            .expect("first child");
+        document
+            .paragraph_mut(1)
+            .expect("second")
+            .set_text("changed-1")
+            .expect("edit");
+        document
+            .paragraph_mut(2)
+            .expect("third")
+            .set_text("changed-2")
+            .expect("edit");
+        #[cfg(debug_assertions)]
+        let before = Document::main_body_block_scans();
+        let fast = document.direct_body_item_location(1).expect("two edits");
+        let xml = document.document.to_xml().expect("large head bytes");
+        let full = full_direct_body_item_location(&xml, &document.doc_part_name, 1)
+            .expect("old two edits");
+        assert_eq!(fast, full);
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            Document::main_body_block_scans() - before,
+            document.document.body.content.len()
+        );
+
+        let mut broken = Document::new();
+        broken.document.body.content.clear();
+        for index in 0..children {
+            broken.add_paragraph(&format!("stable {index}"));
+        }
+        broken
+            .direct_body_item_location(0)
+            .expect("warm independent")
+            .expect("present");
+        broken.document.body.content[14] = BodyContent::RawXml(Box::new(b"<w:p>".to_vec()));
+        #[cfg(debug_assertions)]
+        let before = Document::main_body_block_scans();
+        let fast = broken.direct_body_item_location(14);
+        let xml = broken.document.to_xml().expect("broken bytes");
+        let full = full_direct_body_item_location(&xml, &broken.doc_part_name, 14);
+        match (&fast, &full) {
+            (Err(actual), Err(expected)) => assert_eq!(actual.to_string(), expected.to_string()),
+            (Ok(actual), Err(expected)) => {
+                panic!("fast Ok {actual:?} hid full error {expected}")
+            }
+            (Err(actual), Ok(expected)) => {
+                panic!("fast error {actual} but full Ok {expected:?}")
+            }
+            (Ok(actual), Ok(expected)) => panic!("broken raw succeeded {actual:?} {expected:?}"),
+        }
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            Document::main_body_block_scans() - before,
+            1 + broken.document.body.content.len()
+        );
+    }
+
+    #[test]
+    fn main_body_layout_mixed_owners_follow_old_scans() {
+        let mut document = Document::new();
+        document.document.body.content.clear();
+        document.add_paragraph("same");
+        document.add_paragraph("same");
+        document.add_table(1, 1);
+        document.document.body.content.push(BodyContent::RawXml(Box::new(
+            b"<w:sdt><w:sdtContent><w:p><w:r><w:t>nest</w:t></w:r></w:p><w:sdt><w:sdtContent><w:p><w:r><w:t>inner</w:t></w:r></w:p></w:sdtContent></w:sdt></w:sdtContent></w:sdt>".to_vec(),
+        )));
+        let body = document
+            .stories()
+            .expect("stories")
+            .into_iter()
+            .find(|story| story.kind == StoryKind::Body)
+            .expect("body");
+        document
+            .add_text_box_to_story(
+                &body,
+                "box",
+                TextBoxOptions {
+                    width: crate::Length::pt(120.0),
+                    height: crate::Length::pt(40.0),
+                    anchor: PictureAnchor {
+                        horizontal_relative_from: DrawingHorizontalRelativeFrom::Page,
+                        horizontal_offset: crate::Length::pt(72.0),
+                        horizontal_alignment: None,
+                        vertical_relative_from: DrawingVerticalRelativeFrom::Page,
+                        vertical_offset: crate::Length::pt(72.0),
+                        vertical_alignment: None,
+                        wrap: DrawingWrap::None,
+                        distance_top: crate::Length::pt(0.0),
+                        distance_bottom: crate::Length::pt(0.0),
+                        distance_left: crate::Length::pt(0.0),
+                        distance_right: crate::Length::pt(0.0),
+                        relative_height: 0,
+                        behind_text: false,
+                    },
+                    rotation_degrees: 0.0,
+                    text_direction: TextBoxDirection::Horizontal,
+                    fill_color: None,
+                },
+            )
+            .expect("textbox");
+        let stories = document.stories().expect("stories");
+        assert!(
+            stories
+                .iter()
+                .any(|story| story.kind == StoryKind::TableCell)
+        );
+        assert!(stories.iter().any(|story| story.kind == StoryKind::TextBox));
+        assert_old_body_result(&document);
+        document.document.body.content.swap(0, 1);
+        assert_old_body_result(&document);
+        let moved = document.document.body.content.remove(0);
+        document.document.body.content.insert(2, moved);
+        assert_old_body_result(&document);
+        let duplicated = document.document.body.content[0].clone();
+        document.document.body.content.insert(0, duplicated);
+        document.document.body.content.pop();
+        assert_old_body_result(&document);
+    }
+
+    #[test]
+    fn main_body_layout_serialized_facts_and_frame_use_scanner_bytes() {
+        let mut document = Document::new();
+        document.document.body.content.clear();
+        document.add_paragraph("same");
+        document.add_paragraph("same");
+        document
+            .direct_body_item_location(0)
+            .expect("warm")
+            .expect("row");
+        document
+            .direct_body_item_location(1)
+            .expect("warm")
+            .expect("row");
+        // The cache key is the serialized child and frame bytes that the
+        // scanner reads. These edits are visible because they change those
+        // bytes. Model equality is not the key.
+        let before = document.document.to_xml().expect("before");
+        assert!(
+            document
+                .paragraph_mut(1)
+                .expect("paragraph")
+                .inner
+                .insert_bookmark_start(0, 4, "here")
+        );
+        document
+            .paragraph_mut(0)
+            .expect("paragraph")
+            .try_add_tab_stop(
+                crate::paragraph::TabAlignment::Left,
+                crate::Length::pt(72.0),
+                None,
+            )
+            .expect("tab");
+        document
+            .paragraph_mut(0)
+            .expect("paragraph")
+            .inner
+            .extra_xml
+            .push((
+                0,
+                b"<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>".to_vec(),
+            ));
+        let after = document.document.to_xml().expect("after");
+        assert_ne!(before, after);
+        assert!(
+            after
+                .windows(b"bookmarkStart".len())
+                .any(|window| window == b"bookmarkStart")
+        );
+        assert!(
+            after
+                .windows(b"w:tab".len())
+                .any(|window| window == b"w:tab")
+        );
+        assert!(
+            after
+                .windows(b"fldChar".len())
+                .any(|window| window == b"fldChar")
+        );
+        #[cfg(debug_assertions)]
+        let scanned = Document::main_body_block_scans();
+        assert_old_body_result(&document);
+        #[cfg(debug_assertions)]
+        assert!(Document::main_body_block_scans() > scanned);
+        let alias = format!(
+            "<q:document xmlns:q=\"{W_NS}\"><q:body><q:p><q:r><q:t>alias</q:t></q:r></q:p></q:body></q:document>"
+        );
+        document.document = CT_Document::from_xml(alias.as_bytes()).expect("alias");
+        assert_old_body_result(&document);
+        let defaults = format!(
+            "<document xmlns=\"{W_NS}\"><body><p><r><t>defaults</t></r></p></body></document>"
+        );
+        document.document = CT_Document::from_xml(defaults.as_bytes()).expect("defaults");
+        assert_old_body_result(&document);
+    }
+
+    fn main_body_reopen_route(document: &Document, memory: bool) -> Document {
+        let mut staged = document.clone_for_staging();
+        staged.prepare_staged_package().expect("prepare");
+        if !memory {
+            staged.parsed = None;
+        }
+        staged.reopen_prepared_staged().expect("reopen")
+    }
+
+    #[test]
+    fn main_body_layout_reopen_reuses_unchanged_children() {
+        #[cfg(debug_assertions)]
+        let mut cache_off = Vec::new();
+        #[cfg(debug_assertions)]
+        let mut sample_deltas = Vec::new();
+        for count in [50usize, 200] {
+            let mut seed = Document::new();
+            seed.document.body.content.clear();
+            for index in 0..count {
+                seed.add_paragraph(&format!("row {index} {}", "abcdefghij".repeat(6)));
+            }
+            let bytes = seed.to_bytes().expect("bytes");
+            let mut document = Document::from_bytes(&bytes).expect("open");
+            document
+                .direct_body_item_location(0)
+                .expect("cold")
+                .expect("row");
+            document
+                .paragraph_mut(0)
+                .expect("p")
+                .set_text("warmup-a")
+                .expect("edit");
+            document
+                .direct_body_item_location(0)
+                .expect("warmup a")
+                .expect("row");
+            document
+                .paragraph_mut(1)
+                .expect("p")
+                .set_text("warmup-b")
+                .expect("edit");
+            document
+                .direct_body_item_location(1)
+                .expect("warmup b")
+                .expect("row");
+            let mut carried = Vec::new();
+            for memory in [true, false] {
+                let mut opened = main_body_reopen_route(&document, memory);
+                #[cfg(debug_assertions)]
+                let before = Document::main_body_block_scans();
+                let fast = opened.direct_body_item_location(10).expect("carried");
+                let xml = opened.document.to_xml().expect("carried xml");
+                let full = full_direct_body_item_location(&xml, &opened.doc_part_name, 10)
+                    .expect("old carried");
+                assert_eq!(fast, full);
+                #[cfg(debug_assertions)]
+                assert_eq!(Document::main_body_block_scans() - before, 0);
+                opened
+                    .paragraph_mut(3)
+                    .expect("p")
+                    .set_text("sample-c")
+                    .expect("edit");
+                #[cfg(debug_assertions)]
+                let before = Document::main_body_block_scans();
+                let fast = opened.direct_body_item_location(3).expect("sample");
+                let xml = opened.document.to_xml().expect("sample xml");
+                let full = full_direct_body_item_location(&xml, &opened.doc_part_name, 3)
+                    .expect("old sample");
+                assert_eq!(fast, full);
+                #[cfg(debug_assertions)]
+                sample_deltas.push(Document::main_body_block_scans() - before);
+                opened
+                    .paragraph_mut(4)
+                    .expect("p")
+                    .set_text("sample-d")
+                    .expect("edit");
+                #[cfg(debug_assertions)]
+                let before = Document::main_body_block_scans();
+                let fast = opened.direct_body_item_location(4).expect("sample");
+                let xml = opened.document.to_xml().expect("sample xml");
+                let full = full_direct_body_item_location(&xml, &opened.doc_part_name, 4)
+                    .expect("old sample");
+                assert_eq!(fast, full);
+                #[cfg(debug_assertions)]
+                sample_deltas.push(Document::main_body_block_scans() - before);
+                let model = opened.document.to_xml().expect("model");
+                let saved = opened.to_bytes().expect("saved");
+                let mut reopened = main_body_reopen_route(&opened, memory);
+                assert_eq!(reopened.document.to_xml().expect("reopened model"), model);
+                assert_eq!(reopened.to_bytes().expect("reopened bytes"), saved);
+                let fast = reopened
+                    .direct_body_item_location(4)
+                    .expect("after second reopen");
+                let xml = reopened.document.to_xml().expect("second xml");
+                let full = full_direct_body_item_location(&xml, &reopened.doc_part_name, 4)
+                    .expect("old second");
+                assert_eq!(fast, full);
+                #[cfg(debug_assertions)]
+                {
+                    let before = Document::main_body_block_scans();
+                    let again = reopened
+                        .direct_body_item_location(10)
+                        .expect("still carried");
+                    let full = full_direct_body_item_location(&xml, &reopened.doc_part_name, 10)
+                        .expect("old still carried");
+                    assert_eq!(again, full);
+                    assert_eq!(Document::main_body_block_scans() - before, 0);
+                }
+                let identifiers = reopened.identifiers.clone();
+                let cleared = reopened;
+                *cleared
+                    .main_body_scans
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = MainBodyScans::default();
+                #[cfg(debug_assertions)]
+                let before = Document::main_body_block_scans();
+                let fast = cleared.direct_body_item_location(4).expect("cache off");
+                let full = full_direct_body_item_location(&xml, &cleared.doc_part_name, 4)
+                    .expect("old cache off");
+                assert_eq!(fast, full);
+                #[cfg(debug_assertions)]
+                cache_off.push(Document::main_body_block_scans() - before);
+                assert_old_body_result(&cleared);
+                carried.push((saved, identifiers));
+            }
+            assert_eq!(carried[0].0, carried[1].0);
+            assert_eq!(carried[0].1, carried[1].1);
+        }
+        #[cfg(debug_assertions)]
+        {
+            assert!(
+                sample_deltas.iter().all(|delta| *delta == 1),
+                "{sample_deltas:?}"
+            );
+            assert!(cache_off[2] > cache_off[0], "{cache_off:?}");
+            assert!(cache_off[3] > cache_off[1], "{cache_off:?}");
+        }
+    }
+
+    #[test]
+    fn main_body_layout_multiple_body_owners_use_full_reader() {
+        let mut document = Document::new();
+        document.document.body.content.clear();
+        document.add_paragraph("paragraph A");
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(b"</w:body><w:body>".to_vec())));
+        document.add_paragraph("paragraph B");
+        let xml = match document.document.to_xml() {
+            Ok(xml) => xml,
+            Err(error) => {
+                let fast = document.direct_body_item_location(0);
+                assert_eq!(
+                    fast.expect_err("fast result").to_string(),
+                    error.to_string(),
+                    "writer already refused this shape"
+                );
+                return;
+            }
+        };
+        let owners = match scan_story_owners(&xml, StoryKind::Body) {
+            Ok(owners) => owners,
+            Err(error) => {
+                let fast = document.direct_body_item_location(0);
+                assert_eq!(
+                    fast.expect_err("fast result").to_string(),
+                    error.to_string(),
+                    "old owner scan already refused this shape"
+                );
+                return;
+            }
+        };
+        let bodies: Vec<_> = owners
+            .iter()
+            .filter(|owner| owner.kind == StoryKind::Body)
+            .collect();
+        assert_eq!(
+            bodies.len(),
+            2,
+            "old scanner did not report two body owners"
+        );
+        let stories = document.stories().expect("stories");
+        let public_bodies: Vec<_> = stories
+            .iter()
+            .filter(|story| story.kind == StoryKind::Body)
+            .collect();
+        assert_eq!(public_bodies.len(), bodies.len());
+        for (story, old) in public_bodies.iter().zip(&bodies) {
+            assert_eq!(story.owner_index, old.owner_index);
+            assert_eq!(story.fingerprint, old.fingerprint);
+            let (_source, owner) = document.story_source_and_owner(story).expect("owner");
+            assert_eq!(owner.fingerprint, old.fingerprint);
+            assert_eq!(owner.full, old.full);
+        }
+        let direct = direct_story_content_items(&xml, bodies[0]).expect("old direct");
+        for slot in 0..=direct.len() {
+            let fast = document.direct_body_item_location(slot);
+            let full = full_direct_body_item_location(&xml, &document.doc_part_name, slot);
+            match (&fast, &full) {
+                (Ok(actual), Ok(expected)) => assert_eq!(actual, expected, "slot {slot}"),
+                (Err(actual), Err(expected)) => {
+                    assert_eq!(actual.to_string(), expected.to_string(), "slot {slot}")
+                }
+                (Ok(actual), Err(expected)) => {
+                    panic!("slot {slot}: fast Ok {actual:?} hid full error {expected}")
+                }
+                (Err(actual), Ok(expected)) => {
+                    panic!("slot {slot}: fast error {actual} but full Ok {expected:?}")
+                }
+            }
+        }
+        assert_old_body_result(&document);
+
+        let mut warm = Document::new();
+        warm.document.body.content.clear();
+        for index in 0..20 {
+            warm.add_paragraph(&format!("paragraph {index} {}", "abcdefghij".repeat(8)));
+        }
+        warm.direct_body_item_location(0)
+            .expect("warm")
+            .expect("row");
+        warm.document.body.content[10] =
+            BodyContent::RawXml(Box::new(b"</w:body><w:body>".to_vec()));
+        #[cfg(debug_assertions)]
+        let before = Document::main_body_block_scans();
+        let xml = warm
+            .document
+            .to_xml()
+            .expect("warm writer accepts the raw body");
+        let owners =
+            scan_story_owners(&xml, StoryKind::Body).expect("old scanner accepts two bodies");
+        assert_eq!(
+            owners
+                .iter()
+                .filter(|owner| owner.kind == StoryKind::Body)
+                .count(),
+            2
+        );
+        assert_old_body_result(&warm);
+        #[cfg(debug_assertions)]
+        assert!(
+            Document::main_body_block_scans() - before > 1,
+            "unsupported shape was reused as one child scan"
+        );
+    }
+
+    #[test]
+    fn main_body_layout_coverage_steps_scale_with_children() {
+        let mut steps = Vec::new();
+        for count in [250usize, 1000] {
+            let mut document = Document::new();
+            document.document.body.content.clear();
+            for index in 0..count {
+                document.add_paragraph(&format!("paragraph {index}"));
+            }
+            let before = body_coverage_steps();
+            document
+                .direct_body_item_location(0)
+                .expect("cold")
+                .expect("row");
+            let taken = body_coverage_steps() - before;
+            assert!(taken > 0, "{count}");
+            steps.push(taken);
+        }
+        assert!(
+            steps[1] <= steps[0] * 5,
+            "coverage steps are not linear: {steps:?}"
+        );
+    }
+
     #[test]
     fn reviewed_styleref_relative_fields_render_the_evaluated_number() {
         let mut document = Document::new();
@@ -57388,6 +66766,694 @@ mod tests {
         .concat()
     }
 
+    fn assert_cross_body_facts_fall_back(
+        label: &str,
+        first: String,
+        second: &str,
+        relationship: &str,
+        drawing: u32,
+    ) {
+        let mut document = Document::new();
+        document.document.body.content.clear();
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(first.into_bytes())));
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::RawXml(Box::new(second.as_bytes().to_vec())));
+        let old = document
+            .document
+            .to_xml()
+            .expect("old writer admits this raw body");
+        let (current, record) = document
+            .canonical_source()
+            .expect("canonical source keeps the admitted raw bytes");
+        assert_eq!(
+            current, old,
+            "{label} canonical bytes differ from the old writer"
+        );
+        let record = record.expect("canonical record has a head");
+        let parsed = CT_Document::from_xml(&old);
+        let old_relationships =
+            xml_relationship_ids_in_order(&old).expect("old relationship scanner");
+        let old_drawings = drawing_ids_in_xml(&old).expect("old drawing scanner");
+        let fast_relationships = record.proved_relationship_ids(&old, &[]);
+        let fast_drawings = record.proved_drawing_ids(&old);
+        let scopes = document_namespace_scopes(&old).expect("namespace scopes");
+        let hint = record.identifier_hint(&old, &scopes);
+        let mut categories = HashSet::new();
+        categories.insert(IdentifierXmlCategory::Bookmark);
+        categories.insert(IdentifierXmlCategory::Drawing);
+        let whole = scan_identifier_definitions(&old, &categories);
+        println!("{label} old relationships {old_relationships:?}");
+        println!("{label} old drawings {old_drawings:?}");
+        println!("{label} fast relationships {fast_relationships:?}");
+        println!("{label} fast drawings {fast_drawings:?}");
+        println!(
+            "{label} hint {}",
+            hint.as_ref()
+                .map(|hint| format!("{:?}", hint.definitions))
+                .unwrap_or_else(|| "None".to_owned())
+        );
+        println!("{label} whole definitions {whole:?}");
+        let mut problems = Vec::new();
+        match &parsed {
+            Err(error) if error.to_string() == "unexpected element: w:body" => {}
+            Err(error) => problems.push(format!("parser rejected differently: {error}")),
+            Ok(_) => problems.push("parser accepted two bodies".to_owned()),
+        }
+        if !old_relationships.iter().any(|id| id == relationship) {
+            problems.push(format!(
+                "old relationships missed {relationship}: {old_relationships:?}"
+            ));
+        }
+        if !old_drawings.contains(&drawing) {
+            problems.push(format!("old drawings missed {drawing}: {old_drawings:?}"));
+        }
+        if let Some(fast) = &fast_relationships
+            && fast != &old_relationships
+        {
+            problems.push(format!(
+                "relationship facts {fast:?} differ from old {old_relationships:?}"
+            ));
+        }
+        if let Some(fast) = &fast_drawings
+            && fast != &old_drawings
+        {
+            problems.push(format!(
+                "drawing facts {fast:?} differ from old {old_drawings:?}"
+            ));
+        }
+        if let Some(hint) = &hint {
+            match &whole {
+                Some(definitions) if hint.definitions.as_ref() != Some(definitions) => {
+                    problems.push(format!(
+                        "identifier hint {:?} differs from whole {definitions:?}",
+                        hint.definitions
+                    ));
+                }
+                None => problems.push(
+                    "identifier hint is Some while the whole part scan is not well formed"
+                        .to_owned(),
+                ),
+                _ => {}
+            }
+        }
+        assert!(
+            record.retained_nested_owners(&current).is_none(),
+            "{label} cross body published namespace owners"
+        );
+        assert!(problems.is_empty(), "{label}: {problems:?}");
+    }
+
+    #[test]
+    fn main_part_blocks_cross_body_scope_probe() {
+        assert_cross_body_facts_fall_back(
+            "prefixed",
+            format!(
+                "</w:body><w:body xmlns:q=\"{}\" xmlns:s=\"{}\">",
+                drawing_ns::WP,
+                drawing_ns::R
+            ),
+            r#"<q:docPr id="37" name="opaque"/><w:custom s:id="rId7"/>"#,
+            "rId7",
+            37,
+        );
+        assert_cross_body_facts_fall_back(
+            "default-namespace",
+            format!(
+                "</w:body><w:body xmlns=\"{}\" xmlns:s=\"{}\">",
+                drawing_ns::WP,
+                drawing_ns::R
+            ),
+            r#"<docPr id="41" name="opaque"/><w:custom s:id="rId9"/>"#,
+            "rId9",
+            41,
+        );
+
+        let wp = drawing_ns::WP;
+        let a = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        let rel = drawing_ns::R;
+        let body = format!(
+            r#"<w:p><w:r><w:drawing xmlns="{wp}" xmlns:a="{a}" xmlns:r="{rel}"><inline><extent cx="1" cy="1"/><docPr id="37" name="closed"/><a:graphic><a:graphicData uri="urn:pic"><a:blip r:embed="rId7"/></a:graphicData></a:graphic></inline></w:drawing></w:r></w:p>"#
+        );
+        let document = issue407_document(&body, false);
+        let old = document.document.to_xml().expect("closed parent writes");
+        let (current, record) = document
+            .canonical_source()
+            .expect("closed parent canonical source");
+        assert_eq!(current, old);
+        CT_Document::from_xml(&old).expect("closed parent parses");
+        let record = record.expect("closed parent record");
+        let old_relationships = xml_relationship_ids_in_order(&old).unwrap();
+        let old_drawings = drawing_ids_in_xml(&old).unwrap();
+        assert!(
+            old_relationships.iter().any(|id| id == "rId7"),
+            "{old_relationships:?}"
+        );
+        assert!(old_drawings.contains(&37), "{old_drawings:?}");
+        let scopes = document_namespace_scopes(&old).unwrap();
+        let mut categories = HashSet::new();
+        categories.insert(IdentifierXmlCategory::Bookmark);
+        categories.insert(IdentifierXmlCategory::Drawing);
+        let whole = scan_identifier_definitions(&old, &categories).expect("whole identifiers");
+        assert!(
+            whole.contains(&IdentifierDefinition::Drawing(37)),
+            "{whole:?}"
+        );
+        #[cfg(debug_assertions)]
+        {
+            let _ = take_canonical_fragment_bytes();
+            let _ = take_reopen_work();
+            let _ = take_closed_body_guard_bytes();
+        }
+        let fast_relationships = record
+            .proved_relationship_ids(&old, &[])
+            .expect("closed relationship facts");
+        let fast_drawings = record
+            .proved_drawing_ids(&old)
+            .expect("closed drawing facts");
+        let hint = record
+            .identifier_hint(&old, &scopes)
+            .expect("closed identifier hint");
+        assert_eq!(fast_relationships, old_relationships);
+        assert_eq!(fast_drawings, old_drawings);
+        assert_eq!(hint.definitions.as_ref(), Some(&whole));
+        #[cfg(debug_assertions)]
+        {
+            let fill_fragments = take_canonical_fragment_bytes();
+            let fill_identifier = take_reopen_work()[2];
+            let fill_guard = take_closed_body_guard_bytes();
+            println!(
+                "closed parent fill fragments {fill_fragments} identifier {fill_identifier} guard {fill_guard}"
+            );
+            assert!(fill_guard > 0, "closed parent scope guard did not run");
+        }
+        assert_eq!(
+            record.proved_relationship_ids(&old, &[]).unwrap(),
+            old_relationships
+        );
+        assert_eq!(record.proved_drawing_ids(&old).unwrap(), old_drawings);
+        assert_eq!(
+            record
+                .identifier_hint(&old, &scopes)
+                .unwrap()
+                .definitions
+                .as_ref(),
+            Some(&whole)
+        );
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(
+                take_canonical_fragment_bytes(),
+                0,
+                "closed-parent cache hit reads no new canonical input"
+            );
+            assert_eq!(
+                take_reopen_work()[2],
+                0,
+                "closed-parent cache hit reads no new identifier input"
+            );
+            assert_eq!(
+                take_closed_body_guard_bytes(),
+                0,
+                "closed-parent cache hit repeats the scope guard"
+            );
+        }
+    }
+
+    #[test]
+    fn positive_canonical_read_facts_match_whole_scanners() {
+        let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        let wp = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+        let a = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        let rel = drawing_ns::R;
+        let drawing = |id: u32, embed: &str| {
+            format!(
+                r#"<w:r><w:drawing xmlns:wp="{wp}" xmlns:a="{a}" xmlns:r="{rel}"><wp:inline><wp:extent cx="1" cy="1"/><wp:docPr id="{id}" name="n"/><a:graphic><a:graphicData uri="urn:pic"><a:blip r:embed="{embed}"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#
+            )
+        };
+        let nested_drawing = r#"<w:r><w:drawing><wp:inline><a:graphic><a:graphicData uri="urn:pic"><a:blip r:embed="rIdNested"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#;
+        let malformed = r#"<w:r><w:drawing><wp:inline><wp:docPr id="x" name="bad"/></wp:inline></w:drawing></w:r>"#;
+        let root = format!(
+            r#"<w:document xmlns:w="{word}" xmlns:r="{rel}" xmlns:wp="{wp}" xmlns:a="{a}"><w:body>{{}}</w:body></w:document>"#
+        );
+        let missing_first = root.replace(
+            "{}",
+            &format!(r#"<w:p>{nested_drawing}</w:p><w:p>{malformed}</w:p><w:sectPr/>"#),
+        );
+        let nested_ids = HashSet::from([String::from("rIdNested")]);
+        let missing =
+            authored_drawing_slots_in_source_order(missing_first.as_bytes(), &[4], &nested_ids)
+                .unwrap_err()
+                .to_string();
+        assert!(missing.contains("no wp:docPr"), "{missing}");
+        let later = root.replace(
+            "{}",
+            &format!(
+                r#"<w:p>{}</w:p><w:p>{malformed}</w:p><w:sectPr/>"#,
+                drawing(4, "rIdPicture")
+            ),
+        );
+        let later_error =
+            authored_drawing_slots_in_source_order(later.as_bytes(), &[4, 99], &HashSet::new())
+                .unwrap_err()
+                .to_string();
+        assert!(
+            later_error.contains("invalid story drawing id"),
+            "{later_error}"
+        );
+        assert!(
+            !later_error.contains("occurrences changed"),
+            "{later_error}"
+        );
+
+        let body = format!(
+            r#"<w:p><w:hyperlink xmlns:r="{rel}" r:id="rId1"><w:r><w:t>one</w:t></w:r></w:hyperlink></w:p><w:p><w:hyperlink xmlns:r="{rel}" r:id="rId2"><w:r><w:t>two</w:t></w:r></w:hyperlink><w:hyperlink xmlns:r="{rel}" r:id="rId1"><w:r><w:t>again</w:t></w:r></w:hyperlink></w:p><w:p>{}</w:p><w:p>{}</w:p><w:p><w:r><w:t>edit</w:t></w:r></w:p>"#,
+            drawing(7, "rIdPicture"),
+            drawing(7, "rIdOther")
+        );
+        let mut document = issue407_document(&body, false);
+        document
+            .paragraph_mut(document.paragraph_count() - 1)
+            .expect("edit paragraph")
+            .set_text("changed")
+            .unwrap();
+        let (xml, blocks) = document.canonical_source().unwrap();
+        let blocks = blocks.as_ref();
+        #[cfg(debug_assertions)]
+        let _ = take_relationship_membership_ops();
+        let proved = relationship_ids_by_blocks(&xml, blocks, &[]).unwrap();
+        #[cfg(debug_assertions)]
+        {
+            let ops = take_relationship_membership_ops();
+            println!(
+                "relationship membership ops {ops} distinct {}",
+                proved.len()
+            );
+            assert!(
+                ops > proved.len(),
+                "membership ops {ops} distinct {}",
+                proved.len()
+            );
+        }
+        let whole = xml_relationship_ids_in_order(&xml).unwrap();
+        assert_eq!(proved, whole, "relationship order");
+        assert_eq!(
+            proved.iter().filter(|id| *id == "rId1").count(),
+            1,
+            "duplicate relationship ids stay first-occurrence only: {proved:?}"
+        );
+        assert!(
+            proved.windows(2).any(|pair| pair == ["rId1", "rId2"]),
+            "{proved:?}"
+        );
+        let slots =
+            authored_drawing_slots_by_blocks(&xml, blocks, &[7, 7], &HashSet::new()).unwrap();
+        let whole_slots =
+            authored_drawing_slots_in_source_order(&xml, &[7, 7], &HashSet::new()).unwrap();
+        assert_eq!(format!("{slots:?}"), format!("{whole_slots:?}"));
+        assert_eq!(slots.len(), 2, "{slots:?}");
+        for (_, span, id) in &slots {
+            assert_eq!(
+                std::str::from_utf8(&xml[span.clone()]).unwrap(),
+                id.to_string()
+            );
+        }
+        let ids = drawing_ids_by_blocks(&xml, blocks).unwrap();
+        assert_eq!(ids, drawing_ids_in_xml(&xml).unwrap());
+        #[cfg(debug_assertions)]
+        {
+            let _ = take_staging_work();
+            let odd = [(String::from("xmlns:extra"), String::from("urn:extra"))];
+            let odd_ids = relationship_ids_by_blocks(&xml, blocks, &odd).unwrap();
+            let staged = take_staging_work();
+            assert!(
+                staged[2] >= xml.len(),
+                "unmatched bindings keep the whole scanner {staged:?}"
+            );
+            assert_eq!(
+                odd_ids,
+                xml_relationship_ids_in_order_with_bindings(&xml, &odd).unwrap()
+            );
+            let _ = take_staging_work();
+            let proof_off = CanonicalBlockProofOff::enter();
+            let forced = relationship_ids_by_blocks(&xml, blocks, &[]).unwrap();
+            drop(proof_off);
+            let forced_work = take_staging_work();
+            assert!(
+                forced_work[2] >= xml.len(),
+                "forced reference scanned {forced_work:?}"
+            );
+            assert_eq!(forced, whole);
+        }
+    }
+
+    #[test]
+    fn staging_reads_only_the_main_part_blocks_an_edit_changes() {
+        type MainPartEdit = fn(&mut Document, usize);
+        let edits: [(&str, MainPartEdit); 3] = [
+            ("table row", |document, _| {
+                let table = document.tables().len() - 1;
+                document.add_empty_table_row(table).unwrap();
+            }),
+            ("section", |document, _| {
+                let count = document.section_count();
+                document.insert_section(count).unwrap();
+            }),
+            ("list item", |document, sample| {
+                document.add_bullet_list_item(&format!("item {sample}"), 0);
+            }),
+        ];
+        for (edit_index, (name, edit)) in edits.iter().enumerate() {
+            #[cfg(not(debug_assertions))]
+            let _ = edit_index;
+            #[cfg(debug_assertions)]
+            let mut lines = Vec::new();
+            #[cfg(debug_assertions)]
+            let mut samples = Vec::new();
+            #[cfg(debug_assertions)]
+            type StageSample = ([usize; 6], [usize; 3], usize);
+            #[cfg(debug_assertions)]
+            let mut staged_samples: Vec<(usize, usize, StageSample, StageSample)> = Vec::new();
+            #[cfg(debug_assertions)]
+            let public_phase = if *name == "list item" {
+                "public model commit"
+            } else {
+                "public call"
+            };
+            for count in [50usize, 200] {
+                let body = format!("{}{}", issue407_runs(count), issue407_varied_body(""));
+                let mut source = issue407_document(&body, false);
+                for _ in 0..count / 10 {
+                    source.add_picture(
+                        super::watermark_tests::PNG,
+                        "pixel.png",
+                        Length::pt(12.0),
+                        Length::pt(12.0),
+                    );
+                }
+                source
+                    .add_numbering_definition(&[ListLevel::decimal()])
+                    .unwrap();
+                let mut document = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+                #[cfg(debug_assertions)]
+                {
+                    let _ = take_staging_work();
+                    let _ = take_reopen_work();
+                    let _ = take_canonical_fragment_bytes();
+                }
+                edit(&mut document, 0);
+                #[cfg(debug_assertions)]
+                lines.push(format!(
+                    "cold {count} {public_phase} stage {:?} reopen {:?} fragments {}",
+                    take_staging_work(),
+                    take_reopen_work(),
+                    take_canonical_fragment_bytes()
+                ));
+                if *name == "list item" {
+                    document = document
+                        .prepare_and_reopen_staged()
+                        .expect("list warmup 0 published stage");
+                    #[cfg(debug_assertions)]
+                    lines.push(format!(
+                        "cold {count} explicit stage stage {:?} reopen {:?} fragments {}",
+                        take_staging_work(),
+                        take_reopen_work(),
+                        take_canonical_fragment_bytes()
+                    ));
+                }
+                edit(&mut document, 1);
+                #[cfg(debug_assertions)]
+                if *name == "list item" {
+                    lines.push(format!(
+                        "cold {count} {public_phase} stage {:?} reopen {:?} fragments {}",
+                        take_staging_work(),
+                        take_reopen_work(),
+                        take_canonical_fragment_bytes()
+                    ));
+                } else {
+                    let _ = take_staging_work();
+                    let _ = take_reopen_work();
+                    let _ = take_canonical_fragment_bytes();
+                }
+                if *name == "list item" {
+                    document = document
+                        .prepare_and_reopen_staged()
+                        .expect("list warmup 1 published stage");
+                    #[cfg(debug_assertions)]
+                    lines.push(format!(
+                        "cold {count} explicit stage stage {:?} reopen {:?} fragments {}",
+                        take_staging_work(),
+                        take_reopen_work(),
+                        take_canonical_fragment_bytes()
+                    ));
+                }
+                for sample in 2..4 {
+                    let mut slow = document.clone_for_staging();
+                    slow.main_part_blocks = None;
+                    slow.parsed = None;
+                    slow.main_body_scans =
+                        std::sync::Arc::new(std::sync::Mutex::new(MainBodyScans::default()));
+                    #[cfg(debug_assertions)]
+                    {
+                        let _ = take_staging_work();
+                        let _ = take_reopen_work();
+                        let _ = take_canonical_fragment_bytes();
+                    }
+                    edit(&mut document, sample);
+                    #[cfg(debug_assertions)]
+                    let fast = (
+                        take_staging_work(),
+                        take_reopen_work(),
+                        take_canonical_fragment_bytes(),
+                    );
+                    let proof_off = CanonicalBlockProofOff::enter();
+                    edit(&mut slow, sample);
+                    drop(proof_off);
+                    #[cfg(debug_assertions)]
+                    let slow_work = (
+                        take_staging_work(),
+                        take_reopen_work(),
+                        take_canonical_fragment_bytes(),
+                    );
+                    assert_eq!(document.document, slow.document, "{name} count={count}");
+                    let mut fast_bytes = document.clone_for_staging();
+                    let mut slow_bytes = slow.clone_for_staging();
+                    assert_eq!(
+                        fast_bytes.to_bytes().unwrap(),
+                        slow_bytes.to_bytes().unwrap(),
+                        "{name} count={count}"
+                    );
+                    assert_eq!(
+                        document.identifiers, slow.identifiers,
+                        "{name} count={count}"
+                    );
+                    #[cfg(debug_assertions)]
+                    {
+                        lines.push(format!(
+                            "sample {} count {count} {public_phase} fast stage {:?} reopen {:?} fragments {} slow stage {:?} reopen {:?} fragments {}",
+                            sample - 2,
+                            fast.0,
+                            fast.1,
+                            fast.2,
+                            slow_work.0,
+                            slow_work.1,
+                            slow_work.2
+                        ));
+                        samples.push((count, sample, fast, slow_work));
+                    }
+                    if *name == "list item" {
+                        slow.main_part_blocks = None;
+                        slow.parsed = None;
+                        slow.main_body_scans =
+                            std::sync::Arc::new(std::sync::Mutex::new(MainBodyScans::default()));
+                        #[cfg(debug_assertions)]
+                        {
+                            let _ = take_staging_work();
+                            let _ = take_reopen_work();
+                            let _ = take_canonical_fragment_bytes();
+                        }
+                        document = document
+                            .prepare_and_reopen_staged()
+                            .expect("list explicit prepare");
+                        #[cfg(debug_assertions)]
+                        let staged_fast_work = (
+                            take_staging_work(),
+                            take_reopen_work(),
+                            take_canonical_fragment_bytes(),
+                        );
+                        let proof_off = CanonicalBlockProofOff::enter();
+                        slow = slow
+                            .prepare_and_reopen_staged()
+                            .expect("list explicit reference prepare");
+                        drop(proof_off);
+                        #[cfg(debug_assertions)]
+                        let staged_slow_work = (
+                            take_staging_work(),
+                            take_reopen_work(),
+                            take_canonical_fragment_bytes(),
+                        );
+                        assert_eq!(
+                            document.document, slow.document,
+                            "list explicit prepare count={count}"
+                        );
+                        assert_eq!(
+                            document.to_bytes().unwrap(),
+                            slow.to_bytes().unwrap(),
+                            "list explicit prepare count={count}"
+                        );
+                        assert_eq!(
+                            document.identifiers, slow.identifiers,
+                            "list explicit prepare count={count}"
+                        );
+                        #[cfg(debug_assertions)]
+                        {
+                            lines.push(format!(
+                                "sample {} count {count} explicit prepare/reopen fast stage {:?} reopen {:?} fragments {} slow stage {:?} reopen {:?} fragments {}",
+                                sample - 2,
+                                staged_fast_work.0,
+                                staged_fast_work.1,
+                                staged_fast_work.2,
+                                staged_slow_work.0,
+                                staged_slow_work.1,
+                                staged_slow_work.2
+                            ));
+                            staged_samples.push((
+                                count,
+                                sample,
+                                staged_fast_work,
+                                staged_slow_work,
+                            ));
+                        }
+                    }
+                }
+            }
+            #[cfg(debug_assertions)]
+            {
+                println!("a10-original {name}");
+                for line in &lines {
+                    println!("{line}");
+                }
+            }
+            #[cfg(debug_assertions)]
+            {
+                let mut problems = Vec::new();
+                for (count, sample, fast, slow_work) in &samples {
+                    if fast.0[..4] != [0, 0, 0, 0] {
+                        problems.push(format!(
+                            "{name} count={count} sample={sample} warm whole-input {:?}",
+                            fast.0
+                        ));
+                    }
+                    if fast.1[0] != 0 || fast.1[1] != 0 {
+                        problems.push(format!(
+                            "{name} count={count} sample={sample} reopen {:?}",
+                            fast.1
+                        ));
+                    }
+                    let twin = samples.iter().find(|(other_count, other_sample, _, _)| {
+                        *other_count != *count && other_sample == sample
+                    });
+                    if let Some((_, _, other, other_slow)) = twin
+                        && *count == 50
+                    {
+                        if fast.0[4] != other.0[4] || fast.0[5] != other.0[5] {
+                            problems.push(format!(
+                                "{name} sample={sample} child counts {:?} vs {:?}",
+                                fast.0, other.0
+                            ));
+                        }
+                        let delta = fast.1[2].abs_diff(other.1[2]);
+                        if delta > 16 {
+                            problems.push(format!(
+                                "{name} sample={sample} identifier delta {delta} {:?} vs {:?}",
+                                fast.1, other.1
+                            ));
+                        }
+                        let slow_here = slow_work.0[0] + slow_work.0[1] + slow_work.0[2];
+                        let slow_there = other_slow.0[0] + other_slow.0[1] + other_slow.0[2];
+                        if slow_there <= slow_here {
+                            problems.push(format!(
+                                "{name} sample={sample} cache-off did not grow {slow_here} to {slow_there}"
+                            ));
+                        }
+                    }
+                }
+                if !problems.is_empty() {
+                    let pending = edits
+                        .iter()
+                        .skip(edit_index + 1)
+                        .map(|(pending_name, _)| *pending_name)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let pending = if pending.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        format!("{pending} not yet executed")
+                    };
+                    panic!("{name} gate missed: {problems:?}. later edits: {pending}");
+                }
+                if *name == "list item" {
+                    let mut staged_problems = Vec::new();
+                    for (count, sample, fast, slow_work) in &staged_samples {
+                        if fast.0[..4] != [0, 0, 0, 0] {
+                            staged_problems.push(format!(
+                                "list explicit prepare count={count} sample={sample} warm whole-input {:?}",
+                                fast.0
+                            ));
+                        }
+                        if fast.1[0] != 0 || fast.1[1] != 0 {
+                            staged_problems.push(format!(
+                                "list explicit prepare count={count} sample={sample} reopen {:?}",
+                                fast.1
+                            ));
+                        }
+                        let twin =
+                            staged_samples
+                                .iter()
+                                .find(|(other_count, other_sample, _, _)| {
+                                    *other_count != *count && other_sample == sample
+                                });
+                        if let Some((_, _, other, other_slow)) = twin
+                            && *count == 50
+                        {
+                            if fast.0[4] != other.0[4] || fast.0[5] != other.0[5] {
+                                staged_problems.push(format!(
+                                    "list explicit prepare sample={sample} child counts {:?} vs {:?}",
+                                    fast.0, other.0
+                                ));
+                            }
+                            let delta = fast.1[2].abs_diff(other.1[2]);
+                            if delta > 16 {
+                                staged_problems.push(format!(
+                                    "list explicit prepare sample={sample} identifier delta {delta} {:?} vs {:?}",
+                                    fast.1, other.1
+                                ));
+                            }
+                            let slow_here = slow_work.0[0] + slow_work.0[1] + slow_work.0[2];
+                            let slow_there = other_slow.0[0] + other_slow.0[1] + other_slow.0[2];
+                            if slow_there <= slow_here {
+                                staged_problems.push(format!(
+                                    "list explicit prepare sample={sample} cache-off did not grow {slow_here} to {slow_there}"
+                                ));
+                            }
+                        }
+                    }
+                    if !staged_problems.is_empty() {
+                        panic!(
+                            "list item explicit prepare/reopen gate missed: {staged_problems:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn missing_run_path_refuses() {
         let document = issue407_document(&issue407_varied_body(""), false);
@@ -57562,6 +67628,135 @@ mod tests {
     }
 
     #[test]
+    fn issue407_plain_removal_stays_local_only_when_nested_owners_replay() {
+        const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        let rows = format!(
+            r#"<w:sdt xmlns:w="{W}" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w:sdtPr><w:tag w:val="rows"/><w15:repeatingSection/></w:sdtPr><w:sdtContent><w:sdt><w:sdtPr><w15:repeatingSectionItem/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>row</w:t></w:r></w:p></w:sdtContent></w:sdt></w:sdtContent></w:sdt>"#
+        );
+        let twin = r#"<w:sdt xmlns:x="urn:x"><w:sdtPr><x:meta/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>twin</w:t></w:r></w:p></w:sdtContent></w:sdt>"#;
+        let alias = format!(
+            r#"<q:sdt xmlns:q="{W}"><q:sdtPr><q:tag q:val="t"/></q:sdtPr><q:sdtContent><q:p><q:r><q:t>in q</q:t></q:r></q:p></q:sdtContent></q:sdt>"#
+        );
+        let table = r#"<w:tbl xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr w14:paraId="00000001"><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+        let mut failures = Vec::new();
+        for (label, owners, local, savable) in [
+            ("one-repeating-section", rows.clone(), true, true),
+            (
+                "two-repeating-sections",
+                format!("{rows}{rows}"),
+                false,
+                false,
+            ),
+            ("twin", format!("{twin}{twin}"), false, false),
+            ("alias", alias, false, false),
+            ("table-local-w14", table.to_owned(), false, true),
+        ] {
+            let body = format!(
+                "<w:p><w:r><w:t>keep</w:t></w:r></w:p><w:p><w:r><w:t>drop</w:t></w:r></w:p>{owners}"
+            );
+            let mut document = issue407_document(&body, false);
+            let slot = document
+                .document
+                .body
+                .content
+                .iter()
+                .position(|content| {
+                    matches!(content, BodyContent::Paragraph(paragraph) if paragraph.accepted_text() == "drop")
+                })
+                .unwrap();
+            let eligible = document.plain_removable_paragraph(slot);
+            let proved = document.unsavable_body_edit().is_none();
+            if eligible != local || proved != savable {
+                failures.push(format!(
+                    "{label} eligibility {eligible} expected {local}, savable {proved} expected {savable}"
+                ));
+                continue;
+            }
+            let before = document.to_bytes().unwrap();
+            match document.try_remove_content(slot) {
+                Ok(removed) => {
+                    if !(removed && savable) {
+                        failures.push(format!("{label} removal returned {removed}"));
+                        continue;
+                    }
+                    let saved_bytes = document.to_bytes().unwrap();
+                    let saved = Document::from_bytes(&saved_bytes).unwrap();
+                    if saved.document.body.content.iter().any(|content| {
+                        matches!(content, BodyContent::Paragraph(paragraph) if paragraph.accepted_text() == "drop")
+                    }) {
+                        failures.push(format!("{label} reopen still holds drop"));
+                    }
+                    if label == "one-repeating-section" {
+                        let mut staged = issue407_document(&body, false);
+                        let mut candidate = staged.clone_for_staging();
+                        candidate.document.body.remove(slot);
+                        match candidate.prepare_and_reopen_staged() {
+                            Ok(reopened) => {
+                                staged.commit_staged_mutation(reopened);
+                                if staged.to_bytes().unwrap() != saved_bytes {
+                                    failures.push(
+                                        "one-repeating-section local bytes differ from staged removal"
+                                            .to_owned(),
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                failures.push(format!("staged removal control {error}"));
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    if savable || !message.contains("namespace owner") {
+                        failures.push(format!("{label} removal error {message}"));
+                        continue;
+                    }
+                    if document.to_bytes().unwrap() != before {
+                        failures.push(format!("{label} refusal changed bytes"));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:?}");
+    }
+
+    #[test]
+    fn paragraph_count_before_content_follows_facade_paragraphs() {
+        let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        let sdt = |text: &str| {
+            format!(
+                r#"<w:sdt xmlns:w="{word}"><w:sdtPr><w:tag w:val="{text}"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+            )
+        };
+        let document = issue407_document(&format!("{}{}", sdt("one"), sdt("many")), false);
+        let paragraphs = document.document.body.paragraphs().count();
+        assert_eq!(document.paragraph_count_before_content(0), 0);
+        assert_eq!(document.paragraph_count_before_content(1), 1);
+        assert_eq!(
+            document.paragraph_count_before_content(document.content_count()),
+            paragraphs
+        );
+        let mixed = issue407_document(
+            r#"<w:p><w:r><w:t>keep</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>after</w:t></w:r></w:p>"#,
+            false,
+        );
+        assert_eq!(mixed.paragraph_count_before_content(0), 0);
+        assert_eq!(mixed.paragraph_count_before_content(1), 1);
+        assert_eq!(mixed.paragraph_count_before_content(2), 1);
+        assert_eq!(
+            mixed.paragraph_count_before_content(3),
+            mixed.document.body.paragraphs().count()
+        );
+        let empty = Document::new();
+        assert_eq!(empty.paragraph_count_before_content(0), 0);
+        assert_eq!(
+            empty.paragraph_count_before_content(empty.content_count()),
+            empty.document.body.paragraphs().count()
+        );
+    }
+
+    #[test]
     fn issue407_direct_body_reads_and_plain_edits_do_not_grow_with_the_body() {
         let mut work = Vec::new();
         const TABLE: &str = r#"<w:tbl><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>one</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>two</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
@@ -57655,6 +67850,1574 @@ mod tests {
             work.push(sample);
         }
         assert_eq!(work[0], work[1]);
+    }
+
+    #[test]
+    fn word_owner_piece_sources_match_the_full_physical_inventory() {
+        type TableShape = (Vec<oxml_core::Twips>, Vec<Vec<(usize, Vec<String>)>>);
+        fn table_shape(table: &rdocx_oxml::table::CT_Tbl) -> TableShape {
+            let widths = table
+                .grid
+                .as_ref()
+                .map(|grid| grid.columns.iter().map(|column| column.width).collect())
+                .unwrap_or_default();
+            let rows = table
+                .rows
+                .iter()
+                .map(|row| {
+                    row.cells
+                        .iter()
+                        .map(|cell| {
+                            let paragraphs = cell.paragraphs();
+                            (
+                                paragraphs.len(),
+                                paragraphs
+                                    .iter()
+                                    .map(|paragraph| paragraph.accepted_text())
+                                    .collect(),
+                            )
+                        })
+                        .collect()
+                })
+                .collect();
+            (widths, rows)
+        }
+        let mut samples = Vec::new();
+        for count in [20usize, 80] {
+            let document = issue407_document(
+                &format!("{}{}", issue407_runs(count), issue407_varied_body("")),
+                false,
+            );
+            let context = document.body_item_context();
+            let mut items = 0;
+            let mut cells = 0;
+            let mut tables = 0;
+            let mut paragraphs = Vec::new();
+            let mut cell_paragraphs = HashMap::new();
+            let mut local_bytes = Vec::new();
+            let mut table_shapes = Vec::new();
+            let content = &document.document.body.content;
+            for (slot, item) in content.iter().enumerate() {
+                STORY_SOURCE_BUILDS.set(0);
+                STANDALONE_BODY_ITEM_BYTES.set(0);
+                let owners = document.body_item_owners(item).unwrap();
+                assert_eq!(STORY_SOURCE_BUILDS.get(), 0, "slot={slot}");
+                assert_eq!(document.body_item_context(), context, "slot={slot}");
+                if slot == 0 || slot == count {
+                    local_bytes.push(STANDALONE_BODY_ITEM_BYTES.get());
+                }
+                let direct = owners
+                    .snapshots
+                    .iter()
+                    .filter(|item| item.location().story().kind() == StoryKind::Body)
+                    .filter(|item| item.is_direct_child())
+                    .map(StoryItemSnapshot::direct_body_index)
+                    .collect::<Vec<_>>();
+                assert_eq!(direct, [Some(0)], "slot={slot}");
+                if let BodyContent::Table(_) = item {
+                    let xml = owners
+                        .snapshots
+                        .iter()
+                        .find(|snapshot| {
+                            snapshot.is_direct_child()
+                                && snapshot.location().item_kind() == StoryItemKind::Table
+                        })
+                        .unwrap()
+                        .xml();
+                    let parsed = rdocx_oxml::table::CT_Tbl::from_xml_fragment_checked(xml)
+                        .unwrap_or_else(|error| panic!("slot={slot} standalone table: {error}"));
+                    table_shapes.push((slot, table_shape(&parsed)));
+                    let full = document.story_owner_snapshots().unwrap();
+                    let exact = full
+                        .0
+                        .iter()
+                        .find(|snapshot| {
+                            snapshot.direct_body_index() == Some(slot)
+                                && snapshot.is_direct_child()
+                                && snapshot.location().item_kind() == StoryItemKind::Table
+                        })
+                        .unwrap()
+                        .xml();
+                    assert_ne!(exact, xml, "slot={slot}");
+                    assert!(
+                        rdocx_oxml::table::CT_Tbl::from_xml_fragment_checked(exact).is_err(),
+                        "slot={slot}"
+                    );
+                }
+                paragraphs.extend(owners.paragraph_routes.iter().map(|route| {
+                    route.clone().map(|mut path| {
+                        path[0] += items;
+                        path
+                    })
+                }));
+                let (routes, complete) = owners.cell_paragraphs.clone().unwrap();
+                assert!(complete, "slot={slot}");
+                for ((table, row, cell), locations) in routes {
+                    let locations = locations
+                        .iter()
+                        .map(|location| {
+                            let mut story = location.story().clone();
+                            story.set_owner_index(story.owner_index() + cells);
+                            (story, location.index_path().to_vec())
+                        })
+                        .collect::<Vec<_>>();
+                    cell_paragraphs.insert((table + tables, row, cell), locations);
+                }
+                items += owners
+                    .snapshots
+                    .iter()
+                    .filter(|item| item.location().story().kind() == StoryKind::Body)
+                    .count();
+                cells += owners.cell_stories;
+                tables += owners.tables;
+            }
+            let expected = document
+                .paragraph_story_locations()
+                .unwrap()
+                .into_iter()
+                .map(|location| location.map(|location| location.index_path().to_vec()))
+                .collect::<Vec<_>>();
+            assert_eq!(paragraphs, expected);
+            let expected = document
+                .cell_paragraph_story_locations()
+                .unwrap()
+                .into_iter()
+                .map(|(key, locations)| {
+                    let locations = locations
+                        .iter()
+                        .map(|location| (location.story().clone(), location.index_path().to_vec()))
+                        .collect::<Vec<_>>();
+                    (key, locations)
+                })
+                .collect::<HashMap<_, _>>();
+            assert!(!expected.is_empty());
+            assert_eq!(cell_paragraphs, expected);
+            assert_eq!(tables, document.table_count());
+            let whole_tables = document.standalone_story_item_snapshots().unwrap();
+            for (slot, shape) in table_shapes {
+                let xml = whole_tables
+                    .iter()
+                    .find(|snapshot| {
+                        snapshot.direct_body_index() == Some(slot)
+                            && snapshot.is_direct_child()
+                            && snapshot.location().item_kind() == StoryItemKind::Table
+                    })
+                    .unwrap_or_else(|| panic!("slot={slot} whole standalone table"))
+                    .xml();
+                let parsed = rdocx_oxml::table::CT_Tbl::from_xml_fragment_checked(xml)
+                    .unwrap_or_else(|error| panic!("slot={slot} whole standalone table: {error}"));
+                assert_eq!(shape, table_shape(&parsed), "slot={slot}");
+            }
+            samples.push(local_bytes);
+        }
+        assert_eq!(samples[0], samples[1]);
+
+        let empty = issue407_document("", false);
+        assert_eq!(empty.table_count(), 0);
+        let one = issue407_document("<w:p><w:r><w:t>only</w:t></w:r></w:p>", false);
+        let owners = one
+            .body_item_owners(one.document.body.content.last().unwrap())
+            .unwrap();
+        assert_eq!(owners.tables, 0);
+        assert_eq!(owners.paragraph_routes.last().unwrap(), &Some(vec![0]));
+        let shadow = issue407_document(
+            r#"<w:p xmlns:w="urn:not-word"><w:r><w:t>shadow</w:t></w:r></w:p>"#,
+            false,
+        );
+        let item = shadow.document.body.content.last().unwrap();
+        match shadow.body_item_owners(item) {
+            Err(_) => {}
+            Ok(owners) => {
+                let xml = owners
+                    .snapshots
+                    .iter()
+                    .find(|snapshot| snapshot.is_direct_child())
+                    .unwrap()
+                    .xml();
+                assert!(!xml.is_empty());
+                assert!(rdocx_oxml::text::CT_P::from_xml_fragment_checked(xml).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn pending_main_relationship_holds_match_full_canonicalization() {
+        fn opened(with_header: bool) -> Document {
+            let mut source = Document::new();
+            source.add_paragraph("plain");
+            if with_header {
+                source.set_header("header");
+            }
+            let bytes = source.to_bytes().unwrap();
+            Document::from_bytes(&bytes).unwrap()
+        }
+        fn compare(label: &str, mut document: Document, hold: &str, kept: bool) {
+            let mut warmer = document.clone_for_staging();
+            warmer.set_font(FontDefinition::new("Warm")).unwrap();
+            assert!(!document.saves_as(&warmer).unwrap(), "{label}");
+            let owner = document.doc_part_name.clone();
+            document.register_pending_relationship(&owner, hold);
+            let admitted = document.unchanged_main_part().is_some();
+            assert!(!admitted, "{label} admitted a nonempty pending hold");
+            let mut full = document.clone_for_staging();
+            full.parsed = None;
+            let full_result = full.canonicalize_all_drawing_ids();
+            let cache_result = match document.unchanged_main_part() {
+                Some(kept_part) => {
+                    let unchanged = kept_part
+                        .unchanged_main_part
+                        .get()
+                        .and_then(Option::as_ref)
+                        .expect("checked unchanged main part");
+                    document.canonicalize_beside_unchanged_main_part(unchanged)
+                }
+                None => document.canonicalize_all_drawing_ids(),
+            };
+            assert_eq!(
+                cache_result
+                    .as_ref()
+                    .map(|_| ())
+                    .map_err(|error| error.to_string()),
+                full_result
+                    .as_ref()
+                    .map(|_| ())
+                    .map_err(|error| error.to_string()),
+                "{label} admitted={admitted}"
+            );
+            assert_eq!(document.document, full.document, "{label}");
+            assert_eq!(
+                document.document.to_xml().ok(),
+                full.document.to_xml().ok(),
+                "{label}"
+            );
+            assert!(
+                document.package.same_package_as(&full.package),
+                "{label} admitted={admitted}"
+            );
+            assert_eq!(
+                document.identifiers,
+                full.identifiers,
+                "{label} admitted={admitted} cache_pending={:?} full_pending={:?}",
+                document.identifiers.pending_relationship_ids,
+                full.identifiers.pending_relationship_ids
+            );
+            let owner_identity = relationship_owner_identity(&document.doc_part_name);
+            let still_held = document
+                .identifiers
+                .pending_relationship_ids
+                .get(&owner_identity)
+                .is_some_and(|ids| ids.contains(hold));
+            assert_eq!(still_held, kept, "{label} hold {hold}");
+        }
+        compare("expired", opened(false), "rId999", false);
+        let live = opened(false);
+        let owner = live.doc_part_name.clone();
+        let live_id = live
+            .package
+            .get_part_rels(&owner)
+            .expect("main relationships")
+            .items
+            .iter()
+            .find(|relationship| relationship.id.contains("Theme") || relationship.id == "rId0")
+            .map(|relationship| relationship.id.clone())
+            .expect("existing unreferenced main relationship");
+        compare("live", opened(false), &live_id, true);
+        let referenced = opened(true);
+        let header_id = referenced
+            .document
+            .body
+            .sect_pr
+            .as_ref()
+            .and_then(|section| section.header_refs.first())
+            .map(|reference| reference.rel_id.clone())
+            .expect("existing header relationship");
+        compare("referenced", opened(true), &header_id, false);
+    }
+
+    fn staged_reopen_pair(candidate: Document) -> (Result<Document>, Result<Document>) {
+        let mut through_zip = candidate.clone_for_staging();
+        through_zip.parsed = None;
+        let optimized = candidate.reopen_prepared_staged();
+        let through_zip = through_zip.reopen_prepared_staged();
+        (optimized, through_zip)
+    }
+
+    fn assert_staged_reopen_pair(candidate: Document) {
+        let (optimized, through_zip) = staged_reopen_pair(candidate);
+        match (optimized, through_zip) {
+            (Ok(optimized), Ok(through_zip)) => {
+                assert!(optimized.document == through_zip.document);
+                assert_eq!(
+                    optimized
+                        .document
+                        .to_xml()
+                        .map_err(|error| error.to_string()),
+                    through_zip
+                        .document
+                        .to_xml()
+                        .map_err(|error| error.to_string())
+                );
+                assert_eq!(optimized.identifiers, through_zip.identifiers);
+                assert!(optimized.package.same_package_as(&through_zip.package));
+                assert_eq!(
+                    optimized.custom_properties_owned,
+                    through_zip.custom_properties_owned
+                );
+                assert_eq!(optimized.settings_owned, through_zip.settings_owned);
+                assert_eq!(optimized.web_settings_owned, through_zip.web_settings_owned);
+                assert_eq!(optimized.comments_owned, through_zip.comments_owned);
+                assert_eq!(
+                    optimized.comments_extended_owned,
+                    through_zip.comments_extended_owned
+                );
+                assert_eq!(
+                    optimized.package_signatures_invalidated,
+                    through_zip.package_signatures_invalidated
+                );
+                assert_eq!(
+                    optimized.embedded_invalidated_signatures,
+                    through_zip.embedded_invalidated_signatures
+                );
+                let mut optimized = optimized;
+                let mut through_zip = through_zip;
+                assert_eq!(
+                    optimized.to_bytes().unwrap(),
+                    through_zip.to_bytes().unwrap()
+                );
+            }
+            (Err(optimized), Err(through_zip)) => {
+                assert_eq!(
+                    std::mem::discriminant(&optimized),
+                    std::mem::discriminant(&through_zip)
+                );
+                assert_eq!(optimized.to_string(), through_zip.to_string());
+            }
+            (optimized, through_zip) => panic!(
+                "reopen variants differ: {} vs {}",
+                optimized
+                    .as_ref()
+                    .err()
+                    .map(|error| error.to_string())
+                    .unwrap_or_else(|| "ok".to_owned()),
+                through_zip
+                    .as_ref()
+                    .err()
+                    .map(|error| error.to_string())
+                    .unwrap_or_else(|| "ok".to_owned())
+            ),
+        }
+    }
+
+    #[test]
+    fn in_memory_reopen_matches_zip_for_new_flat_limited_and_hook_paths() {
+        let mut created = Document::new();
+        created.add_paragraph("created");
+        created.prepare_staged_package().unwrap();
+        #[cfg(debug_assertions)]
+        {
+            take_reopen_work();
+            let probe = created.clone_for_staging();
+            probe.reopen_prepared_staged().unwrap();
+            assert_eq!(take_reopen_work()[0], 1, "a new document still writes ZIP");
+        }
+        assert_staged_reopen_pair(created.clone_for_staging());
+
+        let opened = Document::from_bytes(&created.to_bytes().unwrap()).unwrap();
+        let mut edited = opened.clone_for_staging();
+        edited.add_paragraph("after open");
+        edited.prepare_staged_package().unwrap();
+        #[cfg(debug_assertions)]
+        {
+            take_reopen_work();
+            let probe = edited.clone_for_staging();
+            probe.reopen_prepared_staged().unwrap();
+            assert_eq!(
+                take_reopen_work()[0],
+                0,
+                "a byte reopen of a saved new document qualifies"
+            );
+        }
+        assert_staged_reopen_pair(edited);
+
+        let mut flat_source = Document::new();
+        flat_source.add_paragraph("flat");
+        let flat_bytes = flat_source.to_flat_opc_bytes().unwrap();
+        let mut flat = Document::from_flat_opc_bytes(&flat_bytes).unwrap();
+        flat.add_paragraph("flat edit");
+        flat.prepare_staged_package().unwrap();
+        #[cfg(debug_assertions)]
+        {
+            take_reopen_work();
+            let probe = flat.clone_for_staging();
+            probe.reopen_prepared_staged().unwrap();
+            assert_eq!(take_reopen_work()[0], 1, "Flat OPC first commit writes ZIP");
+        }
+        assert_staged_reopen_pair(flat.clone_for_staging());
+        let mut flat_opened = Document::from_bytes(&flat.to_bytes().unwrap()).unwrap();
+        flat_opened.add_paragraph("flat opened");
+        flat_opened.prepare_staged_package().unwrap();
+        #[cfg(debug_assertions)]
+        {
+            take_reopen_work();
+            let probe = flat_opened.clone_for_staging();
+            probe.reopen_prepared_staged().unwrap();
+            assert_eq!(
+                take_reopen_work()[0],
+                0,
+                "Flat OPC qualifies after ZIP open"
+            );
+        }
+        assert_staged_reopen_pair(flat_opened);
+
+        let mut limited = Document::from_bytes(&created.to_bytes().unwrap()).unwrap();
+        limited.add_paragraph("limited");
+        limited.prepare_staged_package().unwrap();
+        let limits = PackageReadLimits {
+            max_entries: usize::MAX - 1,
+            ..PackageReadLimits::UNBOUNDED
+        };
+        #[cfg(debug_assertions)]
+        {
+            take_reopen_work();
+            let probe = limited.clone_for_staging();
+            probe.reopen_prepared_staged_with_limits(limits).unwrap();
+            assert_eq!(take_reopen_work()[0], 1, "a non-unbounded limit writes ZIP");
+        }
+        let mut zip_limited = limited.clone_for_staging();
+        zip_limited.parsed = None;
+        let mut optimized = limited.reopen_prepared_staged_with_limits(limits).unwrap();
+        let mut through_zip = zip_limited
+            .reopen_prepared_staged_with_limits(limits)
+            .unwrap();
+        assert_eq!(
+            optimized.to_bytes().unwrap(),
+            through_zip.to_bytes().unwrap()
+        );
+        let mut refused = Document::from_bytes(&created.to_bytes().unwrap()).unwrap();
+        refused.prepare_staged_package().unwrap();
+        let refused = refused.reopen_prepared_staged_with_limits(PackageReadLimits {
+            max_entries: 0,
+            ..PackageReadLimits::UNBOUNDED
+        });
+        let refused = match refused {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("max_entries 0 must fail"),
+        };
+        assert!(
+            refused.contains("entry count"),
+            "max_entries 0 is enforced through ZIP: {refused}"
+        );
+
+        let mut hooked = Document::from_bytes(&created.to_bytes().unwrap()).unwrap();
+        hooked.add_paragraph("hook");
+        let mut next = hooked.clone_for_staging();
+        FAIL_NEXT_STAGED_REOPEN.set(true);
+        let failed = hooked.prepare_and_reopen_staged();
+        assert!(
+            !FAIL_NEXT_STAGED_REOPEN.get(),
+            "the failure hook is consumed"
+        );
+        let failed = match failed {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("the failure hook must fail"),
+        };
+        assert!(
+            failed.contains("entry count"),
+            "the hook keeps the old ZIP limit failure: {failed}"
+        );
+        next.prepare_staged_package().unwrap();
+        assert_staged_reopen_pair(next);
+    }
+
+    #[test]
+    fn in_memory_reopen_keeps_related_part_errors_and_drops_stale_main_checks() {
+        let mut source = Document::new();
+        source.add_paragraph("body");
+        source.set_header("header");
+        source.set_font(FontDefinition::new("Seed")).unwrap();
+        source
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        let opened = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+
+        let mut header = opened.clone_for_staging();
+        header.set_header("header changed");
+        header.prepare_staged_package().unwrap();
+        assert_staged_reopen_pair(header);
+
+        let mut styled = opened.clone_for_staging();
+        styled.set_font(FontDefinition::new("Changed")).unwrap();
+        styled
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        styled.prepare_staged_package().unwrap();
+        assert_staged_reopen_pair(styled);
+
+        let mut styles_only = opened.clone_for_staging();
+        styles_only.prepare_staged_package().unwrap();
+        styles_only
+            .package
+            .set_part(DEFAULT_STYLES_PART, b"<w:styles".to_vec());
+        let mut both = opened.clone_for_staging();
+        both.prepare_staged_package().unwrap();
+        both.package
+            .set_part(DEFAULT_STYLES_PART, b"<w:styles".to_vec());
+        both.package
+            .set_part(DEFAULT_NUMBERING_PART, b"<w:numbering".to_vec());
+        let (styles_error, _) = staged_reopen_pair(styles_only);
+        let (both_error, both_zip) = staged_reopen_pair(both);
+        let styles_error = match styles_error {
+            Err(error) => error,
+            Ok(_) => panic!("bad styles"),
+        };
+        let both_error = match both_error {
+            Err(error) => error,
+            Ok(_) => panic!("bad styles before numbering"),
+        };
+        let both_zip = match both_zip {
+            Err(error) => error,
+            Ok(_) => panic!("zip sees the styles error"),
+        };
+        assert_eq!(
+            std::mem::discriminant(&styles_error),
+            std::mem::discriminant(&both_error)
+        );
+        assert_eq!(styles_error.to_string(), both_error.to_string());
+        assert_eq!(both_error.to_string(), both_zip.to_string());
+
+        let mut garbled_header = opened.clone_for_staging();
+        garbled_header.prepare_staged_package().unwrap();
+        garbled_header
+            .package
+            .set_part("/word/header1.xml", b"<w:hdr".to_vec());
+        assert_staged_reopen_pair(garbled_header);
+
+        let mut retyped = opened.clone_for_staging();
+        retyped.prepare_staged_package().unwrap();
+        retyped
+            .package
+            .get_part_rels_mut(&retyped.doc_part_name)
+            .unwrap()
+            .items
+            .iter_mut()
+            .find(|relationship| relationship.rel_type == rel_types::HEADER)
+            .unwrap()
+            .rel_type = rel_types::FOOTER.to_owned();
+        assert_staged_reopen_pair(retyped);
+
+        let mut replaced = opened.clone_for_staging();
+        let mut xml = replaced
+            .package
+            .get_part(&replaced.doc_part_name)
+            .unwrap()
+            .to_vec();
+        xml.extend(b" ");
+        replaced
+            .package
+            .set_part(&replaced.doc_part_name.clone(), xml);
+        assert_staged_reopen_pair(replaced);
+
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p/></w:body></w:document>"#;
+        let failed = OnceLock::from(None);
+        let (blocked, diagnostic) = plain_local_edit_facts(&[], &[], xml, &failed);
+        assert!(blocked, "a cached scan failure is not an empty owner list");
+        assert!(matches!(diagnostic.get(), Some(None)));
+        let shadowed = OnceLock::new();
+        let (blocked, diagnostic) = plain_local_edit_facts(
+            &[("xmlns:w".to_owned(), "urn:not-word".to_owned())],
+            &[],
+            xml,
+            &shadowed,
+        );
+        assert!(blocked);
+        assert_eq!(
+            diagnostic.get().map(|message| message.as_deref()),
+            Some(Some(
+                "cannot serialize a modified document with a shadowed `w` namespace"
+            ))
+        );
+        assert!(shadowed.get().is_none(), "a shadow does not scan owners");
+    }
+
+    #[test]
+    fn main_part_blocks_identifier_opaque_and_error_order() {
+        fn document_with(body: &str) -> Document {
+            let xml = format!(
+                r#"<w:document xmlns:w="{W_NS}" xmlns:wp="{}"><w:body>{body}<w:sectPr/></w:body></w:document>"#,
+                drawing_ns::WP
+            );
+            let mut source = Document::new();
+            let mut package =
+                OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap())).unwrap();
+            package.set_part("/word/document.xml", xml.into_bytes());
+            Document::from_package(package).unwrap()
+        }
+        let mut document = document_with(
+            r#"<w:bookmarkStart w:id="4" w:name="kept"/><w:p><w:r><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><wp:inline><wp:extent cx="914400" cy="914400"/><wp:docPr id="7" name="kept"/><a:graphic><a:graphicData uri="urn:producer"/></a:graphic></wp:inline></w:drawing></w:r></w:p><w:p><w:r><w:t>edit</w:t></w:r></w:p>"#,
+        );
+        document = document.prepare_and_reopen_staged().unwrap();
+        let mut paragraph = rdocx_oxml::text::CT_P::new();
+        paragraph.add_run("added");
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(Box::new(paragraph)));
+        let mut old = document.clone_for_staging();
+        let mut fast = document.prepare_and_reopen_staged().unwrap();
+        old.prepare_staged_package().unwrap();
+        old.main_part_blocks = None;
+        let mut slow = old.reopen_prepared_staged().unwrap();
+        assert_eq!(fast.document, slow.document);
+        assert_eq!(fast.to_bytes().unwrap(), slow.to_bytes().unwrap());
+        assert_eq!(fast.identifiers, slow.identifiers);
+        assert!(fast.identifiers.bookmark_ids.contains(&4));
+        assert!(fast.identifiers.drawing_ids.contains(&7));
+
+        let mut duplicated = document_with(r#"<w:p><w:r><w:t>a</w:t></w:r></w:p>"#);
+        duplicated = duplicated.prepare_and_reopen_staged().unwrap();
+        for name in ["a", "b"] {
+            duplicated.document.body.content.insert(
+                0,
+                BodyContent::RawXml(Box::new(
+                    format!(r#"<w:bookmarkStart w:id="1" w:name="{name}"/>"#).into_bytes(),
+                )),
+            );
+        }
+        duplicated.prepare_staged_package().unwrap();
+        let header =
+            format!(r#"<w:hdr xmlns:w="{W_NS}"><w:p><w:bookmarkStart w:id="x"/></w:p></w:hdr>"#);
+        duplicated
+            .package
+            .set_part("/word/header1.xml", header.into_bytes());
+        duplicated.package.content_types.add_override(
+            "/word/header1.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+        );
+        duplicated
+            .package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(rel_types::HEADER, "header1.xml");
+        let mut duplicated_old = duplicated.clone_for_staging();
+        duplicated_old.main_part_blocks = None;
+        let fast_error = match duplicated.reopen_prepared_staged() {
+            Err(error) => error,
+            Ok(_) => panic!("duplicate bookmark reopened"),
+        };
+        let slow_error = match duplicated_old.reopen_prepared_staged() {
+            Err(error) => error,
+            Ok(_) => panic!("duplicate bookmark reopened on the old path"),
+        };
+        assert_eq!(fast_error.to_string(), slow_error.to_string());
+        assert!(
+            fast_error.to_string().contains("duplicate bookmark id 1"),
+            "{fast_error}"
+        );
+        assert!(
+            !fast_error.to_string().contains("invalid bookmark id"),
+            "{fast_error}"
+        );
+    }
+
+    #[test]
+    fn identifier_scan_replays_exact_bytes_categories_and_old_error_order() {
+        let story = |body: &str| {
+            format!(
+                r#"<w:document xmlns:w="{WORD_NAMESPACE}" xmlns:wp="{}"><w:body>{body}</w:body></w:document>"#,
+                drawing_ns::WP,
+            )
+            .into_bytes()
+        };
+        let mut package =
+            OpcPackage::with_main_part("word/document.xml", content_types::WORD_DOCUMENT);
+        package.set_part(
+            "/word/document.xml",
+            story(r#"<w:bookmarkStart w:id="1"/><wp:docPr id="1"/><wp:docPr id="1"/>"#),
+        );
+        package.set_part(
+            "/word/header1.xml",
+            story(r#"<w:bookmarkStart w:id="2"/><w:comment w:id="9"/><wp:docPr id="2"/>"#),
+        );
+        package.set_part("/word/header2.xml", story(r#"<w:bookmarkStart w:id="3"/>"#));
+        for target in ["header1.xml", "header2.xml"] {
+            package
+                .get_or_create_part_rels("/word/document.xml")
+                .add(rel_types::HEADER, target);
+        }
+        let earlier = DocumentIdentifiers::scan(&package).unwrap();
+        let bookmark_ids = earlier.bookmark_ids.clone();
+        assert!(earlier.bookmark_ids.contains(&2));
+        assert!(earlier.drawing_ids.contains(&2));
+        assert!(
+            !earlier.comment_ids.contains(&9),
+            "a header relationship does not collect a comment id"
+        );
+        let scans = |package: &OpcPackage| {
+            #[cfg(debug_assertions)]
+            take_reopen_work();
+            let reused = DocumentIdentifiers::scan_reusing(package, Some(&earlier), None)
+                .map_err(|error| error.to_string());
+            #[cfg(debug_assertions)]
+            let scanned_bytes = take_reopen_work()[2];
+            #[cfg(not(debug_assertions))]
+            let scanned_bytes = 0;
+            let fresh = DocumentIdentifiers::scan(package).map_err(|error| error.to_string());
+            assert_eq!(reused, fresh);
+            scanned_bytes
+        };
+        assert_eq!(scans(&package), 0);
+        let mut copied = package.clone();
+        copied.set_part(
+            "/word/document.xml",
+            package.get_part("/word/document.xml").unwrap().to_vec(),
+        );
+        assert_eq!(scans(&copied), 0);
+
+        let duplicate_then_invalid =
+            r#"<w:bookmarkStart w:id="1"/><w:bookmarkStart w:id="1"/><w:bookmarkStart w:id="x"/>"#;
+        let invalid_then_duplicate =
+            r#"<w:bookmarkStart w:id="x"/><w:bookmarkStart w:id="1"/><w:bookmarkStart w:id="1"/>"#;
+        let duplicate_message = "cannot scan identifiers in XML part /word/header1.xml: duplicate bookmark id 1 in imported or preserved XML";
+        let invalid_message =
+            "cannot scan identifiers in XML part /word/header1.xml: invalid bookmark id x";
+        for (header, message) in [
+            (duplicate_then_invalid, duplicate_message),
+            (invalid_then_duplicate, invalid_message),
+        ] {
+            let mut edited = package.clone();
+            edited.set_part("/word/header1.xml", story(header));
+            let error = DocumentIdentifiers::scan(&edited).unwrap_err();
+            assert!(
+                matches!(error, Error::Other(ref text) if text == message),
+                "{error}"
+            );
+            let error =
+                DocumentIdentifiers::scan_reusing(&edited, Some(&earlier), None).unwrap_err();
+            assert!(
+                matches!(error, Error::Other(ref text) if text == message),
+                "{error}"
+            );
+            assert_eq!(earlier.bookmark_ids, bookmark_ids);
+            #[cfg(debug_assertions)]
+            assert_eq!(scans(&edited), story(header).len(), "{header}");
+            #[cfg(not(debug_assertions))]
+            scans(&edited);
+        }
+
+        let mut second = package.clone();
+        second.set_part("/word/header2.xml", story(r#"<w:bookmarkStart w:id="2"/>"#));
+        let error = DocumentIdentifiers::scan(&second).unwrap_err();
+        assert!(
+            matches!(error, Error::Other(ref text) if text == "cannot scan identifiers in XML part /word/header2.xml: duplicate bookmark id 2 in imported or preserved XML"),
+            "{error}"
+        );
+
+        let mut retyped = package.clone();
+        retyped
+            .get_part_rels_mut("/word/document.xml")
+            .unwrap()
+            .items
+            .iter_mut()
+            .find(|relationship| relationship.target.ends_with("header1.xml"))
+            .unwrap()
+            .rel_type = rel_types::COMMENTS.to_owned();
+        let retyped_ids = DocumentIdentifiers::scan(&retyped).unwrap();
+        let replayed = DocumentIdentifiers::scan_reusing(&retyped, Some(&earlier), None).unwrap();
+        assert_eq!(retyped_ids, replayed);
+        assert!(retyped_ids.comment_ids.contains(&9));
+        assert!(retyped_ids.bookmark_ids.contains(&2));
+        assert!(retyped_ids.bookmark_ids.contains(&1));
+        assert!(retyped_ids.bookmark_ids.contains(&3));
+        assert!(retyped_ids.drawing_ids.contains(&2));
+        assert!(!earlier.comment_ids.contains(&9));
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            scans(&retyped),
+            package.get_part("/word/header1.xml").unwrap().len()
+        );
+        #[cfg(not(debug_assertions))]
+        scans(&retyped);
+    }
+
+    #[test]
+    fn parsed_none_reopen_grows_zip_parse_and_identifier_bytes() {
+        #[cfg(debug_assertions)]
+        let mut recorded = Vec::new();
+        for count in [50usize, 200] {
+            let body = format!("{}{}", issue407_runs(count), issue407_varied_body(""));
+            let mut source = issue407_document(&body, false);
+            source.set_font(FontDefinition::new("Seed")).unwrap();
+            source
+                .add_numbering_definition(&[ListLevel::decimal()])
+                .unwrap();
+            let mut document = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+            document.set_font(FontDefinition::new("Fallback")).unwrap();
+            document
+                .add_numbering_definition(&[ListLevel::decimal()])
+                .unwrap();
+            document.prepare_staged_package().unwrap();
+            let mut fallback = document.clone_for_staging();
+            fallback.parsed = None;
+            #[cfg(debug_assertions)]
+            {
+                take_reopen_work();
+                take_staging_work();
+            }
+            let mut optimized = document.reopen_prepared_staged().unwrap();
+            #[cfg(debug_assertions)]
+            let optimized_reopen = take_reopen_work();
+            #[cfg(debug_assertions)]
+            let optimized_staging = take_staging_work();
+            #[cfg(debug_assertions)]
+            {
+                take_reopen_work();
+                take_staging_work();
+            }
+            let mut fallback = fallback.reopen_prepared_staged().unwrap();
+            #[cfg(debug_assertions)]
+            let fallback_reopen = take_reopen_work();
+            #[cfg(debug_assertions)]
+            let fallback_staging = take_staging_work();
+            assert_eq!(optimized.identifiers, fallback.identifiers);
+            assert_eq!(optimized.to_bytes().unwrap(), fallback.to_bytes().unwrap());
+            #[cfg(debug_assertions)]
+            recorded.push((
+                count,
+                optimized_reopen,
+                optimized_staging,
+                fallback_reopen,
+                fallback_staging,
+            ));
+        }
+        #[cfg(debug_assertions)]
+        {
+            println!("cacheoff {recorded:?}");
+            let small = &recorded[0];
+            let large = &recorded[1];
+            assert!(small.3[0] >= 1 && small.3[1] >= 1, "{recorded:?}");
+            assert!(large.3[0] >= 1 && large.3[1] >= 1, "{recorded:?}");
+            assert!(large.3[2] > small.3[2] + 16, "{recorded:?}");
+            assert!(small.4[0] > 0 && small.4[3] > 0, "{recorded:?}");
+            assert!(large.4[1] > small.4[1], "{recorded:?}");
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn in_memory_reopen_baseline_counts_zip_parse_and_identifier_bytes() {
+        let edit = |document: &Document, name: &str| {
+            let mut candidate = document.clone_for_staging();
+            candidate.set_font(FontDefinition::new(name)).unwrap();
+            let numbering_id = candidate
+                .add_numbering_definition(&[ListLevel::decimal()])
+                .unwrap();
+            candidate.prepare_staged_package().unwrap();
+            (candidate, numbering_id)
+        };
+        let mut recorded = Vec::new();
+        for count in [50usize, 200] {
+            let body = format!("{}{}", issue407_runs(count), issue407_varied_body(""));
+            let mut source = issue407_document(&body, false);
+            source.set_font(FontDefinition::new("Seed")).unwrap();
+            source
+                .add_numbering_definition(&[ListLevel::decimal()])
+                .unwrap();
+            let opened = source.to_bytes().unwrap();
+            let mut document = Document::from_bytes(&opened).unwrap();
+            take_reopen_work();
+            take_staging_work();
+            let names = ["Warmup A", "Warmup B", "Warm C", "Warm D"];
+            let mut samples = Vec::new();
+            let mut staging_samples = Vec::new();
+            for name in names {
+                let (candidate, numbering_id) = edit(&document, name);
+                let mut zip_source = candidate.clone_for_staging();
+                zip_source.parsed = None;
+                take_reopen_work();
+                take_staging_work();
+                let mut reopened = candidate.reopen_prepared_staged().unwrap();
+                let sample = take_reopen_work();
+                let staging = take_staging_work();
+                samples.push(sample);
+                staging_samples.push(staging);
+                assert!(
+                    reopened.fonts().iter().any(|font| font.name == name),
+                    "count={count} {name}"
+                );
+                assert!(
+                    reopened
+                        .numbering_definitions()
+                        .iter()
+                        .any(|definition| definition.id == numbering_id),
+                    "count={count} {name} {numbering_id}"
+                );
+                let mut through_zip = zip_source.reopen_prepared_staged().unwrap();
+                assert_eq!(
+                    reopened.to_bytes().unwrap(),
+                    through_zip.to_bytes().unwrap(),
+                    "count={count} {name}"
+                );
+                assert_eq!(
+                    reopened.identifiers, through_zip.identifiers,
+                    "count={count} {name}"
+                );
+                document = reopened;
+            }
+            println!(
+                "size {count} reopen cold {:?} warm {:?}",
+                &samples[..2],
+                &samples[2..]
+            );
+            println!(
+                "size {count} staging cold {:?} warm {:?}",
+                &staging_samples[..2],
+                &staging_samples[2..]
+            );
+            recorded.push((count, samples, staging_samples));
+        }
+        let (cold_50, warm_50) = (&recorded[0].1[..2], &recorded[0].1[2..]);
+        let (cold_200, warm_200) = (&recorded[1].1[..2], &recorded[1].1[2..]);
+        let (stage_cold_50, stage_warm_50) = (&recorded[0].2[..2], &recorded[0].2[2..]);
+        let (stage_cold_200, stage_warm_200) = (&recorded[1].2[..2], &recorded[1].2[2..]);
+        println!("reopen cold 50 {cold_50:?}");
+        println!("reopen warm 50 {warm_50:?}");
+        println!("reopen cold 200 {cold_200:?}");
+        println!("reopen warm 200 {warm_200:?}");
+        println!("staging cold 50 {stage_cold_50:?}");
+        println!("staging warm 50 {stage_warm_50:?}");
+        println!("staging cold 200 {stage_cold_200:?}");
+        println!("staging warm 200 {stage_warm_200:?}");
+        for (ordinal, (left, right)) in warm_50.iter().zip(warm_200).enumerate() {
+            assert_eq!(left[0], 0, "warm zip {ordinal} {left:?} {right:?}");
+            assert_eq!(left[1], 0, "warm parse {ordinal} {left:?} {right:?}");
+            assert_eq!(right[0], 0, "warm zip {ordinal} {left:?} {right:?}");
+            assert_eq!(right[1], 0, "warm parse {ordinal} {left:?} {right:?}");
+            assert!(
+                left[2].abs_diff(right[2]) <= 16,
+                "warm identifier bytes {ordinal} {left:?} {right:?}"
+            );
+        }
+        for (ordinal, (left, right)) in stage_warm_50.iter().zip(stage_warm_200).enumerate() {
+            assert_eq!(
+                &left[..4],
+                &[0, 0, 0, 0],
+                "warm staging {ordinal} {left:?} {right:?}"
+            );
+            assert_eq!(
+                &right[..4],
+                &[0, 0, 0, 0],
+                "warm staging {ordinal} {left:?} {right:?}"
+            );
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn unchanged_main_staging_reuse_counts_actual_work() {
+        let edit = |document: &Document, name: &str| {
+            let mut candidate = document.clone_for_staging();
+            candidate.set_font(FontDefinition::new(name)).unwrap();
+            let numbering_id = candidate
+                .add_numbering_definition(&[ListLevel::decimal()])
+                .unwrap();
+            (candidate, numbering_id)
+        };
+        let mut recorded = Vec::new();
+        for count in [50usize, 200] {
+            let body = format!("{}{}", issue407_runs(count), issue407_varied_body(""));
+            let mut source = issue407_document(&body, false);
+            source.set_font(FontDefinition::new("Seed")).unwrap();
+            source
+                .add_numbering_definition(&[ListLevel::decimal()])
+                .unwrap();
+            let opened = source.to_bytes().unwrap();
+            let mut document = Document::from_bytes(&opened).unwrap();
+            take_staging_work();
+            let names = ["Warmup A", "Warmup B", "Warm C", "Warm D"];
+            let mut samples = Vec::new();
+            for name in names {
+                take_staging_work();
+                let (candidate, numbering_id) = edit(&document, name);
+                let same = document.saves_as(&candidate).unwrap();
+                let sample = take_staging_work();
+                assert!(!same, "count={count} {name}");
+                assert!(
+                    candidate.fonts().iter().any(|font| font.name == name),
+                    "count={count} {name}"
+                );
+                assert!(
+                    candidate
+                        .numbering_definitions()
+                        .iter()
+                        .any(|definition| definition.id == numbering_id),
+                    "count={count} {name} {numbering_id}"
+                );
+                let mut check = candidate.clone_for_staging();
+                let saved = check.to_bytes().unwrap();
+                let reopened = Document::from_bytes(&saved).unwrap();
+                assert!(
+                    reopened.fonts().iter().any(|font| font.name == name),
+                    "count={count} reopened {name}"
+                );
+                assert!(
+                    reopened
+                        .numbering_definitions()
+                        .iter()
+                        .any(|definition| definition.id == numbering_id),
+                    "count={count} reopened {name} {numbering_id}"
+                );
+                take_staging_work();
+                document = candidate;
+                samples.push(sample);
+            }
+            eprintln!("staging count={count} samples={samples:?}");
+            recorded.push(samples);
+        }
+        for (count, samples) in [50usize, 200].into_iter().zip(recorded.iter()) {
+            assert_eq!(samples.len(), 4, "count={count} {samples:?}");
+            for sample in &samples[2..] {
+                assert_eq!(
+                    &sample[..4],
+                    &[0, 0, 0, 0],
+                    "count={count} all={recorded:?} sample={sample:?}"
+                );
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn opened_main_cache_off_restores_growing_work() {
+        let mut recorded = Vec::new();
+        for count in [50usize, 200] {
+            let body = format!("{}{}", issue407_runs(count), issue407_varied_body(""));
+            let mut source = issue407_document(&body, false);
+            source.set_font(FontDefinition::new("Seed")).unwrap();
+            source
+                .add_numbering_definition(&[ListLevel::decimal()])
+                .unwrap();
+            let opened = source.to_bytes().unwrap();
+            let mut document = Document::from_bytes(&opened).unwrap();
+            take_staging_work();
+            for name in ["Warmup A", "Warmup B"] {
+                let mut candidate = document.clone_for_staging();
+                candidate.set_font(FontDefinition::new(name)).unwrap();
+                candidate
+                    .add_numbering_definition(&[ListLevel::decimal()])
+                    .unwrap();
+                assert!(
+                    !document.saves_as(&candidate).unwrap(),
+                    "count={count} {name}"
+                );
+                document = candidate;
+                take_staging_work();
+            }
+            let mut copy = document.clone_for_staging();
+            copy.parsed = None;
+            let mut candidate = copy.clone_for_staging();
+            candidate
+                .set_font(FontDefinition::new("Cache off"))
+                .unwrap();
+            let numbering_id = candidate
+                .add_numbering_definition(&[ListLevel::decimal()])
+                .unwrap();
+            take_staging_work();
+            let same = copy.saves_as(&candidate).unwrap();
+            let sample = take_staging_work();
+            assert!(!same, "count={count} {sample:?}");
+            assert!(
+                candidate
+                    .fonts()
+                    .iter()
+                    .any(|font| font.name == "Cache off"),
+                "count={count}"
+            );
+            assert!(
+                candidate
+                    .numbering_definitions()
+                    .iter()
+                    .any(|definition| definition.id == numbering_id),
+                "count={count} {numbering_id}"
+            );
+            let mut check = candidate.clone_for_staging();
+            let reopened = Document::from_bytes(&check.to_bytes().unwrap()).unwrap();
+            assert!(
+                reopened.fonts().iter().any(|font| font.name == "Cache off"),
+                "count={count} reopened"
+            );
+            assert!(
+                reopened
+                    .numbering_definitions()
+                    .iter()
+                    .any(|definition| definition.id == numbering_id),
+                "count={count} reopened {numbering_id}"
+            );
+            take_staging_work();
+            eprintln!("cache-off count={count} sample={sample:?}");
+            recorded.push(sample);
+        }
+        let small = recorded[0];
+        let large = recorded[1];
+        for (label, index) in [("parsed", 0), ("canonical", 2), ("zip", 3)] {
+            assert!(small[index] > 0, "{label} {recorded:?}");
+            assert!(large[index] > small[index], "{label} {recorded:?}");
+        }
+    }
+
+    #[test]
+    fn opened_main_equal_serialization_misses_an_unequal_model() {
+        let mut source = issue407_document("<w:p><w:r><w:t>one</w:t></w:r></w:p>", false);
+        let mut document = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+        let baseline = document.document.to_xml().unwrap();
+        assert!(
+            document
+                .document
+                .extra_namespaces
+                .iter()
+                .any(|(name, _)| name == "xmlns:wp"),
+            "fixture needs a redundant canonical xmlns:wp"
+        );
+        document
+            .document
+            .extra_namespaces
+            .retain(|(name, _)| name != "xmlns:wp");
+        let current = document.document.to_xml().unwrap();
+        assert_eq!(current, baseline, "serialization must stay equal");
+        let kept = document.kept_main_part().expect("opened main");
+        let parsed = kept.main_document().expect("cached parse");
+        assert_ne!(parsed, &document.document, "parsed model must differ");
+        assert!(!document.opened_main_still_serializes());
+        let mut disabled = document.clone_for_staging();
+        disabled.parsed = None;
+        let cached = document.clone_for_staging().to_bytes().unwrap();
+        let old = disabled.to_bytes().unwrap();
+        assert_eq!(cached, old);
+    }
+
+    #[test]
+    fn opened_main_requires_a_successful_serialization_proof() {
+        let mut source = issue407_document("<w:p><w:r><w:t>one</w:t></w:r></w:p>", false);
+        let mut document = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+        Arc::get_mut(document.parsed.as_mut().unwrap())
+            .unwrap()
+            .serialization_proof = None;
+        let template_xml = format!(
+            "<w:document xmlns:w=\"{W_NS}\"><w:body><w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>one</w:t></w:r></w:p></w:sdtContent></w:sdt></w:body></w:document>"
+        );
+        let template_document = CT_Document::from_xml(template_xml.as_bytes()).unwrap();
+        let BodyContent::ContentControl(template) = &template_document.body.content[0] else {
+            panic!("expected one content control");
+        };
+        let template = template.as_ref().clone();
+        let mut inner = template.clone();
+        for _ in 0..256 {
+            let mut outer = template.clone();
+            outer.content = vec![SdtContent::ContentControl(inner)];
+            inner = outer;
+        }
+        document.document.body.content = vec![BodyContent::ContentControl(Box::new(inner))];
+        assert!(document.document.to_xml().is_err());
+        assert!(!document.opened_main_still_serializes());
+        let saved = document.saves_as(&document).unwrap_err();
+        let admitted = document.validate_model_resource_limits().unwrap_err();
+        assert_eq!(
+            std::mem::discriminant(&saved),
+            std::mem::discriminant(&admitted)
+        );
+        assert_eq!(saved.to_string(), admitted.to_string());
+        eprintln!("proof-guard error {saved:?}");
+    }
+
+    fn cache_disabled_bytes(document: &Document) -> Result<Vec<u8>> {
+        document.validate_model_resource_limits()?;
+        let mut copy = document.clone_for_staging();
+        copy.parsed = None;
+        copy.to_bytes()
+    }
+
+    fn old_ordered_save_comparison(left: &Document, right: &Document) -> Result<bool> {
+        left.validate_model_resource_limits()?;
+        right.validate_model_resource_limits()?;
+        let mut left_copy = left.clone_for_staging();
+        left_copy.parsed = None;
+        let mut right_copy = right.clone_for_staging();
+        right_copy.parsed = None;
+        let left_bytes = left_copy.to_bytes()?;
+        let right_bytes = right_copy.to_bytes()?;
+        Ok(left_bytes == right_bytes)
+    }
+
+    fn assert_save_matches_old_order(label: &str, left: &Document, right: &Document) {
+        let actual = left.saves_as(right);
+        let expected = old_ordered_save_comparison(left, right);
+        match (&actual, &expected) {
+            (Ok(actual_same), Ok(expected_same)) => {
+                assert_eq!(actual_same, expected_same, "{label}");
+                let left_bytes = cache_disabled_bytes(left).unwrap();
+                let right_bytes = cache_disabled_bytes(right).unwrap();
+                assert_eq!(*actual_same, left_bytes == right_bytes, "{label} bytes");
+                assert_eq!(
+                    cache_disabled_bytes(left).unwrap(),
+                    left_bytes,
+                    "{label} left"
+                );
+                assert_eq!(
+                    cache_disabled_bytes(right).unwrap(),
+                    right_bytes,
+                    "{label} right"
+                );
+            }
+            (Err(actual_error), Err(expected_error)) => {
+                assert_eq!(
+                    std::mem::discriminant(actual_error),
+                    std::mem::discriminant(expected_error),
+                    "{label}"
+                );
+                assert_eq!(
+                    actual_error.to_string(),
+                    expected_error.to_string(),
+                    "{label}"
+                );
+            }
+            (actual, expected) => panic!("{label} cache {actual:?} old {expected:?}"),
+        }
+        let repeated = left.saves_as(right);
+        match (&repeated, &expected) {
+            (Ok(repeated), Ok(expected_same)) => {
+                assert_eq!(repeated, expected_same, "{label} warm")
+            }
+            (Err(repeated), Err(expected_error)) => {
+                assert_eq!(
+                    repeated.to_string(),
+                    expected_error.to_string(),
+                    "{label} warm"
+                )
+            }
+            (repeated, expected) => panic!("{label} warm cache {repeated:?} old {expected:?}"),
+        }
+        eprintln!("{label} {actual:?}");
+    }
+
+    #[test]
+    fn main_body_block_reuse_preserves_physical_owners_and_publication() {
+        let legacy = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="legacy"/><w:textInput><w:default w:val="keep"/></w:textInput></w:ffData></w:fldChar></w:r><w:r><w:instrText> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>typed</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+        for root_w14 in [false, true] {
+            let body = format!(
+                "{}{}{}",
+                issue407_runs(20),
+                legacy,
+                issue407_varied_body("")
+            );
+            let mut source = issue407_document(&body, root_w14);
+            source.try_set_header("shared header").unwrap();
+            source.set_remove_personal_information(true).unwrap();
+            source
+                .add_custom_xml_store(b"<root><value>bound</value></root>", &["urn:composition"])
+                .unwrap();
+            let original = source.to_bytes().unwrap();
+            let mut document = Document::from_bytes(&original).unwrap();
+            let fields = format!("{:?}", document.legacy_form_fields_with_defaults().unwrap());
+            assert!(fields.contains("keep") && fields.contains("typed"));
+            let original_count = document.story_owner_snapshots().unwrap().0.len();
+            for (index, text) in ["changed one", "changed two", "changed three"]
+                .iter()
+                .enumerate()
+            {
+                // The mutable native publisher preserves topology but changes facts.
+                document.paragraph_mut(0).unwrap().set_text(text).unwrap();
+                document
+                    .set_font(FontDefinition::new(format!("Composition {index}")))
+                    .unwrap();
+                assert_eq!(document.paragraph(0).unwrap().text(), *text);
+                assert_eq!(
+                    format!("{:?}", document.legacy_form_fields_with_defaults().unwrap()),
+                    fields
+                );
+                assert_eq!(
+                    document.story_owner_snapshots().unwrap().0.len(),
+                    original_count
+                );
+                assert_eq!(document.remove_personal_information(), Some(true));
+                let saved = document.clone_for_staging().to_bytes().unwrap();
+                let whole = {
+                    let _off = CanonicalBlockProofOff::enter();
+                    let mut reference = document.clone_for_staging();
+                    reference.main_part_blocks = None;
+                    reference.main_body_scans = Default::default();
+                    reference.to_bytes().unwrap()
+                };
+                assert_eq!(saved, whole);
+                let reopened = Document::from_bytes(&saved).unwrap();
+                assert_eq!(
+                    format!("{:?}", reopened.legacy_form_fields_with_defaults().unwrap()),
+                    fields
+                );
+                assert_eq!(
+                    reopened.document.to_xml().unwrap(),
+                    document.document.to_xml().unwrap()
+                );
+                assert_eq!(
+                    reopened.story_owner_snapshots().unwrap().0.len(),
+                    original_count
+                );
+                assert_eq!(reopened.remove_personal_information(), Some(true));
+                assert_eq!(
+                    reopened.package.get_part("/customXml/item1.xml"),
+                    document.package.get_part("/customXml/item1.xml")
+                );
+                document = reopened;
+            }
+        }
+    }
+
+    #[test]
+    fn unchanged_main_staging_preserves_save_bytes_and_error_order() {
+        let fresh_left = Document::new();
+        let fresh_right = Document::new();
+        assert_save_matches_old_order("in-memory equal", &fresh_left, &fresh_right);
+
+        let mut source = issue407_document("<w:p><w:r><w:t>one</w:t></w:r></w:p>", false);
+        let opened_bytes = source.to_bytes().unwrap();
+        let opened = Document::from_bytes(&opened_bytes).unwrap();
+        let opened_again = Document::from_bytes(&opened_bytes).unwrap();
+        assert_save_matches_old_order("opened equal", &opened, &opened_again);
+
+        let mut edited = opened.clone_for_staging();
+        edited.set_font(FontDefinition::new("Probe")).unwrap();
+        edited
+            .add_numbering_definition(&[ListLevel::decimal()])
+            .unwrap();
+        assert_save_matches_old_order("opened font and numbering", &opened, &edited);
+
+        let mut typed = opened.clone_for_staging();
+        typed.paragraph_mut(0).unwrap().set_text("two").unwrap();
+        assert_save_matches_old_order("typed main edit", &opened, &typed);
+
+        let mut raw = opened.clone_for_staging();
+        raw.package
+            .set_part("/custom/cache-probe.xml", b"<cache/>".to_vec());
+        assert_save_matches_old_order("raw unrelated part", &opened, &raw);
+
+        let mut missed = opened.clone_for_staging();
+        let mut xml = String::from_utf8(
+            missed
+                .package
+                .get_part(&missed.doc_part_name)
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        let root = xml.find("<w:document").unwrap() + "<w:document".len();
+        xml.insert_str(root, " xmlns:cache=\"urn:cache-probe\"");
+        missed
+            .package
+            .set_part(&missed.doc_part_name, xml.into_bytes());
+        assert_save_matches_old_order("replaced main bytes", &opened, &missed);
+    }
+
+    #[test]
+    fn saves_as_preserves_first_resource_error() {
+        let mut left_source = issue407_document("<w:p><w:r><w:t>one</w:t></w:r></w:p>", false);
+        let mut left = Document::from_bytes(&left_source.to_bytes().unwrap()).unwrap();
+        let control_xml = format!(
+            "<w:document xmlns:w=\"{W_NS}\"><w:body><w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>one</w:t></w:r></w:p></w:sdtContent></w:sdt></w:body></w:document>"
+        );
+        let control_document = CT_Document::from_xml(control_xml.as_bytes()).unwrap();
+        let BodyContent::ContentControl(template) = &control_document.body.content[0] else {
+            panic!("expected one content control");
+        };
+        let template = template.as_ref().clone();
+        let mut inner = template.clone();
+        for _ in 0..256 {
+            let mut outer = template.clone();
+            outer.content = vec![SdtContent::ContentControl(inner)];
+            inner = outer;
+        }
+        left.document.body.content = vec![BodyContent::ContentControl(Box::new(inner))];
+
+        let mut right_source = issue407_document("<w:p><w:r><w:t>one</w:t></w:r></w:p>", false);
+        let mut right = Document::from_bytes(&right_source.to_bytes().unwrap()).unwrap();
+        let table_xml = format!(
+            "<w:document xmlns:w=\"{W_NS}\"><w:body><w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"
+        );
+        let table_document = CT_Document::from_xml(table_xml.as_bytes()).unwrap();
+        let BodyContent::Table(template) = &table_document.body.content[0] else {
+            panic!("expected one table");
+        };
+        let template = template.as_ref().clone();
+        let mut inner = template.clone();
+        for _ in 0..32 {
+            let mut outer = template.clone();
+            outer.rows[0].cells[0].content = vec![CellContent::Table(inner)];
+            inner = outer;
+        }
+        right.document.body.content = vec![BodyContent::Table(Box::new(inner))];
+
+        let left_limit = left.validate_model_resource_limits().unwrap_err();
+        let right_limit = right.validate_model_resource_limits().unwrap_err();
+        assert!(left.document.to_xml().is_err());
+        assert!(right.document.to_xml().is_err());
+        assert!(left_limit.to_string().contains("weighted limit 256"));
+        assert!(
+            right_limit
+                .to_string()
+                .contains("recognized model nesting exceeds table limit")
+        );
+        assert_ne!(left_limit.to_string(), right_limit.to_string());
+
+        let left_bytes = left.to_bytes().unwrap_err();
+        let right_bytes = right.to_bytes().unwrap_err();
+        let forward = left.saves_as(&right).unwrap_err();
+        let reverse = right.saves_as(&left).unwrap_err();
+        assert_eq!(
+            std::mem::discriminant(&forward),
+            std::mem::discriminant(&left_bytes)
+        );
+        assert_eq!(forward.to_string(), left_bytes.to_string());
+        assert_eq!(
+            std::mem::discriminant(&reverse),
+            std::mem::discriminant(&right_bytes)
+        );
+        assert_eq!(reverse.to_string(), right_bytes.to_string());
+        eprintln!("first-error left {forward}");
+        eprintln!("first-error right {reverse}");
+    }
+
+    fn opened_header_and_comment() -> Document {
+        let mut source = issue407_document("<w:p><w:r><w:t>one</w:t></w:r></w:p>", false);
+        source.try_set_header("header").unwrap();
+        source
+            .add_comment(
+                crate::comments::RunRange {
+                    start: crate::comments::RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: crate::comments::RunPosition {
+                        body_index: 0,
+                        run_index: 1,
+                    },
+                },
+                "Ada",
+                None,
+                "note",
+            )
+            .unwrap();
+        let saved = source.to_bytes().unwrap();
+        let opened = Document::from_bytes(&saved).unwrap();
+        let mut warm = opened.clone_for_staging();
+        warm.set_font(FontDefinition::new("Warm")).unwrap();
+        assert!(!opened.saves_as(&warm).unwrap());
+        assert!(opened.opened_main_still_serializes());
+        opened
+    }
+
+    /// Validate and write `left` before `right` is admitted or cloned.
+    fn old_self_then_other(left: &Document, right: &Document) -> Result<bool> {
+        left.validate_model_resource_limits()?;
+        let mut left_copy = left.clone_for_staging();
+        left_copy.parsed = None;
+        let left_bytes = left_copy.to_bytes()?;
+        right.validate_model_resource_limits()?;
+        let mut right_copy = right.clone_for_staging();
+        right_copy.parsed = None;
+        let right_bytes = right_copy.to_bytes()?;
+        Ok(left_bytes == right_bytes)
+    }
+
+    fn assert_related_save(label: &str, changed: &Document, original: &Document) {
+        let actual = changed.saves_as(original);
+        let expected = old_self_then_other(changed, original);
+        match (&actual, &expected) {
+            (Ok(actual_same), Ok(expected_same)) => {
+                assert_eq!(actual_same, expected_same, "{label}");
+                let mut disabled = changed.clone_for_staging();
+                disabled.parsed = None;
+                let disabled_bytes = disabled.to_bytes().unwrap();
+                let cached_bytes = changed.clone_for_staging().to_bytes().unwrap();
+                assert_eq!(cached_bytes, disabled_bytes, "{label} bytes");
+            }
+            (Err(actual_error), Err(expected_error)) => {
+                assert_eq!(
+                    std::mem::discriminant(actual_error),
+                    std::mem::discriminant(expected_error),
+                    "{label}"
+                );
+                assert_eq!(
+                    actual_error.to_string(),
+                    expected_error.to_string(),
+                    "{label}"
+                );
+            }
+            (actual, expected) => panic!("{label} cache {actual:?} old {expected:?}"),
+        }
+        eprintln!("{label} {actual:?}");
+    }
+
+    #[test]
+    fn saves_as_checks_changed_related_parts_with_unchanged_main() {
+        let opened = opened_header_and_comment();
+        let main = opened
+            .package
+            .get_part(&opened.doc_part_name)
+            .unwrap()
+            .to_vec();
+        let original = opened.clone_for_staging();
+
+        let mut header_changed = opened.clone_for_staging();
+        let header_part = header_changed.active_header_footer_parts().remove(0);
+        let mut header_xml = String::from_utf8(
+            header_changed
+                .package
+                .get_part(&header_part)
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(header_xml.contains("header"), "{header_xml}");
+        header_xml = header_xml.replacen("header", "changed", 1);
+        header_changed
+            .package
+            .set_part(&header_part, header_xml.into_bytes());
+        assert_eq!(
+            header_changed
+                .package
+                .get_part(&header_changed.doc_part_name),
+            Some(main.as_slice())
+        );
+        assert_eq!(header_changed.paragraph(0).unwrap().text(), "one");
+        assert_related_save("valid header", &header_changed, &original);
+        let header_result = header_changed.saves_as(&original).unwrap();
+        assert!(!header_result, "valid header must differ");
+
+        let mut comments_changed = opened.clone_for_staging();
+        let comments_part = comments_changed.comments_part_name.clone().unwrap();
+        comments_changed
+            .package
+            .set_part(&comments_part, b"<w:comments".to_vec());
+        assert_eq!(
+            comments_changed
+                .package
+                .get_part(&comments_changed.doc_part_name),
+            Some(main.as_slice())
+        );
+        assert_eq!(comments_changed.paragraph(0).unwrap().text(), "one");
+        assert_related_save("malformed comments", &comments_changed, &original);
+
+        let rejected = br#"<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:id="not-a-number"><w:p/></w:comment></w:comments>"#;
+        assert!(rdocx_oxml::comments::CT_Comments::from_xml(rejected).is_err());
+        let mut rejected_comments = opened.clone_for_staging();
+        let rejected_part = rejected_comments.comments_part_name.clone().unwrap();
+        rejected_comments
+            .package
+            .set_part(&rejected_part, rejected.to_vec());
+        assert_eq!(
+            rejected_comments
+                .package
+                .get_part(&rejected_comments.doc_part_name),
+            Some(main.as_slice())
+        );
+        assert_related_save("rejected comment id", &rejected_comments, &original);
     }
 }
 

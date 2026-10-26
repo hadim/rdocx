@@ -775,6 +775,8 @@ children it removed. The range is half-open. An empty range returns 0. A
 reversed or out-of-bounds range raises `RdocxError` and publishes nothing.
 The call does not recurse into tables.
 
+Scoped paragraph, cell and direct-body text replacement share the native physical-child proof and preserve whole-path errors. Document and cell picture insertion use child-aware retained-source canonicalization with the same conservative publication and live-owner rules. A failed decoder or context proof uses the whole path before publication. Debug staging counters distinguish actual fragment child reads from full-part parsed, scanned and canonicalized bytes. These private hooks do not promise constant total edit cost.
+
 A plain direct body `Paragraph.replace_xml` resolves its captured generation
 through a derived current-inventory index and prepares only that paragraph's
 content, properties and exact run scopes. An empty plain paragraph may acquire
@@ -4202,6 +4204,10 @@ ordered report payload.
 
 ## Python Word document operations
 
+Rust provides `try_add_paragraph`, `try_insert_paragraph`, `try_add_table` and `try_insert_table` as additive checked methods. Python keeps its existing add and insert paragraph and table APIs, paragraph insertion before an owner, heading creation and page-break creation. Those paths share the checked native policy before their existing publishers. Insertion bounds precede paragraph XML characters, which precede namespace refusal. Existing error families remain. No Python `try_` method or stub export is added. The internal paragraph preflight is shared so XML errors keep that order without replacing the source-preserving splice path.
+
+Word publication consumes current native serialization pieces and retained-source read proofs without adding a stable Python export. Source normalization does not make a parsed child eligible for writer reuse. The page-border publisher validates through the existing save-equivalent path before its conservative owner publication. Trusted byte-opened packages can avoid ZIP output there, while untrusted packages retain the ZIP fallback. Debug `_staging_work` has six slots: parsed bytes, scanned bytes, canonicalized bytes, ZIP bytes written, serialized children and children read. The last two units count children rather than bytes.
+
 Document.charts is a read-only tuple of owned Chart snapshots. chart_type is an
 optional integer, categories a tuple of strings and series a tuple of existing
 CategorySeriesData values. Reading preserves package bytes and held owners.
@@ -4215,8 +4221,8 @@ Public Word signatures are unchanged. Direct body XML and plain body splices
 are hidden native providers. `None` from a direct reader means the slot is
 absent or the child has the wrong kind. An invalid run or cell path inside a
 present table or paragraph is an error and does not fall back to success.
-Debug-only `_word_whole_body_work` and `_word_splice_work` reset on read and
-are not stable exports. The splice visit count includes each ordinary owner,
+Debug-only `_word_whole_body_work`, `_word_splice_work` and `_word_piece_work` reset on read and
+are not stable or release exports. Debug-only `_staging_work` returns parsed bytes, scanned bytes, canonicalized bytes, ZIP bytes written, serialized children and children read. Debug-only `_reopen_work` returns ZIP writes, main parses and identifier input bytes. Both reset on read and are not stable or release exports. Python `body_locations` resolves checked body slots for `pop_content`, `insert_content`, `clone_content`, `move_content` and `insert_document`. The body arm of `TableLocation::native` is the other consumer. An end index resolves the body story and then refuses before an edit when the caller cannot remove that boundary. Debug-only `_main_body_block_scans` is cumulative and does not reset on read. It counts actual address-scan attempts and whole-fallback children, including failed attempts. It is not a stable or release export. Frame scans, whole serialization, hashes, copies and other validation remain separate costs. The counter is not a constant-time claim for the public call. Python has no `PackageReadLimits` parameter. Native read limits stay on the Rust reopen. `Document.set_story_text` is the existing Python path that reopens a changed story part. `_word_piece_work` counts actual piece read attempts. Metadata traversal, native index preparation and serialization are separate work. The splice visit count includes each ordinary owner,
 plan, prepare, commit, index and projection record on the qualified path.
 Explicit debug whole-source comparisons stay outside that count. The release
 ratio for Issue 407 stays a final gate.
@@ -4242,7 +4248,7 @@ their namespace identity across actual modeled mutation, serialization and
 reopen, including producer aliases and locally shadowed canonical prefixes.
 Move and clone refuse an incompatible repeating type before publication with
 unchanged package bytes. Compatible block edits retain the qualified markers,
-opaque metadata and the existing move or clone id policy.
+opaque metadata and the existing move or clone id policy. Python font, numbering and form publication compares the live document with the candidate through that native save comparison before it prepares a revision.
 
 Template input accepts a string-keyed dict of bounded JSON values. Bool precedes integer conversion. Nonfinite values, cyclic containers, out-of-range integers and arbitrary objects refuse before publication. FragmentConflictPolicy exposes independent style, numbering and related-part reuse choices. ContentLocation and DocumentFragment retain physical source boundaries. Checked insertion uses the native fragment path and excludes final section properties by default.
 
@@ -4559,7 +4565,7 @@ publication. The additive doc-hidden native methods paragraph_story_locations an
 cell_paragraph_story_locations return the existing ContentLocation vocabulary. Unsupported entries retain the single lookup and
 its refusal behavior. No Python signature changes. Read text, collection counts
 and nested-table enumeration use current admitted inventory facts after scope
-validation. Full or property publications replace those facts. Plain paragraph
+validation. A prepared publication installs those prepared index and piece facts. An unprepared property install clears the piece cache. Returned paragraph and table handles read the prepared inventory and fall back to the existing native route. Plain paragraph
 XML prepares its accepted text before live mutation and tail removal drops only
 the removed facts. No-op, refusal and numeric-slot reuse preserve their existing
 causal lifetime semantics. Source facts do not bypass native mutation admission.

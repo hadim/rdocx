@@ -78,15 +78,8 @@ impl TableLocation {
                     rdocx::Error::Other("table has no checked direct physical owner".into())
                 })?;
                 document
-                    .story_item_snapshots()?
-                    .into_iter()
-                    .find(|snapshot| {
-                        snapshot.location().story().kind() == rdocx::StoryKind::Body
-                            && snapshot.location().item_kind() == rdocx::StoryItemKind::Table
-                            && snapshot.is_direct_child()
-                            && snapshot.direct_body_index() == Some(slot)
-                    })
-                    .map(|snapshot| snapshot.location().clone())
+                    .direct_body_item_location(slot)?
+                    .filter(|location| location.item_kind() == rdocx::StoryItemKind::Table)
                     .ok_or_else(|| {
                         rdocx::Error::Other("table has no checked physical source owner".into())
                     })
@@ -145,6 +138,27 @@ impl TableLocation {
                 document.edit_story_table(&Self::refreshed(document, location)?, edit)
             }
         }
+    }
+}
+
+/// The route of a table handle's physical owner in the inventory of
+/// `prepared`, which holds the route `candidate` resolves.
+fn prepared_table_location(
+    py: Python<'_>,
+    document: &PyDocument,
+    prepared: &crate::document::PreparedWordRevision,
+    candidate: &rdocx::Document,
+    index: usize,
+    related: &Option<rdocx::ContentLocation>,
+) -> PyResult<rdocx::ContentLocation> {
+    let native = || TableLocation::new(index, related).native(candidate);
+    match document.indexed_table_location(index, related, Some(prepared)) {
+        Some(indexed) => {
+            #[cfg(debug_assertions)]
+            crate::document::assert_indexed_route(&indexed, native, "table");
+            Ok(indexed)
+        }
+        None => native().map_err(|error| rdocx_to_pyerr(py, error)),
     }
 }
 
@@ -475,7 +489,7 @@ impl PyTable {
         {
             let document = self.document.borrow(py);
             match document
-                .indexed_table_location(index, &self.related)
+                .indexed_table_location(index, &self.related, None)
                 .map(Ok)
                 .unwrap_or_else(|| TableLocation::new(index, &self.related).native(&document.inner))
             {
@@ -523,9 +537,8 @@ impl PyTable {
         self.furniture_scope =
             document.prepared_furniture_scope(prepared, furniture_scope.as_ref())?;
         let index = table_index(&self.path)?;
-        let location = TableLocation::new(index, &self.related)
-            .native(candidate)
-            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let location =
+            prepared_table_location(py, document, prepared, candidate, index, &self.related)?;
         let (path, owner) = document.capture_prepared_owner(
             prepared,
             &crate::document::WordOwnerLocation::Table(location),
@@ -772,7 +785,7 @@ impl PyTable {
                 Ok(())
             })
             .map_err(|e| rdocx_to_pyerr(py, e))?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(())
     }
 
@@ -1150,7 +1163,7 @@ impl PyTable {
                 crate::document::WordPublication::Conservative,
             )?;
             document.commit_word_revision(prepared)?;
-            document.inner = candidate;
+            document.install_inner(candidate);
         } else {
             document.adopt_property_edit(py, candidate, "Table.set_cell_grid_span")?;
         }
@@ -1215,7 +1228,7 @@ impl PyTable {
             )?,
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(result)
     }
 
@@ -1247,7 +1260,7 @@ impl PyTable {
             crate::document::WordPublication::Conservative,
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(())
     }
 
@@ -1272,7 +1285,7 @@ impl PyTable {
             crate::document::WordPublication::Conservative,
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(())
     }
 
@@ -1324,7 +1337,7 @@ impl PyTable {
                     )?,
             )?;
             document.commit_word_revision(prepared)?;
-            document.inner = candidate;
+            document.install_inner(candidate);
             result
         };
         Ok(result)
@@ -1359,7 +1372,7 @@ impl PyTable {
             ),
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(())
     }
 }
@@ -1553,7 +1566,7 @@ impl PyRow {
         {
             let document = self.document.borrow(py);
             match document
-                .indexed_table_location(index, &self.related)
+                .indexed_table_location(index, &self.related, None)
                 .map(Ok)
                 .unwrap_or_else(|| TableLocation::new(index, &self.related).native(&document.inner))
             {
@@ -1585,9 +1598,14 @@ impl PyRow {
     ) -> PyResult<Self> {
         self.furniture_scope =
             document.prepared_furniture_scope(prepared, furniture_scope.as_ref())?;
-        let location = TableLocation::new(table_index(&self.path)?, &self.related)
-            .native(candidate)
-            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let location = prepared_table_location(
+            py,
+            document,
+            prepared,
+            candidate,
+            table_index(&self.path)?,
+            &self.related,
+        )?;
         let (path, owner) = document.capture_prepared_owner(
             prepared,
             &crate::document::WordOwnerLocation::Table(location),
@@ -1968,7 +1986,7 @@ impl PyCell {
         {
             let document = self.document.borrow(py);
             match document
-                .indexed_table_location(table, &self.related)
+                .indexed_table_location(table, &self.related, None)
                 .map(Ok)
                 .unwrap_or_else(|| TableLocation::new(table, &self.related).native(&document.inner))
             {
@@ -1976,9 +1994,13 @@ impl PyCell {
                     let location = match document.indexed_cell_location(&table, row, cell) {
                         Some(location) => location,
                         None => {
+                            // An inventory's body story has no fingerprint.
+                            let native = TableLocation::Related(table.clone())
+                                .native(&document.inner)
+                                .map_err(|error| rdocx_to_pyerr(py, error))?;
                             let story = document
                                 .inner
-                                .story_table_cell(&table, row, cell)
+                                .story_table_cell(&native, row, cell)
                                 .map_err(|error| rdocx_to_pyerr(py, error))?;
                             crate::document::WordOwnerLocation::Cell {
                                 table,
@@ -2205,7 +2227,7 @@ impl PyCell {
             },
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(result)
     }
 
@@ -2314,7 +2336,7 @@ impl PyCell {
         result.furniture_scope = this.furniture_scope.clone();
         let result = Py::new(py, result)?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(result)
     }
 
@@ -2369,7 +2391,7 @@ impl PyCell {
             crate::document::WordPublication::Conservative,
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(())
     }
 
@@ -2479,7 +2501,7 @@ impl PyCell {
             )?,
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(result)
     }
     #[setter]
@@ -2510,7 +2532,7 @@ impl PyCell {
                 .unwrap_or(crate::document::WordPublication::Conservative),
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(())
     }
     #[getter]
@@ -2599,7 +2621,7 @@ impl PyCell {
             };
             let result = Py::new(py, paragraph)?;
             document.commit_word_revision(prepared)?;
-            document.inner = candidate;
+            document.install_inner(candidate);
             result
         };
         Ok(result)

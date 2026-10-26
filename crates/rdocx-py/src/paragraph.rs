@@ -431,11 +431,7 @@ impl PyParagraph {
         )?;
         {
             let document = self.document.borrow(py);
-            match document
-                .indexed_paragraph_location(&location)
-                .map(Ok)
-                .unwrap_or_else(|| location.native(&document.inner))
-            {
+            match document.paragraph_route(&location, None) {
                 Ok(location) => {
                     let (path, owner) = document.capture_owner(
                         &crate::document::WordOwnerLocation::Paragraph(location),
@@ -470,8 +466,8 @@ impl PyParagraph {
             || paragraph_location(&self.path),
             |location| Ok(ParagraphLocation::Related(location.clone())),
         )?;
-        let location = location
-            .native(candidate)
+        let location = document
+            .paragraph_route(&location, Some((prepared, candidate)))
             .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         let (path, owner) = document.capture_prepared_owner(
             prepared,
@@ -588,7 +584,7 @@ impl PyParagraph {
             )?,
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(result)
     }
 
@@ -681,7 +677,7 @@ impl PyParagraph {
                 )?,
             )?;
             document.commit_word_revision(prepared)?;
-            document.inner = candidate;
+            document.install_inner(candidate);
             result
         };
         Ok(result)
@@ -897,7 +893,7 @@ impl PyParagraph {
             ),
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(result)
     }
 
@@ -994,7 +990,7 @@ impl PyParagraph {
                 .unwrap_or(crate::document::WordPublication::Conservative),
         )?;
         document.commit_word_revision(prepared)?;
-        document.inner = candidate;
+        document.install_inner(candidate);
         Ok(())
     }
 

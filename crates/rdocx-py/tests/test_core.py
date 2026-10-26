@@ -1,4 +1,5 @@
 import io
+import os
 import posixpath
 import re
 import struct
@@ -13489,3 +13490,1350 @@ def test_mail_merge_mappings_use_word_slots():
             rdocx.MailMergePackageOptions(rdocx.MailMergePackageSource.external("file:///declared/other.csv"))
         )
     assert crowded.to_bytes() == crowded_before
+
+
+_FX268_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_FX268_TWIN = (
+    '<w:sdt xmlns:x="urn:x"><w:sdtPr><x:meta/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>twin</w:t></w:r>'
+    "</w:p></w:sdtContent></w:sdt>"
+)
+_FX268_ALIAS = (
+    f'<q:sdt xmlns:q="{_FX268_W}"><q:sdtPr><q:tag q:val="t"/></q:sdtPr><q:sdtContent><q:p><q:r>'
+    "<q:t>in q</q:t></q:r></q:p></q:sdtContent></q:sdt>"
+)
+_FX268_BODY_EDITS = {
+    "insert_paragraph": lambda doc: doc.insert_paragraph(1, "inserted"),
+    "add_paragraph": lambda doc: doc.add_paragraph("appended"),
+    "insert_table": lambda doc: doc.insert_table(1, 1, 2),
+    "add_table": lambda doc: doc.add_table(1, 2),
+    "insert_paragraph_before": lambda doc: doc.paragraphs[1].insert_paragraph_before("before"),
+    "add_heading": lambda doc: doc.add_heading("heading"),
+    "add_page_break": lambda doc: doc.add_page_break(),
+}
+
+
+def _fx268_root_declaration(document, name, value):
+    """Return a package whose main root carries `name="value"`.
+
+    The declaration is written on `word/document.xml` before `from_bytes`.
+    A package-wide URI replace does not do this when the root omits the prefix.
+    """
+    decl = f'{name}="{value}"'.encode()
+    source = io.BytesIO(document.to_bytes())
+    result = io.BytesIO()
+    saw = False
+    with zipfile.ZipFile(source) as source_zip:
+        with zipfile.ZipFile(result, "w") as result_zip:
+            for info in source_zip.infolist():
+                data = source_zip.read(info.filename)
+                if info.filename == "word/document.xml":
+                    start = data.find(b"<w:document")
+                    end = data.find(b">", start)
+                    root = data[start:end]
+                    token = name.encode() + b'="'
+                    if token in root:
+                        at = root.find(token)
+                        quote = root.find(b'"', at + len(token))
+                        root = root[: at + len(token)] + value.encode() + root[quote:]
+                    else:
+                        root = root + b" " + decl
+                    data = data[:start] + root + data[end:]
+                    assert decl in data[start : data.find(b">", start) + 1]
+                    saw = True
+                result_zip.writestr(info, data)
+    assert saw
+    opened = type(document).from_bytes(result.getvalue())
+    return opened
+
+
+@pytest.mark.parametrize("owners", ["valid", "foreign", "alias", "twin", "default", "rshadow"])
+@pytest.mark.parametrize("edit", sorted(_FX268_BODY_EDITS))
+def test_checked_body_insertions_preserve_owners_on_namespace_refusal(owners, edit):
+    """A1. Checked body insertions refuse before an unsavable namespace replay.
+
+    The read-only package saves. A valid body still accepts the edit. Alias and
+    twin owners are the contributed ambiguous fixtures. The checked call must
+    raise before it changes model text, package bytes, or the held paragraph.
+    """
+    import rdocx
+
+    body = '<w:p><w:r><w:t>keep</w:t></w:r></w:p><w:p><w:r><w:t>drop</w:t></w:r></w:p>'
+    if owners == "alias":
+        body += _FX268_ALIAS
+    elif owners == "twin":
+        body += _FX268_TWIN + '<w:p><w:r><w:t>mid</w:t></w:r></w:p>' + _FX268_TWIN
+    elif owners == "default":
+        body += "<producer/>"
+    doc = _replace_document_body(
+        rdocx.Document(),
+        body,
+        root_default="urn:producer" if owners == "default" else None,
+    )
+    if owners == "foreign":
+        doc = _fx268_root_declaration(doc, "xmlns:z", "urn:unused-foreign")
+    elif owners == "rshadow":
+        doc = _fx268_root_declaration(
+            doc,
+            "xmlns:r",
+            "urn:shadow-relationships",
+        )
+    before = doc.to_bytes()
+    texts = [paragraph.text for paragraph in doc.paragraphs]
+    tables = len(doc.tables)
+    held = doc.paragraphs[0]
+    held_text = held.text
+    held_xml = held.xml
+    assert held_text == "keep"
+    assert ">keep<" in held_xml
+    assert before.startswith(b"PK")
+    if owners in ("valid", "foreign"):
+        _FX268_BODY_EDITS[edit](doc)
+        saved = doc.to_bytes()
+        assert saved != before
+        reopened = rdocx.Document.from_bytes(saved)
+        assert reopened.paragraphs[0].text == "keep"
+        return
+    try:
+        _FX268_BODY_EDITS[edit](doc)
+    except rdocx.RdocxError as error:
+        message = str(error)
+        assert "namespace owner" in message or "shadowed `" in message
+        assert doc.to_bytes() == before
+        assert [paragraph.text for paragraph in doc.paragraphs] == texts
+        assert len(doc.tables) == tables
+        assert held.text == held_text
+        assert held.xml == held_xml
+    else:
+        mutated = [paragraph.text for paragraph in doc.paragraphs]
+        try:
+            held_after = held.text
+        except rdocx.StaleElementError as stale:
+            held_after = f"stale: {stale}"
+        try:
+            doc.to_bytes()
+        except rdocx.RdocxError as error:
+            raise AssertionError(
+                f"{owners}/{edit} mutated before save failure: texts {texts!r} -> {mutated!r}, "
+                f"tables {tables} -> {len(doc.tables)}, held {held_text!r} -> {held_after!r}, "
+                f"save {error}"
+            ) from error
+        raise AssertionError(
+            f"{owners}/{edit} published bytes without an early namespace refusal: "
+            f"texts {texts!r} -> {mutated!r}"
+        )
+
+
+def test_checked_body_insertion_index_precedes_namespace_refusal():
+    import rdocx
+
+    doc = _replace_document_body(
+        rdocx.Document(),
+        '<w:p><w:r><w:t>keep</w:t></w:r></w:p><w:p><w:r><w:t>drop</w:t></w:r></w:p>' + _FX268_ALIAS,
+    )
+    before = doc.to_bytes()
+    held = doc.paragraphs[0].xml
+    with pytest.raises(IndexError):
+        doc.insert_paragraph(99, "\x01")
+    with pytest.raises(IndexError):
+        doc.insert_table(99, 1, 1)
+    with pytest.raises(rdocx.XmlError, match="paragraph text"):
+        doc.insert_paragraph(1, "\x01")
+    with pytest.raises(rdocx.XmlError, match="paragraph text"):
+        doc.add_paragraph("\x01")
+    assert doc.to_bytes() == before
+    assert doc.paragraphs[0].xml == held
+
+
+def _fx268_body_work():
+    from rdocx import _rdocx
+
+    return getattr(_rdocx, "_word_whole_body_work", None)
+
+
+def _fx268_review_document(paragraphs):
+    """Review-shaped body for the mechanism 1 qualified splice case.
+
+    Paragraphs carry several runs. Every tenth paragraph adds a picture and a
+    table. The package then has two sections, a header, comments, and the
+    tracked, control, spot, row, after, and end snippets.
+    """
+    import rdocx
+
+    w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    w15 = 'xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"'
+    document = rdocx.Document()
+    for i in range(paragraphs):
+        paragraph = document.add_paragraph()
+        for k in range(3):
+            paragraph.add_run(f"run {k} of paragraph {i} ").bold = False
+        if i % 10 == 9:
+            paragraph.add_run("").add_picture(_one_pixel_png(), "pixel.png")
+            table = document.add_table(2, 2)
+            table.cell(0, 0).text = f"cell of table {i // 10}"
+    document.section(0).header.add_paragraph("header")
+    for k in range(2):
+        at = document.find_content_index(document.add_paragraph(f"commented {k}"))
+        document.add_comment(
+            rdocx.RunRange(
+                start=rdocx.RunPosition(body_index=at, run_index=0),
+                end=rdocx.RunPosition(body_index=at, run_index=0),
+            ),
+            author="Reviewer",
+            text=f"comment {k}",
+        )
+    tail = "".join([
+        f'<w:p><w:r><w:t xml:space="preserve">tracked </w:t></w:r><w:ins {w} w:id="901" w:author="Editor" '
+        'w:date="2026-01-01T00:00:00Z"><w:r><w:t>inserted</w:t></w:r></w:ins></w:p>',
+        f'<w:sdt {w}><w:sdtPr><w:tag w:val="probe0"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r>'
+        '</w:p></w:sdtContent></w:sdt>',
+        '<w:p><w:r><w:t>spot</w:t></w:r></w:p>',
+        f'<w:sdt {w} {w15}><w:sdtPr><w:tag w:val="rows"/><w15:repeatingSection/></w:sdtPr><w:sdtContent><w:sdt>'
+        '<w:sdtPr><w15:repeatingSectionItem/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>row</w:t></w:r></w:p>'
+        '</w:sdtContent></w:sdt></w:sdtContent></w:sdt>',
+        '<w:p><w:r><w:t>after the rows</w:t></w:r></w:p>',
+        '<w:p><w:r><w:t>end</w:t></w:r></w:p>',
+    ])
+    source = io.BytesIO(document.to_bytes())
+    output = io.BytesIO()
+    with zipfile.ZipFile(source) as source_zip, zipfile.ZipFile(output, "w") as result_zip:
+        for info in source_zip.infolist():
+            data = source_zip.read(info.filename)
+            if info.filename == "word/document.xml":
+                text = data.decode()
+                at = text.rindex("<w:sectPr")
+                section = text[at:text.index("</w:sectPr>", at) + len("</w:sectPr>")]
+                text = text[:at] + f"<w:p><w:pPr>{section}</w:pPr></w:p>" + tail + text[at:]
+                data = text.encode()
+            result_zip.writestr(info, data)
+    return rdocx.Document.from_bytes(output.getvalue())
+
+
+@pytest.mark.parametrize("paragraphs", [20, 80])
+def test_word_owner_pieces_follow_edits_splices_and_related_owners(paragraphs):
+    """Mechanism 1 qualified splice on a review-shaped document.
+
+    Later owner-piece cases stay out of this group. The debug counter is
+    drained before each measured call. Its delta is inventory and whole-source
+    reads only. A release build without the counter keeps the functional checks.
+    """
+    import rdocx
+
+    work = _fx268_body_work()
+    doc = _fx268_review_document(paragraphs)
+    texts = [paragraph.text for paragraph in doc.paragraphs]
+    assert texts[-6:] == ["tracked inserted", "control", "spot", "row", "after the rows", "end"]
+    assert len(doc.sections) == 2
+    assert doc.section(0).header.paragraphs[0].text == "header"
+    assert len(doc.tables) >= 2
+    held = doc.paragraphs[0]
+    costs = []
+
+    def measured(call, label):
+        if work is None:
+            return call()
+        work()
+        result = call()
+        delta = work()
+        if delta != (0, 0):
+            costs.append((label, delta))
+        return result
+
+    for paragraph in doc.paragraphs[-10:] + doc.paragraphs[8:11]:
+        if paragraph.text in ("control", "row"):
+            continue
+        label = paragraph.text
+        measured(lambda paragraph=paragraph: paragraph.xml, f"paragraph.xml {label}")
+        for run in paragraph.runs:
+            measured(lambda run=run: run.xml, f"run.xml {label}")
+    for index, table in enumerate((doc.tables[0], doc.tables[-1])):
+        measured(lambda table=table: table.xml, f"table.xml {index}")
+        measured(lambda table=table: table.cell(0, 0).xml, f"cell.xml {index}")
+    spot = doc.find_content_index(doc.paragraphs[-4])
+    tables = len(doc.tables)
+    measured(lambda: doc.insert_paragraph(spot, "inserted"), "insert_paragraph")
+    with pytest.raises(rdocx.StaleElementError):
+        _ = held.text
+    assert measured(lambda: doc.remove_content(spot), "remove_content")
+    measured(lambda: doc.paragraphs[-2].insert_paragraph_before("before"), "insert_paragraph_before")
+    measured(lambda: doc.insert_paragraph(spot, "x"), "insert_paragraph_x")
+    assert measured(lambda: doc.remove_content_range(spot, spot + 2), "remove_content_range") == 2
+    appended = measured(lambda: doc.add_paragraph("appended"), "add_paragraph")
+    assert appended.text == "appended"
+    measured(lambda: doc.insert_table(spot, 2, 2), "insert_table")
+    measured(lambda: doc.add_table(1, 2), "add_table")
+    assert len(doc.tables) == tables + 2
+    reopened = rdocx.Document.from_bytes(doc.to_bytes())
+    assert [paragraph.text for paragraph in reopened.paragraphs] == texts[:-4] + [
+        "row", "before", "after the rows", "end", "appended"]
+    xml = reopened.part_xml("/word/document.xml")
+    assert "<w15:repeatingSectionItem/>" in xml and 'w:val="probe0"' in xml and 'w:id="901"' in xml
+    assert len(reopened.sections) == 2 and len(reopened.tables) == len(doc.tables)
+    assert not costs, costs
+
+
+@pytest.mark.parametrize("paragraphs", [20, 80])
+@pytest.mark.parametrize("kind", ["run", "cell", "header"])
+def test_word_owner_pieces_keep_changed_text_without_a_full_rebuild(paragraphs, kind):
+    """Owner-preserving text edits on a producer-retained document.
+
+    Setup stays outside the counter. A qualified changed publication then
+    keeps the whole-body inventory rebuild count at zero and reads at most
+    two owner pieces. Release builds
+    without the counter still check held, fresh, and reopened values.
+    A run edit keeps its held run. A cell or header edit retires that held
+    body run, matching the checked full path, and the fresh body run keeps
+    its previous text. The held body paragraph stays readable.
+    """
+    import rdocx
+    from rdocx import _rdocx
+
+    work = _fx268_body_work()
+    piece = getattr(_rdocx, "_word_piece_work", None)
+    if work is not None or piece is not None:
+        assert callable(work) and callable(piece)
+    doc = _fx268_review_document(paragraphs)
+    body = doc.paragraphs[1]
+    run = doc.paragraphs[0].runs[0]
+    cell = doc.tables[0].cell(0, 0)
+    header = doc.section(0).header.paragraphs[0]
+    body_text = body.text
+    run_text = run.text
+    cell_text = cell.text
+    header_text = header.text
+    if kind == "run":
+        call = lambda: setattr(run, "text", "changed run")
+        changed = "changed run"
+    elif kind == "cell":
+        call = lambda: setattr(cell, "text", "changed cell")
+        changed = "changed cell"
+    else:
+        call = lambda: setattr(header, "text", "changed header")
+        changed = "changed header"
+    if work is not None:
+        piece()
+        work()
+        call()
+        piece_reads = piece()
+        rebuilds, reads = work()
+    else:
+        call()
+        piece_reads = None
+        rebuilds, reads = None, None
+    if kind == "run":
+        assert run.text == changed
+        assert doc.paragraphs[0].runs[0].text == changed
+        assert body.text == body_text
+        assert header.text == header_text
+    elif kind == "cell":
+        assert cell.text == changed
+        assert doc.tables[0].cell(0, 0).text == changed
+        with pytest.raises(rdocx.StaleElementError):
+            _ = run.text
+        assert doc.paragraphs[0].runs[0].text == run_text
+        assert body.text == body_text
+        assert header.text == header_text
+    else:
+        assert header.text == changed
+        assert doc.section(0).header.paragraphs[0].text == changed
+        with pytest.raises(rdocx.StaleElementError):
+            _ = run.text
+        assert doc.paragraphs[0].runs[0].text == run_text
+        assert cell.text == cell_text
+        assert body.text == body_text
+    reopened = rdocx.Document.from_bytes(doc.to_bytes())
+    assert reopened.paragraphs[1].text == body.text
+    assert reopened.paragraphs[0].runs[0].text == doc.paragraphs[0].runs[0].text
+    assert reopened.tables[0].cell(0, 0).text == doc.tables[0].cell(0, 0).text
+    assert reopened.section(0).header.paragraphs[0].text == doc.section(0).header.paragraphs[0].text
+    assert reopened.section(0).header.paragraphs[0].text != reopened.paragraphs[1].text
+    if work is not None:
+        print(f"piece-count {kind} {paragraphs} {piece_reads} {(rebuilds, reads)}")
+        assert rebuilds == 0 and reads == 0, (kind, paragraphs, piece_reads, rebuilds, reads)
+        assert piece_reads <= 2, (kind, paragraphs, piece_reads, rebuilds, reads)
+
+
+@pytest.mark.parametrize("paragraphs", [20, 80])
+@pytest.mark.parametrize("splice", ["insert", "remove"])
+def test_word_owner_pieces_reuse_neighbors_after_a_body_splice(paragraphs, splice):
+    """A top insert or tail removal keeps neighboring owner pieces.
+
+    The document is N distinct one-run paragraphs, reopened before the
+    measured calls. The splice reads no body piece and no whole-body
+    inventory. The next owner-preserving run edit, on a run fetched after
+    the splice, reads at most one piece. A release build without the
+    counters still checks the texts and the reopened package.
+    """
+    import rdocx
+    from rdocx import _rdocx
+
+    piece = getattr(_rdocx, "_word_piece_work", None)
+    whole = getattr(_rdocx, "_word_whole_body_work", None)
+    measure = piece is not None or whole is not None
+    if measure:
+        assert callable(piece) and callable(whole)
+    document = rdocx.Document()
+    for index in range(paragraphs):
+        document.add_paragraph(f"p{index}")
+    document = rdocx.Document.from_bytes(document.to_bytes())
+    original = [f"p{index}" for index in range(paragraphs)]
+    assert [paragraph.text for paragraph in document.paragraphs] == original
+    if measure:
+        piece()
+        whole()
+    if splice == "insert":
+        document.insert_paragraph(0, "prefix")
+    else:
+        document.remove_content(document.find_content_index(document.paragraphs[-1]))
+    splice_cost = (piece(), whole()) if measure else None
+    if splice == "insert":
+        document.paragraphs[-1].runs[0].text = "edited"
+        expected = ["prefix", *original[:-1], "edited"]
+    else:
+        document.paragraphs[0].runs[0].text = "edited"
+        expected = ["edited", *original[1:-1]]
+    edit_cost = (piece(), whole()) if measure else None
+    assert [paragraph.text for paragraph in document.paragraphs] == expected
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [paragraph.text for paragraph in reopened.paragraphs] == expected
+    if measure:
+        assert splice_cost == (0, (0, 0)), (splice, paragraphs, splice_cost, edit_cost)
+        edit_piece, edit_whole = edit_cost
+        assert edit_piece <= 1 and edit_whole == (0, 0), (
+            splice,
+            paragraphs,
+            splice_cost,
+            edit_cost,
+        )
+
+
+def _fx268_staging_work():
+    from rdocx import _rdocx
+
+    work = getattr(_rdocx, "_staging_work", None)
+    if work is None:
+        return None
+    assert callable(work)
+    sample = list(work())
+    assert len(sample) == 6
+    assert list(work()) == [0, 0, 0, 0, 0, 0]
+    return work
+
+
+def _fx268_opened_review(paragraphs):
+    """Opened review package with a font and a numbering part.
+
+    The review body is built here. Seed font and numbering are applied
+    outside the measured window.
+    """
+    import rdocx
+
+    document = _fx268_review_document(paragraphs)
+    document.set_font(rdocx.FontDefinition("Seed"))
+    document.add_numbering_definition([rdocx.ListLevel(text="%1.")])
+    return rdocx.Document.from_bytes(document.to_bytes())
+
+
+def _fx268_take_staging(work):
+    if work is None:
+        return None
+    return list(work())
+
+
+def _fx268_reopen_work():
+    from rdocx import _rdocx
+
+    work = getattr(_rdocx, "_reopen_work", None)
+    if work is None:
+        return None
+    assert callable(work)
+    sample = list(work())
+    assert len(sample) == 3
+    assert list(work()) == [0, 0, 0]
+    return work
+
+
+def test_header_story_text_reopen_counts_the_changed_header_part():
+    """Header story text goes through the checked staged reopen.
+
+    `Paragraph.text` does not. `Document.set_story_text` does. Each document
+    is already opened from bytes. Both 20 and 80 paragraphs run here. Two
+    changed warmups and two later edits are the measured public calls. Each
+    warm sample has zero ZIP writes and main parses, positive identifier
+    bytes, and zero in the first four staging slots. Matching identifier
+    bytes stay within 16 across the two sizes. Child slots are compared
+    across those sizes. The held header snapshot keeps its old text and XML.
+    The held body paragraph and its regular run are stale. A fresh body
+    paragraph, comments, and controls stay put. Save and reopen checks stay
+    outside the counter window. Release builds without the counters still
+    check both sizes. This does not pass a package read limit.
+    """
+    import rdocx
+
+    reopen = _fx268_reopen_work()
+    staging = _fx268_staging_work()
+    recorded = {}
+    for paragraphs in (20, 80):
+        document = _fx268_review_document(paragraphs)
+        body = document.paragraphs[1]
+        body_text = body.text
+        run = document.paragraphs[0].runs[0]
+        comments = len(document.comments)
+        controls = [control.tag for control in document.content_controls()]
+        sections = len(document.sections)
+        owned = next(
+            item
+            for item in document.story_items
+            if item.story.kind == "header" and item.kind == "paragraph" and item.text == "header"
+        )
+        owned_text = owned.text
+        owned_xml = owned.xml
+        texts = ("header A1", "header B2", "header C3", "header D4")
+        reopen_samples = []
+        staging_samples = []
+        for text in texts:
+            item = next(
+                item
+                for item in document.story_items
+                if item.story.kind == "header" and item.kind == "paragraph"
+            )
+            if reopen is not None:
+                reopen()
+            if staging is not None:
+                staging()
+            document.set_story_text(item, text)
+            reopen_samples.append(list(reopen()) if reopen is not None else None)
+            staging_samples.append(list(staging()) if staging is not None else None)
+        assert owned.text == owned_text == "header"
+        assert owned.xml == owned_xml
+        fresh = next(
+            item
+            for item in document.story_items
+            if item.story.kind == "header" and item.kind == "paragraph"
+        )
+        assert fresh.text == "header D4"
+        with pytest.raises(rdocx.StaleElementError):
+            _ = body.text
+        with pytest.raises(rdocx.StaleElementError):
+            _ = run.text
+        assert document.paragraphs[1].text == body_text
+        assert len(document.comments) == comments
+        assert [control.tag for control in document.content_controls()] == controls
+        assert len(document.sections) == sections
+        saved = document.to_bytes()
+        reopened = rdocx.Document.from_bytes(saved)
+        assert reopened.section(0).header.paragraphs[0].text == "header D4"
+        assert reopened.paragraphs[1].text == body_text
+        assert len(reopened.comments) == comments
+        assert [control.tag for control in reopened.content_controls()] == controls
+        assert len(reopened.sections) == sections
+        recorded[paragraphs] = (reopen_samples, staging_samples)
+        print({"paragraphs": paragraphs, "reopen": reopen_samples, "staging": staging_samples})
+    if reopen is None:
+        return
+    small_reopen, small_staging = recorded[20]
+    large_reopen, large_staging = recorded[80]
+    for ordinal, (left, right, left_stage, right_stage) in enumerate(
+        zip(small_reopen, large_reopen, small_staging, large_staging)
+    ):
+        if ordinal < 2:
+            continue
+        assert left[0] == 0 and left[1] == 0, (ordinal, left, right)
+        assert right[0] == 0 and right[1] == 0, (ordinal, left, right)
+        assert left[2] > 0 and right[2] > 0, (ordinal, left, right)
+        assert abs(left[2] - right[2]) <= 16, (ordinal, left, right)
+        assert left_stage[:4] == [0, 0, 0, 0], (ordinal, left_stage, right_stage)
+        assert right_stage[:4] == [0, 0, 0, 0], (ordinal, left_stage, right_stage)
+        assert left_stage[4:] == right_stage[4:], (ordinal, left_stage, right_stage)
+
+
+@pytest.mark.parametrize("paragraphs", [20, 80])
+def test_unchanged_main_staging_font_and_numbering(paragraphs):
+    """Font and numbering edits on one opened review document.
+
+    Two changed font publications warm the opened main part. Two later public
+    edits, one numbering definition and one font, are the warm samples. The
+    first four staging slots of those warm samples are zero. The last two
+    slots are child-staging debt. Forms, modern fields, and mail merge are
+    not exercised. Save and reopen checks stay outside the counter window.
+    """
+    import rdocx
+
+    work = _fx268_staging_work()
+    document = _fx268_opened_review(paragraphs)
+    _fx268_take_staging(work)
+    warmups = []
+    for name in ("Warmup A", "Warmup B"):
+        _fx268_take_staging(work)
+        document.set_font(rdocx.FontDefinition(name))
+        warmups.append(_fx268_take_staging(work))
+    samples = []
+    _fx268_take_staging(work)
+    document.add_numbering_definition([rdocx.ListLevel(text="%1.")])
+    samples.append(_fx268_take_staging(work))
+    _fx268_take_staging(work)
+    document.set_font(rdocx.FontDefinition("Warm C"))
+    samples.append(_fx268_take_staging(work))
+    saved = document.to_bytes()
+    reopened = rdocx.Document.from_bytes(saved)
+    assert any(font.name == "Warm C" for font in reopened.fonts)
+    assert "w:abstractNum" in reopened.part_xml("/word/numbering.xml")
+    assert any("run 0 of paragraph 0" in paragraph.text for paragraph in reopened.paragraphs)
+    assert any(control.tag == "probe0" for control in reopened.content_controls())
+    assert reopened.section(0).header.paragraphs[0].text == "header"
+    assert len(reopened.comments) >= 2
+    assert len(reopened.sections) >= 2
+    _fx268_take_staging(work)
+    print({"paragraphs": paragraphs, "warmups": warmups, "warm": samples})
+    if work is None:
+        return
+    for sample in samples:
+        assert sample[:4] == [0, 0, 0, 0], (paragraphs, warmups, samples)
+        assert len(sample) == 6
+
+
+@pytest.mark.parametrize("paragraphs", [20, 80])
+def test_repeated_add_run_does_not_reread_every_changed_piece(paragraphs):
+    """Four body paragraphs each gain one run.
+
+    The next edit must not reread every previously changed piece. Held runs
+    from before the first add_run raise StaleElementError, the same result
+    as the mechanism 3 extension 048b9142. An unchanged held paragraph stays
+    live, and the XML string taken from that unchanged paragraph stays
+    byte-identical. A story item taken from the first changed paragraph
+    keeps the text and XML it stored. The new owner includes the added
+    text. Fresh paragraphs and a reopened package retain the added text.
+    A release build without the counters still checks those values.
+    """
+    import rdocx
+    from rdocx import _rdocx
+
+    work = _fx268_body_work()
+    piece = getattr(_rdocx, "_word_piece_work", None)
+    if work is not None or piece is not None:
+        assert callable(work) and callable(piece)
+    document = _fx268_review_document(paragraphs)
+    chosen = document.paragraphs[:4]
+    assert len(chosen) == 4
+    held = [paragraph.runs[0] for paragraph in chosen]
+    before = [paragraph.text for paragraph in chosen]
+    unchanged = document.paragraphs[4]
+    unchanged_text = unchanged.text
+    unchanged_xml = unchanged.xml
+    owned_snapshot = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "body"
+        and item.kind == "paragraph"
+        and item.text == before[0]
+    )
+    owned_text = owned_snapshot.text
+    owned_xml = owned_snapshot.xml
+    piece_reads = []
+    whole = []
+    for index, paragraph in enumerate(chosen):
+        if piece is not None:
+            piece()
+            work()
+        added = paragraph.add_run(f" extra {index}")
+        assert added.text == f" extra {index}"
+        if piece is not None:
+            piece_reads.append(piece())
+            whole.append(work())
+    fresh = document.paragraphs[:4]
+    for index, (paragraph, old) in enumerate(zip(fresh, before)):
+        assert paragraph.runs[-1].text == f" extra {index}"
+        assert old in paragraph.text
+    for run in held:
+        with pytest.raises(rdocx.StaleElementError):
+            run.text
+    assert unchanged.text == unchanged_text
+    assert unchanged.xml == unchanged_xml
+    assert owned_snapshot.text == owned_text == before[0]
+    assert owned_snapshot.xml == owned_xml
+    assert " extra 0" not in owned_snapshot.text
+    assert " extra 0" in document.paragraphs[0].text
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    for index, old in enumerate(before):
+        paragraph = reopened.paragraphs[index]
+        assert paragraph.runs[-1].text == f" extra {index}"
+        assert old in paragraph.text
+    print({"paragraphs": paragraphs, "piece": piece_reads, "whole": whole})
+    if piece is None:
+        return
+    assert all(rebuilds == 0 and reads == 0 for rebuilds, reads in whole), whole
+    assert piece_reads[-1] <= 2, (paragraphs, piece_reads, whole)
+
+
+def test_fx268_body_locations_keep_physical_slots():
+    """Indexed body edits keep physical slots at 20 and 80 paragraphs.
+
+    pop_content at the end index resolves the body story and then refuses.
+    The first measured address delta can be zero when construction already
+    filled the cache. A repeated refusal adds no address scans. Reading the
+    debug counter does not clear it. Functional checks do not require it.
+    """
+    import rdocx
+    from rdocx import _rdocx
+
+    scans = getattr(_rdocx, "_main_body_block_scans", None)
+    records = []
+    for paragraphs in (20, 80):
+        document = rdocx.Document()
+        for index in range(paragraphs):
+            document.add_paragraph("same" if index < 2 else f"row {index}")
+        document.add_table(1, 1)
+        assert document.paragraphs[0].text == document.paragraphs[1].text == "same"
+        body = next(story for story in document.stories if story.kind == "body")
+        document.insert_content_control(
+            rdocx.ContentLocation.end(body), "block", "rich_text", tag="nest"
+        )
+        assert any(control.tag == "nest" for control in document.content_controls())
+        direct = [
+            item.direct_body_index
+            for item in document.story_items
+            if item.direct_body_index is not None
+        ]
+        end_index = max(direct) + 1
+        held = document.paragraphs[0]
+        table = document.tables[0]
+        before = document.to_bytes()
+        with pytest.raises(IndexError):
+            document.pop_content(paragraphs + 50)
+        assert document.to_bytes() == before
+        assert held.text == "same"
+        assert table.cell(0, 0).text == ""
+
+        before = document.to_bytes()
+        mark = scans() if callable(scans) else None
+        with pytest.raises(IndexError):
+            document.pop_content(end_index)
+        first_measured = None if mark is None else scans() - mark
+        assert document.to_bytes() == before
+        assert held.text == "same"
+        assert table.cell(0, 0).text == ""
+        mark = scans() if callable(scans) else None
+        with pytest.raises(IndexError):
+            document.pop_content(end_index)
+        repeat = None if mark is None else scans() - mark
+        assert document.to_bytes() == before
+        assert held.text == "same"
+        assert table.cell(0, 0).text == ""
+
+        imported = rdocx.Document()
+        imported.add_paragraph("imported")
+        document.insert_document(imported, at=end_index)
+        assert document.paragraphs[-1].text == "imported"
+        second = document.paragraphs[1]
+        fragment = document.pop_content(1)
+        assert fragment.kind == "paragraph"
+        with pytest.raises(rdocx.StaleElementError):
+            _ = second.text
+        document.insert_content(1, fragment)
+        restored = document.paragraphs[1]
+        assert restored.text == "same"
+        assert document.paragraphs[0].text == "same"
+        document.clone_content(restored, 0)
+        with pytest.raises(rdocx.StaleElementError):
+            _ = restored.text
+        table = document.tables[0]
+        document.move_content(table, 0)
+        with pytest.raises(rdocx.StaleElementError):
+            _ = table.cell(0, 0).text
+        fresh = rdocx.Document.from_bytes(document.to_bytes())
+        same = [paragraph for paragraph in fresh.paragraphs if paragraph.text == "same"]
+        assert len(same) == 3
+        assert fresh.find_content_index(fresh.tables[0]) == 0
+        assert [fresh.find_content_index(paragraph) for paragraph in same[:3]] == [1, 2, 3]
+        assert fresh.paragraphs[-1].text == "imported"
+        assert fresh.tables[0].cell(0, 0).text == ""
+        assert any(control.tag == "nest" for control in fresh.content_controls())
+        records.append(
+            {
+                "paragraphs": paragraphs,
+                "first_measured": first_measured,
+                "repeat": repeat,
+            }
+        )
+
+    if callable(scans):
+        seen = scans()
+        assert scans() == seen
+        assert [record["repeat"] for record in records] == [0, 0]
+    print(records)
+
+
+_FX268_A10_EDITS = (
+    "Table.add_row",
+    "Cell.text",
+    "Run.text",
+    "Document.add_bullet_list_item",
+    "Document.insert_section",
+    "Document.insert_html",
+    "Document.add_footnote",
+    "Document.import_fragment",
+    "SectionHandle.set_page_border",
+    "Paragraph.replace_text",
+    "Cell.replace_text",
+    "Document.replace_text_at",
+    "Document.add_picture",
+    "Cell.add_picture",
+)
+
+# Structural publishers invalidate the held header paragraph. Text and row
+# edits do not. The product handle policy stays as it is.
+_FX268_A10_STRUCTURAL = frozenset(
+    {
+        "Document.add_bullet_list_item",
+        "Document.insert_section",
+        "Document.insert_html",
+        "Document.import_fragment",
+        "SectionHandle.set_page_border",
+        "Paragraph.replace_text",
+        "Cell.replace_text",
+        "Document.replace_text_at",
+        "Document.add_picture",
+        "Cell.add_picture",
+    }
+)
+
+# Immutable opened-review package bytes, one entry per paragraph count.
+_FX268_A10_SEED_PACKAGES = {}
+
+
+def _fx268_a10_seed_package(paragraphs):
+    """Build the rich review package once for this process and paragraph count."""
+    package = _FX268_A10_SEED_PACKAGES.get(paragraphs)
+    if package is None:
+        package = _fx268_opened_review(paragraphs).to_bytes()
+        _FX268_A10_SEED_PACKAGES[paragraphs] = package
+    return package
+
+
+def _fx268_a10_open(paragraphs):
+    import rdocx
+
+    return rdocx.Document.from_bytes(_fx268_a10_seed_package(paragraphs))
+
+
+_FX268_A10_PRODUCER_PACKAGES = {}
+
+
+def _fx268_producer_package(paragraphs, root_prefix=None, run_sibling=None):
+    """Producer bytes from the paragraph-count seed. Built once per prefix."""
+    key = (paragraphs, root_prefix, run_sibling)
+    package = _FX268_A10_PRODUCER_PACKAGES.get(key)
+    if package is not None:
+        return package
+    source = io.BytesIO(_fx268_a10_seed_package(paragraphs))
+    written = io.BytesIO()
+    saw = False
+    with zipfile.ZipFile(source) as source_zip, zipfile.ZipFile(written, "w") as copy:
+        for info in source_zip.infolist():
+            data = source_zip.read(info.filename)
+            if info.filename == "word/document.xml":
+                body = data.replace(b"<w:body>", b"<w:body>\n", 1)
+                assert body != data
+                data = body
+                if run_sibling:
+                    data = data.replace(b"</w:r>", run_sibling + b"</w:r>", 1)
+                if root_prefix:
+                    namespace = b'="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+                    prefix = root_prefix.encode()
+                    rewritten = data.replace(
+                        b"<w:document ",
+                        b"<%s:document xmlns:%s%s " % (prefix, prefix, namespace),
+                        1,
+                    )
+                    rewritten = rewritten.replace(
+                        b"</w:document>",
+                        b"</%s:document>" % prefix,
+                        1,
+                    )
+                    assert rewritten != data
+                    data = rewritten
+                saw = True
+            copy.writestr(info, data)
+    assert saw
+    package = written.getvalue()
+    _FX268_A10_PRODUCER_PACKAGES[key] = package
+    return package
+
+
+def _fx268_producer_opened(paragraphs, root_prefix=None, run_sibling=None):
+    """Opened review package whose main part keeps a producer body break.
+
+    `root_prefix` rebinds the Word namespace on the document element only.
+    The header, tracked revision, controls, pictures, and numbering stay.
+    Each call still opens a fresh document from the cached package bytes.
+    """
+    import rdocx
+
+    return rdocx.Document.from_bytes(_fx268_producer_package(paragraphs, root_prefix, run_sibling))
+
+
+def _fx268_a10_call(edit, document, k):
+    """Bind one public edit. Lookup happens here, before the counter window."""
+    import rdocx
+
+    if edit == "Table.add_row":
+        table = document.tables[-1]
+        return table.add_row
+    if edit == "Cell.text":
+        cell = document.tables[-1].cell(0, 1)
+        text = f"cell {k}"
+        return lambda: setattr(cell, "text", text)
+    if edit == "Run.text":
+        run = [paragraph for paragraph in document.paragraphs if paragraph.text.startswith("end")][-1].runs[0]
+        text = f"end {k}"
+        return lambda: setattr(run, "text", text)
+    if edit == "Document.add_bullet_list_item":
+        text = f"item {k}"
+        return lambda: document.add_bullet_list_item(text)
+    if edit == "Document.insert_section":
+        index = len(document.sections)
+        return lambda: document.insert_section(index)
+    if edit == "Document.insert_html":
+        anchor = [paragraph for paragraph in document.paragraphs if paragraph.text == "spot"][-1]
+        html = f"<p>inserted {k}</p>"
+        return lambda: document.insert_html(html, after=anchor)
+    if edit == "Document.add_footnote":
+        paragraph = [item for item in document.paragraphs if item.text == "spot"][-1]
+        note = f"note {k}"
+        return lambda: document.add_footnote(paragraph, note)
+    if edit == "Document.import_fragment":
+        source = rdocx.Document()
+        source.add_paragraph(f"imported {k}")
+        source.add_paragraph("second")
+        story = next(item for item in source.stories if item.kind == "body")
+        fragment = rdocx.DocumentFragment.from_range(
+            source,
+            rdocx.ContentLocation(story, "paragraph", [0]),
+            rdocx.ContentLocation(story, "paragraph", [1]),
+        )
+        body = next(item for item in document.stories if item.kind == "body")
+        destination = rdocx.ContentLocation.end(body)
+        source_main_xml = len(source.part_xml("/word/document.xml"))
+
+        def call():
+            return document.import_fragment(destination, fragment)
+
+        call.source_main_xml = source_main_xml
+        return call
+    if edit == "SectionHandle.set_page_border":
+        section = document.section(0)
+        edge = ("top", "left", "bottom", "right")[k]
+        return lambda: section.set_page_border(edge)
+    if edit in ("Paragraph.replace_text", "Document.replace_text_at"):
+        old, new = ("spot", "omega") if k % 2 == 0 else ("omega", "spot")
+        paragraph = next(item for item in document.paragraphs if item.text == old)
+        if edit == "Paragraph.replace_text":
+            def replace():
+                assert paragraph.replace_text(old, new) == 1
+            return replace
+        index = document.find_content_index(paragraph)
+        item = next(item for item in document.story_items
+                    if item.story.kind == "body" and item.kind == "paragraph"
+                    and item.direct_body_index == index)
+        def replace():
+            assert document.replace_text_at(item, old, new) == 1
+        return replace
+    if edit == "Cell.replace_text":
+        cell = document.tables[-1].cell(0, 0)
+        old, new = ("cell of table", "omega table") if k % 2 == 0 else ("omega table", "cell of table")
+        def replace():
+            assert cell.replace_text(old, new) == 1
+        return replace
+    if edit in ("Document.add_picture", "Cell.add_picture"):
+        target = document if edit == "Document.add_picture" else document.tables[-1].cell(0, 0)
+        data = _one_pixel_png(bytes([k, k, k]))
+        return lambda: target.add_picture(data, f"added{k}.png", 12700, 12700)
+    raise AssertionError(edit)
+
+
+def _fx268_a10_context(document):
+    main = document.part_xml("/word/document.xml")
+    return {
+        "header": document.section(0).header.paragraphs[0].text,
+        "controls": [control.tag for control in document.content_controls()],
+        "comments": len(document.comments),
+        "pictures": len(document.pictures()),
+        "numbering": "w:abstractNum" in document.part_xml("/word/numbering.xml"),
+        "tracked": 'w:id="901"' in main,
+        "field": ("fldChar" in main) or ("fldSimple" in main) or ("instrText" in main),
+        "cell_text": document.tables[-1].cell(0, 0).text,
+        "rows": len(document.tables[-1].rows),
+        "sections": len(document.sections),
+        "texts": [paragraph.text for paragraph in document.paragraphs],
+    }
+
+
+def _fx268_a10_kept(document, header, before, edit):
+    import rdocx
+
+    if edit in _FX268_A10_STRUCTURAL:
+        with pytest.raises(rdocx.StaleElementError, match=re.escape(edit)):
+            _ = header.text
+        fresh = document.section(0).header.paragraphs[0].text
+        assert fresh == before["header"] == "header"
+    else:
+        assert header.text == before["header"] == "header"
+    assert [control.tag for control in document.content_controls()] == before["controls"]
+    assert "probe0" in before["controls"]
+    assert len(document.comments) == before["comments"]
+    assert len(document.pictures()) == before["pictures"] + (4 if edit in ("Document.add_picture", "Cell.add_picture") else 0)
+    assert before["pictures"] > 0
+    main = document.part_xml("/word/document.xml")
+    assert ('w:id="901"' in main) is before["tracked"]
+    assert before["tracked"]
+    field_now = ("fldChar" in main) or ("fldSimple" in main) or ("instrText" in main)
+    assert field_now is before["field"]
+    assert ("w:abstractNum" in document.part_xml("/word/numbering.xml")) is before["numbering"]
+    assert before["numbering"]
+
+
+def _fx268_a10_result(edit, document, before):
+    texts = [paragraph.text for paragraph in document.paragraphs]
+    if edit == "Table.add_row":
+        assert len(document.tables[-1].rows) == before["rows"] + 4
+    elif edit == "Cell.text":
+        assert document.tables[-1].cell(0, 1).text == "cell 3"
+    elif edit == "Run.text":
+        assert "end 3" in texts
+    elif edit == "Document.add_bullet_list_item":
+        assert [text for text in texts if text.startswith("item ")] == [
+            "item 0",
+            "item 1",
+            "item 2",
+            "item 3",
+        ]
+    elif edit == "Document.insert_section":
+        assert len(document.sections) == before["sections"] + 4
+    elif edit == "Document.insert_html":
+        # Each insert_html uses the same anchor, so the newest paragraph
+        # lands immediately after that anchor and the earlier inserts move down.
+        assert [text for text in texts if text.startswith("inserted ")] == [
+            "inserted 3",
+            "inserted 2",
+            "inserted 1",
+            "inserted 0",
+        ]
+    elif edit == "Document.add_footnote":
+        notes = document.part_xml("/word/footnotes.xml")
+        for k in range(4):
+            assert f"note {k}" in notes
+        assert "spot" in texts
+    elif edit == "Document.import_fragment":
+        assert [text for text in texts if text.startswith("imported ")] == [
+            "imported 0",
+            "imported 1",
+            "imported 2",
+            "imported 3",
+        ]
+    elif edit in ("Paragraph.replace_text", "Document.replace_text_at"):
+        assert "spot" in texts
+        assert "omega" not in texts
+    elif edit == "Cell.replace_text":
+        assert document.tables[-1].cell(0, 0).text == before["cell_text"]
+    elif edit in ("Document.add_picture", "Cell.add_picture"):
+        assert len(document.pictures()) == before["pictures"] + 4
+        actual = [document.image_data(picture.relationship_id) for picture in document.pictures()]
+        assert actual[-4:] == [_one_pixel_png(bytes([k, k, k])) for k in range(4)]
+    elif edit == "SectionHandle.set_page_border":
+        main = document.part_xml("/word/document.xml")
+        assert "pgBorders" in main
+        for edge in ("top", "left", "bottom", "right"):
+            assert f"w:{edge}" in main
+    else:
+        raise AssertionError(edit)
+    assert any(text.startswith("run 0 of paragraph 0") for text in texts)
+    assert "control" in texts
+
+
+@pytest.mark.parametrize("edit", _FX268_A10_EDITS)
+def test_staging_writes_and_reads_only_the_main_part_blocks_an_edit_changes(edit):
+    """A10. Two changed warmups, then two distinct public edits at 20 and 80.
+
+    The opened review package keeps pictures, numbering, the header, the
+    tracked revision, and the content controls. Lookup is outside the counter
+    window. Debug builds compare the six staging slots and the three reopen
+    slots. Release builds without those hooks still check the edit, the
+    reopened package, and the kept owners.
+    """
+    import rdocx
+
+    work = _fx268_staging_work()
+    reopen = _fx268_reopen_work()
+    if (work is None) != (reopen is None):
+        raise AssertionError("staging and reopen counters are one debug pair")
+    counts = []
+    reopens = []
+    for paragraphs in (20, 80):
+        if edit in ("Document.import_fragment", "Paragraph.replace_text", "Cell.replace_text",
+                    "Document.replace_text_at", "Document.add_picture", "Cell.add_picture"):
+            document = _fx268_producer_opened(paragraphs)
+        else:
+            document = _fx268_a10_open(paragraphs)
+        before = _fx268_a10_context(document)
+        main_xml = len(document.part_xml("/word/document.xml"))
+        header = document.section(0).header.paragraphs[0]
+        setup_sources = []
+        for k in (0, 1):
+            call = _fx268_a10_call(edit, document, k)
+            setup_sources.append(getattr(call, "source_main_xml", None))
+            call()
+        sample = []
+        opened = []
+        measured_sources = []
+        for k in (2, 3):
+            call = _fx268_a10_call(edit, document, k)
+            measured_sources.append(getattr(call, "source_main_xml", None))
+            if work is not None:
+                work()
+                reopen()
+            call()
+            if work is not None:
+                staged = list(work())
+                opened_work = list(reopen())
+                assert len(staged) == 6
+                assert len(opened_work) == 3
+                sample.append(staged)
+                opened.append(opened_work)
+        print(
+            {
+                "edit": edit,
+                "paragraphs": paragraphs,
+                "main_xml": main_xml,
+                "setup_fragment_source_main_xml": setup_sources,
+                "fragment_source_main_xml": measured_sources,
+                "staging": sample,
+                "reopen": opened,
+            }
+        )
+        _fx268_a10_kept(document, header, before, edit)
+        _fx268_a10_result(edit, document, before)
+        saved = document.to_bytes()
+        reopened = rdocx.Document.from_bytes(saved)
+        assert reopened.to_bytes() == saved
+        _fx268_a10_result(edit, reopened, before)
+        assert reopened.section(0).header.paragraphs[0].text == "header"
+        assert [control.tag for control in reopened.content_controls()] == before["controls"]
+        counts.append(sample)
+        reopens.append(opened)
+    if work is None:
+        return
+    imported = edit == "Document.import_fragment"
+    assert counts[0] == counts[1], (edit, counts)
+    for sample in counts[0]:
+        if imported:
+            continue
+        assert sample[:4] == [0, 0, 0, 0], (edit, counts)
+    for left, right in zip(reopens[0], reopens[1]):
+        assert left[0] == right[0] == 0, (edit, reopens)
+        assert left[1] == right[1] == (1 if imported else 0), (edit, reopens)
+        assert abs(left[2] - right[2]) <= 16, (edit, reopens)
+
+
+def test_a_fragment_imports_into_a_main_part_whose_root_has_another_word_prefix():
+    """A producer may bind the Word namespace to another root prefix.
+
+    Three fragment imports append their first paragraphs. Header, controls,
+    pictures, and numbering stay. Save and reopen match the live document.
+    """
+    import rdocx
+
+    document = _fx268_producer_opened(20, "x")
+    before = _fx268_a10_context(document)
+    main_xml = len(document.part_xml("/word/document.xml"))
+    header = document.section(0).header.paragraphs[0]
+    texts = list(before["texts"])
+    sources = []
+    for k in range(3):
+        call = _fx268_a10_call("Document.import_fragment", document, k)
+        sources.append(call.source_main_xml)
+        call()
+    live_texts = [paragraph.text for paragraph in document.paragraphs]
+    print(
+        {
+            "edit": "alternate-root",
+            "paragraphs": 20,
+            "main_xml": main_xml,
+            "fragment_source_main_xml": sources,
+            "texts": live_texts,
+        }
+    )
+    assert live_texts == texts + [
+        "imported 0",
+        "imported 1",
+        "imported 2",
+    ]
+    _fx268_a10_kept(document, header, before, "Document.import_fragment")
+    saved = document.to_bytes()
+    reopened = rdocx.Document.from_bytes(saved)
+    assert reopened.to_bytes() == saved
+    assert [paragraph.text for paragraph in reopened.paragraphs] == [
+        paragraph.text for paragraph in document.paragraphs
+    ]
+    assert reopened.section(0).header.paragraphs[0].text == "header"
+    assert [control.tag for control in reopened.content_controls()] == before["controls"]
+
+
+
+def test_story_pictures_preserve_refusal_on_an_unreadable_unaffected_attribute():
+    import rdocx
+
+    for cell in (False, True):
+        document = _fx268_producer_opened(
+            20, run_sibling=b'<x:foo xmlns:x="urn:x" x:a="&bogus;"/>'
+        )
+        held = document.section(0).header.paragraphs[0]
+        texts = [paragraph.text for paragraph in document.paragraphs]
+        for k in range(3):
+            target = document.tables[-1].cell(0, 0) if cell else document
+            with pytest.raises(rdocx.RdocxError, match="bogus"):
+                target.add_picture(_one_pixel_png(bytes([k, k, k])), f"bad{k}.png", 12700, 12700)
+            assert held.text == "header"
+            assert [paragraph.text for paragraph in document.paragraphs] == texts
+
+
+def test_body_block_reuse_preserves_forms_settings_and_live_owners():
+    """A3: cached body edits keep physical form state and live owner policy."""
+    import rdocx
+
+    document, rules, assignments = _source_built_dense_form()
+    assert document.fill_form(rules, assignments) == (1, 1, 1, 1, 1, 1)
+    source = rdocx.MailMergePackageSource.embedded(["Person"], [["MergeAda"]])
+    document.set_mail_merge_package(rdocx.MailMergePackageOptions(source))
+    document = rdocx.Document.from_bytes(document.to_bytes())
+    anchor = next(p for p in document.paragraphs if p.text == "Anchor")
+    run = anchor.runs[0]
+    snapshots = document.content_controls()
+    fields = document.legacy_form_fields()
+    custom = {name: document.part_xml(name) for name in document.part_names()
+              if name.startswith("/customXml/")}
+    for text in ("Anchor one", "Anchor two", "Anchor three"):
+        run.text = text
+        assert anchor.text == run.text == text
+        assert [(c.tag, c.text) for c in document.content_controls()] == [
+            (c.tag, c.text) for c in snapshots
+        ]
+        assert [(f.name, f.value, f.default_value, f.source_part, f.ordinal)
+                for f in document.legacy_form_fields()] == [
+            (f.name, f.value, f.default_value, f.source_part, f.ordinal) for f in fields
+        ]
+        assert document.validate_form(rules) == ()
+        assert document.prepare_mail_merge_data().records == ({"Person": "MergeAda"},)
+    document.insert_paragraph(0, "new first physical owner")
+    with pytest.raises(rdocx.StaleElementError):
+        _ = anchor.text
+    fresh = next(p for p in document.paragraphs if p.text == "Anchor three")
+    assert fresh.text == "Anchor three"
+    assert {name: document.part_xml(name) for name in custom} == custom
+    assert fields[0].default_value == "keep" and fields[0].value == "typed"
+    saved = document.to_bytes()
+    reopened = rdocx.Document.from_bytes(saved)
+    assert reopened.to_bytes() == saved
+    assert reopened.paragraphs[0].text == "new first physical owner"
+    assert reopened.validate_form(rules) == ()
+    assert reopened.legacy_form_fields()[0].default_value == "keep"
+    assert reopened.legacy_form_fields()[0].value == "typed"
+    assert {name: reopened.part_xml(name) for name in custom} == custom
+    assert reopened.prepare_mail_merge_data().records == ({"Person": "MergeAda"},)
+
+
+def test_unchanged_main_staging_keeps_forms_and_settings_authoritative():
+    """A5: related-only changes cannot replace form or settings authority."""
+    import rdocx
+
+    document, rules, assignments = _source_built_dense_form()
+    document.fill_form(rules, assignments)
+    source = rdocx.MailMergePackageSource.embedded(["Person"], [["MergeAda"]])
+    document.set_mail_merge_package(rdocx.MailMergePackageOptions(source))
+    document = rdocx.Document.from_bytes(document.to_bytes())
+    main = document.part_xml("/word/document.xml")
+    custom = {name: document.part_xml(name) for name in document.part_names()
+              if name.startswith("/customXml/")}
+    held = next(p for p in document.paragraphs if p.text == "Anchor")
+    run = held.runs[0]
+    for name in ("Forms warm one", "Forms warm two", "Forms measured"):
+        held = next(p for p in document.paragraphs if p.text == "Anchor")
+        run = held.runs[0]
+        document.set_font(rdocx.FontDefinition(name))
+        for owner in (held, run):
+            with pytest.raises(rdocx.StaleElementError, match="Document.set_font"):
+                _ = owner.text
+        assert next(p for p in document.paragraphs if p.text == "Anchor").text == "Anchor"
+        assert document.part_xml("/word/document.xml") == main
+        assert document.validate_form(rules) == ()
+    document.add_numbering_definition([rdocx.ListLevel(text="%1.")])
+    assert next(p for p in document.paragraphs if p.text == "Anchor").text == "Anchor"
+    assert document.part_xml("/word/document.xml") == main
+    assert {name: document.part_xml(name) for name in custom} == custom
+    assert document.prepare_mail_merge_data().records == ({"Person": "MergeAda"},)
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.part_xml("/word/document.xml") == main
+    assert reopened.validate_form(rules) == ()
+    assert reopened.legacy_form_fields()[0].value == "typed"
+    assert reopened.legacy_form_fields()[0].default_value == "keep"
+    assert any(font.name == "Forms measured" for font in reopened.fonts)
+    assert reopened.prepare_mail_merge_data().records == ({"Person": "MergeAda"},)
+    assert {name: reopened.part_xml(name) for name in custom} == custom
+    assert reopened.reset_form(rules) == (1, 1, 1, 1, 1, 1)
+    assert reopened.legacy_form_fields()[0].value == "keep"
+    assert reopened.legacy_form_fields()[0].default_value == "keep"
+    again = rdocx.Document.from_bytes(reopened.to_bytes())
+    assert again.legacy_form_fields()[0].value == "keep"
+    assert again.legacy_form_fields()[0].default_value == "keep"
+
+
+@pytest.mark.parametrize("alias", [False, True])
+def test_word_piece_shared_header_identity_uses_opc_part_names(alias):
+    import xml.etree.ElementTree as ET
+    import rdocx
+    from rdocx import _rdocx
+
+    source = rdocx.Document()
+    source.add_paragraph("body")
+    source.set_header("shared header")
+    with zipfile.ZipFile(io.BytesIO(source.to_bytes())) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+    relationships = ET.fromstring(parts["word/_rels/document.xml.rels"])
+    header = next(item for item in relationships if item.get("Type").endswith("/header"))
+    target = header.get("Target")
+    assert target is not None and target.endswith("header1.xml")
+    namespace = "http://schemas.openxmlformats.org/package/2006/relationships"
+    ET.SubElement(relationships, "{" + namespace + "}Relationship", {
+        "Id": "pieceAlias", "Type": header.get("Type"),
+        "Target": target.replace("header1.xml", "Header1.xml") if alias else target,
+    })
+    parts["word/_rels/document.xml.rels"] = ET.tostring(relationships)
+    xml = parts["word/document.xml"].decode()
+    at = xml.index(">", xml.index("<w:sectPr")) + 1
+    xml = xml[:at] + '<w:headerReference w:type="first" r:id="pieceAlias"/>' + xml[at:]
+    parts["word/document.xml"] = xml.encode()
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, data in parts.items():
+            archive.writestr(name, data)
+    work = getattr(_rdocx, "_word_whole_body_work", None)
+    if work is not None:
+        work()
+    document = rdocx.Document.from_bytes(output.getvalue())
+    if work is not None:
+        assert (work()[0] > 0) is alias
+    assert document.section(0).header.paragraphs[0].text == "shared header"
+    held = document.paragraphs[0]
+    main = document.part_xml("/word/document.xml")
+    if work is not None:
+        work()
+    document.set_font(rdocx.FontDefinition("Shared header check"))
+    if work is not None:
+        assert (work()[0] > 0) is alias
+    with pytest.raises(rdocx.StaleElementError, match="Document.set_font"):
+        _ = held.text
+    assert document.paragraphs[0].text == "body"
+    assert document.part_xml("/word/document.xml") == main
+    saved = document.to_bytes()
+    reopened = rdocx.Document.from_bytes(saved)
+    assert reopened.to_bytes() == saved
+    assert reopened.paragraphs[0].text == "body"
+    assert reopened.section(0).header.paragraphs[0].text == "shared header"
