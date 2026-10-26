@@ -7206,6 +7206,8 @@ struct Parsed {
     serialization_proof: Option<Vec<u8>>,
     main_document: OnceLock<Option<CT_Document>>,
     nested_namespace_owners: OnceLock<Option<Vec<NestedNamespaceOwner>>>,
+    /// Actual source reads for this opening, independently of writer reuse.
+    source_blocks: OnceLock<Option<MainPartBlocks>>,
     unchanged_main_part: OnceLock<Option<UnchangedMainPart>>,
 }
 
@@ -7237,6 +7239,7 @@ impl Parsed {
             serialization_proof,
             main_document: OnceLock::new(),
             nested_namespace_owners: OnceLock::new(),
+            source_blocks: OnceLock::new(),
             unchanged_main_part: OnceLock::new(),
         }
     }
@@ -8067,6 +8070,23 @@ struct BodyBlockScan {
     /// ineligible or failed parse, not an empty span list.
     namespace_spans: OnceLock<Option<NamespaceSpanProof>>,
     decodes: OnceLock<bool>,
+    scoped_correspondence: OnceLock<ScopedChildCorrespondence>,
+}
+
+#[derive(Clone, PartialEq)]
+struct ScopedNormalizationContext {
+    source_head: Vec<u8>,
+    source_tail: Vec<u8>,
+    normal_head: Vec<u8>,
+    normal_tail: Vec<u8>,
+    writer_frame: (Vec<u8>, Vec<u8>),
+}
+
+#[derive(Clone)]
+struct ScopedChildCorrespondence {
+    context: Arc<ScopedNormalizationContext>,
+    canonical: Arc<BodyBlockScan>,
+    normalized: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -8442,6 +8462,7 @@ impl BodyBlockScan {
             empty_namespace_owners: OnceLock::new(),
             namespace_spans: OnceLock::new(),
             decodes: OnceLock::new(),
+            scoped_correspondence: OnceLock::new(),
         })
     }
 }
@@ -8776,6 +8797,7 @@ impl MainPartBlocks {
                     empty_namespace_owners: OnceLock::new(),
                     namespace_spans: OnceLock::new(),
                     decodes: OnceLock::new(),
+                    scoped_correspondence: OnceLock::new(),
                 }));
             }
         }
@@ -9457,6 +9479,67 @@ fn bytes_declare_namespace(bytes: &[u8]) -> bool {
         .any(|window| window == b"xmlns")
 }
 
+fn scoped_normalization_context(
+    document: &CT_Document,
+    source: &MainPartBlocks,
+    normal: &MainPartBlocks,
+) -> Option<Arc<ScopedNormalizationContext>> {
+    Some(Arc::new(ScopedNormalizationContext {
+        source_head: source.head.clone(),
+        source_tail: source.tail.clone(),
+        normal_head: normal.head.clone(),
+        normal_tail: normal.tail.clone(),
+        writer_frame: document.body_frame_xml().ok()?,
+    }))
+}
+
+/// A successful normalization belongs to these exact source bytes, writer
+/// bytes and frames. It never supplies writer eligibility or a source AST.
+fn scoped_children_correspond(
+    document: &CT_Document,
+    source: &MainPartBlocks,
+    normal: &MainPartBlocks,
+    children: (&Arc<BodyBlockScan>, &Arc<BodyBlockScan>),
+    context: &Arc<ScopedNormalizationContext>,
+    marker: Option<&str>,
+) -> bool {
+    let (left, right) = children;
+    let marker_absent = |bytes: &[u8]| {
+        marker.is_none_or(|marker| {
+            !bytes
+                .windows(marker.len())
+                .any(|part| part == marker.as_bytes())
+        })
+    };
+    if let Some(proof) = left.scoped_correspondence.get()
+        && proof.context.as_ref() == context.as_ref()
+        && proof.canonical.bytes == right.bytes
+    {
+        return marker_absent(&proof.normalized);
+    }
+    let (Some((a, written)), Some((b, again))) = (
+        normalized_scoped_child(document, source, normal, &left.bytes),
+        normalized_scoped_child(document, normal, normal, &right.bytes),
+    ) else {
+        return false;
+    };
+    if a != b || written != again || !marker_absent(&written) {
+        return false;
+    }
+    if a.owner_facts_reusable_by_value()
+        && !holds_field_words(&left.bytes)
+        && !holds_field_words(&right.bytes)
+        && right.scoped_correspondence.get().is_none()
+    {
+        let _ = left.scoped_correspondence.set(ScopedChildCorrespondence {
+            context: Arc::clone(context),
+            canonical: Arc::clone(right),
+            normalized: written,
+        });
+    }
+    true
+}
+
 /// Normalize one actual source child twice under exact source and writer frames.
 fn normalized_scoped_child(
     document: &CT_Document,
@@ -9541,6 +9624,7 @@ impl BodyBlockScan {
             empty_namespace_owners: OnceLock::new(),
             namespace_spans: OnceLock::new(),
             decodes: OnceLock::new(),
+            scoped_correspondence: OnceLock::new(),
         }
     }
 
@@ -9929,6 +10013,7 @@ fn scan_body_block(
             empty_namespace_owners: OnceLock::new(),
             namespace_spans: OnceLock::new(),
             decodes: OnceLock::new(),
+            scoped_correspondence: OnceLock::new(),
         });
     };
     let range = head.len()..head.len() + block.len();
@@ -10032,6 +10117,7 @@ fn child_scan(
         empty_namespace_owners: OnceLock::new(),
         namespace_spans: OnceLock::new(),
         decodes: OnceLock::new(),
+        scoped_correspondence: OnceLock::new(),
     }
 }
 
@@ -23563,6 +23649,16 @@ impl Document {
         if let Some(found) = self.source_blocks_in(&current, record.clone(), xml) {
             return Some(found);
         }
+        if let Some(kept) = self.kept_main_part() {
+            let source = kept.main_part_xml()?;
+            if let Some(producer) = kept
+                .source_blocks
+                .get_or_init(|| self.producer_source_blocks(source, &record))
+                && let Some(found) = self.source_blocks_in(source, producer.clone(), xml)
+            {
+                return Some(found);
+            }
+        }
         // Bootstrap a producer's body-leading whitespace under the exact
         // canonical root and body start. Root aliases and other frame changes
         // still require the whole reader. The empty frame is actually parsed
@@ -23608,6 +23704,107 @@ impl Document {
             namespace_frame_spans: OnceLock::new(),
         };
         self.source_blocks_in(&current, retained, xml)
+    }
+
+    /// Partition a producer frame using physical owner ranges and actual
+    /// one-child reads. These facts do not certify canonical writer bytes.
+    fn producer_source_blocks(
+        &self,
+        source: &[u8],
+        normal: &MainPartBlocks,
+    ) -> Option<MainPartBlocks> {
+        let owners = scan_story_owners(source, StoryKind::Body).ok()?;
+        let body = single_frame_body(&owners, None).ok()?;
+        let body_start = source.get(body.full.start..)?;
+        if !body_start.starts_with(b"<w:body>") && !body_start.starts_with(b"<w:body ") {
+            return None;
+        }
+        let items = direct_story_content_items(source, body).ok()?;
+        let first = items.first()?.full.start;
+        let end = items.last()?.full.end;
+        let head = source.get(..first)?.to_vec();
+        let tail = source.get(end..)?.to_vec();
+        let mut root = root_start_tag(&head)?;
+        root.start += head
+            .get(root.clone())?
+            .iter()
+            .take_while(|b| b.is_ascii_whitespace())
+            .count();
+        let tag = head.get(root.clone())?;
+        if !tag.starts_with(b"<w:document ") {
+            return None;
+        }
+        let frame = CT_Document::from_xml(&[head.as_slice(), tail.as_slice()].concat()).ok()?;
+        if !frame.body.content.is_empty()
+            || frame.to_xml().ok()? != normal.frame.get()?.as_ref()?.to_xml().ok()?
+        {
+            return None;
+        }
+        let scopes = document_namespace_scopes(source).ok()?;
+        if !scopes.body_declarations.is_empty()
+            || scopes
+                .root_declarations
+                .iter()
+                .any(|(name, _)| name == "xmlns")
+        {
+            return None;
+        }
+        let mut blocks = Vec::with_capacity(items.len());
+        let mut at = first;
+        for item in items {
+            if !matches!(
+                item.kind,
+                StoryItemKind::Paragraph | StoryItemKind::Table | StoryItemKind::ContentControl
+            ) || item.full.start < at
+                || !source
+                    .get(at..item.full.start)?
+                    .iter()
+                    .all(u8::is_ascii_whitespace)
+            {
+                return None;
+            }
+            let mut block = BodyBlockScan::from_source(source.get(at..item.full.end)?.to_vec());
+            let child = block.read_source_child(&head, &tail, &scopes)?;
+            if holds_field_words(&block.bytes) || !child.owner_facts_reusable_by_value() {
+                return None;
+            }
+            // The proof above is an actual read under the producer scope.
+            // Canonical serialization remains a separate authority.
+            block.staged = None;
+            blocks.push(Arc::new(block));
+            at = item.full.end;
+        }
+        let record = MainPartBlocks {
+            head,
+            root,
+            tail,
+            blocks,
+            part: Some(Arc::new(source.to_vec())),
+            frame: OnceLock::from(Some(frame)),
+            nested_namespace_owners: OnceLock::new(),
+            identifier_frame: OnceLock::new(),
+            canonical_frame: OnceLock::new(),
+            namespace_frame: OnceLock::new(),
+            namespace_frame_spans: OnceLock::new(),
+        };
+        record.proved_document(source)?;
+        if record.blocks.len() != normal.blocks.len() {
+            return None;
+        }
+        let context = scoped_normalization_context(&self.document, &record, normal)?;
+        for children in record.blocks.iter().zip(&normal.blocks) {
+            if !scoped_children_correspond(
+                &self.document,
+                &record,
+                normal,
+                children,
+                &context,
+                None,
+            ) {
+                return None;
+            }
+        }
+        Some(record)
     }
 
     /// Rebuild one exact source partition. Kept children supply actual parse
@@ -28829,8 +29026,10 @@ impl Document {
         let Some(xml) = self.package.get_part(&self.doc_part_name) else {
             return false;
         };
-        nested_modeled_namespace_owners(xml)
-            .ok()
+        self.kept_main_part()
+            .and_then(|kept| kept.nested_namespace_owners().map(<[_]>::to_vec))
+            .or_else(|| self.main_part_blocks.as_ref()?.retained_nested_owners(xml))
+            .or_else(|| nested_modeled_namespace_owners(xml).ok())
             .is_some_and(|owners| {
                 !owners.is_empty() && owners.iter().all(|owner| owner.local_name == "sdt")
             })
@@ -32346,6 +32545,11 @@ impl Document {
         ) {
             return Some(shadowed_namespace_diagnostic(&prefix));
         }
+        if block_proofs_enabled()
+            && let Some(result) = self.proved_unsavable_body_edit(xml)
+        {
+            return result;
+        }
         if let Some(reason) = replay_unsavable_body_edit(xml, &self.document) {
             return Some(reason);
         }
@@ -32364,6 +32568,60 @@ impl Document {
             }
             Ok(_) => None,
         }
+    }
+
+    /// Reuse source-owner facts only for the exact retained part. Current
+    /// replay and the discarded insertion still get their own writer proof.
+    fn proved_unsavable_body_edit(&self, source: &[u8]) -> Option<Option<String>> {
+        let kept = self.kept_main_part();
+        let owners = if let Some(kept) = &kept {
+            if kept.root_namespace_declarations != self.root_namespace_declarations
+                || kept.body_namespace_declarations != self.body_namespace_declarations
+                || kept.body_namespace_bindings != self.body_namespace_bindings
+            {
+                return None;
+            }
+            kept.nested_namespace_owners()?.to_vec()
+        } else {
+            self.main_part_blocks
+                .as_ref()?
+                .retained_nested_owners(source)?
+        };
+        if owners.is_empty() {
+            return Some(None);
+        }
+        if let Some(prefix) = unsafe_nested_namespace_prefix(&owners) {
+            return Some(Some(shadowed_namespace_diagnostic(&prefix)));
+        }
+        let (xml, record) = self.canonical_source().ok()?;
+        let record = record?;
+        let spans = record.proved_namespace_spans(&xml)?;
+        if let Err(error) =
+            replay_nested_namespace_declarations_with_spans(&xml, &owners, Some(&spans))
+        {
+            return Some(Some(error.to_string()));
+        }
+        let item = BodyContent::Paragraph(Box::new(Self::detached_text_paragraph("")));
+        let mut block = BodyBlockScan::from_source(self.document.body_item_xml(&item).ok()?);
+        block.staged = Some(item);
+        note_staging_work(|work| work.serialized_children += 1);
+        let mut blocks = record.blocks.clone();
+        blocks.push(Arc::new(block));
+        let (probe, mut proof) = MainPartBlocks::assemble(
+            &self.document,
+            blocks,
+            None,
+            Some((&record.head, &record.tail)),
+        )
+        .ok()??;
+        proof.part = Some(Arc::new(probe.clone()));
+        let spans = proof.proved_namespace_spans(&probe)?;
+        Some(
+            replay_nested_namespace_declarations_with_spans(&probe, &owners, Some(&spans))
+                .err()
+                .map(|error| error.to_string())
+                .filter(|message| message.contains("namespace")),
+        )
     }
 
     fn refuse_unsavable_body_edit(&self) -> Result<()> {
@@ -41449,29 +41707,36 @@ impl Document {
                     .ok_or_else(|| {
                         Error::Other(format!("cell {table}:{row}:{cell} is out of range"))
                     })?;
-                let xml = candidate.document.to_xml()?;
-                let owners = scan_story_owners(&xml, StoryKind::Body)?;
-                let mut found = None;
-                for owner in owners
-                    .iter()
-                    .filter(|owner| owner.kind == StoryKind::TableCell)
-                {
-                    let (content, mut ordinal) = modeled_main_cell_route(&xml, owner)?;
-                    let modeled = match candidate.document.body.content.get_mut(content) {
-                        Some(BodyContent::Table(t)) => nth_cell_in_table(t, &mut ordinal),
-                        Some(BodyContent::ContentControl(c)) => {
-                            nth_cell_in_control(c, &mut ordinal)
+                let mut found = candidate
+                    .content_index_of_table(table)
+                    .and_then(|slot| candidate.direct_body_item_location(slot).ok().flatten())
+                    .and_then(|location| candidate.story_table_cell(&location, row, cell).ok());
+                // Tables inside controlled content retain the legacy modeled
+                // pointer correspondence, including its failure behavior.
+                if found.is_none() {
+                    let xml = candidate.document.to_xml()?;
+                    let owners = scan_story_owners(&xml, StoryKind::Body)?;
+                    for owner in owners
+                        .iter()
+                        .filter(|owner| owner.kind == StoryKind::TableCell)
+                    {
+                        let (content, mut ordinal) = modeled_main_cell_route(&xml, owner)?;
+                        let modeled = match candidate.document.body.content.get_mut(content) {
+                            Some(BodyContent::Table(t)) => nth_cell_in_table(t, &mut ordinal),
+                            Some(BodyContent::ContentControl(c)) => {
+                                nth_cell_in_control(c, &mut ordinal)
+                            }
+                            _ => None,
+                        };
+                        if modeled.is_some_and(|c| std::ptr::eq(selected, c)) {
+                            found = Some(StoryId {
+                                kind: owner.kind,
+                                part_name: candidate.doc_part_name.clone(),
+                                owner_index: owner.owner_index,
+                                fingerprint: owner.fingerprint,
+                            });
+                            break;
                         }
-                        _ => None,
-                    };
-                    if modeled.is_some_and(|c| std::ptr::eq(selected, c)) {
-                        found = Some(StoryId {
-                            kind: owner.kind,
-                            part_name: candidate.doc_part_name.clone(),
-                            owner_index: owner.owner_index,
-                            fingerprint: owner.fingerprint,
-                        });
-                        break;
                     }
                 }
                 (
@@ -41767,6 +42032,9 @@ impl Document {
         let Ok(normal_scopes) = document_namespace_scopes(canonical) else {
             return false;
         };
+        let Some(context) = scoped_normalization_context(&self.document, &held, &serialized) else {
+            return false;
+        };
         for (block, normal) in held.blocks.iter().zip(&serialized.blocks) {
             if block.bytes == normal.bytes
                 && block.staged.is_some()
@@ -41782,13 +42050,15 @@ impl Document {
             {
                 continue;
             }
-            match (
-                normalized_scoped_child(&self.document, &held, &serialized, &block.bytes),
-                normalized_scoped_child(&self.document, &serialized, &serialized, &normal.bytes),
+            if !scoped_children_correspond(
+                &self.document,
+                &held,
+                &serialized,
+                (block, normal),
+                &context,
+                Some(&marker),
             ) {
-                (Some((left, a)), Some((right, b)))
-                    if left == right && a == b && occurrences(&a) + occurrences(&b) == 0 => {}
-                _ => return false,
+                return false;
             }
         }
         let (Some((index, at)), Some((retained_index, retained_at))) = (
@@ -48083,6 +48353,214 @@ mod tests {
         assert!(samples[1].1[0] > samples[0].1[0]);
     }
 
+    #[cfg(debug_assertions)]
+    #[test]
+    fn final_gate_namespace_preflight_keeps_proved_owner_work_local() {
+        let mut samples = Vec::new();
+        for count in [25, 100] {
+            let body = format!(
+                "{}<w:sdt xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\"><w:sdtPr><w:tag w:val=\"rows\"/><w15:repeatingSection/></w:sdtPr><w:sdtContent><w:sdt><w:sdtPr><w15:repeatingSectionItem/></w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt></w:sdtContent></w:sdt>",
+                issue407_runs(count)
+            );
+            let mut document = issue407_document(&body, false);
+            assert_eq!(document.unsavable_body_edit(), None);
+            document.try_add_paragraph("first").unwrap();
+            assert_eq!(document.unsavable_body_edit(), None);
+            document.try_add_paragraph("second").unwrap();
+            let reference = document.clone_for_staging();
+            let off = CanonicalBlockProofOff::enter();
+            assert_eq!(reference.unsavable_body_edit(), None);
+            drop(off);
+            let _ = take_staging_work();
+            assert_eq!(document.unsavable_body_edit(), None);
+            let work = take_staging_work();
+            assert_eq!(
+                work[1], 0,
+                "warm preflight rescanned retained XML: {work:?}"
+            );
+            assert!(
+                work[4] <= 2,
+                "warm preflight rewrote unrelated children: {work:?}"
+            );
+            samples.push(work);
+        }
+        assert_eq!(samples[0], samples[1]);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn final_gate_producer_frame_retains_actual_child_reads() {
+        let mut seed = Document::new();
+        seed.add_paragraph("alpha");
+        seed.add_paragraph("untouched");
+        let mut package = OpcPackage::from_reader(Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        let main = "/word/document.xml";
+        let raw = String::from_utf8(package.get_part(main).unwrap().to_vec()).unwrap();
+        let end = raw.find("?>").unwrap() + 2;
+        let producer = format!(
+            "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n{}",
+            &raw[end..]
+        );
+        package.set_part(main, producer.into_bytes());
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let original = Arc::new(document.package.get_part(main).unwrap().to_vec());
+        let (parsed, record) = document
+            .source_blocks(&original)
+            .expect("producer read proof");
+        assert_eq!(parsed, CT_Document::from_xml(&original).unwrap());
+        assert!(
+            record.blocks.iter().all(|block| block.staged.is_none()),
+            "producer read facts must not become writer facts"
+        );
+        assert_eq!(record.proved_document(&original), Some(parsed));
+        let location = document.paragraph_story_location(0).unwrap().unwrap();
+        assert_eq!(
+            document
+                .try_replace_text_at(&location, "alpha", "omega", Some(1))
+                .unwrap()
+                .unwrap(),
+            1
+        );
+        assert_eq!(document.paragraph(0).unwrap().text(), "omega");
+        assert_eq!(document.paragraph(1).unwrap().text(), "untouched");
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn final_gate_producer_scope_reuses_only_unchanged_normalizations() {
+        let mut samples = Vec::new();
+        for count in [25, 100] {
+            let seed = issue407_document(
+                &format!(
+                    "{}<w:p><w:r><w:t>alpha</w:t></w:r></w:p>",
+                    issue407_runs(count)
+                ),
+                false,
+            );
+            let main = seed.doc_part_name.clone();
+            let mut package = seed.package.clone();
+            let raw = String::from_utf8(package.get_part(&main).unwrap().to_vec()).unwrap();
+            let end = raw.find("?>").unwrap() + 2;
+            let raw = format!(
+                "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n{}",
+                &raw[end..]
+            );
+            package.set_part(&main, raw.into_bytes());
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+            for (from, to) in [("alpha", "omega"), ("omega", "bravo")] {
+                let location = document.paragraph_story_location(count).unwrap().unwrap();
+                assert_eq!(
+                    document
+                        .try_replace_text_at(&location, from, to, Some(1))
+                        .unwrap()
+                        .unwrap(),
+                    1
+                );
+            }
+            let location = document.paragraph_story_location(count).unwrap().unwrap();
+            let mut reference = document.clone_for_staging();
+            let _ = take_staging_work();
+            assert_eq!(
+                document
+                    .try_replace_text_at(&location, "bravo", "delta", Some(1))
+                    .unwrap()
+                    .unwrap(),
+                1
+            );
+            let work = take_staging_work();
+            let off = CanonicalBlockProofOff::enter();
+            assert_eq!(
+                reference
+                    .try_replace_text_at(&location, "bravo", "delta", Some(1))
+                    .unwrap()
+                    .unwrap(),
+                1
+            );
+            drop(off);
+            assert_eq!(document.package.parts, reference.package.parts);
+            assert_eq!(
+                document.document.to_xml().unwrap(),
+                reference.document.to_xml().unwrap()
+            );
+            assert_eq!(work[..4], [0; 4], "producer warm scope: {work:?}");
+            samples.push(work);
+            let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            assert_eq!(reopened.paragraph(count).unwrap().text(), "delta");
+        }
+        assert_eq!(samples[0], samples[1]);
+    }
+
+    #[test]
+    fn final_gate_cell_replacement_preserves_controlled_and_direct_routes() {
+        let cell = "<w:tc><w:tcPr/><w:p><w:r><w:t>alpha</w:t></w:r></w:p></w:tc>";
+        let table = format!(
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"1000\"/></w:tblGrid><w:tr>{cell}</w:tr></w:tbl>"
+        );
+        let body = format!("<w:sdt><w:sdtPr/><w:sdtContent>{table}</w:sdtContent></w:sdt>{table}");
+        for index in [0, 1] {
+            let mut document = issue407_document(&body, false);
+            assert_eq!(
+                document.content_index_of_table(index),
+                (index == 1).then_some(1)
+            );
+            assert_eq!(
+                document
+                    .try_replace_text_in_cell((index, 0, 0), None, "alpha", "omega", Some(1))
+                    .unwrap()
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                document.table(index).unwrap().cell(0, 0).unwrap().text(),
+                "omega"
+            );
+            assert_eq!(
+                document
+                    .table(1 - index)
+                    .unwrap()
+                    .cell(0, 0)
+                    .unwrap()
+                    .text(),
+                "alpha"
+            );
+            let before = document.to_bytes().unwrap();
+            assert!(
+                document
+                    .try_replace_text_in_cell((index, 1, 0), None, "alpha", "bad", None)
+                    .is_err()
+            );
+            assert_eq!(document.to_bytes().unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn final_gate_producer_default_namespace_keeps_whole_reader() {
+        let seed = issue407_document("<w:p><w:r><w:t>alpha</w:t></w:r></w:p>", false);
+        let main = seed.doc_part_name.clone();
+        let mut package = seed.package.clone();
+        let raw = String::from_utf8(package.get_part(&main).unwrap().to_vec()).unwrap();
+        let end = raw.find("?>").unwrap() + 2;
+        let raw = format!(
+            "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n{}",
+            &raw[end..]
+        )
+        .replacen("<w:document ", "<w:document xmlns=\"urn:producer\" ", 1);
+        package.set_part(&main, raw.into_bytes());
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let original = Arc::new(document.package.get_part(&main).unwrap().to_vec());
+        assert!(
+            document.source_blocks(&original).is_none(),
+            "default declarations must keep the whole-reader fallback"
+        );
+        assert_eq!(document.paragraph(0).unwrap().text(), "alpha");
+    }
+
     #[test]
     fn scoped_proof_distinguishes_duplicates_markers_and_source_contexts() {
         let mut seed = Document::new();
@@ -49225,6 +49703,7 @@ mod tests {
             empty_namespace_owners: OnceLock::new(),
             namespace_spans: OnceLock::new(),
             decodes: OnceLock::new(),
+            scoped_correspondence: OnceLock::new(),
         });
         let stable_record = document.main_part_blocks.as_ref().unwrap();
         let stable_frame = stable_record
