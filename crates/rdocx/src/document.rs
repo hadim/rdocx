@@ -6729,6 +6729,82 @@ thread_local! {
     static CANONICAL_BLOCK_PROOF_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+// These debug units count actual named transaction clones and current main
+// outputs inside the two immutable read phases. They are not staging slots.
+#[cfg(debug_assertions)]
+thread_local! {
+    static TRANSACTION_WORK: std::cell::Cell<[usize; 6]> = const { std::cell::Cell::new([0; 6]) };
+    static TRANSACTION_OUTPUTS: std::cell::RefCell<std::collections::BTreeMap<String, [usize; 2]>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    static TRANSACTION_READ_PHASE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(debug_assertions)]
+struct TransactionReadPhase(u8);
+
+#[cfg(debug_assertions)]
+impl TransactionReadPhase {
+    fn enter(phase: u8) -> Self {
+        Self(TRANSACTION_READ_PHASE.with(|current| current.replace(phase)))
+    }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for TransactionReadPhase {
+    fn drop(&mut self) {
+        TRANSACTION_READ_PHASE.with(|current| current.set(self.0));
+    }
+}
+
+fn note_transaction_clone() {
+    #[cfg(debug_assertions)]
+    TRANSACTION_WORK.with(|work| {
+        let mut counts = work.get();
+        counts[0] += 1;
+        work.set(counts);
+    });
+}
+
+// Counts outputs where they are actually produced. Copies and rewritten buffers
+// stay distinct from current-model writer calls and from each other.
+fn note_transaction_buffer(kind: &str, bytes: usize) {
+    #[cfg(debug_assertions)]
+    TRANSACTION_READ_PHASE.with(|phase| {
+        let prefix = match phase.get() {
+            1 => "scoped",
+            2 => "picture",
+            _ => return,
+        };
+        TRANSACTION_OUTPUTS.with(|outputs| {
+            let mut outputs = outputs.borrow_mut();
+            let counts = outputs.entry(format!("{prefix}.{kind}")).or_default();
+            counts[0] += 1;
+            counts[1] += bytes;
+        });
+    });
+    #[cfg(not(debug_assertions))]
+    let _ = (kind, bytes);
+}
+
+fn note_transaction_output(kind: &str, bytes: usize) {
+    note_transaction_buffer(kind, bytes);
+    #[cfg(debug_assertions)]
+    TRANSACTION_READ_PHASE.with(|phase| {
+        let index = match phase.get() {
+            1 => 1,
+            2 => 3,
+            _ => return,
+        };
+        TRANSACTION_WORK.with(|work| {
+            let mut counts = work.get();
+            counts[index] += 1;
+            counts[index + 1] += bytes;
+            work.set(counts);
+        });
+    });
+    #[cfg(not(debug_assertions))]
+    let _ = bytes;
+}
+
 fn block_proofs_enabled() -> bool {
     #[cfg(any(test, debug_assertions))]
     {
@@ -7215,6 +7291,14 @@ pub struct Document {
     deterministic_layout_cache: Mutex<Option<Arc<rdocx_layout::WordLayoutResult>>>,
     /// Reusable bundled-font engine with caller faces at highest priority.
     bundled_fallback_layout_engine: Mutex<Option<rdocx_layout::engine::Engine>>,
+}
+
+/// The actual source authority of a consumed staged document. No model copy.
+struct StagedCommitOrigin {
+    package: OpcPackage,
+    signature_invalidated: bool,
+    normal_engine: Mutex<Option<rdocx_layout::engine::Engine>>,
+    bundled_engine: Mutex<Option<rdocx_layout::engine::Engine>>,
 }
 
 /// Package and main-part reads kept for the document opened from them.
@@ -8546,6 +8630,259 @@ impl BodyBlockScan {
     }
 }
 
+/// Canonical facts tied to one immutable document phase, never retained.
+struct PreparedMainRead<'a> {
+    document: &'a Document,
+    xml: Vec<u8>,
+    writer: Option<MainPartBlocks>,
+    content: Range<usize>,
+    children: Vec<Range<usize>>,
+}
+
+impl PreparedMainRead<'_> {
+    fn sources<'a>(&'a self, related: &'a [StorySource<'_>]) -> Vec<StorySource<'a>> {
+        let mut sources = vec![StorySource {
+            root_kind: StoryKind::Body,
+            part_name: self.document.doc_part_name.clone(),
+            xml: Cow::Borrowed(&self.xml),
+        }];
+        sources.extend(related.iter().map(|source| StorySource {
+            root_kind: source.root_kind,
+            part_name: source.part_name.clone(),
+            xml: Cow::Borrowed(source.xml.as_ref()),
+        }));
+        sources
+    }
+
+    fn stories(&self, related: &[StorySource<'_>]) -> Result<Vec<StoryId>> {
+        let main = self
+            .document
+            .main_story_layout(&self.xml, &self.content, &self.children, false)
+            .ok();
+        Document::stories_in_sources(self.sources(related), main, self.children.len())
+    }
+
+    fn owner_and_layout<'a>(
+        &'a self,
+        story: &StoryId,
+        items: bool,
+        related: &'a [StorySource<'_>],
+    ) -> Result<(StorySource<'a>, StoryOwnerSpan, Option<MainStoryLayout>)> {
+        self.document.story_source_owner_and_layout_in(
+            story,
+            items,
+            self.sources(related),
+            &self.content,
+            &self.children,
+        )
+    }
+
+    fn prove_scoped_main_source(
+        &self,
+        canonical: &[u8],
+        canonical_span: Range<usize>,
+        original: &[u8],
+        retained_span: Range<usize>,
+    ) -> Result<()> {
+        if self.scoped_main_source_by_blocks(canonical, &canonical_span, original, &retained_span) {
+            #[cfg(debug_assertions)]
+            without_staging_work(|| {
+                let _reference_only = TransactionReadPhase::enter(0);
+                self.document.prove_whole_scoped_main_source(
+                    canonical,
+                    canonical_span,
+                    original,
+                    retained_span,
+                )
+            })
+            .expect("the child proof differs from the whole scoped proof");
+            return Ok(());
+        }
+        self.document.prove_whole_scoped_main_source(
+            canonical,
+            canonical_span,
+            original,
+            retained_span,
+        )
+    }
+
+    fn scoped_main_source_by_blocks(
+        &self,
+        canonical: &[u8],
+        canonical_span: &Range<usize>,
+        original: &[u8],
+        retained_span: &Range<usize>,
+    ) -> bool {
+        if !block_proofs_enabled() {
+            return false;
+        }
+        let Some(held) = self.document.package_main_part_blocks() else {
+            return false;
+        };
+        let Some(serialized) = self.writer.as_ref() else {
+            return false;
+        };
+        let xml = &self.xml;
+        if xml.as_slice() != canonical
+            || !held.part_partition_matches(original)
+            || !serialized.part_partition_matches(canonical)
+            || held.blocks.len() != serialized.blocks.len()
+        {
+            return false;
+        }
+        let Some(source_frame) = held.frame.get().and_then(Option::as_ref) else {
+            return false;
+        };
+        let Some(normal_frame) = serialized.frame.get().and_then(Option::as_ref) else {
+            return false;
+        };
+        if source_frame.to_xml().ok() != normal_frame.to_xml().ok() {
+            return false;
+        }
+        let reads = |record: &MainPartBlocks| -> bool {
+            let Some(root) = record.head.get(record.root.clone()) else {
+                return false;
+            };
+            xml_decodes(&[record.head.as_slice(), record.tail.as_slice()].concat())
+                && record.blocks.iter().all(|block| block.decodes(root))
+        };
+        if !reads(&held) || !reads(serialized) {
+            return false;
+        }
+        let child = |record: &MainPartBlocks, span: &Range<usize>| -> Option<(usize, usize)> {
+            let (starts, _) = record.child_starts()?;
+            record
+                .blocks
+                .iter()
+                .zip(starts)
+                .enumerate()
+                .find_map(|(i, (block, at))| holds(at, block, span).then_some((i, at)))
+        };
+        let closed =
+            |record: &MainPartBlocks, span: &Range<usize>, part: &[u8]| -> Option<Vec<u8>> {
+                let (index, at) = child(record, span)?;
+                let mut wrapped = record.head.clone();
+                wrapped.extend_from_slice(&record.blocks.get(index)?.bytes);
+                wrapped.extend_from_slice(&record.tail);
+                let position = record.head.len().checked_add(span.start.checked_sub(at)?)?;
+                let scope = story_namespace_scope_at(&wrapped, position).ok()?;
+                close_content_fragment_namespaces(part.get(span.clone())?, &scope).ok()
+            };
+        let Some(owners) = held.retained_nested_owners(original) else {
+            return false;
+        };
+        let Some(targets) = serialized.proved_namespace_spans(canonical) else {
+            return false;
+        };
+        for owner in owners {
+            let Some(original_owner) = closed(&held, &owner.source, original) else {
+                return false;
+            };
+            let mut redundant = 0;
+            for target in targets.iter().filter(|target| {
+                target.local_name == owner.local_name
+                    && owner
+                        .declarations
+                        .iter()
+                        .all(|value| target.declarations.contains(value))
+            }) {
+                let Some(target_owner) = closed(serialized, &(target.start..target.end), canonical)
+                else {
+                    return false;
+                };
+                match comment_namespace_source_boundaries(&original_owner, &target_owner) {
+                    Ok(Some((_, changed))) if changed.is_empty() => redundant += 1,
+                    Ok(_) => {}
+                    Err(_) => return false,
+                }
+            }
+            if redundant != 1 {
+                return false;
+            }
+        }
+        let Ok(marker) = scoped_proof_marker(original, canonical) else {
+            return false;
+        };
+        let occurrences = |bytes: &[u8]| {
+            bytes
+                .windows(marker.len())
+                .filter(|value| *value == marker.as_bytes())
+                .count()
+        };
+        let Ok(source_scopes) = document_namespace_scopes(original) else {
+            return false;
+        };
+        let Ok(normal_scopes) = document_namespace_scopes(canonical) else {
+            return false;
+        };
+        let Some(context) =
+            scoped_normalization_context(&self.document.document, &held, serialized)
+        else {
+            return false;
+        };
+        for (block, normal) in held.blocks.iter().zip(&serialized.blocks) {
+            if block.bytes == normal.bytes
+                && block.staged.is_some()
+                && normal.staged.is_some()
+                && !block.reads_anew()
+                && !normal.reads_anew()
+                && block
+                    .read_child(&held.head, &held.tail, &source_scopes)
+                    .is_some()
+                && normal
+                    .read_child(&serialized.head, &serialized.tail, &normal_scopes)
+                    .is_some()
+            {
+                continue;
+            }
+            if !scoped_children_correspond(
+                &self.document.document,
+                &held,
+                serialized,
+                (block, normal),
+                &context,
+                Some(&marker),
+            ) {
+                return false;
+            }
+        }
+        let (Some((index, at)), Some((retained_index, retained_at))) = (
+            child(serialized, canonical_span),
+            child(&held, retained_span),
+        ) else {
+            return false;
+        };
+        if index != retained_index {
+            return false;
+        }
+        let Some(selected) = closed(serialized, canonical_span, canonical) else {
+            return false;
+        };
+        let Ok(sentinel) = scoped_proof_sentinel(&selected, &marker) else {
+            return false;
+        };
+        let probe = |record: &MainPartBlocks,
+                     span: &Range<usize>,
+                     at: usize|
+         -> Option<(BodyContent, Vec<u8>)> {
+            let mut bytes = record.blocks.get(index)?.bytes.clone();
+            let range = span.start.checked_sub(at)?..span.end.checked_sub(at)?;
+            bytes.get(range.clone())?;
+            bytes.splice(range, sentinel.bytes());
+            normalized_scoped_child(&self.document.document, record, serialized, &bytes)
+        };
+        match (
+            probe(serialized, canonical_span, at),
+            probe(&held, retained_span, retained_at),
+        ) {
+            (Some((left, a)), Some((right, b))) => {
+                left == right && a == b && occurrences(&a) == 1 && occurrences(&b) == 1
+            }
+            _ => false,
+        }
+    }
+}
+
 /// One current main-part byte partition, from a writer or a checked source.
 /// `frame` is this head and tail actually parsed as an empty-body shell. A
 /// producer whitespace frame must normalize to the proved canonical shell.
@@ -8674,6 +9011,20 @@ fn same_query_namespace_bindings(left: &[(String, String)], right: &[(String, St
 }
 
 impl MainPartBlocks {
+    fn body_spans(&self) -> Result<(Range<usize>, Vec<Range<usize>>)> {
+        let start = self.head.len();
+        let mut end = start;
+        let mut children = Vec::with_capacity(self.blocks.len());
+        for block in &self.blocks {
+            let next = end.checked_add(block.bytes.len()).ok_or_else(|| {
+                Error::Other("main-part body span exceeds addressable bytes".to_owned())
+            })?;
+            children.push(end..next);
+            end = next;
+        }
+        Ok((start..end, children))
+    }
+
     fn child_starts(&self) -> Option<(Vec<usize>, usize)> {
         let mut at = self.head.len();
         let mut starts = Vec::with_capacity(self.blocks.len());
@@ -21519,6 +21870,21 @@ impl Document {
         Ok(())
     }
 
+    /// Actual named clones, scoped and picture output calls/bytes, then source
+    /// package-origin clones. Debug builds only, reset on read.
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn take_transaction_work() -> [usize; 6] {
+        TRANSACTION_WORK.with(|work| work.replace([0; 6]))
+    }
+
+    /// Actual phase outputs by provenance, as call and byte counts. Debug only.
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn take_transaction_outputs() -> std::collections::BTreeMap<String, [usize; 2]> {
+        TRANSACTION_OUTPUTS.with(|outputs| std::mem::take(&mut *outputs.borrow_mut()))
+    }
+
     /// Clone all package and typed state while discarding derived layout caches.
     pub fn clone_for_staging(&self) -> Self {
         Self {
@@ -23201,27 +23567,59 @@ impl Document {
     }
 
     /// Commit staged package state without discarding reusable layout work.
-    pub(crate) fn commit_staged_mutation(&mut self, mut candidate: Self) {
+    fn take_staged_commit_origin(&mut self) -> StagedCommitOrigin {
+        let package = self.package.clone();
+        #[cfg(debug_assertions)]
+        TRANSACTION_WORK.with(|work| {
+            let mut counts = work.get();
+            counts[5] += 1;
+            work.set(counts);
+        });
+        StagedCommitOrigin {
+            package,
+            signature_invalidated: self.package_signatures_invalidated,
+            normal_engine: std::mem::replace(&mut self.normal_layout_engine, Mutex::new(None)),
+            bundled_engine: std::mem::replace(
+                &mut self.bundled_fallback_layout_engine,
+                Mutex::new(None),
+            ),
+        }
+    }
+
+    fn finish_staged_candidate(
+        source_package: &OpcPackage,
+        source_invalidated: bool,
+        normal_engine: &mut Mutex<Option<rdocx_layout::engine::Engine>>,
+        bundled_engine: &mut Mutex<Option<rdocx_layout::engine::Engine>>,
+        mut candidate: Self,
+    ) -> Self {
         candidate.package_signatures_invalidated |= candidate
             .package
             .package_rels
             .items
             .iter()
             .any(|relationship| relationship.rel_type == rel_types::DIGITAL_SIGNATURE_ORIGIN)
-            && (self.package_signatures_invalidated
+            && (source_invalidated
                 || crate::embedded::synchronized_package_mutation_invalidates_signature(
-                    &self.package,
+                    source_package,
                     &candidate.package,
                 ));
+        std::mem::swap(normal_engine, &mut candidate.normal_layout_engine);
         std::mem::swap(
-            &mut self.normal_layout_engine,
-            &mut candidate.normal_layout_engine,
-        );
-        std::mem::swap(
-            &mut self.bundled_fallback_layout_engine,
+            bundled_engine,
             &mut candidate.bundled_fallback_layout_engine,
         );
-        *self = candidate;
+        candidate
+    }
+
+    pub(crate) fn commit_staged_mutation(&mut self, candidate: Self) {
+        *self = Self::finish_staged_candidate(
+            &self.package,
+            self.package_signatures_invalidated,
+            &mut self.normal_layout_engine,
+            &mut self.bundled_fallback_layout_engine,
+            candidate,
+        );
     }
 
     /// Open a document from a file path.
@@ -24218,6 +24616,7 @@ impl Document {
             let mut record = record.clone();
             record.part = None;
             drop(scans);
+            note_transaction_output("normalized_opening_copy", xml.len());
             return Ok((xml, Some(record)));
         }
         let (xml, record) = MainPartBlocks::serialize(
@@ -24229,6 +24628,7 @@ impl Document {
             scans.serialized = (!record.head.is_empty()).then(|| record.clone());
         }
         drop(scans);
+        note_transaction_output("assembled_current_writer", xml.len());
         Ok((xml, (!record.head.is_empty()).then_some(record)))
     }
 
@@ -24238,24 +24638,43 @@ impl Document {
         let (xml, mut record) = self.serialized_main_part()?;
         if let Some(record) = &mut record {
             record.part = Some(Arc::new(xml.clone()));
+            note_transaction_buffer("canonical_record_copy", xml.len());
         }
         Ok((xml, record))
+    }
+
+    fn prepared_main_read(&self) -> Result<PreparedMainRead<'_>> {
+        let (xml, writer) = self.canonical_source()?;
+        let (xml, content, children) = match writer.as_ref() {
+            Some(record) => {
+                let (content, children) = record.body_spans()?;
+                (xml, content, children)
+            }
+            None => {
+                note_staging_work(|work| {
+                    work.serialized_children += self.document.body.content.len()
+                });
+                let (xml, content, children) = self.document.to_xml_with_body_spans()?;
+                note_transaction_output("current_span_writer", xml.len());
+                (xml, content, children)
+            }
+        };
+        Ok(PreparedMainRead {
+            document: self,
+            xml,
+            writer,
+            content,
+            children,
+        })
     }
 
     #[allow(clippy::type_complexity)]
     fn main_part_with_body_spans(&self) -> Result<(Vec<u8>, Range<usize>, Vec<Range<usize>>)> {
         let (xml, record) = self.serialized_main_part()?;
         if let Some(record) = record {
-            let start = record.head.len();
-            let mut end = start;
-            let mut children = Vec::with_capacity(record.blocks.len());
-            for block in &record.blocks {
-                let next = end.checked_add(block.bytes.len()).ok_or_else(|| {
-                    Error::Other("main-part body span exceeds addressable bytes".to_owned())
-                })?;
-                children.push(end..next);
-                end = next;
-            }
+            let (content, children) = record.body_spans()?;
+            let start = content.start;
+            let end = content.end;
             #[cfg(debug_assertions)]
             without_staging_work(|| {
                 assert_eq!(
@@ -25851,9 +26270,17 @@ impl Document {
     /// Discover every supported Word story owner in stable document and
     /// relationship order.
     pub fn stories(&self) -> Result<Vec<StoryId>> {
+        let (sources, main, child_count) = self.story_sources_and_main_layout(false)?;
+        Self::stories_in_sources(sources, main, child_count)
+    }
+
+    fn stories_in_sources(
+        sources: Vec<StorySource<'_>>,
+        main: Option<MainStoryLayout>,
+        _child_count: usize,
+    ) -> Result<Vec<StoryId>> {
         let mut stories = Vec::new();
         let mut seen = HashSet::new();
-        let (sources, main, _child_count) = self.story_sources_and_main_layout(false)?;
         for (index, source) in sources.into_iter().enumerate() {
             let owners = match main.as_ref().filter(|_| index == 0) {
                 Some(layout) => layout.owners(&source.xml)?,
@@ -25893,7 +26320,18 @@ impl Document {
         story: &StoryId,
         items: bool,
     ) -> Result<(StorySource<'a>, StoryOwnerSpan, Option<MainStoryLayout>)> {
-        let (mut sources, content, children) = self.spanned_story_sources()?;
+        let (sources, content, children) = self.spanned_story_sources()?;
+        self.story_source_owner_and_layout_in(story, items, sources, &content, &children)
+    }
+
+    fn story_source_owner_and_layout_in<'a>(
+        &self,
+        story: &StoryId,
+        items: bool,
+        mut sources: Vec<StorySource<'a>>,
+        content: &Range<usize>,
+        children: &[Range<usize>],
+    ) -> Result<(StorySource<'a>, StoryOwnerSpan, Option<MainStoryLayout>)> {
         let source = sources.iter().position(|source| {
             source.part_name == story.part_name
                 && (source.root_kind == story.kind
@@ -25903,7 +26341,7 @@ impl Document {
             Some(index) => {
                 let source = sources.swap_remove(index);
                 let layout = if index == 0 {
-                    self.main_story_layout(&source.xml, &content, &children, items)
+                    self.main_story_layout(&source.xml, content, children, items)
                         .ok()
                 } else {
                     None
@@ -27512,6 +27950,7 @@ impl Document {
     // qualify every owner before a restored declaration can reinterpret a name.
     fn namespace_restored_main_source(&self) -> Result<Vec<u8>> {
         let canonical = self.document.to_xml()?;
+        note_transaction_output("namespace_current_writer", canonical.len());
         let original = self
             .package
             .get_part(&self.doc_part_name)
@@ -27556,6 +27995,7 @@ impl Document {
             }
         }
         let restored = replay_nested_namespace_declarations(&canonical, &needed)?;
+        note_transaction_buffer("namespace_replay_output", restored.len());
         if restored == canonical {
             return Ok(canonical);
         }
@@ -28280,6 +28720,75 @@ impl Document {
         height: Option<Length>,
         options: Option<PictureOptions>,
     ) -> Result<ContentLocation> {
+        let options = Self::checked_insertion_picture_options(
+            image_data,
+            image_filename,
+            width,
+            height,
+            options,
+        )?;
+        let candidate = self.clone_for_staging();
+        note_transaction_clone();
+        let (updated, location) = Self::insert_picture_candidate(
+            candidate,
+            story,
+            after,
+            image_data,
+            image_filename,
+            options,
+        )?;
+        self.commit_staged_mutation(updated);
+        Ok(location)
+    }
+
+    /// Consume a private candidate using the same checked picture transaction.
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_picture_to_story_with_options_owned(
+        mut self,
+        story: &StoryId,
+        after: Option<&ContentLocation>,
+        image_data: &[u8],
+        image_filename: &str,
+        width: Option<Length>,
+        height: Option<Length>,
+        options: Option<PictureOptions>,
+    ) -> Result<(Self, ContentLocation)> {
+        let options = Self::checked_insertion_picture_options(
+            image_data,
+            image_filename,
+            width,
+            height,
+            options,
+        )?;
+        let mut origin = self.take_staged_commit_origin();
+        let (updated, location) = Self::insert_picture_candidate(
+            self,
+            story,
+            after,
+            image_data,
+            image_filename,
+            options,
+        )?;
+        Ok((
+            Self::finish_staged_candidate(
+                &origin.package,
+                origin.signature_invalidated,
+                &mut origin.normal_engine,
+                &mut origin.bundled_engine,
+                updated,
+            ),
+            location,
+        ))
+    }
+
+    fn checked_insertion_picture_options(
+        image_data: &[u8],
+        image_filename: &str,
+        width: Option<Length>,
+        height: Option<Length>,
+        options: Option<PictureOptions>,
+    ) -> Result<PictureOptions> {
         let format = oxml_media::ImageFormat::sniff(image_data)
             .ok_or_else(|| Error::Other("picture image bytes are unsupported".to_owned()))?;
         if matches!(
@@ -28327,7 +28836,17 @@ impl Document {
         options.width = width;
         options.height = height;
         validate_picture_options(&options)?;
-        let mut candidate = self.clone_for_staging();
+        Ok(options)
+    }
+
+    fn insert_picture_candidate(
+        mut candidate: Self,
+        story: &StoryId,
+        after: Option<&ContentLocation>,
+        image_data: &[u8],
+        image_filename: &str,
+        options: PictureOptions,
+    ) -> Result<(Self, ContentLocation)> {
         candidate.flush_to_package()?;
         let (source, mut story_owner) = candidate.story_source_and_owner(story)?;
         let part_name = source.part_name.clone();
@@ -28405,8 +28924,12 @@ impl Document {
         }
         let reopened = candidate.prepare_and_reopen_staged()?;
         let location = {
-            let refreshed_story = reopened
-                .stories()?
+            #[cfg(debug_assertions)]
+            let _read_phase = TransactionReadPhase::enter(2);
+            let read = reopened.prepared_main_read()?;
+            let related = reopened.related_story_sources()?;
+            let refreshed_story = read
+                .stories(&related)?
                 .into_iter()
                 .inspect(|_| {
                     #[cfg(test)]
@@ -28418,7 +28941,7 @@ impl Document {
                         && candidate.owner_index == story.owner_index
                 })
                 .ok_or_else(|| Error::Other("inserted picture story was not found".to_owned()))?;
-            let (source, owner) = reopened.story_source_and_owner(&refreshed_story)?;
+            let (source, owner, _) = read.owner_and_layout(&refreshed_story, false, &related)?;
             let direct = direct_story_content_items(source.xml.as_ref(), &owner)?;
             let inserted = direct.get(inserted_direct_index).ok_or_else(|| {
                 Error::Other("inserted picture paragraph was not found".to_owned())
@@ -28436,8 +28959,7 @@ impl Document {
                 })?;
             ContentLocation::new(refreshed_story, StoryItemKind::Paragraph, vec![index])
         };
-        self.commit_staged_mutation(reopened);
-        Ok(location)
+        Ok((reopened, location))
     }
 
     /// Append one configured picture paragraph to a checked story owner.
@@ -42728,7 +43250,106 @@ impl Document {
         expected: Option<usize>,
     ) -> Result<std::result::Result<usize, ReplacementCountMismatch>> {
         oxml_core::xml::reject_non_xml_characters("replacement text", replacement)?;
-        let mut candidate = self.clone_for_staging();
+        let candidate = self.clone_for_staging();
+        note_transaction_clone();
+        match Self::replace_scoped_candidate(candidate, target, placeholder, replacement, expected)?
+        {
+            Err(mismatch) => Ok(Err(mismatch)),
+            Ok(None) => Ok(Ok(0)),
+            Ok(Some((updated, count))) => {
+                self.commit_staged_mutation(updated);
+                Ok(Ok(count))
+            }
+        }
+    }
+
+    /// Consume an already private candidate. No change or mismatch returns no candidate.
+    #[doc(hidden)]
+    pub fn try_replace_text_at_owned(
+        self,
+        location: &ContentLocation,
+        placeholder: &str,
+        replacement: &str,
+        expected: Option<usize>,
+    ) -> Result<std::result::Result<Option<(Self, usize)>, ReplacementCountMismatch>> {
+        self.replace_scoped_owned(
+            ScopedReplacementTarget::Item(location),
+            placeholder,
+            replacement,
+            expected,
+        )
+    }
+
+    /// Consume an already private candidate. No change or mismatch returns no candidate.
+    #[doc(hidden)]
+    pub fn try_replace_text_in_cell_owned(
+        self,
+        cell: (usize, usize, usize),
+        paragraph: Option<usize>,
+        placeholder: &str,
+        replacement: &str,
+        expected: Option<usize>,
+    ) -> Result<std::result::Result<Option<(Self, usize)>, ReplacementCountMismatch>> {
+        self.replace_scoped_owned(
+            ScopedReplacementTarget::Cell {
+                coordinates: cell,
+                paragraph,
+            },
+            placeholder,
+            replacement,
+            expected,
+        )
+    }
+
+    /// Consume an already private candidate. No change or mismatch returns no candidate.
+    #[doc(hidden)]
+    pub fn try_replace_text_in_story_cell_owned(
+        self,
+        story: &StoryId,
+        placeholder: &str,
+        replacement: &str,
+        expected: Option<usize>,
+    ) -> Result<std::result::Result<Option<(Self, usize)>, ReplacementCountMismatch>> {
+        self.replace_scoped_owned(
+            ScopedReplacementTarget::RelatedCell(story),
+            placeholder,
+            replacement,
+            expected,
+        )
+    }
+
+    fn replace_scoped_owned(
+        mut self,
+        target: ScopedReplacementTarget<'_>,
+        placeholder: &str,
+        replacement: &str,
+        expected: Option<usize>,
+    ) -> Result<std::result::Result<Option<(Self, usize)>, ReplacementCountMismatch>> {
+        oxml_core::xml::reject_non_xml_characters("replacement text", replacement)?;
+        let mut origin = self.take_staged_commit_origin();
+        match Self::replace_scoped_candidate(self, target, placeholder, replacement, expected)? {
+            Err(mismatch) => Ok(Err(mismatch)),
+            Ok(None) => Ok(Ok(None)),
+            Ok(Some((updated, count))) => Ok(Ok(Some((
+                Self::finish_staged_candidate(
+                    &origin.package,
+                    origin.signature_invalidated,
+                    &mut origin.normal_engine,
+                    &mut origin.bundled_engine,
+                    updated,
+                ),
+                count,
+            )))),
+        }
+    }
+
+    fn replace_scoped_candidate(
+        mut candidate: Self,
+        target: ScopedReplacementTarget<'_>,
+        placeholder: &str,
+        replacement: &str,
+        expected: Option<usize>,
+    ) -> Result<std::result::Result<Option<(Self, usize)>, ReplacementCountMismatch>> {
         let (story, path, paragraph) = match target {
             ScopedReplacementTarget::Item(location) => {
                 if location.is_end
@@ -42824,8 +43445,12 @@ impl Document {
         };
         // Flush only the private candidate before choosing the preserved physical span.
         candidate.prepare_staged_package()?;
+        #[cfg(debug_assertions)]
+        let read_phase = TransactionReadPhase::enter(1);
+        let read = candidate.prepared_main_read()?;
+        let related = candidate.related_story_sources()?;
         let (canonical, canonical_owner, layout) =
-            candidate.story_source_owner_and_layout(&story, path.is_some())?;
+            read.owner_and_layout(&story, path.is_some(), &related)?;
         let (source, owner, actual_owners) =
             candidate.fragment_story_source_from_canonical(&story, &canonical)?;
         let canonical_owners = match &layout {
@@ -42903,7 +43528,7 @@ impl Document {
             (canonical_owner.full.clone(), owner.full.clone())
         };
         if source.part_name == candidate.doc_part_name {
-            candidate.prove_scoped_main_source(
+            read.prove_scoped_main_source(
                 &canonical.xml,
                 canonical_span,
                 &source.xml,
@@ -42935,7 +43560,7 @@ impl Document {
             }));
         }
         if count == 0 {
-            return Ok(Ok(0));
+            return Ok(Ok(None));
         }
         if let Some(edits) = paired_scoped_edits(
             &xml,
@@ -42954,6 +43579,11 @@ impl Document {
         } else {
             xml.splice(span, raw);
         }
+        drop(canonical);
+        drop(read);
+        drop(related);
+        #[cfg(debug_assertions)]
+        drop(read_phase);
         set_story_source_xml(&mut candidate, &part, xml)?;
         candidate.prepare_staged_package()?;
         let limits = PackageReadLimits::UNBOUNDED;
@@ -42967,13 +43597,13 @@ impl Document {
             limits
         };
         let reopened = candidate.reopen_prepared_staged_with_limits(limits)?;
-        self.commit_staged_mutation(reopened);
-        Ok(Ok(count))
+        Ok(Ok(Some((reopened, count))))
     }
 
     // A private model probe distinguishes physical positions even when siblings
     // contain identical text. Producer normalization is allowed, raw output is
     // still edited only at the proved retained span.
+    #[cfg(test)]
     fn prove_scoped_main_source(
         &self,
         canonical: &[u8],
@@ -42997,6 +43627,7 @@ impl Document {
         self.prove_whole_scoped_main_source(canonical, canonical_span, original, retained_span)
     }
 
+    #[cfg(test)]
     fn scoped_main_source_by_blocks(
         &self,
         canonical: &[u8],
@@ -43004,171 +43635,9 @@ impl Document {
         original: &[u8],
         retained_span: &Range<usize>,
     ) -> bool {
-        if !block_proofs_enabled() {
-            return false;
-        }
-        let Some(held) = self.package_main_part_blocks() else {
-            return false;
-        };
-        let Ok((xml, Some(serialized))) = self.canonical_source() else {
-            return false;
-        };
-        if xml != canonical
-            || !held.part_partition_matches(original)
-            || !serialized.part_partition_matches(canonical)
-            || held.blocks.len() != serialized.blocks.len()
-        {
-            return false;
-        }
-        let Some(source_frame) = held.frame.get().and_then(Option::as_ref) else {
-            return false;
-        };
-        let Some(normal_frame) = serialized.frame.get().and_then(Option::as_ref) else {
-            return false;
-        };
-        if source_frame.to_xml().ok() != normal_frame.to_xml().ok() {
-            return false;
-        }
-        let reads = |record: &MainPartBlocks| -> bool {
-            let Some(root) = record.head.get(record.root.clone()) else {
-                return false;
-            };
-            xml_decodes(&[record.head.as_slice(), record.tail.as_slice()].concat())
-                && record.blocks.iter().all(|block| block.decodes(root))
-        };
-        if !reads(&held) || !reads(&serialized) {
-            return false;
-        }
-        let child = |record: &MainPartBlocks, span: &Range<usize>| -> Option<(usize, usize)> {
-            let (starts, _) = record.child_starts()?;
-            record
-                .blocks
-                .iter()
-                .zip(starts)
-                .enumerate()
-                .find_map(|(i, (block, at))| holds(at, block, span).then_some((i, at)))
-        };
-        let closed =
-            |record: &MainPartBlocks, span: &Range<usize>, part: &[u8]| -> Option<Vec<u8>> {
-                let (index, at) = child(record, span)?;
-                let mut wrapped = record.head.clone();
-                wrapped.extend_from_slice(&record.blocks.get(index)?.bytes);
-                wrapped.extend_from_slice(&record.tail);
-                let position = record.head.len().checked_add(span.start.checked_sub(at)?)?;
-                let scope = story_namespace_scope_at(&wrapped, position).ok()?;
-                close_content_fragment_namespaces(part.get(span.clone())?, &scope).ok()
-            };
-        let Some(owners) = held.retained_nested_owners(original) else {
-            return false;
-        };
-        let Some(targets) = serialized.proved_namespace_spans(canonical) else {
-            return false;
-        };
-        for owner in owners {
-            let Some(original_owner) = closed(&held, &owner.source, original) else {
-                return false;
-            };
-            let mut redundant = 0;
-            for target in targets.iter().filter(|target| {
-                target.local_name == owner.local_name
-                    && owner
-                        .declarations
-                        .iter()
-                        .all(|value| target.declarations.contains(value))
-            }) {
-                let Some(target_owner) =
-                    closed(&serialized, &(target.start..target.end), canonical)
-                else {
-                    return false;
-                };
-                match comment_namespace_source_boundaries(&original_owner, &target_owner) {
-                    Ok(Some((_, changed))) if changed.is_empty() => redundant += 1,
-                    Ok(_) => {}
-                    Err(_) => return false,
-                }
-            }
-            if redundant != 1 {
-                return false;
-            }
-        }
-        let Ok(marker) = scoped_proof_marker(original, canonical) else {
-            return false;
-        };
-        let occurrences = |bytes: &[u8]| {
-            bytes
-                .windows(marker.len())
-                .filter(|value| *value == marker.as_bytes())
-                .count()
-        };
-        let Ok(source_scopes) = document_namespace_scopes(original) else {
-            return false;
-        };
-        let Ok(normal_scopes) = document_namespace_scopes(canonical) else {
-            return false;
-        };
-        let Some(context) = scoped_normalization_context(&self.document, &held, &serialized) else {
-            return false;
-        };
-        for (block, normal) in held.blocks.iter().zip(&serialized.blocks) {
-            if block.bytes == normal.bytes
-                && block.staged.is_some()
-                && normal.staged.is_some()
-                && !block.reads_anew()
-                && !normal.reads_anew()
-                && block
-                    .read_child(&held.head, &held.tail, &source_scopes)
-                    .is_some()
-                && normal
-                    .read_child(&serialized.head, &serialized.tail, &normal_scopes)
-                    .is_some()
-            {
-                continue;
-            }
-            if !scoped_children_correspond(
-                &self.document,
-                &held,
-                &serialized,
-                (block, normal),
-                &context,
-                Some(&marker),
-            ) {
-                return false;
-            }
-        }
-        let (Some((index, at)), Some((retained_index, retained_at))) = (
-            child(&serialized, canonical_span),
-            child(&held, retained_span),
-        ) else {
-            return false;
-        };
-        if index != retained_index {
-            return false;
-        }
-        let Some(selected) = closed(&serialized, canonical_span, canonical) else {
-            return false;
-        };
-        let Ok(sentinel) = scoped_proof_sentinel(&selected, &marker) else {
-            return false;
-        };
-        let probe = |record: &MainPartBlocks,
-                     span: &Range<usize>,
-                     at: usize|
-         -> Option<(BodyContent, Vec<u8>)> {
-            let mut bytes = record.blocks.get(index)?.bytes.clone();
-            let range = span.start.checked_sub(at)?..span.end.checked_sub(at)?;
-            bytes.get(range.clone())?;
-            bytes.splice(range, sentinel.bytes());
-            normalized_scoped_child(&self.document, record, &serialized, &bytes)
-        };
-        match (
-            probe(&serialized, canonical_span, at),
-            probe(&held, retained_span, retained_at),
-        ) {
-            (Some((left, a)), Some((right, b))) => {
-                left == right && a == b && occurrences(&a) == 1 && occurrences(&b) == 1
-            }
-            _ => false,
-        }
+        self.prepared_main_read().is_ok_and(|read| {
+            read.scoped_main_source_by_blocks(canonical, canonical_span, original, retained_span)
+        })
     }
 
     fn prove_whole_scoped_main_source(
@@ -43191,14 +43660,19 @@ impl Document {
             .ok_or_else(|| Error::Other("scoped end has no physical namespace boundary".into()))?;
         // One typed serialization establishes the same canonical defaults and
         // root namespace inventory on both sides before model comparison.
-        let normalize = |xml: &[u8]| -> Result<CT_Document> {
+        let normalize = |xml: &[u8], kind: &str| -> Result<CT_Document> {
             note_staging_work(|work| work.parsed += xml.len());
             let written = CT_Document::from_xml(xml)?.to_xml()?;
+            note_transaction_buffer(kind, written.len());
             note_staging_work(|work| work.parsed += written.len());
             Ok(CT_Document::from_xml(&written)?)
         };
-        let baseline = normalize(original)?;
-        if normalize(&self.document.to_xml()?)? != baseline || normalize(&restored)? != baseline {
+        let baseline = normalize(original, "normalized_retained_writer")?;
+        let current = self.document.to_xml()?;
+        note_transaction_output("proof_current_writer", current.len());
+        if normalize(&current, "normalized_current_writer")? != baseline
+            || normalize(&restored, "normalized_restored_writer")? != baseline
+        {
             return Err(Error::Other(
                 "scoped source has no equivalent checked model projection".into(),
             ));
@@ -43209,13 +43683,17 @@ impl Document {
         let sentinel = scoped_proof_sentinel(&selected_closed, &marker)?;
         let mut checked_probe = restored;
         checked_probe.splice(start..end, sentinel.bytes());
+        note_transaction_buffer("masked_checked_rewrite", checked_probe.len());
         let mut retained_probe = original.to_vec();
+        note_transaction_buffer("retained_probe_copy", retained_probe.len());
         retained_probe.splice(retained_span, sentinel.bytes());
-        let checked_model = normalize(&checked_probe)?;
-        let retained_model = normalize(&retained_probe)?;
+        note_transaction_buffer("masked_retained_rewrite", retained_probe.len());
+        let checked_model = normalize(&checked_probe, "normalized_masked_checked_writer")?;
+        let retained_model = normalize(&retained_probe, "normalized_masked_retained_writer")?;
         let occurrences = |model: &CT_Document| -> Result<usize> {
-            Ok(model
-                .to_xml()?
+            let written = model.to_xml()?;
+            note_transaction_buffer("masked_occurrence_writer", written.len());
+            Ok(written
                 .windows(marker.len())
                 .filter(|bytes| *bytes == marker.as_bytes())
                 .count())
@@ -50218,6 +50696,331 @@ mod tests {
         let document = Document::from_bytes(output.get_ref()).unwrap();
         document.serialized_main_part().unwrap();
         document
+    }
+
+    fn owned_transaction_seed() -> Document {
+        let mut seed = Document::new();
+        seed.add_paragraph("alpha body");
+        seed.add_table(1, 1)
+            .cell(0, 0)
+            .unwrap()
+            .set_text("alpha cell");
+        Document::from_bytes(&seed.to_bytes().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn owned_transactions_match_borrowed_routes_and_keep_real_clone_control() {
+        for route in 0..3 {
+            let seed = owned_transaction_seed();
+            let location = seed.paragraph_story_location(0).unwrap().unwrap();
+            let table = seed.direct_body_item_location(1).unwrap().unwrap();
+            let story = seed.story_table_cell(&table, 0, 0).unwrap();
+            let mut borrowed = seed.clone_for_staging();
+            #[cfg(debug_assertions)]
+            let _ = Document::take_transaction_work();
+            let count = match route {
+                0 => borrowed.try_replace_text_at(&location, "alpha", "omega", Some(1)),
+                1 => borrowed.try_replace_text_in_cell((0, 0, 0), None, "alpha", "omega", Some(1)),
+                _ => borrowed.try_replace_text_in_story_cell(&story, "alpha", "omega", Some(1)),
+            }
+            .unwrap()
+            .unwrap();
+            assert_eq!(count, 1);
+            #[cfg(debug_assertions)]
+            assert!(
+                Document::take_transaction_work()[0] > 0,
+                "real old entry did not clone"
+            );
+            let candidate = seed.clone_for_staging();
+            #[cfg(debug_assertions)]
+            let _ = Document::take_transaction_work();
+            let changed = match route {
+                0 => candidate.try_replace_text_at_owned(&location, "alpha", "omega", Some(1)),
+                1 => candidate.try_replace_text_in_cell_owned(
+                    (0, 0, 0),
+                    None,
+                    "alpha",
+                    "omega",
+                    Some(1),
+                ),
+                _ => candidate.try_replace_text_in_story_cell_owned(
+                    &story,
+                    "alpha",
+                    "omega",
+                    Some(1),
+                ),
+            }
+            .unwrap()
+            .unwrap()
+            .unwrap();
+            assert_eq!(changed.1, 1);
+            #[cfg(debug_assertions)]
+            {
+                let work = Document::take_transaction_work();
+                assert_eq!(work[0], 0, "owned candidate was cloned: {work:?}");
+                assert_eq!(
+                    work[5], 1,
+                    "actual source package origin not retained: {work:?}"
+                );
+            }
+            assert_eq!(borrowed.package.parts, changed.0.package.parts);
+            assert_eq!(
+                borrowed.document.to_xml().unwrap(),
+                changed.0.document.to_xml().unwrap()
+            );
+            assert!(
+                seed.clone_for_staging()
+                    .try_replace_text_at_owned(&location, "absent", "omega", Some(0))
+                    .unwrap()
+                    .unwrap()
+                    .is_none()
+            );
+            let mismatch = seed
+                .clone_for_staging()
+                .try_replace_text_at_owned(&location, "alpha", "omega", Some(2))
+                .unwrap();
+            assert!(matches!(
+                mismatch,
+                Err(ReplacementCountMismatch {
+                    found: 1,
+                    expected: 2,
+                    ..
+                })
+            ));
+            let before = seed.package.parts.clone();
+            FAIL_NEXT_SCOPED_REOPEN.set(true);
+            assert!(
+                seed.clone_for_staging()
+                    .try_replace_text_at_owned(&location, "alpha", "omega", Some(1))
+                    .is_err()
+            );
+            assert!(!FAIL_NEXT_SCOPED_REOPEN.get());
+            assert_eq!(seed.package.parts, before);
+        }
+    }
+
+    #[test]
+    fn owned_picture_transaction_matches_old_route_and_reopen_failure() {
+        let seed = owned_transaction_seed();
+        for target in 0..2 {
+            let story = if target == 0 {
+                seed.stories()
+                    .unwrap()
+                    .into_iter()
+                    .find(|story| story.kind() == StoryKind::Body)
+                    .unwrap()
+            } else {
+                let table = seed.direct_body_item_location(1).unwrap().unwrap();
+                seed.story_table_cell(&table, 0, 0).unwrap()
+            };
+            let mut borrowed = seed.clone_for_staging();
+            let location = borrowed
+                .insert_picture_to_story_with_options(
+                    &story,
+                    None,
+                    super::watermark_tests::PNG,
+                    "pixel.png",
+                    Some(Length::pt(12.0)),
+                    Some(Length::pt(15.0)),
+                    None,
+                )
+                .unwrap();
+            let (owned, owned_location) = seed
+                .clone_for_staging()
+                .insert_picture_to_story_with_options_owned(
+                    &story,
+                    None,
+                    super::watermark_tests::PNG,
+                    "pixel.png",
+                    Some(Length::pt(12.0)),
+                    Some(Length::pt(15.0)),
+                    None,
+                )
+                .unwrap();
+            assert_eq!(owned_location, location);
+            assert_eq!(owned.package.parts, borrowed.package.parts);
+            assert_eq!(owned.pictures().unwrap(), borrowed.pictures().unwrap());
+            FAIL_NEXT_STAGED_REOPEN.set(true);
+            assert!(
+                seed.clone_for_staging()
+                    .insert_picture_to_story_with_options_owned(
+                        &story,
+                        None,
+                        super::watermark_tests::PNG,
+                        "pixel.png",
+                        Some(Length::pt(12.0)),
+                        Some(Length::pt(15.0)),
+                        None
+                    )
+                    .is_err()
+            );
+            assert!(!FAIL_NEXT_STAGED_REOPEN.get());
+        }
+    }
+
+    #[test]
+    fn owned_transaction_preserves_complete_engine_mutexes() {
+        let seed = owned_transaction_seed();
+        seed.layout_with_fonts_and_bundled_fallback(&[]).unwrap();
+        assert!(
+            seed.bundled_fallback_layout_engine
+                .lock()
+                .unwrap()
+                .is_some()
+        );
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _lock = seed.normal_layout_engine.lock().unwrap();
+            panic!("poison only the original engine mutex");
+        }));
+        assert!(seed.normal_layout_engine.is_poisoned());
+        let location = seed.paragraph_story_location(0).unwrap().unwrap();
+        let (owned, _) = seed
+            .try_replace_text_at_owned(&location, "alpha", "omega", Some(1))
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            owned.normal_layout_engine.is_poisoned(),
+            "whole original mutex was lost"
+        );
+        assert!(
+            owned
+                .bundled_fallback_layout_engine
+                .lock()
+                .unwrap()
+                .is_some()
+        );
+        owned.layout_with_fonts_and_bundled_fallback(&[]).unwrap();
+    }
+
+    #[cfg(all(feature = "digital-signatures", not(target_arch = "wasm32")))]
+    #[test]
+    fn owned_transaction_keeps_original_signed_package_authority() {
+        let mut seed = owned_transaction_seed();
+        seed.sign(
+            &signature_fixture("TEST_PRIVATE_KEY_PKCS8_BASE64"),
+            &signature_fixture("TEST_CERTIFICATE_DER_BASE64"),
+        )
+        .unwrap();
+        let location = seed.paragraph_story_location(0).unwrap().unwrap();
+        let mut borrowed = seed.clone_for_staging();
+        assert_eq!(
+            borrowed
+                .try_replace_text_at(&location, "alpha", "omega", Some(1))
+                .unwrap()
+                .unwrap(),
+            1
+        );
+        let (owned, _) = seed
+            .try_replace_text_at_owned(&location, "alpha", "omega", Some(1))
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            owned.package_signatures_invalidated,
+            borrowed.package_signatures_invalidated
+        );
+        assert!(owned.package_signatures_invalidated);
+        assert_eq!(owned.package.parts, borrowed.package.parts);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn prepared_main_read_has_real_old_duplicate_query_control() {
+        let mut document = owned_transaction_seed();
+        for (old, new) in [("alpha", "omega"), ("omega", "alpha")] {
+            let location = document.paragraph_story_location(0).unwrap().unwrap();
+            document
+                .try_replace_text_at(&location, old, new, Some(1))
+                .unwrap()
+                .unwrap();
+        }
+        let original = document.package.get_part(&document.doc_part_name).unwrap();
+        let owner = scan_story_owners(original, StoryKind::Body)
+            .unwrap()
+            .into_iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .unwrap();
+        let retained = direct_story_content_items(original, &owner).unwrap()[0]
+            .full
+            .clone();
+        let _ = Document::take_transaction_work();
+        let phase = TransactionReadPhase::enter(1);
+        let read = document.prepared_main_read().unwrap();
+        let span = read.children[0].clone();
+        read.prove_scoped_main_source(&read.xml, span.clone(), original, retained.clone())
+            .unwrap();
+        drop(phase);
+        assert_eq!(Document::take_transaction_work()[1], 1);
+        let phase = TransactionReadPhase::enter(1);
+        let read = document.prepared_main_read().unwrap();
+        // This is the real old route: a second current writer query in the same phase.
+        document
+            .prove_scoped_main_source(&read.xml, span, original, retained)
+            .unwrap();
+        drop(phase);
+        assert!(Document::take_transaction_work()[1] > 1);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn scoped_production_fallback_outputs_are_classified_and_not_paused() {
+        let mut document = owned_transaction_seed();
+        for (old, new) in [("alpha", "omega"), ("omega", "alpha")] {
+            let location = document.paragraph_story_location(0).unwrap().unwrap();
+            document
+                .try_replace_text_at(&location, old, new, Some(1))
+                .unwrap()
+                .unwrap();
+        }
+        for force_off in [false, true] {
+            let _off = force_off.then(CanonicalBlockProofOff::enter);
+            let original = document.package.get_part(&document.doc_part_name).unwrap();
+            let owner = scan_story_owners(original, StoryKind::Body)
+                .unwrap()
+                .into_iter()
+                .find(|owner| owner.kind == StoryKind::Body)
+                .unwrap();
+            let retained = direct_story_content_items(original, &owner).unwrap()[0]
+                .full
+                .clone();
+            let _ = Document::take_transaction_work();
+            let _ = Document::take_transaction_outputs();
+            let phase = TransactionReadPhase::enter(1);
+            let read = document.prepared_main_read().unwrap();
+            read.prove_scoped_main_source(&read.xml, read.children[0].clone(), original, retained)
+                .unwrap();
+            drop(phase);
+            let work = Document::take_transaction_work();
+            let outputs = Document::take_transaction_outputs();
+            if force_off {
+                assert!(work[1] >= 3, "production fallback writers: {work:?}");
+                for kind in [
+                    "namespace_current_writer",
+                    "proof_current_writer",
+                    "normalized_retained_writer",
+                    "normalized_current_writer",
+                    "normalized_restored_writer",
+                    "retained_probe_copy",
+                    "masked_checked_rewrite",
+                    "masked_retained_rewrite",
+                    "normalized_masked_checked_writer",
+                    "normalized_masked_retained_writer",
+                ] {
+                    let measured = outputs.get(&format!("scoped.{kind}")).unwrap();
+                    assert_eq!(measured[0], 1, "{outputs:?}");
+                    assert!(measured[1] > 0, "{outputs:?}");
+                }
+                assert_eq!(outputs["scoped.masked_occurrence_writer"][0], 2);
+            } else {
+                assert_eq!(work[1], 1);
+                assert!(
+                    !outputs.contains_key("scoped.proof_current_writer"),
+                    "debug reference must be paused: {outputs:?}"
+                );
+                assert_eq!(outputs["scoped.canonical_record_copy"][0], 1);
+            }
+        }
     }
 
     #[test]

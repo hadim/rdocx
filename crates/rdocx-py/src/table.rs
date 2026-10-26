@@ -2192,9 +2192,9 @@ impl PyCell {
         let current_related = self.current_related(py)?;
         let mut document = self.document.borrow_mut(py);
         let story = self.physical_story(py, &document.inner, &current_related, table, row, cell)?;
-        let mut candidate = document.inner.clone_for_staging();
-        let location = candidate
-            .insert_picture_to_story_with_options(
+        let candidate = document.inner.clone_for_staging();
+        let (candidate, location) = candidate
+            .insert_picture_to_story_with_options_owned(
                 &story,
                 None,
                 &data,
@@ -2258,10 +2258,16 @@ impl PyCell {
         self.document
             .borrow_mut(py)
             .scoped_replacement(py, "Cell.replace_text", |document| match related.as_ref() {
-                Some(story) => document.try_replace_text_in_story_cell(story, old, new, expect),
-                None => {
-                    document.try_replace_text_in_cell((table, row, cell), None, old, new, expect)
+                Some(story) => {
+                    document.try_replace_text_in_story_cell_owned(story, old, new, expect)
                 }
+                None => document.try_replace_text_in_cell_owned(
+                    (table, row, cell),
+                    None,
+                    old,
+                    new,
+                    expect,
+                ),
             })
     }
 

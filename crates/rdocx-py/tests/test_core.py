@@ -14881,3 +14881,233 @@ def test_word_piece_shared_header_identity_uses_opc_part_names(alias):
     assert reopened.to_bytes() == saved
     assert reopened.paragraphs[0].text == "body"
     assert reopened.section(0).header.paragraphs[0].text == "shared header"
+
+
+def _fx268_transaction_fixture(paragraphs=25):
+    import rdocx
+
+    document = rdocx.Document()
+    for index in range(paragraphs):
+        document.add_paragraph(f'alpha {index}')
+    document.add_table(1, 1).cell(0, 0).text = 'alpha cell'
+    return rdocx.Document.from_bytes(document.to_bytes())
+
+
+def _fx268_transaction_counter():
+    from rdocx import _rdocx
+
+    counter = getattr(_rdocx, '_word_transaction_work', None)
+    if counter is None:
+        pytest.skip('requires actual debug transaction counters')
+    return counter
+
+
+@pytest.mark.parametrize('publisher', [
+    'Document.replace_text_at', 'Paragraph.replace_text', 'Cell.replace_text',
+    'Document.add_picture', 'Cell.add_picture',
+])
+def test_fx268_owned_transaction_eliminates_nested_candidate_clone(publisher):
+    import rdocx
+
+    counter = _fx268_transaction_counter()
+    document = _fx268_transaction_fixture()
+
+    def apply(old, new):
+        if publisher == 'Document.replace_text_at':
+            return document.replace_text_at(next(item for item in document.story_items if item.story.kind == "body" and item.kind == "paragraph" and item.direct_body_index == 0), old, new, expect=1)
+        if publisher == 'Paragraph.replace_text':
+            return document.paragraphs[0].replace_text(old, new, expect=1)
+        if publisher == 'Cell.replace_text':
+            return document.tables[0].cell(0, 0).replace_text(old, new, expect=1)
+        owner = document if publisher == 'Document.add_picture' else document.tables[0].cell(0, 0)
+        return owner.add_picture(_one_pixel_png(), 'owned.png')
+
+    apply('alpha', 'omega')
+    apply('omega', 'alpha')
+    counter()
+    result = apply('alpha', 'omega')
+    native, _ = counter()
+    if 'replace_text' in publisher:
+        assert result == 1
+    else:
+        assert result is not None
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    if publisher == 'Cell.replace_text':
+        assert reopened.tables[0].cell(0, 0).text == 'omega cell'
+    elif 'replace_text' in publisher:
+        assert reopened.paragraphs[0].text == 'omega 0'
+    else:
+        assert len(reopened.pictures()) == 3
+    assert native[0] == 0, f'public binding cloned its private candidate again: {native}'
+
+
+@pytest.mark.parametrize('kind', ['scoped', 'picture'])
+def test_fx268_immutable_phase_shares_actual_main_output(kind):
+    counter = _fx268_transaction_counter()
+    document = _fx268_transaction_fixture()
+    if kind == 'scoped':
+        document.paragraphs[0].replace_text('alpha', 'omega', expect=1)
+        document.paragraphs[0].replace_text('omega', 'alpha', expect=1)
+        counter()
+        assert document.paragraphs[0].replace_text('alpha', 'omega', expect=1) == 1
+        native, _ = counter()
+        calls, output_bytes = native[1:3]
+    else:
+        document.add_picture(_one_pixel_png(), 'warm1.png')
+        document.add_picture(_one_pixel_png(), 'warm2.png')
+        counter()
+        document.add_picture(_one_pixel_png(), 'measured.png')
+        native, _ = counter()
+        calls, output_bytes = native[3:5]
+    assert output_bytes > 0, f'no actual current output measured: {native}'
+    assert calls == 1, f'immutable {kind} phase repeated canonical output: {native}'
+
+
+@pytest.mark.parametrize('paragraphs', [100, 1000])
+@pytest.mark.parametrize('state', ['cold', 'warm'])
+def test_fx268_original407_insert_prepares_one_complete_splice_packet(paragraphs, state):
+    import rdocx
+
+    counter = _fx268_transaction_counter()
+    from docx import Document as SourceDocument
+    from docx.shared import Pt, RGBColor
+
+    source = SourceDocument()
+    for index in range(paragraphs):
+        paragraph = source.add_paragraph()
+        for run_index in range(6):
+            run = paragraph.add_run(f'run {run_index} of paragraph {index:04} ')
+            run.font.name = 'Arial'
+            run.font.size = Pt(10)
+            run.font.color.rgb = RGBColor(0, 0, 0)
+            run.bold = run.italic = run.font.small_caps = run.font.strike = run.underline = False
+    package = io.BytesIO()
+    source.save(package)
+    document = rdocx.Document.from_bytes(package.getvalue())
+    owner_count = sum(1 + len(paragraph.runs) for paragraph in source.paragraphs) + len(source.sections)
+    if state == 'warm':
+        for _ in range(2):
+            inserted_warmup = document.insert_paragraph(10, 'x')
+            owner_count += 1 + len(inserted_warmup.runs)
+    held = document.paragraphs[10]
+    counter()
+    inserted = document.insert_paragraph(10, 'x')
+    _, work = counter()
+    assert inserted.text == 'x'
+    with pytest.raises(rdocx.StaleElementError):
+        _ = held.text
+    expected = 'x' if state == 'warm' else ''.join(f'run {j} of paragraph 0010 ' for j in range(6))
+    assert rdocx.Document.from_bytes(document.to_bytes()).paragraphs[11].text == expected
+    assert work[:3] == [0, 0, 0] or work[:3] == (0, 0, 0), f'repeated real walks/map insertions: {work}'
+    assert 0 < work[3] <= owner_count, f'canonical and slot analysis repeated {owner_count} actual owners: {work}'
+    assert work[4:6] == (1, 1) or work[4:6] == [1, 1], f'packet not prepared and consumed: {work}'
+    assert work[6] == owner_count + 2, f'mandatory final owner indexing missing/repeated: {work}'
+    assert work[7] == 0, f'general publication rebuilt indexes instead of consuming packet: {work}'
+
+
+@pytest.mark.parametrize('edit', [
+    'add_paragraph', 'add_table', 'insert_paragraph', 'insert_table',
+    'remove_content', 'remove_content_range',
+])
+def test_fx268_complete_splice_packet_preserves_all_consumers(edit):
+    import rdocx
+
+    counter = _fx268_transaction_counter()
+    document = _fx268_transaction_fixture()
+    held = document.paragraphs[0]
+    held_run = held.runs[0]
+    held_table = document.tables[0]
+    counter()
+    if edit == 'add_paragraph':
+        result = document.add_paragraph('born')
+    elif edit == 'add_table':
+        result = document.add_table(1, 1)
+    elif edit == 'insert_paragraph':
+        result = document.insert_paragraph(10, 'born')
+    elif edit == 'insert_table':
+        result = document.insert_table(10, 1, 1)
+    elif edit == 'remove_content':
+        result = document.remove_content(10)
+    else:
+        result = document.remove_content_range(10, 12)
+    _, work = counter()
+    if edit.startswith('add_'):
+        assert held.text == 'alpha 0'
+        with pytest.raises(rdocx.StaleElementError):
+            _ = held_run.text
+        assert held_table.cell(0, 0).text == 'alpha cell'
+    else:
+        with pytest.raises(rdocx.StaleElementError):
+            _ = held.text
+        with pytest.raises(rdocx.StaleElementError):
+            _ = held_run.text
+        with pytest.raises(rdocx.StaleElementError):
+            _ = held_table.cell(0, 0).text
+    if edit.endswith('paragraph'):
+        assert result.text == 'born'
+        result.text = 'current born'
+    elif edit.endswith('table'):
+        result.cell(0, 0).text = 'current born'
+        assert result.cell(0, 0).text == 'current born'
+    saved = document.to_bytes()
+    reopened = rdocx.Document.from_bytes(saved)
+    assert [paragraph.text for paragraph in reopened.paragraphs] == [paragraph.text for paragraph in document.paragraphs]
+    assert len(reopened.tables) == len(document.tables)
+    assert work[:3] == [0, 0, 0] or work[:3] == (0, 0, 0), f'duplicate splice work in {edit}: {work}'
+    assert tuple(work[4:6]) == (1, 1), f'{edit} did not consume a prepared packet: {work}'
+    assert work[6] > 0 and work[7] == 0, f'{edit} missed mandatory indexing or used general publication: {work}'
+
+
+def test_fx268_scoped_production_fallback_reports_actual_outputs():
+    import rdocx
+    from rdocx import _rdocx
+
+    counter = _fx268_transaction_counter()
+    source = rdocx.Document()
+    source.add_paragraph('alpha')
+    with zipfile.ZipFile(io.BytesIO(source.to_bytes())) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+    parts['word/document.xml'] = parts['word/document.xml'].replace(
+        b'<w:r>', b'<w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr><w:r>', 1)
+    package = io.BytesIO()
+    with zipfile.ZipFile(package, 'w') as archive:
+        for name, value in parts.items():
+            archive.writestr(name, value)
+    document = rdocx.Document.from_bytes(package.getvalue())
+    paragraph = document.paragraphs[0]
+    counter()
+    outputs_counter = getattr(_rdocx, '_word_transaction_outputs', None)
+    if outputs_counter is not None:
+        outputs_counter()
+    assert paragraph.replace_text('alpha', 'omega', expect=1) == 1
+    native, _ = counter()
+    # This assertion actually fails on the authenticated pre-remediation module.
+    assert native[1] >= 3, f'production full-proof current writers disappeared: {native}'
+    outputs = _rdocx._word_transaction_outputs()
+    for name in ('namespace_current_writer', 'proof_current_writer',
+                 'normalized_retained_writer', 'normalized_current_writer',
+                 'normalized_restored_writer', 'retained_probe_copy',
+                 'masked_checked_rewrite', 'masked_retained_rewrite',
+                 'normalized_masked_checked_writer', 'normalized_masked_retained_writer'):
+        assert outputs['scoped.' + name][0] == 1, outputs
+        assert outputs['scoped.' + name][1] > 0, outputs
+    assert outputs['scoped.masked_occurrence_writer'][0] == 2, outputs
+    assert rdocx.Document.from_bytes(document.to_bytes()).paragraphs[0].text == 'omega'
+
+
+def test_fx268_splice_fallback_exposes_general_publication_index_work():
+    import rdocx
+
+    counter = _fx268_transaction_counter()
+    # Only the section owner exists. The actual planner classifies it but
+    # cannot establish a body story, so this public insertion uses fallback.
+    document = rdocx.Document.from_bytes(rdocx.Document().to_bytes())
+    counter()
+    inserted = document.insert_paragraph(0, 'fallback')
+    _, work = counter()
+    assert tuple(work[:3]) == (0, 0, 0), work
+    assert work[3] == 1, work
+    assert tuple(work[4:6]) == (0, 0), work
+    assert work[6] == 0 and work[7] == 3, work
+    assert inserted.text == 'fallback'
+    assert rdocx.Document.from_bytes(document.to_bytes()).paragraphs[0].text == 'fallback'
