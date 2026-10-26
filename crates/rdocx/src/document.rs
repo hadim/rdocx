@@ -8835,6 +8835,45 @@ impl MainPartBlocks {
         Some(Some((remapped.bytes(), remapped, document)))
     }
 
+    /// A comparison using complete current writer facts. It never grants read
+    /// eligibility. An explicit w14 declaration makes whole-part declaration
+    /// processing inert, so unqualified frames retain the full writer.
+    fn writer_bytes_match(&self, document: &CT_Document, expected: &[u8]) -> Option<bool> {
+        let (head, tail) = document.body_frame_xml().ok()?;
+        if !document
+            .extra_namespaces
+            .iter()
+            .chain(&document.root_attributes)
+            .any(|(name, _)| name == "xmlns:w14")
+            || head != self.head
+            || tail != self.tail
+            || document.body.content.len() != self.blocks.len()
+        {
+            return None;
+        }
+        for (item, block) in document.body.content.iter().zip(&self.blocks) {
+            #[cfg(test)]
+            a9_lookup_candidate("writer_bytes_match.current_child");
+            if !item.owner_facts_reusable_by_value()
+                || holds_field_words(&block.bytes)
+                || block.staged.as_ref() != Some(item)
+            {
+                return None;
+            }
+        }
+        let mut cursor = 0usize;
+        let mut matched = true;
+        for piece in std::iter::once(self.head.as_slice())
+            .chain(self.blocks.iter().map(|block| block.bytes.as_slice()))
+            .chain(std::iter::once(self.tail.as_slice()))
+        {
+            let end = cursor.checked_add(piece.len())?;
+            matched &= expected.get(cursor..end) == Some(piece);
+            cursor = end;
+        }
+        Some(matched && cursor == expected.len())
+    }
+
     fn serialize(
         frame: &CT_Document,
         content: &[BodyContent],
@@ -8847,9 +8886,7 @@ impl MainPartBlocks {
         let aligned =
             |item: &BodyContent, block: &BodyBlockScan| block.staged.as_ref() == Some(item);
         let reusable = |item: &BodyContent, block: &BodyBlockScan| {
-            aligned(item, block)
-                && item.owner_facts_reusable_by_value()
-                && !holds_field_words(&block.bytes)
+            item.owner_facts_reusable_by_value() && !holds_field_words(&block.bytes)
         };
         let prefix = content
             .iter()
@@ -8946,6 +8983,8 @@ impl MainPartBlocks {
         let written = xml.len();
         rdocx_oxml::text::declare_w14_on_part_root(&mut xml)?;
         let declared = xml.len() - written;
+        #[cfg(test)]
+        a9_lookup_read("writer.assembled_output", 0, xml.len());
         let head = xml[..head.len() + declared].to_vec();
         let root = root.start..root.end + declared;
         if kept_root.is_some_and(|kept| !kept.is_empty() && kept != &head[root.clone()]) {
@@ -22066,8 +22105,7 @@ impl Document {
         {
             return false;
         }
-        self.serialized_main_part()
-            .is_ok_and(|(current, _)| current.as_slice() == expected)
+        self.serialized_main_part_matches(expected).unwrap_or(false)
     }
 
     fn unchanged_main_part(&self) -> Option<Arc<Parsed>> {
@@ -22141,7 +22179,7 @@ impl Document {
             .get_or_init(|| self.unchanged_main_part_checks().ok())
             .as_ref()?;
         if unchanged.body_namespace_bindings != self.body_namespace_bindings
-            || self.document.to_xml().ok().as_deref() != Some(unchanged.xml.as_slice())
+            || self.serialized_main_part_matches(&unchanged.xml).ok() != Some(true)
         {
             return None;
         }
@@ -23489,7 +23527,7 @@ impl Document {
             staged.map(|(identifiers, _)| identifiers),
             identifier_hint.as_ref(),
         )?;
-        let serialization_proof = document.validate_resource_limits().ok().and_then(|()| {
+        let serialized = document.validate_resource_limits().ok().and_then(|()| {
             MainPartBlocks::serialize(
                 &document,
                 &document.body.content,
@@ -23499,8 +23537,14 @@ impl Document {
                 offered_canonical_blocks(writer_blocks.or(blocks)),
             )
             .ok()
-            .map(|(xml, _)| xml)
         });
+        let (serialization_proof, serialized_blocks) = match serialized {
+            Some((xml, record)) => {
+                let retained = block_proofs_enabled() && !record.head.is_empty();
+                (Some(xml), retained.then_some(record))
+            }
+            None => (None, None),
+        };
         let mut parsed_record = Parsed::of(
             &package,
             &doc_part_name,
@@ -23584,7 +23628,10 @@ impl Document {
             deterministic_layout_cache: Mutex::new(None),
             bundled_fallback_layout_engine: Mutex::new(None),
             parsed,
-            main_body_scans: Arc::new(Mutex::new(MainBodyScans::default())),
+            main_body_scans: Arc::new(Mutex::new(MainBodyScans {
+                serialized: serialized_blocks,
+                ..MainBodyScans::default()
+            })),
             main_part_blocks: None,
         })
     }
@@ -24002,10 +24049,16 @@ impl Document {
         // Writer eligibility is checked against the current model and frame
         // when offered. It is independent of the stricter address-scan carry.
         // A changed owner span must not discard that current writer memo.
-        self.main_body_scans
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .serialized = carried.serialized.clone();
+        {
+            let mut scans = self
+                .main_body_scans
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // The opening may already have qualified a newer writer record.
+            if scans.serialized.is_none() {
+                scans.serialized = carried.serialized.clone();
+            }
+        }
         if carried.frame.is_none() {
             return;
         }
@@ -24091,6 +24144,25 @@ impl Document {
         reopened.install_carried_body_scans(carried_scans);
         reopened.install_carried_blocks(carried_blocks);
         Ok(reopened)
+    }
+
+    /// Compare current writer bytes without constructing an owned result when
+    /// the existing writer memo proves every current child and the full frame.
+    fn serialized_main_part_matches(&self, expected: &[u8]) -> Result<bool> {
+        if block_proofs_enabled() {
+            let scans = self
+                .main_body_scans
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(matched) = scans
+                .serialized
+                .as_ref()
+                .and_then(|record| record.writer_bytes_match(&self.document, expected))
+            {
+                return Ok(matched);
+            }
+        }
+        self.serialized_main_part().map(|(xml, _)| xml == expected)
     }
 
     /// Current writer bytes and pieces, without claiming a flushed part.
@@ -49960,6 +50032,154 @@ mod tests {
             !a9_lookup_excesses(&legacy[0], &legacy[1]).is_empty(),
             "the real legacy route did not fail the unchanged work bound: {legacy:?}"
         );
+    }
+
+    fn writer_comparison_document(body: &str, explicit_w14: bool) -> Document {
+        let seed = Document::new();
+        let mut package = seed.package.clone();
+        let declaration = if explicit_w14 {
+            " xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\""
+        } else {
+            ""
+        };
+        package.set_part(
+            &seed.doc_part_name,
+            format!(
+                "<w:document xmlns:w=\"{W_NS}\"{declaration}><w:body>{body}</w:body></w:document>"
+            )
+            .into_bytes(),
+        );
+        let mut output = Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        let document = Document::from_bytes(output.get_ref()).unwrap();
+        document.serialized_main_part().unwrap();
+        document
+    }
+
+    #[test]
+    fn unchanged_writer_comparisons_keep_the_record_without_assembling_output() {
+        let document = writer_comparison_document(&issue407_runs(25), true);
+        assert!(document.opened_main_still_serializes());
+        let before = document
+            .main_body_scans
+            .lock()
+            .unwrap()
+            .serialized
+            .as_ref()
+            .unwrap()
+            .blocks
+            .as_ptr();
+        let counts = a9_lookup_sample(|| {
+            assert!(document.opened_main_still_serializes());
+            Ok(())
+        });
+        assert_eq!(
+            counts
+                .get("writer.assembled_output")
+                .map_or(0, |work| work[1]),
+            0,
+            "proof-only comparison assembled a whole part: {counts:?}"
+        );
+        assert_eq!(
+            before,
+            document
+                .main_body_scans
+                .lock()
+                .unwrap()
+                .serialized
+                .as_ref()
+                .unwrap()
+                .blocks
+                .as_ptr()
+        );
+        let off = CanonicalBlockProofOff::enter();
+        let old = a9_lookup_sample(|| {
+            assert!(document.opened_main_still_serializes());
+            Ok(())
+        });
+        drop(off);
+        assert!(
+            old.get("writer.assembled_output")
+                .is_some_and(|work| work[1] > 0),
+            "the actual cache-off path must violate the same no-assembly bound: {old:?}"
+        );
+    }
+
+    #[test]
+    fn writer_piece_comparisons_match_whole_bytes_and_decline_changed_frames() {
+        for count in [0, 1, 25] {
+            let document = writer_comparison_document(&issue407_runs(count), true);
+            let expected = document.document.to_xml().unwrap();
+            let scans = document.main_body_scans.lock().unwrap();
+            let record = scans.serialized.as_ref().unwrap();
+            assert_eq!(
+                record.writer_bytes_match(&document.document, &expected),
+                Some(true)
+            );
+            let mut different = expected.clone();
+            different.push(b' ');
+            assert_eq!(
+                record.writer_bytes_match(&document.document, &different),
+                Some(false)
+            );
+            let mut changed = document.document.clone();
+            changed
+                .extra_namespaces
+                .push(("xmlns:probe".into(), "urn:probe".into()));
+            assert_eq!(record.writer_bytes_match(&changed, &expected), None);
+            changed = document.document.clone();
+            changed.body.sect_pr = Some(rdocx_oxml::document::CT_SectPr::default_letter());
+            assert_eq!(record.writer_bytes_match(&changed, &expected), None);
+            changed = document.document.clone();
+            if let Some(BodyContent::Paragraph(paragraph)) = changed.body.content.last_mut() {
+                paragraph.runs.clear();
+                assert_eq!(record.writer_bytes_match(&changed, &expected), None);
+            }
+        }
+    }
+
+    #[test]
+    fn writer_comparisons_keep_private_and_conditional_declaration_fallbacks() {
+        for (body, explicit_w14) in [
+            (
+                "<w:p><w:fldSimple w:instr=\" PAGE \"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>",
+                true,
+            ),
+            (
+                "<w:p><w:bookmarkStart w:id=\"1\" w:name=\"kept\"/><w:r><w:t>alpha</w:t></w:r><w:bookmarkEnd w:id=\"1\"/></w:p>",
+                true,
+            ),
+            (
+                "<w:p><w:pPr><w:tabs><w:tab w:val=\"left\" w:pos=\"1440\"/></w:tabs></w:pPr><w:r><w:t>alpha</w:t></w:r></w:p>",
+                true,
+            ),
+            (
+                "<w:p xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" w14:paraId=\"00000001\"><w:r><w:t>alpha</w:t></w:r></w:p>",
+                false,
+            ),
+            ("<w:p><w:r><w:t>alpha</w:t></w:r></w:p>", false),
+        ] {
+            let document = writer_comparison_document(body, explicit_w14);
+            let expected = document.document.to_xml().unwrap();
+            assert_eq!(
+                document
+                    .kept_main_part()
+                    .unwrap()
+                    .serialization_proof
+                    .as_deref(),
+                Some(expected.as_slice())
+            );
+            let counts = a9_lookup_sample(|| {
+                assert!(document.opened_main_still_serializes());
+                Ok(())
+            });
+            assert!(
+                counts
+                    .get("writer.assembled_output")
+                    .is_some_and(|work| work[1] > 0),
+                "unsupported writer proof skipped its authoritative writer: {counts:?}"
+            );
+        }
     }
 
     #[test]
