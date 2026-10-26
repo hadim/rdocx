@@ -9471,6 +9471,147 @@ impl MainPartBlocks {
         Some(spans)
     }
 
+    /// A masked query may change the tail without changing an earlier closed
+    /// child's namespace environment. Both partitions and both empty frames
+    /// are checked here. This does not transport ASTs or writer eligibility.
+    fn masked_query_frames<'a>(
+        &'a self,
+        xml: &[u8],
+        original: &'a Self,
+    ) -> Option<(&'a NamespaceFrameSpans, &'a NamespaceFrameSpans)> {
+        if !block_proofs_enabled()
+            || self.head != original.head
+            || self.blocks.len() != original.blocks.len()
+            || !self.part_partition_matches(xml)
+            || !original.part_partition_matches(original.part.as_deref()?)
+            || !self.frame.get()?.as_ref()?.body.content.is_empty()
+            || !original.frame.get()?.as_ref()?.body.content.is_empty()
+        {
+            return None;
+        }
+        for block in self.blocks.iter().chain(&original.blocks) {
+            let item = block.staged.as_ref()?;
+            if matches!(item, BodyContent::RawXml(_))
+                || !item.owner_facts_reusable_by_value()
+                || holds_field_words(&block.bytes)
+            {
+                return None;
+            }
+        }
+        let frame = self.frame_namespace_spans()?;
+        let previous = original.frame_namespace_spans()?;
+        (frame.root_declarations == previous.root_declarations
+            && frame.body_declarations == previous.body_declarations
+            && frame.body_bindings == previous.body_bindings)
+            .then_some((frame, previous))
+    }
+
+    /// Compose a fresh query over the masked bytes from actual old relative
+    /// child spans and freshly checked changed children and frame facts.
+    fn masked_query_namespace_spans(
+        &self,
+        xml: &[u8],
+        original: &Self,
+    ) -> Option<Vec<ModeledOwnerSpan>> {
+        let (frame, _) = self.masked_query_frames(xml, original)?;
+        let scopes = DocumentNamespaceScopes {
+            root_declarations: frame.root_declarations.clone(),
+            body_declarations: frame.body_declarations.clone(),
+            body_bindings: frame.body_bindings.clone(),
+        };
+        let mut spans = frame.head_spans.clone();
+        let mut cursor = self.head.len();
+        for (block, previous) in self.blocks.iter().zip(&original.blocks) {
+            let proof = if block.bytes == previous.bytes {
+                previous.namespace_span_proof(&original.head, &original.tail, &scopes)?
+            } else {
+                block.namespace_span_proof(&self.head, &self.tail, &scopes)?
+            };
+            for span in &proof.spans {
+                if span.start > span.end || span.end > block.bytes.len() {
+                    return None;
+                }
+                spans.push(ModeledOwnerSpan {
+                    start: cursor.checked_add(span.start)?,
+                    end: cursor.checked_add(span.end)?,
+                    ..span.clone()
+                });
+            }
+            cursor = cursor.checked_add(block.bytes.len())?;
+        }
+        for span in &frame.tail_spans {
+            if span.start > span.end || span.end > self.tail.len() {
+                return None;
+            }
+            spans.push(ModeledOwnerSpan {
+                start: cursor.checked_add(span.start)?,
+                end: cursor.checked_add(span.end)?,
+                ..span.clone()
+            });
+        }
+        #[cfg(debug_assertions)]
+        without_staging_work(|| {
+            assert_eq!(
+                format!("{spans:?}"),
+                format!(
+                    "{:?}",
+                    modeled_owner_spans(xml).expect("masked query parses")
+                ),
+                "masked namespace query changed physical spans"
+            );
+        });
+        Some(spans)
+    }
+
+    /// Relationship queries use the same tail-only transport certificate.
+    /// The complete current occurrence set still chooses masking sentinels.
+    fn masked_query_relationship_ids(&self, xml: &[u8], original: &Self) -> Option<Vec<String>> {
+        self.masked_query_frames(xml, original)?;
+        let shell = [self.head.as_slice(), self.tail.as_slice()].concat();
+        let old_shell = [original.head.as_slice(), original.tail.as_slice()].concat();
+        let frame = self.canonical_frame_proof(&shell)?;
+        let previous_frame = original.canonical_frame_proof(&old_shell)?;
+        if frame.root_declarations != previous_frame.root_declarations
+            || frame.body_declarations != previous_frame.body_declarations
+            || frame.body_bindings != previous_frame.body_bindings
+        {
+            return None;
+        }
+        let mut ids = Vec::new();
+        let mut seen = HashSet::new();
+        let mut push = |id: &String| {
+            note_relationship_membership();
+            if seen.insert(id.clone()) {
+                ids.push(id.clone());
+            }
+        };
+        for id in &frame.head_plain_relationship_ids {
+            push(id);
+        }
+        for (block, previous) in self.blocks.iter().zip(&original.blocks) {
+            let proof = if block.bytes == previous.bytes {
+                previous.canonical_child_facts(&original.head, &original.tail, previous_frame)?
+            } else {
+                block.canonical_child_facts(&self.head, &self.tail, frame)?
+            };
+            for id in &proof.plain_relationship_ids {
+                push(id);
+            }
+        }
+        for id in &frame.tail_plain_relationship_ids {
+            push(id);
+        }
+        #[cfg(debug_assertions)]
+        without_staging_work(|| {
+            assert_eq!(
+                xml_relationship_ids_in_order_with_bindings(xml, &[]).ok(),
+                Some(ids.clone()),
+                "masked relationship query changed occurrence order"
+            );
+        });
+        Some(ids)
+    }
+
     /// Positive nested owners for these exact part bytes.
     ///
     /// Spans from every piece are combined first. Owner ambiguity is the old
@@ -21419,17 +21560,45 @@ impl Document {
                 }
             }
         };
-        let serialize = |document: &CT_Document| -> Result<Vec<u8>> {
-            let xml = document.to_xml()?;
-            let spans = self
-                .main_part_blocks
-                .as_ref()
-                .and_then(|blocks| blocks.proved_namespace_spans(&xml));
-            replay_nested_namespace_declarations_with_spans(
-                &xml,
-                nested_namespace_owners,
-                spans.as_deref(),
-            )
+        let serialize = |document: &CT_Document,
+                         blocked: Result<(Vec<u8>, Option<MainPartBlocks>)>,
+                         query_source: Option<&MainPartBlocks>|
+         -> Result<(Vec<u8>, Option<MainPartBlocks>)> {
+            match blocked {
+                Ok((xml, record)) => {
+                    let spans = record.as_ref().and_then(|record| {
+                        query_source
+                            .and_then(|source| record.masked_query_namespace_spans(&xml, source))
+                            .or_else(|| record.proved_namespace_spans(&xml))
+                    });
+                    let replayed = replay_nested_namespace_declarations_with_spans(
+                        &xml,
+                        nested_namespace_owners,
+                        spans.as_deref(),
+                    )?;
+                    Ok(relationship_xml_from_replayed(replayed, Ok((xml, record))))
+                }
+                Err(_) => {
+                    // A failed optional writer proof does not replace the
+                    // authoritative full writer or its original error.
+                    let xml = document.to_xml()?;
+                    note_staging_work(|work| {
+                        work.serialized_children += document.body.content.len()
+                    });
+                    let spans = self
+                        .main_part_blocks
+                        .as_ref()
+                        .and_then(|blocks| blocks.proved_namespace_spans(&xml));
+                    Ok((
+                        replay_nested_namespace_declarations_with_spans(
+                            &xml,
+                            nested_namespace_owners,
+                            spans.as_deref(),
+                        )?,
+                        None,
+                    ))
+                }
+            }
         };
         let owners_empty = nested_namespace_owners.is_empty();
         if modeled_relationships.is_empty() {
@@ -21437,17 +21606,15 @@ impl Document {
                 let (current_xml, current_blocks) = self.canonical_source()?;
                 return relationship_ids_by_blocks(&current_xml, current_blocks.as_ref(), &[]);
             }
-            let replayed = serialize(&self.document)?;
             let (current_xml, current_blocks) =
-                relationship_xml_from_replayed(replayed, self.canonical_source());
+                serialize(&self.document, self.canonical_source(), None)?;
             return relationship_ids_by_blocks(&current_xml, current_blocks.as_ref(), &[]);
         }
 
         let (current_xml, current_blocks) = if owners_empty {
             self.canonical_source()?
         } else {
-            let replayed = serialize(&self.document)?;
-            relationship_xml_from_replayed(replayed, self.canonical_source())
+            serialize(&self.document, self.canonical_source(), None)?
         };
         let current_relationships =
             relationship_ids_by_blocks(&current_xml, current_blocks.as_ref(), &[])?;
@@ -21521,18 +21688,25 @@ impl Document {
         let (masked_xml, masked_blocks) = if owners_empty {
             Self::canonical_source_from(&masked, current_blocks.as_ref())?
         } else {
-            let replayed = serialize(&masked)?;
-            relationship_xml_from_replayed(
-                replayed,
+            serialize(
+                &masked,
                 Self::canonical_source_from(&masked, current_blocks.as_ref()),
-            )
+                current_blocks.as_ref(),
+            )?
         };
-        Ok(
-            relationship_ids_by_blocks(&masked_xml, masked_blocks.as_ref(), &[])?
-                .into_iter()
-                .filter(|id| !masked_values.contains(id) && current_relationships.contains(id))
-                .collect(),
-        )
+        let masked_relationships = masked_blocks.as_ref().and_then(|masked| {
+            current_blocks
+                .as_ref()
+                .and_then(|current| masked.masked_query_relationship_ids(&masked_xml, current))
+        });
+        let masked_relationships = match masked_relationships {
+            Some(ids) => ids,
+            None => relationship_ids_by_blocks(&masked_xml, masked_blocks.as_ref(), &[])?,
+        };
+        Ok(masked_relationships
+            .into_iter()
+            .filter(|id| !masked_values.contains(id) && current_relationships.contains(id))
+            .collect())
     }
 
     /// Keep a main-part relationship id from staging renumbering until the
@@ -48566,6 +48740,186 @@ mod tests {
             );
             assert_eq!(document.to_bytes().unwrap(), before);
         }
+    }
+
+    #[test]
+    fn final_gate_masked_queries_transport_only_closed_matching_occurrences() {
+        let mut document = Document::new();
+        document.add_paragraph("alpha");
+        document.set_header("modeled header");
+        let id = document.document.body.sect_pr.as_ref().unwrap().header_refs[0]
+            .rel_id
+            .clone();
+        if let BodyContent::Paragraph(paragraph) = &mut document.document.body.content[0] {
+            paragraph.extra_xml.push((
+                0,
+                format!(r#"<x:opaque xmlns:x="urn:kept" r:id="{id}"/>"#).into_bytes(),
+            ));
+        }
+        let (_, original) = document.canonical_source().unwrap();
+        let original = original.unwrap();
+        let mut masked = document.document.clone();
+        masked.body.sect_pr.as_mut().unwrap().header_refs[0].rel_id =
+            "rdocx-modeled-relationship-0".into();
+        let (xml, record) = Document::canonical_source_from(&masked, Some(&original)).unwrap();
+        let record = record.unwrap();
+        assert_eq!(record.head, original.head);
+        assert_ne!(record.tail, original.tail);
+        let spans = record
+            .masked_query_namespace_spans(&xml, &original)
+            .unwrap();
+        assert_eq!(
+            format!("{spans:?}"),
+            format!("{:?}", modeled_owner_spans(&xml).unwrap())
+        );
+        assert_eq!(
+            record.masked_query_relationship_ids(&xml, &original),
+            Some(xml_relationship_ids_in_order_with_bindings(&xml, &[]).unwrap())
+        );
+        let actual = document
+            .opaque_relationship_ids_from_serialized_story(std::slice::from_ref(&id))
+            .unwrap();
+        let off = CanonicalBlockProofOff::enter();
+        let whole = document
+            .opaque_relationship_ids_from_serialized_story(std::slice::from_ref(&id))
+            .unwrap();
+        drop(off);
+        assert_eq!(actual, whole);
+        assert_eq!(
+            actual,
+            vec![id],
+            "an opaque occurrence sharing the modeled id must survive masking"
+        );
+
+        let mut changed_head = masked.clone();
+        changed_head
+            .extra_namespaces
+            .push(("xmlns:q".into(), "urn:changed".into()));
+        let (changed_xml, changed) =
+            Document::canonical_source_from(&changed_head, Some(&original)).unwrap();
+        let changed = changed.unwrap();
+        assert!(
+            changed
+                .masked_query_namespace_spans(&changed_xml, &original)
+                .is_none()
+        );
+        assert!(
+            changed
+                .masked_query_relationship_ids(&changed_xml, &original)
+                .is_none()
+        );
+
+        let mut bad_tail = record.clone();
+        bad_tail.tail.extend_from_slice(b"<broken");
+        bad_tail.part = Some(Arc::new(bad_tail.bytes()));
+        bad_tail.frame = OnceLock::from(prove_empty_body_frame(&bad_tail.head, &bad_tail.tail));
+        bad_tail.namespace_frame_spans = OnceLock::new();
+        assert!(
+            bad_tail
+                .masked_query_namespace_spans(bad_tail.part.as_deref().unwrap(), &original)
+                .is_none()
+        );
+        assert!(
+            bad_tail
+                .masked_query_relationship_ids(bad_tail.part.as_deref().unwrap(), &original)
+                .is_none()
+        );
+
+        let mut crossing = original.clone();
+        let scopes = document_namespace_scopes(crossing.part.as_deref().unwrap()).unwrap();
+        let mut proof = crossing.blocks[0]
+            .namespace_span_proof(&crossing.head, &crossing.tail, &scopes)
+            .unwrap()
+            .clone();
+        proof.spans[0].end = crossing.blocks[0].bytes.len() + 1;
+        Arc::make_mut(&mut crossing.blocks[0]).namespace_spans = OnceLock::from(Some(proof));
+        assert!(
+            record
+                .masked_query_namespace_spans(&xml, &crossing)
+                .is_none()
+        );
+
+        let field = issue407_document(
+            r#"<w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>"#,
+            false,
+        );
+        let (field_xml, field) = field.canonical_source().unwrap();
+        let field = field.unwrap();
+        assert!(
+            field
+                .masked_query_namespace_spans(&field_xml, &field)
+                .is_none()
+        );
+        assert!(
+            field
+                .masked_query_relationship_ids(&field_xml, &field)
+                .is_none()
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn final_gate_nonempty_namespace_replay_does_not_duplicate_whole_writer() {
+        let mut samples = Vec::new();
+        for count in [25, 100] {
+            let control = r#"<w:sdt xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w:sdtPr><w:tag w:val="rows"/><w15:repeatingSection/></w:sdtPr><w:sdtContent><w:sdt><w:sdtPr><w15:repeatingSectionItem/></w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt></w:sdtContent></w:sdt>"#;
+            let mut seed = issue407_document(
+                &format!(
+                    "{}<w:p><w:r><w:t>alpha</w:t></w:r></w:p>{control}",
+                    issue407_runs(count)
+                ),
+                false,
+            );
+            seed.set_header("modeled header relationship");
+            let mut document = Document::from_bytes(&seed.to_bytes().unwrap()).unwrap();
+            assert!(
+                !nested_modeled_namespace_owners(
+                    document.package.get_part(&document.doc_part_name).unwrap()
+                )
+                .unwrap()
+                .is_empty()
+            );
+            for (from, to) in [("alpha", "omega"), ("omega", "bravo")] {
+                let location = document.paragraph_story_location(count).unwrap().unwrap();
+                assert_eq!(
+                    document
+                        .try_replace_text_at(&location, from, to, Some(1))
+                        .unwrap()
+                        .unwrap(),
+                    1
+                );
+            }
+            let location = document.paragraph_story_location(count).unwrap().unwrap();
+            let mut reference = document.clone_for_staging();
+            let _ = take_staging_work();
+            let _ = take_namespace_scope_bytes();
+            assert_eq!(
+                document
+                    .try_replace_text_at(&location, "bravo", "delta", Some(1))
+                    .unwrap()
+                    .unwrap(),
+                1
+            );
+            let work = take_staging_work();
+            let namespace = take_namespace_scope_bytes();
+            let off = CanonicalBlockProofOff::enter();
+            assert_eq!(
+                reference
+                    .try_replace_text_at(&location, "bravo", "delta", Some(1))
+                    .unwrap()
+                    .unwrap(),
+                1
+            );
+            drop(off);
+            assert_eq!(document.package.parts, reference.package.parts);
+            assert_eq!(
+                document.document.to_xml().unwrap(),
+                reference.document.to_xml().unwrap()
+            );
+            assert!(work[4] <= 5, "masking rewrote unrelated children: {work:?}");
+            samples.push((work, namespace));
+        }
+        assert_eq!(samples[0], samples[1]);
     }
 
     #[test]

@@ -4436,6 +4436,8 @@ Text watermark opacity coverage includes exact named refusals for zero, one and 
 
 ## Word document-operation parity controls
 
+Masked-query controls combine a retained W15 owner and a modeled header relationship, require fixed warm child-write and namespace qualification work at 25 and 100 paragraphs, and compare complete output against the whole reference. Separate controls cover an opaque occurrence sharing a modeled relationship ID, changed head bindings, malformed tails, crossing spans and field fallback. Successful full-writer fallbacks count the body children actually written, rather than hiding that work behind a zero parse count.
+
 Checked body insertion regressions compare valid edits with atomic refusal on ambiguous aliases, repeated namespace owners and actual shadowed root declarations. Controls include unused foreign prefixes, already-unsavable native state, index and XML-character precedence, zero dimensions and the old infallible Rust behavior. Cache tests prime a savable answer, change the text that disambiguates retained namespace owners through a mutable native paragraph, require refusal without model or XML changes, then restore the owner and require success. Held Python owners survive a refusal. These local checks do not replace the final sprint performance, memory, hash or Word riders.
 
 Missing-operation Base controls precede new public routes. Installed current-source controls verify typed payloads, atomic JSON conversion, live property ownership, immutable equation and fragment snapshots, and qualified checkbox scalar/font selection. Strict typing and stubtest run against the authenticated wheel while the complete installed PowerPoint distribution remains unchanged.
