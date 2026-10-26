@@ -82,6 +82,7 @@ __all__ = [
     "MailMergePackageDiagnostic",
     "MailMergePreparedData",
     "LegacyFormField",
+    "LegacyFormFieldDefinition",
     "FormFieldTarget",
     "FormFieldValue",
     "FormResetValue",
@@ -2370,7 +2371,7 @@ class LegacyFormField:
 
 @_final
 class LegacyFormFieldDefinition:
-    def __new__(cls, *, _private: _Never) -> LegacyFormFieldDefinition: ...
+    def __new__(cls, _private: _Never) -> LegacyFormFieldDefinition: ...
     @staticmethod
     def text_input(*, value: str = "", default: str | None = None, input_type: _Literal["regular", "number", "date", "currentTime", "currentDate", "calculated"] = "regular", max_length: int | None = None, format: str | None = None, name: str | None = None, enabled: bool = True, calculate_on_exit: bool = False, help_text: tuple[_Literal["text", "autoText"], str] | None = None, status_text: tuple[_Literal["text", "autoText"], str] | None = None) -> LegacyFormFieldDefinition: ...
     @staticmethod
@@ -2380,7 +2381,7 @@ class LegacyFormFieldDefinition:
 
 @_final
 class FormFieldTarget:
-    def __new__(cls, *, _private: _Never) -> FormFieldTarget: ...
+    def __new__(cls, _private: _Never) -> FormFieldTarget: ...
     @staticmethod
     def content_control_tag(tag: str) -> FormFieldTarget: ...
     @staticmethod
@@ -2388,7 +2389,7 @@ class FormFieldTarget:
 
 @_final
 class FormFieldValue:
-    def __new__(cls, *, _private: _Never) -> FormFieldValue: ...
+    def __new__(cls, _private: _Never) -> FormFieldValue: ...
     @staticmethod
     def text(value: str) -> FormFieldValue: ...
     @staticmethod
@@ -2398,7 +2399,7 @@ class FormFieldValue:
 
 @_final
 class FormResetValue:
-    def __new__(cls, *, _private: _Never) -> FormResetValue: ...
+    def __new__(cls, _private: _Never) -> FormResetValue: ...
     @staticmethod
     def value(value: FormFieldValue) -> FormResetValue: ...
     @staticmethod
@@ -2406,7 +2407,7 @@ class FormResetValue:
 
 @_final
 class FormFieldRule:
-    def __init__(self, *, target: FormFieldTarget, reset: FormResetValue, required: bool = False) -> None: ...
+    def __new__(cls, *, target: FormFieldTarget, reset: FormResetValue, required: bool = False) -> FormFieldRule: ...
     @property
     def target(self) -> FormFieldTarget: ...
     @property
@@ -2416,7 +2417,7 @@ class FormFieldRule:
 
 @_final
 class FormFieldAssignment:
-    def __init__(self, *, target: FormFieldTarget, value: FormFieldValue) -> None: ...
+    def __new__(cls, *, target: FormFieldTarget, value: FormFieldValue) -> FormFieldAssignment: ...
     @property
     def target(self) -> FormFieldTarget: ...
     @property
@@ -2424,7 +2425,7 @@ class FormFieldAssignment:
 
 @_final
 class FormValidationIssue:
-    def __new__(cls, *, _private: _Never) -> FormValidationIssue: ...
+    def __new__(cls, _private: _Never) -> FormValidationIssue: ...
     @property
     def target(self) -> FormFieldTarget: ...
     @property
@@ -2436,8 +2437,8 @@ class FormValidationIssue:
 
 @_final
 class DocumentProtection:
-    def __init__(
-        self,
+    def __new__(
+        cls,
         *,
         mode: _Literal["readOnly", "comments", "trackedChanges", "forms"],
         enforcement: bool | None = None,
@@ -2449,7 +2450,7 @@ class DocumentProtection:
         spin_count: int | None = None,
         hash: str | None = None,
         salt: str | None = None,
-    ) -> None: ...
+    ) -> DocumentProtection: ...
     @property
     def mode(self) -> _Literal["readOnly", "comments", "trackedChanges", "forms"]: ...
     @property

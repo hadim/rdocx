@@ -12287,8 +12287,10 @@ def test_body_work_counts_owner_lookup_without_xml():
     """Owner lookup and capture count without reading paragraph XML."""
     from rdocx import _rdocx
 
-    whole = _rdocx._word_whole_body_work
-    splice = _rdocx._word_splice_work
+    whole = getattr(_rdocx, "_word_whole_body_work", None)
+    splice = getattr(_rdocx, "_word_splice_work", None)
+    if whole is None or splice is None:
+        pytest.skip("release build: body work counters are debug-only")
     doc = _issue407_document(False)
     whole()
     splice()
@@ -12305,8 +12307,10 @@ def test_body_work_counts_owner_lookup_without_xml():
 def test_body_work_counters_follow_owners():
     from rdocx import _rdocx
 
-    whole = _rdocx._word_whole_body_work
-    splice = _rdocx._word_splice_work
+    whole = getattr(_rdocx, "_word_whole_body_work", None)
+    splice = getattr(_rdocx, "_word_splice_work", None)
+    if whole is None or splice is None:
+        pytest.skip("release build: body work counters are debug-only")
     doc = _issue407_document(False)
     sample = list(doc.paragraphs[:4])
     whole()
@@ -12906,15 +12910,16 @@ def test_part_xml_keeps_slash_case_and_binary_errors():
     assert names_failed is False and save_failed is False
 
     refused = rdocx.Document()
-    refused.add_paragraph("tab\tand\x01")
-    with pytest.raises(rdocx.RdocxError) as save_error:
-        refused.to_bytes()
-    with pytest.raises(rdocx.RdocxError) as names_error:
-        refused.part_names()
-    with pytest.raises(rdocx.RdocxError) as xml_error:
-        refused.part_xml("/word/styles.xml")
-    assert str(names_error.value) == str(save_error.value)
-    assert str(xml_error.value) == str(save_error.value)
+    before = refused.to_bytes()
+    names = refused.part_names()
+    styles = refused.part_xml("/word/styles.xml")
+    # Checked insertion rejects the invalid candidate before publication.
+    # Inspection must continue to expose the unchanged save-equivalent view.
+    with pytest.raises(rdocx.XmlError, match="paragraph text"):
+        refused.add_paragraph("tab\tand\x01")
+    assert refused.to_bytes() == before
+    assert refused.part_names() == names
+    assert refused.part_xml("/word/styles.xml") == styles
 
 
 def test_comment_anchor_text_tracks_retained_run_edits():
