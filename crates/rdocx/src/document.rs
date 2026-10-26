@@ -46782,7 +46782,11 @@ mod tests {
             document.main_part_blocks = None;
             #[cfg(debug_assertions)]
             let _ = take_staging_work();
-            let again = document.main_part_xml().unwrap();
+            let again = {
+                // The current writer memo is independent of the flushed record.
+                let _off = CanonicalBlockProofOff::enter();
+                document.main_part_xml().unwrap()
+            };
             assert_eq!(again, document.document.to_xml().unwrap());
             #[cfg(debug_assertions)]
             assert_eq!(take_staging_work()[4], document.document.body.content.len());
@@ -51301,39 +51305,40 @@ mod tests {
                 1,
                 "complete cell inventory must scan each source once"
             );
-            STORY_SOURCE_BUILDS.set(0);
-            STORY_OWNER_SCANS.set(0);
-            FX237_ITEM_SCANS.set(0);
-            FX237_PREFIX_NAMESPACE_BYTES.set(0);
-            FX237_LEGACY_CELL_STEPS.set(0);
-            FX237_CELL_VISITS.set(0);
-            FX237_TABLE_VISITS.set(0);
-            document
-                .story_table_cell(&routes[0].0, cells / 6 - 1, 5)
-                .unwrap();
-            assert_eq!(
-                FX237_CELL_VISITS.get(),
-                cells,
-                "public scalar provider visits each cell once"
-            );
-            assert_eq!(
-                STORY_SOURCE_BUILDS.get(),
-                1,
-                "scalar source must be materialized once"
-            );
-            assert_eq!(
-                STORY_OWNER_SCANS.get(),
-                2,
-                "scalar qualification and physical correspondence scans"
-            );
-            assert_eq!(FX237_ITEM_SCANS.get(), 1);
-            assert!(FX237_PREFIX_NAMESPACE_BYTES.get() <= source_bytes);
-            assert_eq!(FX237_TABLE_VISITS.get(), 1);
-            assert!(
-                FX237_LEGACY_CELL_STEPS.get() <= cells,
-                "scalar lookup repeats physical cell walks: {}",
-                FX237_LEGACY_CELL_STEPS.get()
-            );
+            for (phase, owner_scans, item_scans, prefix_passes) in
+                [("cold", 4, 3, 4), ("warm", 2, 1, 1)]
+            {
+                STORY_SOURCE_BUILDS.set(0);
+                STORY_OWNER_SCANS.set(0);
+                FX237_ITEM_SCANS.set(0);
+                FX237_PREFIX_NAMESPACE_BYTES.set(0);
+                FX237_LEGACY_CELL_STEPS.set(0);
+                FX237_CELL_VISITS.set(0);
+                FX237_TABLE_VISITS.set(0);
+                document
+                    .story_table_cell(&routes[0].0, cells / 6 - 1, 5)
+                    .unwrap();
+                assert_eq!(
+                    FX237_CELL_VISITS.get(),
+                    cells,
+                    "{phase} visits each cell once"
+                );
+                assert_eq!(STORY_SOURCE_BUILDS.get(), 1, "{phase} source builds");
+                // Cold addressing adds a frame and child qualification. Both
+                // phases retain the debug oracle and physical owner scan.
+                assert_eq!(STORY_OWNER_SCANS.get(), owner_scans, "{phase} owner scans");
+                assert_eq!(FX237_ITEM_SCANS.get(), item_scans, "{phase} item scans");
+                assert!(
+                    FX237_PREFIX_NAMESPACE_BYTES.get() <= prefix_passes * source_bytes,
+                    "{phase} prefix work must stay bounded by its real scan count"
+                );
+                assert_eq!(FX237_TABLE_VISITS.get(), 1, "{phase} table visits");
+                assert!(
+                    FX237_LEGACY_CELL_STEPS.get() <= cells,
+                    "{phase} scalar lookup repeats physical cell walks: {}",
+                    FX237_LEGACY_CELL_STEPS.get()
+                );
+            }
         }
     }
 

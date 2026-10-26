@@ -11509,20 +11509,31 @@ fn write_legacy_form_ff_data<W: std::io::Write>(
 
 fn write_missing_legacy_result_region<W: std::io::Write>(
     writer: &mut Writer<W>,
+    source_run_start: &BytesStart<'_>,
     display: &str,
     canonical_word_binding: bool,
 ) -> Result<()> {
-    let _ = canonical_word_binding;
-    writer.write_event(Event::End(BytesEnd::new("w:r")))?;
-    write_word_run_start(writer, None)?;
+    writer.write_event(Event::End(source_run_start.to_end()))?;
+    let word_declaration = canonical_word_binding.then_some(crate::namespace::W_NS);
+    write_word_run_start(writer, word_declaration)?;
     let mut separate = BytesStart::new("w:fldChar");
     separate.push_attribute(("w:fldCharType", "separate"));
     writer.write_event(Event::Empty(separate))?;
     writer.write_event(Event::End(BytesEnd::new("w:r")))?;
-    write_word_run_start(writer, None)?;
+    write_word_run_start(writer, word_declaration)?;
     write_field_result_content_with_binding(writer, display, canonical_word_binding)?;
     writer.write_event(Event::End(BytesEnd::new("w:r")))?;
-    write_word_run_start(writer, None)?;
+    // The source end event still closes this run. Resume its actual QName and
+    // local namespace scope without copying non-namespace owner attributes.
+    let mut resumed = source_run_start.to_owned();
+    resumed.clear_attributes();
+    for attribute in source_run_start.attributes() {
+        let attribute = attribute?;
+        if attribute.key.as_ref() == b"xmlns" || attribute.key.as_ref().starts_with(b"xmlns:") {
+            resumed.push_attribute(attribute);
+        }
+    }
+    writer.write_event(Event::Start(resumed))?;
     Ok(())
 }
 
@@ -12279,7 +12290,7 @@ fn update_simple_field_source(
                         write_rewritten_field_element(
                             &mut writer,
                             &element,
-                            "w:fldSimple",
+                            Some("w:fldSimple"),
                             &prefixes,
                             &[("instr", field.instruction.raw.as_str())],
                             field.dirty,
@@ -12303,7 +12314,7 @@ fn update_simple_field_source(
                             &mut writer,
                             &element,
                             (!wrote_result).then_some(field.cached_result.as_str()),
-                            !prefixes.iter().any(|prefix| prefix == "w"),
+                            !inherited.iter().any(|prefix| prefix == "w"),
                         )?;
                         wrote_result = true;
                     } else {
@@ -12325,7 +12336,7 @@ fn update_simple_field_source(
                         write_field_result_content_with_binding(
                             &mut writer,
                             &field.cached_result,
-                            !prefixes.iter().any(|prefix| prefix == "w"),
+                            !inherited.iter().any(|prefix| prefix == "w"),
                         )?;
                         wrote_result = true;
                     }
@@ -12357,7 +12368,7 @@ fn update_simple_field_source(
                             &mut writer,
                             &element,
                             (!wrote_result).then_some(field.cached_result.as_str()),
-                            !prefixes.iter().any(|prefix| prefix == "w"),
+                            !inherited.iter().any(|prefix| prefix == "w"),
                         )?;
                         wrote_result = true;
                     } else {
@@ -12373,7 +12384,7 @@ fn update_simple_field_source(
                         write_field_result_content_with_binding(
                             &mut writer,
                             &field.cached_result,
-                            !prefixes.iter().any(|prefix| prefix == "w"),
+                            !inherited.iter().any(|prefix| prefix == "w"),
                         )?;
                         wrote_result = true;
                     }
@@ -12934,11 +12945,11 @@ fn update_complex_field_source(
     let mut output = Vec::new();
     let mut writer = Writer::new(&mut output);
     let mut contexts = Vec::<FieldRewriteContext>::new();
+    let mut source_run_start: Option<BytesStart<'static>> = None;
     let mut buffer = Vec::new();
     let mut field_depth = 0usize;
     let mut outer_result = false;
     let mut wrote_result = false;
-    let canonical_word_binding = !word_prefixes.iter().any(|prefix| prefix == "w");
 
     loop {
         match reader.read_event_into(&mut buffer)? {
@@ -12948,6 +12959,7 @@ fn update_complex_field_source(
                     .map(|context| context.prefixes.as_slice())
                     .unwrap_or(word_prefixes);
                 let prefixes = word_prefixes_at(&element, inherited)?;
+                let canonical_word_binding = !inherited.iter().any(|prefix| prefix == "w");
                 let depth = contexts.len();
                 let direct_run_child =
                     depth == 1 && contexts.last().is_some_and(|context| context.word_run);
@@ -12967,8 +12979,11 @@ fn update_complex_field_source(
                     {
                         write_missing_legacy_result_region(
                             &mut writer,
+                            source_run_start.as_ref().ok_or_else(|| {
+                                OxmlError::MissingElement("legacy field source run".into())
+                            })?,
                             &field.cached_result,
-                            canonical_word_binding,
+                            !word_prefixes.iter().any(|prefix| prefix == "w"),
                         )?;
                         wrote_result = true;
                     }
@@ -13004,7 +13019,7 @@ fn update_complex_field_source(
                         write_rewritten_field_element(
                             &mut writer,
                             &element,
-                            "w:fldChar",
+                            None,
                             &prefixes,
                             &[("fldCharType", kind)],
                             (kind == "begin").then_some(field.dirty).flatten(),
@@ -13014,7 +13029,7 @@ fn update_complex_field_source(
                         contexts.push(FieldRewriteContext {
                             prefixes,
                             word_run: false,
-                            canonical_end: Some("w:fldChar"),
+                            canonical_end: None,
                         });
                         buffer.clear();
                         continue;
@@ -13078,6 +13093,9 @@ fn update_complex_field_source(
                 } else {
                     let word_run =
                         depth == 0 && is_word_element(element.name().as_ref(), b"r", &prefixes);
+                    if publish_missing_result && word_run {
+                        source_run_start = Some(element.clone().into_owned());
+                    }
                     writer.write_event(Event::Start(element.into_owned()))?;
                     contexts.push(FieldRewriteContext {
                         prefixes,
@@ -13092,6 +13110,7 @@ fn update_complex_field_source(
                     .map(|context| context.prefixes.as_slice())
                     .unwrap_or(word_prefixes);
                 let prefixes = word_prefixes_at(&element, inherited)?;
+                let canonical_word_binding = !inherited.iter().any(|prefix| prefix == "w");
                 let direct_run_child =
                     contexts.len() == 1 && contexts.last().is_some_and(|context| context.word_run);
                 if direct_run_child
@@ -13110,8 +13129,11 @@ fn update_complex_field_source(
                     {
                         write_missing_legacy_result_region(
                             &mut writer,
+                            source_run_start.as_ref().ok_or_else(|| {
+                                OxmlError::MissingElement("legacy field source run".into())
+                            })?,
                             &field.cached_result,
-                            canonical_word_binding,
+                            !word_prefixes.iter().any(|prefix| prefix == "w"),
                         )?;
                         wrote_result = true;
                     }
@@ -13147,7 +13169,7 @@ fn update_complex_field_source(
                         write_rewritten_field_element(
                             &mut writer,
                             &element,
-                            "w:fldChar",
+                            None,
                             &prefixes,
                             &[("fldCharType", kind)],
                             (kind == "begin").then_some(field.dirty).flatten(),
@@ -13215,6 +13237,9 @@ fn update_complex_field_source(
                 } else {
                     writer.write_event(Event::End(element.into_owned()))?;
                 }
+                if contexts.is_empty() {
+                    source_run_start = None;
+                }
             }
             Event::Eof => break,
             event => writer.write_event(event.into_owned())?,
@@ -13241,14 +13266,27 @@ fn update_complex_phase(kind: Option<&str>, field_depth: &mut usize, outer_resul
 fn write_rewritten_field_element<W: std::io::Write>(
     writer: &mut Writer<W>,
     source: &BytesStart<'_>,
-    name: &'static str,
+    name: Option<&'static str>,
     word_prefixes: &[String],
     replacements: &[(&str, &str)],
     dirty: Option<bool>,
     canonical_word_binding: bool,
     empty: bool,
 ) -> Result<()> {
-    let mut element = BytesStart::new(name);
+    let canonical_word_binding = name.is_some() && canonical_word_binding;
+    let attribute_prefix = if name.is_some() {
+        "w"
+    } else {
+        word_prefixes
+            .iter()
+            .find(|prefix| !prefix.is_empty() && !prefix.starts_with('\0'))
+            .map(String::as_str)
+            .ok_or_else(|| {
+                OxmlError::InvalidValue("field attribute requires a Word prefix".into())
+            })?
+    };
+    let mut element = name.map_or_else(|| source.clone().into_owned(), BytesStart::new);
+    element.clear_attributes();
     for attribute in source.attributes() {
         let attribute = attribute?;
         let key = attribute.key.as_ref();
@@ -13268,18 +13306,22 @@ fn write_rewritten_field_element<W: std::io::Write>(
         element.push_attribute(("xmlns:w", crate::namespace::W_NS));
     }
     for (local, value) in replacements {
-        let name = match *local {
-            "instr" => "w:instr",
-            "fldCharType" => "w:fldCharType",
+        let local = match *local {
+            "instr" => "instr",
+            "fldCharType" => "fldCharType",
             _ => {
                 return Err(OxmlError::MissingElement(format!(
                     "field attribute {local}"
                 )));
             }
         };
-        element.push_attribute((name, *value));
+        let attribute = format!("{attribute_prefix}:{local}");
+        element.push_attribute((attribute.as_str(), *value));
     }
-    push_dirty_attribute(&mut element, dirty);
+    if let Some(dirty) = dirty {
+        let attribute = format!("{attribute_prefix}:dirty");
+        element.push_attribute((attribute.as_str(), if dirty { "1" } else { "0" }));
+    }
     writer.write_event(if empty {
         Event::Empty(element)
     } else {
@@ -13399,21 +13441,29 @@ fn write_field_text_with_source<W: std::io::Write>(
 ) -> Result<()> {
     // Keep the source Word alias when canonical w would shadow foreign
     // attribute bindings. Generated text without a source gets its own scope.
-    let name = if canonical_word_binding {
-        source
-            .map(|source| {
-                let name = source.name();
-                let name = std::str::from_utf8(name.as_ref())?;
-                Ok::<_, OxmlError>(
-                    name.rsplit_once(':')
-                        .map_or_else(|| "t".to_owned(), |(prefix, _)| format!("{prefix}:t")),
-                )
-            })
-            .transpose()?
-            .unwrap_or_else(|| "w:t".to_owned())
-    } else {
-        "w:t".to_owned()
-    };
+    let mut preserve_source_name = canonical_word_binding;
+    if let Some(source) = source {
+        for attribute in source.attributes() {
+            let attribute = attribute?;
+            if attribute.key.as_ref() == b"xmlns:w"
+                && attribute.value.as_ref() != crate::namespace::W_NS.as_bytes()
+            {
+                preserve_source_name = true;
+            }
+        }
+    }
+    let name = source
+        .filter(|_| preserve_source_name)
+        .map(|source| {
+            let name = source.name();
+            let name = std::str::from_utf8(name.as_ref())?;
+            Ok::<_, OxmlError>(
+                name.rsplit_once(':')
+                    .map_or_else(|| "t".to_owned(), |(prefix, _)| format!("{prefix}:t")),
+            )
+        })
+        .transpose()?
+        .unwrap_or_else(|| "w:t".to_owned());
     let mut element = BytesStart::new(name.as_str());
     if let Some(source) = source {
         for attribute in source.attributes() {
@@ -20085,6 +20135,239 @@ mod tests {
     }
 
     #[test]
+    fn legacy_missing_result_preserves_source_run_names_and_nested_owners() {
+        for run in ["r", "q:r", "w:r"] {
+            for paired_end in [false, true] {
+                for nested in [false, true] {
+                    for existing_result in [false, true] {
+                        let binding = if run == "w:r" {
+                            format!(r#"xmlns:w="{}""#, crate::namespace::W_NS)
+                        } else {
+                            r#"xmlns:w="urn:foreign""#.to_owned()
+                        };
+                        let end = if paired_end {
+                            r#"<q:fldChar q:fldCharType="end"></q:fldChar>"#
+                        } else {
+                            r#"<q:fldChar q:fldCharType="end"/>"#
+                        };
+                        let result = if existing_result {
+                            r#"<q:fldChar q:fldCharType="separate"/><q:t>old</q:t>"#
+                        } else {
+                            ""
+                        };
+                        let child = format!(
+                            r#"<{run} xmlns="{word}" xmlns:q="{word}" {binding}><q:fldChar q:fldCharType="begin"><q:ffData><q:textInput><q:default q:val="keep"/></q:textInput></q:ffData></q:fldChar></{run}><{run} xmlns="{word}" xmlns:q="{word}" {binding}><q:instrText> FORMTEXT </q:instrText></{run}><{run} xmlns="{word}" xmlns:q="{word}" {binding} xmlns:x="urn:producer">{result}{end}<x:keep x:data="yes"/></{run}>"#,
+                            word = crate::namespace::W_NS,
+                        );
+                        let body = if nested {
+                            format!(r#"<q:fldSimple q:instr=" UNKNOWN ">{child}</q:fldSimple>"#)
+                        } else {
+                            child
+                        };
+                        let input = format!(
+                            r#"<q:p xmlns:q="{0}" xmlns:w="{0}">{body}</q:p>"#,
+                            crate::namespace::W_NS,
+                        );
+                        let mut paragraph = CT_P::from_xml_fragment(input.as_bytes()).unwrap();
+                        let RunContent::Field(parent) = &mut paragraph.runs[0].content[0] else {
+                            panic!("field");
+                        };
+                        let field = if nested {
+                            parent.cached_field_mut(0).unwrap()
+                        } else {
+                            &mut *parent
+                        };
+                        field
+                            .set_legacy_form_value(LegacyFormFieldValue::Text(
+                                "new\tline\nnext".into(),
+                            ))
+                            .unwrap();
+                        if nested {
+                            parent.refresh_cached_field_projection();
+                        }
+                        let output = serialized_paragraph(&paragraph);
+                        assert!(output.contains(r#"<x:keep x:data="yes"/>"#), "{output}");
+                        let scoped = output.replacen(
+                            "<w:p>",
+                            &format!(
+                                r#"<w:p xmlns:w="{}" xmlns:q="{}">"#,
+                                crate::namespace::W_NS,
+                                crate::namespace::W_NS
+                            ),
+                            1,
+                        );
+                        let reopened = CT_P::from_xml_fragment(scoped.as_bytes()).unwrap();
+                        let parent = parsed_field(&reopened, 0);
+                        let field = if nested {
+                            parent.cached_fields_in_source_order()[0]
+                        } else {
+                            parent
+                        };
+                        assert_eq!(
+                            field.legacy_form_default_value().unwrap(),
+                            Some(LegacyFormFieldValue::Text("keep".into())),
+                            "{run} paired={paired_end} nested={nested}"
+                        );
+                        assert_eq!(
+                            field.legacy_form_value().unwrap(),
+                            Some(LegacyFormFieldValue::Text("new\tline\nnext".into())),
+                            "{output}"
+                        );
+                        if nested {
+                            assert!(output.contains("UNKNOWN"), "{output}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn field_result_publication_uses_destination_scopes_and_preserves_foreign_names() {
+        for (parent_word, run_word, local_word) in [
+            (false, false, true),
+            (false, false, false),
+            (true, false, false),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            for paired in [false, true] {
+                for existing in [false, true] {
+                    let word = crate::namespace::W_NS;
+                    let parent_ns = if parent_word { word } else { "urn:foreign" };
+                    let run_ns = if run_word { word } else { "urn:foreign" };
+                    let local = if local_word {
+                        format!(r#" xmlns:w="{word}""#)
+                    } else {
+                        String::new()
+                    };
+                    let foreign = !run_word && !local_word;
+                    let attributes = if foreign {
+                        r#" w:keep="yes""#
+                    } else {
+                        r#" x:keep="yes""#
+                    };
+                    let opaque = if foreign {
+                        "<w:opaque/>"
+                    } else {
+                        "<x:opaque/>"
+                    };
+                    let end = if paired {
+                        format!(
+                            r#"<q:fldChar q:fldCharType="end"{local}{attributes}>{opaque}</q:fldChar>"#
+                        )
+                    } else {
+                        format!(r#"<q:fldChar q:fldCharType="end"{local}{attributes}/>"#)
+                    };
+                    let result = if existing {
+                        format!(
+                            r#"<q:fldChar q:fldCharType="separate"/><q:t xmlns:w="{word}">old</q:t>"#
+                        )
+                    } else {
+                        String::new()
+                    };
+                    let raw = format!(
+                        r#"<q:r xmlns:w="{run_ns}"><q:fldChar q:fldCharType="begin"{local}{attributes}><q:ffData><q:textInput><q:default q:val="keep"/></q:textInput></q:ffData>{opaque}</q:fldChar></q:r><q:r xmlns:w="{run_ns}"><q:instrText> FORMTEXT </q:instrText></q:r><q:r xmlns:w="{run_ns}">{result}{end}</q:r>"#
+                    );
+                    let wrap = |body: &str| {
+                        format!(
+                            r#"<q:p xmlns:q="{word}" xmlns:w="{parent_ns}" xmlns:x="urn:foreign">{body}</q:p>"#
+                        )
+                    };
+                    let paragraph = CT_P::from_xml_fragment(wrap(&raw).as_bytes()).unwrap();
+                    let mut field = parsed_field(&paragraph, 0).clone();
+                    field
+                        .set_legacy_form_value(LegacyFormFieldValue::Text("new\tline\nnext".into()))
+                        .unwrap();
+                    field.dirty = Some(true);
+                    // Bind the raw run sequence at its actual parent scope, not
+                    // at a source marker or source text element's local scope.
+                    let root_scope = wrap("");
+                    let mut reader = Reader::from_str(&root_scope);
+                    let mut buffer = Vec::new();
+                    let Event::Start(root) = reader.read_event_into(&mut buffer).unwrap() else {
+                        panic!("root");
+                    };
+                    let prefixes = word_prefixes_at(&root, &[]).unwrap();
+                    let updated = update_complex_field_source(
+                        &field,
+                        raw.as_bytes(),
+                        &prefixes,
+                        true,
+                        !existing,
+                    )
+                    .unwrap();
+                    let output = wrap(std::str::from_utf8(&updated).unwrap());
+                    let reopened = CT_P::from_xml_fragment(output.as_bytes()).unwrap();
+                    let field = parsed_field(&reopened, 0);
+                    assert_eq!(
+                        field.legacy_form_value().unwrap(),
+                        Some(LegacyFormFieldValue::Text("new\tline\nnext".into())),
+                        "{output}"
+                    );
+                    assert_eq!(
+                        field.legacy_form_default_value().unwrap(),
+                        Some(LegacyFormFieldValue::Text("keep".into()))
+                    );
+                    let mut reader = NsReader::from_str(&output);
+                    let mut buffer = Vec::new();
+                    let mut opaque_count = 0;
+                    let mut attribute_count = 0;
+                    loop {
+                        let (namespace, event) =
+                            reader.read_resolved_event_into(&mut buffer).unwrap();
+                        match event {
+                            Event::Start(element) | Event::Empty(element) => {
+                                if element.local_name().as_ref() == b"opaque" {
+                                    assert_eq!(
+                                        namespace,
+                                        ResolveResult::Bound(Namespace(b"urn:foreign")),
+                                        "{output}"
+                                    );
+                                    opaque_count += 1;
+                                }
+                                for attribute in element.attributes() {
+                                    let attribute = attribute.unwrap();
+                                    let (namespace, name) =
+                                        reader.resolver().resolve_attribute(attribute.key);
+                                    if name.as_ref() == b"keep" {
+                                        assert_eq!(
+                                            namespace,
+                                            ResolveResult::Bound(Namespace(b"urn:foreign")),
+                                            "{output}"
+                                        );
+                                        attribute_count += 1;
+                                    }
+                                }
+                            }
+                            Event::Eof => break,
+                            _ => {}
+                        }
+                        buffer.clear();
+                    }
+                    assert_eq!(opaque_count, if paired { 2 } else { 1 });
+                    assert_eq!(attribute_count, 2);
+                }
+            }
+        }
+        // Simple cached text has the same removed-child versus sibling scope.
+        let word = crate::namespace::W_NS;
+        let raw = format!(
+            r#"<q:fldSimple xmlns:q="{word}" xmlns:w="urn:foreign" q:instr=" UNKNOWN "><q:r><q:t xmlns:w="{word}">old</q:t></q:r></q:fldSimple>"#
+        );
+        let paragraph = parse_paragraph(&raw);
+        let mut field = parsed_field(&paragraph, 0).clone();
+        field.cached_result = "new\tline\nnext".into();
+        let FieldSource::Parsed { word_prefixes, .. } = &field.source else {
+            panic!("parsed source");
+        };
+        let updated =
+            update_simple_field_source(&field, raw.as_bytes(), word_prefixes, true).unwrap();
+        let reopened = parse_paragraph(std::str::from_utf8(&updated).unwrap());
+        assert_eq!(parsed_field(&reopened, 0).cached_result, "new\tline\nnext");
+    }
+
+    #[test]
     fn malformed_or_duplicate_legacy_form_singletons_fail_closed() {
         let cases = [
             (
@@ -20664,6 +20947,14 @@ mod tests {
         field
             .set_legacy_form_value(LegacyFormFieldValue::Text("new".to_owned()))
             .unwrap();
+        assert_eq!(
+            field.legacy_form_default_value().unwrap(),
+            Some(LegacyFormFieldValue::Text("old".into()))
+        );
+        assert_eq!(
+            field.legacy_form_value().unwrap(),
+            Some(LegacyFormFieldValue::Text("new".into()))
+        );
         let output = serialized_paragraph(&paragraph);
         assert!(
             output.contains(
@@ -20673,10 +20964,30 @@ mod tests {
         );
         assert!(
             output.contains(
-                r#"<w:ffData><w:textInput><w:default w:val="new"/></w:textInput></w:ffData>"#
+                r#"<w:ffData><w:textInput><w:default w:val="old"/></w:textInput></w:ffData>"#
             ),
             "{output}"
         );
+        assert!(output.contains("<w:t>new</w:t>"), "{output}");
+
+        // Checkbox current metadata really invokes the owner rewriter. The
+        // text case above intentionally changes only the cached result.
+        let mut checkbox = parse_paragraph(concat!(
+            r#"<w:r xmlns:x="urn:producer"><w:fldChar w:fldCharType="begin">"#,
+            r#"<x:producer><w:ffData><w:checkBox><w:checked w:val="0"/></w:checkBox></w:ffData></x:producer>"#,
+            r#"<w:ffData><w:checkBox><w:sizeAuto/><w:default w:val="0"/><w:checked w:val="0"/></w:checkBox></w:ffData>"#,
+            r#"</w:fldChar></w:r><w:r><w:instrText> FORMCHECKBOX </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        ));
+        let RunContent::Field(field) = &mut checkbox.runs[0].content[0] else {
+            panic!("checkbox");
+        };
+        field
+            .set_legacy_form_value(LegacyFormFieldValue::Checked(true))
+            .unwrap();
+        let output = serialized_paragraph(&checkbox);
+        assert!(output.contains(r#"<x:producer><w:ffData><w:checkBox><w:checked w:val="0"/></w:checkBox></w:ffData></x:producer>"#), "{output}");
+        assert!(output.contains(r#"<w:ffData><w:checkBox><w:sizeAuto/><w:default w:val="0"/><w:checked w:val="1"/></w:checkBox></w:ffData>"#), "{output}");
     }
 
     #[test]
@@ -20704,7 +21015,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_text_input_form_can_be_expanded_for_value_mutation() {
+    fn empty_text_input_form_keeps_reset_metadata_absent_on_value_mutation() {
         let mut paragraph = parse_paragraph(concat!(
             r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:textInput/></w:ffData></w:fldChar></w:r>"#,
             r#"<w:r><w:instrText> FORMTEXT </w:instrText></w:r>"#,
@@ -20721,13 +21032,17 @@ mod tests {
         field
             .set_legacy_form_value(LegacyFormFieldValue::Text("new".to_owned()))
             .unwrap();
+        assert_eq!(field.legacy_form_default_value().unwrap(), None);
+        assert_eq!(
+            field.legacy_form_value().unwrap(),
+            Some(LegacyFormFieldValue::Text("new".into()))
+        );
         let output = serialized_paragraph(&paragraph);
         assert!(
-            output.contains(
-                r#"<w:ffData><w:textInput><w:default xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="new"/></w:textInput></w:ffData>"#
-            ),
+            output.contains("<w:ffData><w:textInput/></w:ffData>"),
             "{output}"
         );
+        assert!(output.contains("<w:t>new</w:t>"), "{output}");
     }
 
     #[test]
