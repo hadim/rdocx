@@ -26526,36 +26526,57 @@ impl Document {
                 endpoint.1
             };
             let (source, owner) = self.story_source_and_owner(story)?;
+            let qualified =
+                story_range_paragraph_spans(source.xml.as_ref(), &[(story.clone(), owner.clone())])
+                    .ok()
+                    .filter(|spans| spans.len() == 1)
+                    .and_then(|mut spans| spans.pop());
             let mut found = None;
-            for (index, item) in scan_story_items(source.xml.as_ref(), &owner, None)?
-                .iter()
-                .inspect(|_| {
+            if let Some(paragraphs) = qualified {
+                for (location, span) in paragraphs {
                     #[cfg(test)]
-                    a9_lookup_candidate("move_comment_story_range.candidate.8");
-                })
-                .enumerate()
-            {
-                let paths = match item.kind {
-                    StoryItemKind::Paragraph => vec![(vec![index], item.full.start)],
-                    StoryItemKind::ContentControl => {
-                        scan_story_control_paragraphs(source.xml.as_ref(), item)?
-                            .iter()
-                            .inspect(|_| {
-                                #[cfg(test)]
-                                a9_lookup_candidate("move_comment_story_range.candidate.9");
-                            })
-                            .enumerate()
-                            .map(|(child, span)| (vec![index, child], span.start))
-                            .collect()
-                    }
-                    _ => Vec::new(),
-                };
-                for (path, offset) in paths {
-                    if offset == expected {
+                    a9_lookup_candidate("move_comment_story_range.rebase_candidate");
+                    if span.start == expected {
                         if found.is_some() {
                             return Err(Error::Other("ambiguous comment move destination".into()));
                         }
-                        found = Some(path);
+                        found = Some(location.index_path);
+                    }
+                }
+            } else {
+                // Preserve the original lookup and its early error ordering.
+                for (index, item) in scan_story_items(source.xml.as_ref(), &owner, None)?
+                    .iter()
+                    .inspect(|_| {
+                        #[cfg(test)]
+                        a9_lookup_candidate("move_comment_story_range.candidate.8");
+                    })
+                    .enumerate()
+                {
+                    let paths = match item.kind {
+                        StoryItemKind::Paragraph => vec![(vec![index], item.full.start)],
+                        StoryItemKind::ContentControl => {
+                            scan_story_control_paragraphs(source.xml.as_ref(), item)?
+                                .iter()
+                                .inspect(|_| {
+                                    #[cfg(test)]
+                                    a9_lookup_candidate("move_comment_story_range.candidate.9");
+                                })
+                                .enumerate()
+                                .map(|(child, span)| (vec![index, child], span.start))
+                                .collect()
+                        }
+                        _ => Vec::new(),
+                    };
+                    for (path, offset) in paths {
+                        if offset == expected {
+                            if found.is_some() {
+                                return Err(Error::Other(
+                                    "ambiguous comment move destination".into(),
+                                ));
+                            }
+                            found = Some(path);
+                        }
                     }
                 }
             }
@@ -26757,16 +26778,31 @@ impl Document {
         let (source, owner) = self.story_source_and_owner(entry.range().start.location.story())?;
         let part_name = source.part_name.clone();
         let xml = source.xml.as_ref();
-        let mut paragraphs = Vec::new();
-        for item in scan_story_items(xml, &owner, None)? {
-            match item.kind {
-                StoryItemKind::Paragraph => paragraphs.push(item.full),
-                StoryItemKind::ContentControl => {
-                    paragraphs.extend(scan_story_control_paragraphs(xml, &item)?);
+        let qualified = story_range_paragraph_spans(
+            xml,
+            &[(entry.range().start.location.story().clone(), owner.clone())],
+        )
+        .ok()
+        .filter(|spans| spans.len() == 1)
+        .and_then(|mut spans| spans.pop());
+        let paragraphs = if let Some(paragraphs) = qualified {
+            paragraphs
+                .into_iter()
+                .map(|(_, span)| span)
+                .collect::<Vec<_>>()
+        } else {
+            let mut paragraphs = Vec::new();
+            for item in scan_story_items(xml, &owner, None)? {
+                match item.kind {
+                    StoryItemKind::Paragraph => paragraphs.push(item.full),
+                    StoryItemKind::ContentControl => {
+                        paragraphs.extend(scan_story_control_paragraphs(xml, &item)?);
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
-        }
+            paragraphs
+        };
         let (start_tag, end_tag, identity) = match entry.kind() {
             StoryRangeKind::Bookmark { id, .. } => (
                 b"bookmarkStart".as_slice(),
@@ -26787,6 +26823,43 @@ impl Document {
                 (b"proofErr".as_slice(), b"proofErr".as_slice(), kind.clone())
             }
         };
+        // Source-order disjoint ranges admit one forward membership cursor.
+        // Unqualified inventories keep the original containment predicate.
+        let ordered = paragraphs
+            .iter()
+            .inspect(|_| {
+                #[cfg(test)]
+                a9_lookup_candidate("story_range_marker_spans.range_bounds");
+            })
+            .all(|span| span.start <= span.end && span.end <= xml.len())
+            && paragraphs
+                .windows(2)
+                .inspect(|_| {
+                    #[cfg(test)]
+                    a9_lookup_candidate("story_range_marker_spans.range_order");
+                })
+                .all(|pair| pair[0].end <= pair[1].start);
+        let mut paragraph_cursor = 0usize;
+        let mut paragraph_contains = |offset: usize| {
+            if !ordered {
+                return paragraphs
+                    .iter()
+                    .inspect(|_| {
+                        #[cfg(test)]
+                        a9_lookup_candidate("story_range_marker_spans.membership_fallback");
+                    })
+                    .any(|paragraph| paragraph.contains(&offset));
+            }
+            while let Some(paragraph) = paragraphs.get(paragraph_cursor) {
+                #[cfg(test)]
+                a9_lookup_candidate("story_range_marker_spans.membership_cursor");
+                if offset < paragraph.end {
+                    return paragraph.start <= offset;
+                }
+                paragraph_cursor += 1;
+            }
+            false
+        };
         let mut reader = NsReader::from_reader(xml);
         reader.config_mut().trim_text(false);
         let mut ranges = Vec::new();
@@ -26795,20 +26868,37 @@ impl Document {
         let mut buffer = Vec::new();
         loop {
             let before = reader.buffer_position() as usize;
-            let (namespace, event) = reader
-                .read_resolved_event_into(&mut buffer)
-                .map_err(|error| Error::Other(format!("range removal scan failed: {error}")))?;
+            let (namespace, event) = match reader.read_resolved_event_into(&mut buffer) {
+                Ok(event) => event,
+                Err(error) => {
+                    #[cfg(test)]
+                    a9_lookup_read(
+                        "story_range_marker_spans.events",
+                        before,
+                        reader.buffer_position() as usize,
+                    );
+                    return Err(Error::Other(format!("range removal scan failed: {error}")));
+                }
+            };
             let is_word = word_element(&namespace);
             drop(namespace);
             let after = reader.buffer_position() as usize;
-            let hidden = stack.iter().any(|(word, name, start)| {
-                *word
-                    && matches!(
-                        name.as_slice(),
-                        b"del" | b"moveFrom" | b"smartTag" | b"customXml" | b"fldSimple"
-                    )
-                    || *word && name == b"txbxContent" && *start > owner.full.start
-            });
+            #[cfg(test)]
+            a9_lookup_read("story_range_marker_spans.events", before, after);
+            let hidden = stack
+                .iter()
+                .inspect(|_| {
+                    #[cfg(test)]
+                    a9_lookup_candidate("story_range_marker_spans.hidden_owner");
+                })
+                .any(|(word, name, start)| {
+                    *word
+                        && matches!(
+                            name.as_slice(),
+                            b"del" | b"moveFrom" | b"smartTag" | b"customXml" | b"fldSimple"
+                        )
+                        || *word && name == b"txbxContent" && *start > owner.full.start
+                });
             if let Event::End(_) = &event {
                 stack.pop();
             }
@@ -26817,10 +26907,7 @@ impl Document {
             }
             let element = match &event {
                 Event::Start(element) | Event::Empty(element)
-                    if paragraphs
-                        .iter()
-                        .any(|paragraph| paragraph.contains(&before))
-                        && !hidden
+                    if !hidden
                         && is_word
                         && matches!(
                             element.local_name().as_ref(),
@@ -26832,7 +26919,8 @@ impl Document {
                                 | b"permEnd"
                                 | b"proofErr"
                                 | b"commentReference"
-                        ) =>
+                        )
+                        && paragraph_contains(before) =>
                 {
                     element
                 }
@@ -26844,7 +26932,10 @@ impl Document {
             };
             let mut id_value = None;
             let mut type_value = None;
-            for attribute in element.attributes() {
+            for attribute in element.attributes().inspect(|_| {
+                #[cfg(test)]
+                a9_lookup_candidate("story_range_marker_spans.attributes");
+            }) {
                 let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
                 let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
                 if word_element(&namespace) && matches!(local.as_ref(), b"id" | b"type") {
@@ -49455,7 +49546,12 @@ mod tests {
         let picture_source = String::from_utf8(picture.source).unwrap();
         let (frame, range, _) = seed.document.to_xml_with_body_spans().unwrap();
         let mut body = String::new();
-        let mut comments = format!("<w:comments xmlns:w=\"{W_NS}\">");
+        let mut comments = format!(
+            "<w:comments xmlns:w=\"{W_NS}\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\">"
+        );
+        let mut extended = String::from(
+            "<w15:commentsEx xmlns:w15=\"http://schemas.microsoft.com/office/word/2012/wordml\">",
+        );
         for index in 0..paragraphs {
             // issue407_runs carries six independently formatted source runs.
             body.push_str(
@@ -49496,10 +49592,14 @@ mod tests {
                 "<w:p><w:r><w:t>destination {index:04}</w:t></w:r></w:p>"
             ));
             comments.push_str(&format!(
-                "<w:comment w:id=\"{identity}\" w:author=\"Ada\"><w:p><w:r><w:t>note {index:04}</w:t></w:r></w:p></w:comment>"
+                "<w:comment w:id=\"{identity}\" w:author=\"Ada\"><w:p w14:paraId=\"{identity:08X}\"><w:r><w:t>note {index:04}</w:t></w:r></w:p></w:comment>"
+            ));
+            extended.push_str(&format!(
+                "<w15:commentEx w15:paraId=\"{identity:08X}\" w15:done=\"0\"/>"
             ));
         }
         comments.push_str("</w:comments>");
+        extended.push_str("</w15:commentsEx>");
         let mut main = frame[..range.start].to_vec();
         main.extend_from_slice(body.as_bytes());
         main.extend_from_slice(&frame[range.end..]);
@@ -49507,6 +49607,10 @@ mod tests {
         package.set_part(
             seed.comments_part_name.as_ref().unwrap(),
             comments.into_bytes(),
+        );
+        package.set_part(
+            seed.comments_extended_part_name.as_ref().unwrap(),
+            extended.into_bytes(),
         );
         let mut output = Cursor::new(Vec::new());
         package.write_to(&mut output).unwrap();
@@ -49866,10 +49970,10 @@ mod tests {
             .map(|document| document.to_bytes().unwrap())
             .collect::<Vec<_>>();
         for family in [
+            "comment.move",
             "picture.insert",
             "control.block",
             "control.nested",
-            "comment.move",
             "cell.direct",
             "cell.controlled",
             "picture.resize",
