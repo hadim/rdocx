@@ -22,13 +22,13 @@ fresh final CLI, the full workspace, full verify, the full hash suite, WASM,
 publish dry-run, strict installed mypy, and stubtest stay pending. F-289 is
 not done.
 F-290 is integrated at `79047bf193bcd9dfb229a0b37a93d979dc0997a7` and stays in progress, owner grok. Root whole-feature pass 3 is clean, with 0 defects, 0 smells, and 0 nitpicks, at `.claude/reviews/F-290-whole-feature-pass-3.md`. Public local checks are consumed. Final gates stay pending. Shared leases are released. No final acceptance is claimed.
-F-X268 is in progress, owner grok. The design is approved, including the
+F-X268 is in progress, owner codex. The design is approved, including the
 2026-10-25 refresh4 extension, and the story is claimed for parallel work. Codex root
 approved the 2026-10-24 refresh2 extension. Codex root approved the
 2026-10-24 refresh3 extension. Codex root approved the refresh4 mechanism 8
 contract on 2026-10-25 after the user answered Q24. The baseline is
 `d1f42516eb3747442fe4304a6331eab946dc9a0e`. Those approvals do not change
-one another. No implementation has started and no gate pass is claimed. It follows F-289 and F-290. The approved F-X266 and F-X267 local provider
+one another. Implementation is in progress and no final gate pass is claimed. It follows F-289 and F-290. The approved F-X266 and F-X267 local provider
 checkpoints are satisfied on `79047bf193bcd9dfb229a0b37a93d979dc0997a7`.
 That completion is the local prefix only. It is not final acceptance and it
 is not product implementation of F-X268. The
@@ -36,6 +36,14 @@ repairs do not replace the original authoring contract. The sprint now has
 eight stories. The previously authorized full run remains authorized. This
 approval does not ask for a new permission. Q1 through Q24 stay answered.
 No product choice is unanswered.
+
+On 2026-10-26 the user stopped new Grok assignments. The active Grok process
+was interrupted and exited before Codex took sole write ownership. Codex
+continues on `work/f-x268-codex` in the existing worker checkout. The original
+`work/f-x268-grok` branch and all uncommitted work are preserved. Six F-X268
+mechanisms are checkpointed locally. Mechanism 7 remains in progress and
+mechanism 8 has not started. Final acceptance, integration of F-X268 and the
+release remain pending.
 
 **Estimated effort**: the 12 to 17 developer-day figure applies only to the
 original three Rust and Python authoring stories, F-288, F-289 and F-290.
@@ -61,13 +69,13 @@ consumed local evidence is not a full gate. F-X267 remains the largest repair.
 - `docs/hld/14-development-backlog.md`, sections F-288, F-289 and F-290 define
   supported authoring behavior, dependencies and each story's acceptance gate.
   Sections F-X264, F-X265, F-X266 and F-X267 define the admitted repair scope.
-  Section F-X268 defines the claimed story. Its design is approved and the story is in progress, owner grok.
+  Section F-X268 defines the claimed story. Its design is approved and the story is in progress, owner codex.
   The durable issue and PR mapping is the S95.4 issue and PR intake, 2026-10-23 section in `docs/sprints/SPRINT_PLAN.md`.
   The 2026-10-24 refresh is a later section in the same file.
   The 2026-10-24T13:49:35Z refresh is appended to that same intake.
   The 2026-10-24T17:02:28Z refresh is appended to that same intake.
   The 2026-10-24T23:05:39Z refresh is appended to that same intake.
-  The scope approved through refresh3 stays approved. F-X268 is claimed and in progress, owner grok. Codex root approved the refresh4 extension on 2026-10-25. Q24 is answered.
+  The scope approved through refresh3 stays approved. F-X268 is claimed and in progress, owner codex. Codex root approved the refresh4 extension on 2026-10-25. Q24 is answered.
 - `docs/hld/03-architecture.md`, the existing legacy form, field, content-control,
   protection and mail-merge ownership contracts settle reuse of the document
   model, staging and publication boundaries.
@@ -92,7 +100,7 @@ consumed local evidence is not a full gate. F-X267 remains the largest repair.
 | F-X265 | Preserve fragment relationship targets and duplicate styles | M | in-progress | grok |
 | F-X266 | Bound Word body reads and structural edit cost | L | done | - |
 | F-X267 | Bound PowerPoint mutation cost across public publishers | L | done | - |
-| F-X268 | Bound Word owner inventory and unchanged package staging | L | in-progress | grok |
+| F-X268 | Bound Word owner inventory and unchanged package staging | L | in-progress | codex |
 
 ## Sequencing note
 
