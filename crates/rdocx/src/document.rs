@@ -51713,7 +51713,6 @@ mod tests {
         (xml, record)
     }
 
-    #[cfg(debug_assertions)]
     #[test]
     fn story_prefix_contexts_share_without_changing_values_or_first_errors() {
         fn old_prefixes(
@@ -52289,6 +52288,7 @@ mod tests {
         }
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn picture_plain_read_requires_existing_actual_source_and_exact_partition() {
         let (xml, record) = plain_picture_read_record(&issue407_runs(3));
