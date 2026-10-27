@@ -25180,6 +25180,125 @@ mod tests {
         );
     }
 
+    /// Give the body section a default header of `lines` paragraphs.
+    fn with_tall_header(input: &mut LayoutInput, top: rdocx_oxml::units::Twips, lines: usize) {
+        use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef, HdrFtrType};
+        let mut section = CT_SectPr::default_letter();
+        section.margin_top = Some(top);
+        section.header_refs.push(HdrFtrRef {
+            hdr_ftr_type: HdrFtrType::Default,
+            rel_id: "rIdHeader".into(),
+        });
+        input.document.body.sect_pr = Some(section);
+        let mut header = CT_HdrFtr::new();
+        for line in 1..=lines {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(&format!("Header line {line}"));
+            header.paragraphs.push(paragraph);
+        }
+        input.headers.insert("rIdHeader".into(), header);
+    }
+
+    #[test]
+    fn issue424_the_first_body_fragment_starts_below_a_header_taller_than_the_top_margin() {
+        // The issue's geometry: a 2 cm top margin, a 1.27 cm header distance
+        // and five header lines, which end well below the margin.
+        let mut input = make_input_with_text("Body line.");
+        with_tall_header(&mut input, rdocx_oxml::units::Twips(1134), 5);
+        let output = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("layout with a header");
+        let fragment = output.body_layout_fragments(0).expect("body fragment")[0];
+        assert_eq!(fragment.physical_page, 1);
+        let mut header_baselines = Vec::new();
+        for element in compatibility_page_elements(&output.layout.pages[0]) {
+            match element {
+                PositionedElement::Text(run) if run.text.starts_with("Header") => {
+                    header_baselines.push(run.origin.y)
+                }
+                PositionedElement::MultilingualText(run)
+                    if run.logical_text.starts_with("Header") =>
+                {
+                    header_baselines.push(run.origin.y)
+                }
+                _ => {}
+            }
+        }
+        header_baselines.sort_by(f64::total_cmp);
+        assert_eq!(header_baselines.len(), 5);
+        let pitch = header_baselines[1] - header_baselines[0];
+        let last = header_baselines[4];
+        assert!(
+            fragment.y > last && fragment.y < last + pitch,
+            "the body starts right under the last header line at {last}, got {}",
+            fragment.y
+        );
+        assert!(fragment.y > 1134.0 / 20.0);
+
+        // A header that fits above the margin leaves the body on it.
+        let mut input = make_input_with_text("Body line.");
+        with_tall_header(&mut input, rdocx_oxml::units::Twips(1440), 1);
+        let output = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("layout with a short header");
+        assert_eq!(output.body_layout_fragments(0).expect("body")[0].y, 72.0);
+
+        // A negative top margin is exact, so the tall header overlaps.
+        let mut input = make_input_with_text("Body line.");
+        with_tall_header(&mut input, rdocx_oxml::units::Twips(-1440), 8);
+        let output = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("layout with an exact top margin");
+        assert_eq!(output.body_layout_fragments(0).expect("body")[0].y, 72.0);
+    }
+
+    #[test]
+    fn fitting_endnotes_keep_their_distance_below_a_body_moved_by_its_header() {
+        let measure = |header_lines: usize| {
+            let mut input = make_document_with_both_streams(2, 3);
+            if header_lines > 0 {
+                with_tall_header(&mut input, rdocx_oxml::units::Twips(1440), header_lines);
+            }
+            let output = Engine::new_deterministic()
+                .expect("bundled fonts load")
+                .layout(&input)
+                .expect("layout succeeds");
+            let page = output
+                .pages
+                .iter()
+                .find(|page| page_text(page).contains("ENDNOTETEXT"))
+                .expect("the endnote follows the body on its page");
+            let body = compatibility_page_elements(page)
+                .into_iter()
+                .filter_map(|element| match element {
+                    PositionedElement::Text(run) if run.text.contains("occupies") => {
+                        Some(run.origin.y)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let endnote = compatibility_page_elements(page)
+                .into_iter()
+                .find_map(|element| match element {
+                    PositionedElement::Text(run) if run.text.contains("ENDNOTETEXT") => {
+                        Some(run.origin.y)
+                    }
+                    _ => None,
+                })
+                .expect("endnote text");
+            let body_top = body.iter().copied().fold(f64::INFINITY, f64::min);
+            let body_bottom = body.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            (body_top, endnote - body_bottom)
+        };
+        let (plain_top, plain_gap) = measure(0);
+        let (moved_top, moved_gap) = measure(8);
+        assert!(
+            moved_top > plain_top,
+            "eight header lines move the body down"
+        );
+        assert!(
+            (moved_gap - plain_gap).abs() < 1e-9,
+            "the endnote follows the moved body as it follows a plain one: {moved_gap} and {plain_gap}"
+        );
+    }
+
     #[test]
     fn footnotes_and_endnotes_keep_their_own_regions() {
         let input = make_document_with_both_streams(2, 3);

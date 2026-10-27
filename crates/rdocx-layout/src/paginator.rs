@@ -1400,8 +1400,13 @@ struct Pager<'a> {
     /// The section as authored, before a page mirrors it or a track narrows it.
     section_geometry: PageGeometry,
     /// The page being built, mirrored for its displayed number, at full text
-    /// measure. Headers, footers and page furniture are drawn against this.
+    /// measure. Its top and bottom margins are moved clear of the header and
+    /// footer the page draws, so the body band and whatever is placed
+    /// against the text margins start from these.
     page_geometry: PageGeometry,
+    /// The same page with the section's own margins. Headers, footers and
+    /// page borders are drawn against this.
+    furniture_geometry: PageGeometry,
     /// Column tracks of the page being built, left to right. Empty for a
     /// single-column section, which never leaves the untouched path.
     tracks: Vec<ColumnTrack>,
@@ -1504,6 +1509,7 @@ impl<'a> Pager<'a> {
             content_height: geometry.content_height(),
             section_geometry: geometry.clone(),
             page_geometry: geometry.clone(),
+            furniture_geometry: geometry.clone(),
             tracks: Vec::new(),
             track_index: 0,
             numbered_lines: Vec::new(),
@@ -1545,15 +1551,21 @@ impl<'a> Pager<'a> {
 
     /// Resolve the geometry of the page now being built.
     ///
-    /// A section that neither mirrors its margins nor declares column tracks
-    /// gets its own geometry back unchanged, which is the path every existing
-    /// document takes.
+    /// A section that neither mirrors its margins nor declares column tracks,
+    /// and whose header and footer stay within its margins, gets its own
+    /// geometry back unchanged, which is the path most documents take.
     fn begin_page(&mut self) {
         self.track_index = 0;
         let mut page = self.section_geometry.without_columns();
         if self.section_geometry.mirror_margins && self.header_page_number.is_multiple_of(2) {
             std::mem::swap(&mut page.margin_left, &mut page.margin_right);
         }
+        // A negative top or bottom margin is laid out at its absolute value.
+        page.margin_top = page.margin_top.abs();
+        page.margin_bottom = page.margin_bottom.abs();
+        self.furniture_geometry = page.clone();
+        self.clear_header_and_footer(&mut page);
+        self.content_height = page.content_height();
         let shift = page.margin_left - self.section_geometry.margin_left;
         self.tracks = self
             .section_geometry
@@ -1571,6 +1583,33 @@ impl<'a> Pager<'a> {
             self.next_line_number = numbering.start;
         }
         self.apply_active_track();
+    }
+
+    /// Move the body band of `page` clear of its header and footer.
+    ///
+    /// Word starts the body below a header that reaches past the top margin,
+    /// and ends it above a footer that reaches past the bottom margin. Only
+    /// the stories' flow counts, so an anchored drawing pushes nothing. A
+    /// negative `w:top` or `w:bottom` asks for that margin exactly, and the
+    /// header or footer may then overlap the body.
+    fn clear_header_and_footer(&self, page: &mut PageGeometry) {
+        let Some(hf) = self.header_footer else {
+            return;
+        };
+        let variant = self.story_variant(hf);
+        let semantics = self.header_footer_semantics;
+        let header = hf.header(variant);
+        if !header.is_empty() && self.section_geometry.margin_top >= 0.0 {
+            let header_bottom = page.header_distance
+                + story_flow_height(header, semantics.map(|semantics| semantics.header(variant)));
+            page.margin_top = page.margin_top.max(header_bottom);
+        }
+        let footer = hf.footer(variant);
+        if !footer.is_empty() && self.section_geometry.margin_bottom >= 0.0 {
+            let footer_extent = page.footer_distance
+                + story_flow_height(footer, semantics.map(|semantics| semantics.footer(variant)));
+            page.margin_bottom = page.margin_bottom.max(footer_extent);
+        }
     }
 
     /// Narrow the body geometry to the active column track.
@@ -2488,7 +2527,7 @@ impl<'a> Pager<'a> {
 
     /// The section's page border frame, for the page being built.
     fn page_border_elements(&self) -> Vec<PositionedElement> {
-        let Some(frame) = self.page_geometry.page_borders.as_ref() else {
+        let Some(frame) = self.furniture_geometry.page_borders.as_ref() else {
             return Vec::new();
         };
         let draws = match frame.display {
@@ -2499,7 +2538,7 @@ impl<'a> Pager<'a> {
         if !draws {
             return Vec::new();
         }
-        let geometry = &self.page_geometry;
+        let geometry = &self.furniture_geometry;
         let mut elements = Vec::new();
         match frame.offset_from {
             ST_PageBorderOffset::Text => {
@@ -2576,9 +2615,12 @@ impl<'a> Pager<'a> {
         self.draw_line_numbers();
         self.apply_vertical_alignment();
         self.apply_body_rotation();
+        // Endnotes that follow the body on this page are placed from the
+        // section's top margin, so the band's offset from it is added back.
+        let band_offset = self.page_geometry.margin_top - self.section_geometry.margin_top;
         self.page_flow_spaces.push(PageFlowSpace {
-            body_bottom: self.ink_bottom,
-            note_top: self.content_height - self.reserved_height(),
+            body_bottom: self.ink_bottom + band_offset,
+            note_top: self.content_height - self.reserved_height() + band_offset,
         });
         self.place_page_notes();
         let mut all_elements = Vec::new();
@@ -2614,11 +2656,11 @@ impl<'a> Pager<'a> {
                 .header_footer_semantics
                 .map(|semantics| semantics.header(variant));
             if !header_blocks.is_empty() {
-                let header_y = self.page_geometry.header_distance;
+                let header_y = self.furniture_geometry.header_distance;
                 render_hf_blocks(
                     header_blocks,
                     header_directions,
-                    &self.page_geometry,
+                    &self.furniture_geometry,
                     header_y,
                     self.page_number,
                     (
@@ -2642,13 +2684,13 @@ impl<'a> Pager<'a> {
                 .map(|semantics| semantics.footer(variant));
             if !footer_blocks.is_empty() {
                 let footer_height = story_flow_height(footer_blocks, footer_directions);
-                let footer_y = self.page_geometry.page_height
-                    - self.page_geometry.footer_distance
+                let footer_y = self.furniture_geometry.page_height
+                    - self.furniture_geometry.footer_distance
                     - footer_height;
                 render_hf_blocks(
                     footer_blocks,
                     footer_directions,
-                    &self.page_geometry,
+                    &self.furniture_geometry,
                     footer_y,
                     self.page_number,
                     (
@@ -9821,5 +9863,137 @@ mod tests {
         let (page, placed) = pass.resolved.get(&(1, 0)).expect("block one, anchor zero");
         assert_eq!(*page, 1);
         assert_eq!(placed.wrap, WrapType::Square);
+    }
+
+    /// A header or footer of `lines` lines of 14 points, with no text.
+    fn hf_story(lines: usize) -> Vec<ParagraphBlock> {
+        (0..lines).map(|_| make_para(1, 14.0)).collect()
+    }
+
+    /// A default header and footer, with a blank first-page header.
+    fn hf_content(header: usize, footer: usize) -> HeaderFooterContent {
+        HeaderFooterContent {
+            header_blocks: hf_story(header),
+            footer_blocks: hf_story(footer),
+            first_header_blocks: Vec::new(),
+            first_footer_blocks: Vec::new(),
+            even_header_blocks: Vec::new(),
+            even_footer_blocks: Vec::new(),
+            even_headers_active: false,
+            watermark: None,
+            first_watermark: None,
+            even_watermark: None,
+        }
+    }
+
+    /// Lay out `count` one-line body paragraphs of 14 points and return, per
+    /// page, the baselines of the body text drawn there.
+    fn body_baselines(
+        count: usize,
+        geometry: PageGeometry,
+        header_footer: Option<&HeaderFooterContent>,
+        title_pg: bool,
+        page_break_after_first: bool,
+    ) -> Vec<Vec<f64>> {
+        let blocks = (0..count)
+            .map(|index| {
+                let mut para = make_para(1, 14.0);
+                para.page_break_before = page_break_after_first && index == 1;
+                para.lines[0].items = vec![LineItem::Text(directional_test_segment(
+                    "BODY",
+                    TextDirection::Auto,
+                    None,
+                    None,
+                ))];
+                LayoutBlock::Paragraph(para)
+            })
+            .collect::<Vec<_>>();
+        let (pages, _) = paginate(
+            &blocks,
+            geometry,
+            header_footer,
+            title_pg,
+            &FontManager::new(),
+            &empty_media(),
+            &NoteRegistry::default(),
+        );
+        pages
+            .iter()
+            .map(|page| {
+                let mut baselines = Vec::new();
+                oxml_layout::walk(&page.elements, &mut |element, _| {
+                    if let PositionedElement::Text(run) = element
+                        && run.text == "BODY"
+                    {
+                        baselines.push(run.origin.y);
+                    }
+                });
+                baselines
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_header_reaching_past_the_top_margin_moves_the_body_below_it() {
+        // Five 14 point lines from the 36 point header distance end at 106,
+        // which is 34 points below the 72 point top margin.
+        let plain = body_baselines(3, PageGeometry::default(), None, false, false);
+        let tall = hf_content(5, 0);
+        let pushed = body_baselines(3, PageGeometry::default(), Some(&tall), false, false);
+        assert_eq!(pushed[0].len(), 3);
+        assert_eq!(pushed[0][0] - plain[0][0], 34.0);
+        assert_eq!(pushed[0][2] - plain[0][2], 34.0);
+
+        // Two lines end at 64, inside the margin, so the body stays put.
+        let short = hf_content(2, 0);
+        let kept = body_baselines(3, PageGeometry::default(), Some(&short), false, false);
+        assert_eq!(kept, plain);
+    }
+
+    #[test]
+    fn a_negative_top_margin_keeps_its_absolute_value_under_a_tall_header() {
+        let plain = body_baselines(3, PageGeometry::default(), None, false, false);
+        let tall = hf_content(5, 0);
+        let geometry = PageGeometry {
+            margin_top: -72.0,
+            ..PageGeometry::default()
+        };
+        let exact = body_baselines(3, geometry, Some(&tall), false, false);
+        assert_eq!(exact, plain);
+    }
+
+    #[test]
+    fn a_title_page_takes_the_clearance_of_its_own_blank_first_header() {
+        let plain = body_baselines(2, PageGeometry::default(), None, false, true);
+        let tall = hf_content(5, 0);
+        let pages = body_baselines(2, PageGeometry::default(), Some(&tall), true, true);
+        assert_eq!(pages.len(), 2);
+        // The first page selects the blank first header, the second the tall
+        // default one.
+        assert_eq!(pages[0], plain[0]);
+        assert_eq!(pages[1][0] - plain[1][0], 34.0);
+    }
+
+    #[test]
+    fn a_footer_reaching_past_the_bottom_margin_ends_the_body_above_it() {
+        // 648 points of body hold 46 lines of 14. A footer of five lines from
+        // the 36 point footer distance reaches 106 points up, which leaves
+        // 614 points and 43 lines.
+        let plain = body_baselines(60, PageGeometry::default(), None, false, false);
+        assert_eq!(plain[0].len(), 46);
+        let tall = hf_content(0, 5);
+        let pushed = body_baselines(60, PageGeometry::default(), Some(&tall), false, false);
+        assert_eq!(pushed[0].len(), 43);
+        assert_eq!(pushed[0][0], plain[0][0]);
+        let footer_top = PageGeometry::default().page_height - 36.0 - 70.0;
+        assert!(pushed[0].iter().all(|baseline| *baseline < footer_top));
+
+        // A negative bottom margin is exact, so the footer overlaps instead.
+        let geometry = PageGeometry {
+            margin_bottom: -72.0,
+            ..PageGeometry::default()
+        };
+        let exact = body_baselines(60, geometry, Some(&tall), false, false);
+        assert_eq!(exact[0].len(), 46);
     }
 }
