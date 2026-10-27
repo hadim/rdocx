@@ -3159,7 +3159,7 @@ signature field, behind an opt-in option, while PDF/A and PDF/UA output stay
 valid. F-X219 carries unfinished full-range text watermark interoperability,
 and F-X192 carries the full bibliography catalogue. Five stories provisionally
 total19 to21 developer-days. Both carried designs require reset and explicit
-capacity/technical reassessment before implementation. S96 remains unopened.
+capacity/technical reassessment before implementation. S96 remains unopened. The five-story estimate remains historical. F-X269 is an additional provisional M follow-up from independent S95.4 native observations. Its design and S96 capacity require reassessment before claim. It adds no S95.4 story or delivery credit.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -3168,6 +3168,7 @@ capacity/technical reassessment before implementation. S96 remains unopened.
 | F-X244 | Signature field, bindings and CLI option | M |
 | F-X219 | Qualify full-range text watermark interoperability | M |
 | F-X192 | Complete the remaining Word bibliography catalogue | L |
+| F-X269 | Qualify PowerPoint shadow falloff and wipe paint domains | M |
 
 Issue381 is accepted only when all three stories pass. F-X242 makes layout
 report each control's rectangle and maps text, rich text, checkbox,

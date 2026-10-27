@@ -210,6 +210,7 @@ Existing `crates/rpptx-py/tests/test_documented_examples.py` and the native inte
 - `docs/hld/03-architecture.md`, PowerPoint checked XML ownership
 - `docs/hld/04-opc-and-packaging.md`, Checked PowerPoint XML transactions
 - `docs/hld/06-presentationml-model.md`, Public facade and Preservation strategy, plus new ownership prose under those sections
+- `docs/hld/08-rendering-spec.md`, native-qualified timeline masks and SmartArt profile behavior
 - `docs/hld/10-bindings-spec.md`, public API and bindings
 - `docs/hld/12-testing-strategy.md`, tests
 - `docs/hld/14-development-backlog.md`, F-X267 story intent
@@ -317,3 +318,51 @@ Q26's purpose requires meaningful independent native evidence. Correcting this f
 Tests bind evaluation by the actual selected Hero ID and click marker ID, not the first state-map value. They distinguish missing/duplicate names, missing/duplicate IDs, placeholder and wrong paint/extent, and reordered template children. A source retargeted to a placeholder must fail admission even if whole-image SSIM is high. Existing source binding and terminal outgoing fade controls stay. Visible paint and native pose observations must demonstrate that wipe, opacity, transform and exit concern the Hero. Merely unequal compressed frame bytes do not prove animation. The yellow marker remains in the terminal outgoing state, making the fade comparison nontrivial. No native active-click observation or zoom sample is invented.
 
 This intentionally changes only the generated fixture source and its future reference pins. Hash harness 49 is expected unchanged. Preserve the old generator/source hash and all old pins as history. A changed source requires a fresh native movie and nine exact-time extractions. Independently review fixture correction before capture and actual provenance/outcomes before trusted adoption. If the corrected native export cannot satisfy the existing case/time/owner preconditions, retain the failure and escalate before changing samples or rendering semantics. All final outcomes remain pending.
+
+## Root-assessed native remediation after Q26
+
+Root approves the following bounded repair on2026-10-27 under the user's instruction to select recommended options without further questions. This explicitly extends the earlier reference-only boundary. It does not weaken the four native gates, replace independent references with renderer output or revoke the local performance-provider checkpoint. The actual corrected-target330ms failure, shadowed native comparisons and all strict extraction failures remain preserved.
+
+Independent native controls establish the supported numeric property names `ScaleX`, `ScaleY` and `style.rotation`, with fractional opacity. Native directions reveal from the named edge and exits remove from that edge. Native exit fade overwrites a prior opacity hold, so retain that existing behavior. Keep all existing aliases and source-preserving timing serialization. No new timing node variant or public timing-model struct field is required.
+
+The plain-paint width/duration corpus qualifies `alpha_in = clamp(8*p - 7*u,0,1)`, where u is normalized distance from the named edge and p is supported effect progress. Exit uses its complement. The two-width and fourfold-duration controls distinguish a spatial linear band from temporal blur. `/private/tmp/s954-q26-wipe-factor-analysis/REPORT.md` and its manifest retain exact native source, movie, actual timestamp, physical paint and measured fits. The first-slide phase controls require no fitted clock shift. Later-slide declared slots remain unqualified. No timing offset, easing correction or pixel-based band constant is approved.
+
+The canonical animation fixture must use explicit plain solid rectangles with no line or inherited effects. Its appearance state uses the existing native style.visibility set operation, rather than claiming that the historical appear filter is a native-supported filter. The legacy Rust alias remains supported. This isolates the intended animation from unrelated theme shadows. It retains all six slides, nine logical cases, local and encoded sample times, click-marker binding and thresholds. The fixture change and expected new native source identity are separately labelled and independently reviewed before new capture. All shadowed sources, native files and failed comparisons stay available. Those observations exposed a distinct shadow falloff/effect-domain qualification gap, now pending under F-X269. Do not claim that the new mask qualifies those old shadowed samples or fixes general shadow fidelity. Native trust requires fresh exact-source capture and review, not a transformed old frame.
+
+### Concrete output and API contract
+
+Add one variant to the existing non_exhaustive neutral Effect enum, without changing GroupElement fields:
+
+```rust
+Effect::LinearOpacityMask {
+    bounds: Rect,
+    start: Point,
+    end: Point,
+    stops: Vec<GradientStop>,
+}
+```
+
+Coordinates are child-local. Outside bounds alpha is zero. Inside, interpolate only stop color alpha, with pad extension beyond the endpoints. RGB does not contribute. Valid bounds are finite and positive. Endpoints are finite and distinct. At least two stops have finite ordered offsets in0through1 and finite alpha in0through1. Invalid masks make the group's raster/SVG contribution transparent rather than revealing children or panicking. Multiple masks multiply. Masks act on the complete group including its original effects, then group opacity applies once. Keep one child scene and one physical text/font/source owner, including overlapping descendants. No clipped-scene replication, raster replacement of semantic text or new generic framework is allowed.
+
+Raster and SVG support this linear capability. PDF group effects remain unsupported under HLD08's existing contract. The new effect is deliberately ignored by the ordinary PDF writer, with child text emitted once and ordinary clips/transforms/opacity preserved. Checked conformance retains explicit unsupported-effect refusal. Do not promise a soft-wipe PDF or unchanged old hard-clip pixels. The public timeline result exposes a page, so document this limitation and disclose it through the existing frame diagnostic vector for an authored partial soft wipe. No PDF transparency-form, tagging or new PDF capability is in this repair.
+
+EvaluatedShapeState may retain a private source-derived wipe record. Its existing private fields already prevent external struct literals. Keep public clip authority: a caller-modified or cleared clip must not silently keep the previous automatic wipe mask. An additive `local_opacity_mask(size) -> Option<Effect>` projection may accompany the existing local_clip_paths method. For an unchanged evaluator-authored wipe clip, the renderer uses the qualified mask rather than the old hard front. Other explicit and oriented clips remain effective. No existing signature or Python method changes.
+
+### Consumers, acceptance and discriminators
+
+| ID | Input and expected result | Consumers and local evidence | Final evidence |
+|---|---|---|---|
+| A12 | Unique authored Hero and click marker with explicit plain paint. Missing, duplicate, placeholder or wrong-paint targets refuse. All original cases and clocks remain | Existing generator and integration entrypoint, named owner guards and actual visible paint controls. Separate fixture commit | Fresh native movie, exact nine frames, trusted reviewed source/application/movie/frame identities and the unchanged four Q26 checks |
+| A13 | An earlier applicable visibility operation survives a later pending entrance. Initial pending entrance remains hidden under the existing evaluator contract. Native numeric aliases and all four wipe directions follow their concrete values | Existing timeline tests cover both traversal orders, distinct targets, explicit hidden/visible sets, opacity/motion-only entries, click gating, parent endpoints, boundaries, uniform and independent scale, rotation, fractional and legacy numeric values. Preserve held-exit overwrite | New normal native/binding artifact and unchanged public runtime/performance riders |
+| A14 | Linear alpha mask composes one complete scene, keeps transforms/clips/shadows/opacity and handles transparent/colored backgrounds and nested/multiple masks | Existing output, raster, SVG, PDF writer and conformance modules. Test exact endpoints, interpolation, invalid values, contrasting background, overlap, one text occurrence and explicit PDF limitations. Native mask tests distinguish spatial band and direction from hard clips | Qualified plain native wipe comparisons at existing1pt/0.99 limits. SVG/raster semantic control is separate. No PDF soft-mask parity claim |
+| A15 | Six unchanged SmartArt sources use independent native frame/text owners and exact caller Calibri bytes | Existing diagram implementation and integration tests. Cycle uses native135.703pt square text owners and4.6pt insets. Pyramid uses actual separate txXfrm frames with192/249.6/374.4pt widths and4.4pt insets. List retains outer roundRect and preset text rectangle, with15.24/0/15.24/0 body insets. Apply native90percent line and35percent after defaults independently of vertical centering, preserving explicit data overrides and first/last policy | All six existing geometry, ordered-line, text-edge/width and nontext SSIM gates, unchanged thresholds, independent native ownership mapping and exact physical font provenance |
+
+Use the native geometry and patch map in `/private/tmp/s954-smartart-profile-repair-map.md`. Preserve meaningful invisible text-frame geometry, painted pyramid shapes and connector topology. Whole-circle arrow transforms are not tight visible path bounds. Do not substitute Rust bounds for native expectations or a painted trapezoid for its actual text transform. Existing profile constants are updated from independently captured native/layout authority, not from a higher SSIM search.
+
+### Source, HLD and risk work list
+
+Existing source files only: oxml-layout/src/output.rs, oxml-pdf/src/raster.rs, writer.rs and conformance.rs for the explicit limitation tests, rdocx/src/svg.rs, rpptx-layout/src/timeline.rs, rpptx-render/src/lib.rs, rpptx/src/diagram.rs and existing integration modules. No new file, module, dependency, trait, generic parameter or feature flag. Use a coherent source batch, then one impacted build/test batch and independent microscope. Fixture, timeline/rendering behavior, SmartArt profile and eventual trusted pin changes have separate labelled commits with measured outcomes. Do not rebuild unaffected production solely for later test/pin metadata.
+
+HLD03 describes the neutral output boundary, HLD06 the bounded animation semantics, HLD08 the linear mask/backend limits and qualified profiles, HLD10 the additive Rust surface and unchanged Python signatures, HLD12 the native and backend discriminators, and HLD14 the current repair/follow-up split. These extend the existing HLD impact list. HLD04's existing package contract stays. No global font policy change is introduced.
+
+Risk routing adds additive public output API, shared raster/SVG consumers, PDF capability/conformance boundaries, layout and native compatibility. The final integrated union includes applicable rendering/backend and API tests, installed Rust/Python runtime, strict typing/stub checks, WASM, packaging and unchanged49-entry Word hash harness. Run final performance and memory checks on authenticated final artifacts. The mask adds no retained document edit history. Any changed neutral Effect storage or archive footprint must be measured and disclosed. No new RSS ceiling or constant-time promise is implied.

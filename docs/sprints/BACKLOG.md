@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 30 | 2 | 22 |
-| X, Cross-cutting | 282 | 270 | 3 | 5 |
-| **Total** | **613** | **550** | **5** | **54** |
+| X, Cross-cutting | 283 | 270 | 3 | 6 |
+| **Total** | **614** | **550** | **5** | **55** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -837,4 +837,5 @@ HLD14 contract before adopting contributor changes.
 | F-X266 | Bound Word body reads and structural edit cost | S95.4 | L | done |
 | F-X267 | Bound PowerPoint mutation cost across public publishers | S95.4 | L | done |
 | F-X268 | Bound Word owner inventory and unchanged package staging | S95.4 | L | in-progress |
+| F-X269 | Qualify PowerPoint shadow falloff and wipe paint domains | S96 | M | pending |
 <!-- AUTOGEN:backlog-MX END -->
