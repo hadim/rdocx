@@ -190,6 +190,14 @@ pub(crate) fn word_transaction_outputs() -> std::collections::BTreeMap<String, [
     rdocx::Document::take_transaction_outputs()
 }
 
+/// Actual checked child parser/writer attempts and bytes by normalization round.
+#[cfg(debug_assertions)]
+#[pyfunction]
+#[pyo3(name = "_scoped_normalization_work")]
+pub(crate) fn scoped_normalization_work() -> std::collections::BTreeMap<String, [usize; 2]> {
+    rdocx::Document::take_scoped_normalization_work()
+}
+
 use oxml_py_support::{
     ContentPath, PathSeg, PreparedRevision, RevisionCounter, RevisionScope, RevisionState,
     StaleElementError, revision_to_pyerr,

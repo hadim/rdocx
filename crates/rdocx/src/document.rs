@@ -6735,6 +6735,7 @@ thread_local! {
 thread_local! {
     static TRANSACTION_WORK: std::cell::Cell<[usize; 6]> = const { std::cell::Cell::new([0; 6]) };
     static TRANSACTION_OUTPUTS: std::cell::RefCell<std::collections::BTreeMap<String, [usize; 2]>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+    static SCOPED_NORMALIZATION_WORK: std::cell::RefCell<std::collections::BTreeMap<String, [usize; 2]>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     static TRANSACTION_READ_PHASE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
@@ -6803,6 +6804,19 @@ fn note_transaction_output(kind: &str, bytes: usize) {
     });
     #[cfg(not(debug_assertions))]
     let _ = bytes;
+}
+
+// Actual parser attempts and successful writer bytes at each normalization site.
+fn note_scoped_normalization_work(side: &str, operation: &str, calls: usize, bytes: usize) {
+    #[cfg(debug_assertions)]
+    SCOPED_NORMALIZATION_WORK.with(|work| {
+        let mut work = work.borrow_mut();
+        let count = work.entry(format!("{side}.{operation}")).or_default();
+        count[0] += calls;
+        count[1] += bytes;
+    });
+    #[cfg(not(debug_assertions))]
+    let _ = (side, operation, calls, bytes);
 }
 
 fn block_proofs_enabled() -> bool {
@@ -8842,6 +8856,7 @@ impl PreparedMainRead<'_> {
                 (block, normal),
                 &context,
                 Some(&marker),
+                None,
             ) {
                 return false;
             }
@@ -8869,7 +8884,8 @@ impl PreparedMainRead<'_> {
             let range = span.start.checked_sub(at)?..span.end.checked_sub(at)?;
             bytes.get(range.clone())?;
             bytes.splice(range, sentinel.bytes());
-            normalized_scoped_child(&self.document.document, record, serialized, &bytes)
+            normalized_scoped_child(&self.document.document, record, serialized, &bytes, "probe")
+                .map(|(item, written, _)| (item, written))
         };
         match (
             probe(serialized, canonical_span, at),
@@ -10185,6 +10201,43 @@ fn scoped_normalization_context(
     }))
 }
 
+// Parsing fields allocates private source IDs. Neither shortcut may elide it.
+fn scoped_normalization_reuse_allowed(
+    source: &MainPartBlocks,
+    normal: &MainPartBlocks,
+    left: &BodyBlockScan,
+    right: &BodyBlockScan,
+    item: &BodyContent,
+) -> bool {
+    item.owner_facts_reusable_by_value()
+        && !left.holds_field_words
+        && !right.holds_field_words
+        && [&source.head, &source.tail, &normal.head, &normal.tail]
+            .into_iter()
+            .all(|bytes| !holds_field_words(bytes))
+}
+
+/// Only the freshly constructed producer record may offer this actual read.
+/// Its head/tail have not changed since read_source_child, and the complete
+/// record was checked by proved_document immediately before this call.
+fn producer_scoped_normalization_seed<'a>(
+    source: &MainPartBlocks,
+    normal: &MainPartBlocks,
+    left: &'a BodyBlockScan,
+    right: &BodyBlockScan,
+    scopes: &DocumentNamespaceScopes,
+) -> Option<&'a BodyContent> {
+    let read = left.proved.get()?;
+    if read.root_declarations != scopes.root_declarations
+        || read.body_declarations != scopes.body_declarations
+        || read.body_bindings != scopes.body_bindings
+    {
+        return None;
+    }
+    let item = read.parsed.as_ref()?;
+    scoped_normalization_reuse_allowed(source, normal, left, right, item).then_some(item)
+}
+
 /// A successful normalization belongs to these exact source bytes, writer
 /// bytes and frames. It never supplies writer eligibility or a source AST.
 fn scoped_children_correspond(
@@ -10194,6 +10247,7 @@ fn scoped_children_correspond(
     children: (&Arc<BodyBlockScan>, &Arc<BodyBlockScan>),
     context: &Arc<ScopedNormalizationContext>,
     marker: Option<&str>,
+    first_read: Option<&BodyContent>,
 ) -> bool {
     let (left, right) = children;
     let marker_absent = |bytes: &[u8]| {
@@ -10209,13 +10263,53 @@ fn scoped_children_correspond(
     {
         return marker_absent(&proof.normalized);
     }
-    let (Some((a, written)), Some((b, again))) = (
-        normalized_scoped_child(document, source, normal, &left.bytes),
-        normalized_scoped_child(document, normal, normal, &right.bytes),
-    ) else {
+    // Only the fresh producer builder can supply an actual source read.
+    // Recheck private/field safety before consuming it. Generic callers read.
+    let left_result = match first_read
+        .filter(|item| scoped_normalization_reuse_allowed(source, normal, left, right, item))
+    {
+        Some(item) => {
+            note_scoped_normalization_work("left", "seed_used", 1, left.bytes.len());
+            normalize_scoped_parsed_child(document, normal, item, "left")
+        }
+        None => normalized_scoped_child(document, source, normal, &left.bytes, "left"),
+    };
+    // The already executed normal-frame read of C1 produced a and C2. At this
+    // checked fixed point both right rounds repeat that exact read/write with
+    // the same immutable frame and writer. Fields keep their original rounds.
+    let fixed = left_result.as_ref().is_some_and(|(item, written, first)| {
+        scoped_normalization_reuse_allowed(source, normal, left, right, item)
+            && first == &right.bytes
+            && written == &right.bytes
+    });
+    if fixed {
+        note_scoped_normalization_work("pair", "fixed_eligible", 1, right.bytes.len());
+        note_scoped_normalization_work("pair", "fixed_used", 1, right.bytes.len());
+    }
+    // C1 is not retained across fallback. A failed left still executes the full
+    // right side, as the old eager tuple did, including private field parsing.
+    let left_result = left_result.map(|(item, written, first)| {
+        drop(first);
+        (item, written)
+    });
+    let right_result = if fixed {
+        None
+    } else {
+        normalized_scoped_child(document, normal, normal, &right.bytes, "right")
+            .map(|(item, written, _)| (item, written))
+    };
+    let Some((a, written)) = left_result else {
         return false;
     };
-    if a != b || written != again || !marker_absent(&written) {
+    if !fixed {
+        let Some((b, again)) = right_result else {
+            return false;
+        };
+        if a != b || written != again {
+            return false;
+        }
+    }
+    if !marker_absent(&written) {
         return false;
     }
     if a.owner_facts_reusable_by_value()
@@ -10232,32 +10326,59 @@ fn scoped_children_correspond(
     true
 }
 
-/// Normalize one actual source child twice under exact source and writer frames.
-fn normalized_scoped_child(
-    document: &CT_Document,
-    source: &MainPartBlocks,
-    normal: &MainPartBlocks,
+/// One actual closed child read, including both authoritative shell writers.
+fn read_scoped_normalization_child(
+    record: &MainPartBlocks,
     bytes: &[u8],
-) -> Option<(BodyContent, Vec<u8>)> {
-    let read = |record: &MainPartBlocks, bytes: &[u8]| -> Option<BodyContent> {
-        let mut xml = record.head.clone();
-        let end = xml.len().checked_add(bytes.len())?;
-        xml.extend_from_slice(bytes);
-        xml.extend_from_slice(&record.tail);
-        closed_word_body(&xml, record.head.len()..end)?;
-        note_staging_work(|work| work.children_read += 1);
-        let mut parsed = CT_Document::from_xml(&xml).ok()?;
-        if parsed.body.content.len() != 1 {
-            return None;
-        }
-        let item = parsed.body.content.pop()?;
-        if parsed.to_xml().ok()? != record.frame.get()?.as_ref()?.to_xml().ok()? {
-            return None;
-        }
-        Some(item)
+    side: &str,
+    round: u8,
+) -> Option<BodyContent> {
+    let mut xml = record.head.clone();
+    let end = xml.len().checked_add(bytes.len())?;
+    xml.extend_from_slice(bytes);
+    xml.extend_from_slice(&record.tail);
+    closed_word_body(&xml, record.head.len()..end)?;
+    note_staging_work(|work| work.children_read += 1);
+    let read = if round == 1 { "read1" } else { "read2" };
+    note_scoped_normalization_work(side, read, 1, xml.len());
+    let mut parsed = CT_Document::from_xml(&xml).ok()?;
+    if parsed.body.content.len() != 1 {
+        return None;
+    }
+    let item = parsed.body.content.pop()?;
+    let actual_kind = if round == 1 {
+        "frame_actual1"
+    } else {
+        "frame_actual2"
     };
-    let item = read(source, bytes)?;
-    let written = document.body_item_xml(&item).ok()?;
+    note_scoped_normalization_work(side, actual_kind, 1, 0);
+    let actual = parsed.to_xml().ok()?;
+    note_scoped_normalization_work(side, actual_kind, 0, actual.len());
+    let frame = record.frame.get()?.as_ref()?;
+    let expected_kind = if round == 1 {
+        "frame_expected1"
+    } else {
+        "frame_expected2"
+    };
+    note_scoped_normalization_work(side, expected_kind, 1, 0);
+    let expected = frame.to_xml().ok()?;
+    note_scoped_normalization_work(side, expected_kind, 0, expected.len());
+    if actual != expected {
+        return None;
+    }
+    Some(item)
+}
+
+/// Normalize an actual source read through the same borrowed writer and frame.
+fn normalize_scoped_parsed_child(
+    document: &CT_Document,
+    normal: &MainPartBlocks,
+    item: &BodyContent,
+    side: &str,
+) -> Option<(BodyContent, Vec<u8>, Vec<u8>)> {
+    note_scoped_normalization_work(side, "write1", 1, 0);
+    let written = document.body_item_xml(item).ok()?;
+    note_scoped_normalization_work(side, "write1", 0, written.len());
     let root = normal.head.get(normal.root.clone())?;
     if !root.windows(10).any(|bytes| bytes == b"xmlns:w14=")
         && written.windows(5).any(|bytes| {
@@ -10266,9 +10387,23 @@ fn normalized_scoped_child(
     {
         return None;
     }
-    let item = read(normal, &written)?;
+    let item = read_scoped_normalization_child(normal, &written, side, 2)?;
+    note_scoped_normalization_work(side, "write2", 1, 0);
     let rewritten = document.body_item_xml(&item).ok()?;
-    Some((item, rewritten))
+    note_scoped_normalization_work(side, "write2", 0, rewritten.len());
+    Some((item, rewritten, written))
+}
+
+/// Normalize one actual source child twice under exact source and writer frames.
+fn normalized_scoped_child(
+    document: &CT_Document,
+    source: &MainPartBlocks,
+    normal: &MainPartBlocks,
+    bytes: &[u8],
+    side: &str,
+) -> Option<(BodyContent, Vec<u8>, Vec<u8>)> {
+    let item = read_scoped_normalization_child(source, bytes, side, 1)?;
+    normalize_scoped_parsed_child(document, normal, &item, side)
 }
 
 fn prove_empty_body_frame(head: &[u8], tail: &[u8]) -> Option<CT_Document> {
@@ -21885,6 +22020,13 @@ impl Document {
         TRANSACTION_OUTPUTS.with(|outputs| std::mem::take(&mut *outputs.borrow_mut()))
     }
 
+    /// Actual scoped child parser/writer rounds, calls and bytes. Debug only.
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn take_scoped_normalization_work() -> std::collections::BTreeMap<String, [usize; 2]> {
+        SCOPED_NORMALIZATION_WORK.with(|work| std::mem::take(&mut *work.borrow_mut()))
+    }
+
     /// Clone all package and typed state while discarding derived layout caches.
     pub fn clone_for_staging(&self) -> Self {
         Self {
@@ -24854,6 +24996,17 @@ impl Document {
         }
         let context = scoped_normalization_context(&self.document, &record, normal)?;
         for children in record.blocks.iter().zip(&normal.blocks) {
+            let seed = producer_scoped_normalization_seed(
+                &record, normal, children.0, children.1, &scopes,
+            );
+            if seed.is_some() {
+                note_scoped_normalization_work(
+                    "producer",
+                    "seed_eligible",
+                    1,
+                    children.0.bytes.len(),
+                );
+            }
             if !scoped_children_correspond(
                 &self.document,
                 &record,
@@ -24861,6 +25014,7 @@ impl Document {
                 children,
                 &context,
                 None,
+                seed,
             ) {
                 return None;
             }
@@ -51021,6 +51175,319 @@ mod tests {
                 assert_eq!(outputs["scoped.canonical_record_copy"][0], 1);
             }
         }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn scoped_normalization_producer_reuses_actual_reads_with_uncached_control() {
+        let document = writer_comparison_document(&issue407_runs(3), true);
+        let undeclared = document.package.get_part(&document.doc_part_name).unwrap();
+        let (canonical, normal) = document.canonical_source().unwrap();
+        let normal = normal.unwrap();
+        // The original declaration-less factory input correctly keeps the old
+        // fallback. The positive producer control uses real declared XML.
+        assert!(!undeclared.windows(2).any(|bytes| bytes == b"?>"));
+        assert!(
+            document
+                .producer_source_blocks(undeclared, &normal)
+                .is_none()
+        );
+        let original = canonical.as_slice();
+        let _ = Document::take_scoped_normalization_work();
+        let source = document.producer_source_blocks(original, &normal).unwrap();
+        let counts = Document::take_scoped_normalization_work();
+        let pieces = source.blocks.len();
+        assert!(pieces > 0);
+        assert_eq!(counts["producer.seed_eligible"][0], pieces);
+        assert_eq!(counts["left.seed_used"][0], pieces);
+        assert_eq!(counts["pair.fixed_used"][0], pieces);
+        assert!(!counts.contains_key("left.read1"), "{counts:?}");
+        assert!(!counts.contains_key("right.read1"), "{counts:?}");
+        assert!(!counts.contains_key("right.write1"), "{counts:?}");
+        for kind in ["left.read2", "left.write1", "left.write2"] {
+            assert_eq!(counts[kind][0], pieces);
+            assert!(counts[kind][1] > 0);
+        }
+        let left = &source.blocks[0];
+        let right = &normal.blocks[0];
+        let mut wrong_scopes = document_namespace_scopes(original).unwrap();
+        wrong_scopes
+            .body_bindings
+            .push(("changed".into(), "urn:changed".into()));
+        assert!(
+            producer_scoped_normalization_seed(
+                &source,
+                &normal,
+                &source.blocks[0],
+                &normal.blocks[0],
+                &wrong_scopes
+            )
+            .is_none()
+        );
+        // The generic caller has no producer seed, so its actual first read
+        // remains even when the independently checked fixed point is reusable.
+        let fresh_left = Arc::new(BodyBlockScan::from_source(source.blocks[0].bytes.clone()));
+        let context = scoped_normalization_context(&document.document, &source, &normal).unwrap();
+        let _ = Document::take_scoped_normalization_work();
+        assert!(scoped_children_correspond(
+            &document.document,
+            &source,
+            &normal,
+            (&fresh_left, &normal.blocks[0]),
+            &context,
+            None,
+            None
+        ));
+        let unseeded = Document::take_scoped_normalization_work();
+        assert_eq!(unseeded["left.read1"][0], 1);
+        assert_eq!(unseeded["left.read2"][0], 1);
+        assert!(!unseeded.contains_key("left.seed_used"));
+        assert!(!unseeded.contains_key("right.read1"));
+        // The real old right side executes both actual parser/writer rounds.
+        let _ = Document::take_scoped_normalization_work();
+        let (a, written, _) = normalized_scoped_child(
+            &document.document,
+            &source,
+            &normal,
+            &left.bytes,
+            "uncached_left",
+        )
+        .unwrap();
+        let (b, again, _) = normalized_scoped_child(
+            &document.document,
+            &normal,
+            &normal,
+            &right.bytes,
+            "uncached_right",
+        )
+        .unwrap();
+        assert_eq!(a, b);
+        assert_eq!(written, again);
+        let counts = Document::take_scoped_normalization_work();
+        for side in ["uncached_left", "uncached_right"] {
+            for operation in ["read1", "read2", "write1", "write2"] {
+                let count = counts[&format!("{side}.{operation}")];
+                assert_eq!(count[0], 1);
+                assert!(count[1] > 0);
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn scoped_normalization_private_and_failed_left_keep_real_right_rounds() {
+        let private = [
+            r#"<w:p><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>"#,
+            r#"<w:p><w:bookmarkStart w:id="1" w:name="kept"/><w:r><w:t>x</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>"#,
+            r#"<w:p><w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr><w:r><w:t>x</w:t></w:r></w:p>"#,
+        ];
+        for body in private {
+            let document = writer_comparison_document(body, true);
+            let (_, normal) = document.canonical_source().unwrap();
+            let normal = normal.unwrap();
+            let left = Arc::new(BodyBlockScan::from_source(normal.blocks[0].bytes.clone()));
+            let right = Arc::new(BodyBlockScan::from_source(normal.blocks[0].bytes.clone()));
+            let context =
+                scoped_normalization_context(&document.document, &normal, &normal).unwrap();
+            let _ = Document::take_scoped_normalization_work();
+            let actual = scoped_children_correspond(
+                &document.document,
+                &normal,
+                &normal,
+                (&left, &right),
+                &context,
+                None,
+                None,
+            );
+            let counts = Document::take_scoped_normalization_work();
+            assert!(
+                !counts.contains_key("pair.fixed_used"),
+                "private owner reused: {counts:?}"
+            );
+            assert_eq!(counts["right.read1"][0], 1, "{counts:?}");
+            assert_eq!(counts["right.read2"][0], 1, "{counts:?}");
+            assert_eq!(counts["right.write1"][0], 1, "{counts:?}");
+            assert_eq!(counts["right.write2"][0], 1, "{counts:?}");
+            let legacy = match (
+                normalized_scoped_child(
+                    &document.document,
+                    &normal,
+                    &normal,
+                    &left.bytes,
+                    "legacy_left",
+                ),
+                normalized_scoped_child(
+                    &document.document,
+                    &normal,
+                    &normal,
+                    &right.bytes,
+                    "legacy_right",
+                ),
+            ) {
+                (Some((a, first, _)), Some((b, second, _))) => a == b && first == second,
+                _ => false,
+            };
+            assert_eq!(actual, legacy);
+        }
+        let document = writer_comparison_document(&issue407_runs(1), true);
+        let (_, normal) = document.canonical_source().unwrap();
+        let normal = normal.unwrap();
+        let left = Arc::new(BodyBlockScan::from_source(b"<w:p>".to_vec()));
+        let right = Arc::new(BodyBlockScan::from_source(normal.blocks[0].bytes.clone()));
+        let context = scoped_normalization_context(&document.document, &normal, &normal).unwrap();
+        let _ = Document::take_scoped_normalization_work();
+        assert!(!scoped_children_correspond(
+            &document.document,
+            &normal,
+            &normal,
+            (&left, &right),
+            &context,
+            None,
+            None
+        ));
+        let counts = Document::take_scoped_normalization_work();
+        assert_eq!(
+            counts["right.read1"][0], 1,
+            "failed left suppressed right: {counts:?}"
+        );
+        assert_eq!(
+            counts["right.read2"][0], 1,
+            "failed left suppressed right: {counts:?}"
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn scoped_normalization_unequal_frames_markers_and_field_frames_keep_fallbacks() {
+        let document = writer_comparison_document(&issue407_runs(1), true);
+        let (_, normal) = document.canonical_source().unwrap();
+        let normal = normal.unwrap();
+        let context = scoped_normalization_context(&document.document, &normal, &normal).unwrap();
+        let left = Arc::new(BodyBlockScan::from_source(normal.blocks[0].bytes.clone()));
+        let different = String::from_utf8(normal.blocks[0].bytes.clone())
+            .unwrap()
+            .replace("run 0", "different")
+            .into_bytes();
+        let right = Arc::new(BodyBlockScan::from_source(different));
+        let _ = Document::take_scoped_normalization_work();
+        assert!(!scoped_children_correspond(
+            &document.document,
+            &normal,
+            &normal,
+            (&left, &right),
+            &context,
+            None,
+            None
+        ));
+        let counts = Document::take_scoped_normalization_work();
+        assert_eq!(counts["right.read1"][0], 1);
+        assert_eq!(counts["right.read2"][0], 1);
+        // A pure fixed-point marker still rejects at the unchanged absence
+        // guard. Repeating the right parser is not needed to reject it.
+        let right = Arc::new(BodyBlockScan::from_source(normal.blocks[0].bytes.clone()));
+        let _ = Document::take_scoped_normalization_work();
+        assert!(!scoped_children_correspond(
+            &document.document,
+            &normal,
+            &normal,
+            (&left, &right),
+            &context,
+            Some("run 0"),
+            None
+        ));
+        // A changed frame with stale frame metadata fails the old shell proof.
+        let mut changed = normal.clone();
+        changed.head = String::from_utf8(changed.head)
+            .unwrap()
+            .replacen(W_NS, "urn:changed-frame", 1)
+            .into_bytes();
+        let value = normalized_scoped_child(
+            &document.document,
+            &changed,
+            &normal,
+            &left.bytes,
+            "changed",
+        );
+        assert!(value.is_none());
+        let mut field_frame = normal.clone();
+        field_frame.head.extend_from_slice(b"<!-- fldSimple -->");
+        let parsed = read_scoped_normalization_child(&normal, &left.bytes, "safe", 1).unwrap();
+        assert!(!scoped_normalization_reuse_allowed(
+            &field_frame,
+            &normal,
+            &left,
+            &right,
+            &parsed
+        ));
+        let field_left = Arc::new(BodyBlockScan::from_source(left.bytes.clone()));
+        let field_right = Arc::new(BodyBlockScan::from_source(right.bytes.clone()));
+        let field_context =
+            scoped_normalization_context(&document.document, &field_frame, &normal).unwrap();
+        let _ = Document::take_scoped_normalization_work();
+        let field_actual = scoped_children_correspond(
+            &document.document,
+            &field_frame,
+            &normal,
+            (&field_left, &field_right),
+            &field_context,
+            None,
+            None,
+        );
+        let field_counts = Document::take_scoped_normalization_work();
+        assert!(!field_counts.contains_key("pair.fixed_used"));
+        assert_eq!(field_counts["right.read1"][0], 1);
+        assert_eq!(field_counts["right.read2"][0], 1);
+        let field_expected = match (
+            normalized_scoped_child(
+                &document.document,
+                &field_frame,
+                &normal,
+                &field_left.bytes,
+                "frame_legacy_left",
+            ),
+            normalized_scoped_child(
+                &document.document,
+                &normal,
+                &normal,
+                &field_right.bytes,
+                "frame_legacy_right",
+            ),
+        ) {
+            (Some((a, first, _)), Some((b, second, _))) => a == b && first == second,
+            _ => false,
+        };
+        assert_eq!(field_actual, field_expected);
+        // A missing actual normal-frame w14 binding still stops before the
+        // second normal read, rather than being accepted by a byte shortcut.
+        let w14_body = r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" w14:paraId="01234567"><w:r><w:t>x</w:t></w:r></w:p>"#;
+        let w14_document = writer_comparison_document(w14_body, true);
+        let (_, w14_record) = w14_document.canonical_source().unwrap();
+        let w14_record = w14_record.unwrap();
+        let mut missing = w14_record.clone();
+        missing.head = String::from_utf8(missing.head)
+            .unwrap()
+            .replace(
+                " xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\"",
+                "",
+            )
+            .into_bytes();
+        let _ = Document::take_scoped_normalization_work();
+        assert!(
+            normalized_scoped_child(
+                &w14_document.document,
+                &w14_record,
+                &missing,
+                &w14_record.blocks[0].bytes,
+                "missing_w14"
+            )
+            .is_none()
+        );
+        let missing_counts = Document::take_scoped_normalization_work();
+        assert_eq!(missing_counts["missing_w14.read1"][0], 1);
+        assert!(!missing_counts.contains_key("missing_w14.read2"));
+        let off = CanonicalBlockProofOff::enter();
+        assert!(document.source_blocks(&Arc::new(normal.bytes())).is_none());
+        drop(off);
     }
 
     #[test]

@@ -144,6 +144,11 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(document::word_transaction_work, module)?)?;
     #[cfg(debug_assertions)]
     module.add_function(wrap_pyfunction!(
+        document::scoped_normalization_work,
+        module
+    )?)?;
+    #[cfg(debug_assertions)]
+    module.add_function(wrap_pyfunction!(
         document::word_transaction_outputs,
         module
     )?)?;

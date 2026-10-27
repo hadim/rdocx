@@ -15111,3 +15111,47 @@ def test_fx268_splice_fallback_exposes_general_publication_index_work():
     assert work[6] == 0 and work[7] == 3, work
     assert inserted.text == 'fallback'
     assert rdocx.Document.from_bytes(document.to_bytes()).paragraphs[0].text == 'fallback'
+
+
+@pytest.mark.parametrize('publisher', ['Document.add_picture', 'Cell.add_picture'])
+@pytest.mark.parametrize('paragraphs', [25, 100])
+def test_fx268_picture_normalization_reuses_actual_checked_rounds(publisher, paragraphs):
+    from docx import Document as SourceDocument
+    from docx.shared import Pt, RGBColor
+    import rdocx
+    from rdocx import _rdocx
+
+    counter = getattr(_rdocx, '_scoped_normalization_work', None)
+    if counter is None:
+        pytest.skip('release build: normalization work counters are debug-only')
+    source = SourceDocument()
+    for index in range(paragraphs):
+        paragraph = source.add_paragraph()
+        for j in range(6):
+            run = paragraph.add_run(f'run {j} of paragraph {index:04} ')
+            run.font.name = 'Arial'
+            run.font.size = Pt(10)
+            run.font.color.rgb = RGBColor(0, 0, 0)
+            run.bold = run.italic = run.font.small_caps = run.font.strike = run.underline = False
+    source.add_table(rows=1, cols=1).cell(0, 0).text = 'picture target'
+    pieces = len(source.element.body) - int(source.element.body.sectPr is not None)
+    package = io.BytesIO()
+    source.save(package)
+    document = rdocx.Document.from_bytes(package.getvalue())
+    owner = document if publisher == 'Document.add_picture' else document.tables[0].cell(0, 0)
+    counter()
+    _rdocx._staging_work()
+    picture = owner.add_picture(_one_pixel_png(), 'rounds.png')
+    work = counter()
+    staging = _rdocx._staging_work()
+    assert work['producer.seed_eligible'][0] == pieces, work
+    assert work['left.seed_used'][0] == pieces, work
+    assert work['pair.fixed_used'][0] == pieces, work
+    for name in ['left.read1', 'right.read1', 'right.read2', 'right.write1', 'right.write2']:
+        assert work.get(name, [0, 0]) == [0, 0] or work.get(name, [0, 0]) == (0, 0), work
+    for name in ['left.read2', 'left.write1', 'left.write2']:
+        assert work[name][0] == pieces and work[name][1] > 0, work
+    assert staging[0] == 0, f'whole-parse fallback hid producer work: {staging}'
+    assert staging[5] <= 3 * pieces + 20, staging
+    assert picture.bytes == _one_pixel_png()
+    assert len(rdocx.Document.from_bytes(document.to_bytes()).pictures()) == 1
