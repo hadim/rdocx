@@ -240,6 +240,40 @@ pub struct HeaderFooterContent {
     pub even_watermark: Option<oxml_layout::GroupElement>,
 }
 
+/// The header and footer variant Word selects for one page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoryVariant {
+    First,
+    Even,
+    Default,
+}
+
+impl HeaderFooterContent {
+    fn header(&self, variant: StoryVariant) -> &[ParagraphBlock] {
+        match variant {
+            StoryVariant::First => &self.first_header_blocks,
+            StoryVariant::Even => &self.even_header_blocks,
+            StoryVariant::Default => &self.header_blocks,
+        }
+    }
+
+    fn footer(&self, variant: StoryVariant) -> &[ParagraphBlock] {
+        match variant {
+            StoryVariant::First => &self.first_footer_blocks,
+            StoryVariant::Even => &self.even_footer_blocks,
+            StoryVariant::Default => &self.footer_blocks,
+        }
+    }
+
+    fn watermark(&self, variant: StoryVariant) -> Option<&oxml_layout::GroupElement> {
+        match variant {
+            StoryVariant::First => self.first_watermark.as_ref(),
+            StoryVariant::Even => self.even_watermark.as_ref(),
+            StoryVariant::Default => self.watermark.as_ref(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct HeaderFooterSemantics {
     // Each private entry carries direction and the priced interior frame gap.
@@ -249,6 +283,37 @@ pub(crate) struct HeaderFooterSemantics {
     pub first_footer_directions: Vec<(oxml_layout::TextDirection, f64)>,
     pub even_header_directions: Vec<(oxml_layout::TextDirection, f64)>,
     pub even_footer_directions: Vec<(oxml_layout::TextDirection, f64)>,
+}
+
+impl HeaderFooterSemantics {
+    fn header(&self, variant: StoryVariant) -> &[(oxml_layout::TextDirection, f64)] {
+        match variant {
+            StoryVariant::First => &self.first_header_directions,
+            StoryVariant::Even => &self.even_header_directions,
+            StoryVariant::Default => &self.header_directions,
+        }
+    }
+
+    fn footer(&self, variant: StoryVariant) -> &[(oxml_layout::TextDirection, f64)] {
+        match variant {
+            StoryVariant::First => &self.first_footer_directions,
+            StoryVariant::Even => &self.even_footer_directions,
+            StoryVariant::Default => &self.footer_directions,
+        }
+    }
+}
+
+/// Height of a header or footer flow as `render_hf_blocks` stacks it.
+///
+/// Anchored drawings are positioned apart from the flow, so they add nothing.
+fn story_flow_height(
+    blocks: &[ParagraphBlock],
+    directions: Option<&[(oxml_layout::TextDirection, f64)]>,
+) -> f64 {
+    blocks.iter().map(|b| b.content_height()).sum::<f64>()
+        + directions.map_or(0.0, |values| {
+            values.iter().map(|value| value.1).sum::<f64>()
+        })
 }
 
 /// A section with its blocks, geometry, and header/footer content.
@@ -2486,6 +2551,21 @@ impl<'a> Pager<'a> {
         elements
     }
 
+    /// The header and footer variant Word selects for the page being built.
+    ///
+    /// A title page takes its first variant and, when the document turns
+    /// even and odd headers on, an even displayed page takes its even
+    /// variant. A selected variant stays selected when it is blank.
+    fn story_variant(&self, hf: &HeaderFooterContent) -> StoryVariant {
+        if self.is_first_page && self.title_pg {
+            StoryVariant::First
+        } else if hf.even_headers_active && self.header_page_number.is_multiple_of(2) {
+            StoryVariant::Even
+        } else {
+            StoryVariant::Default
+        }
+    }
+
     fn finish_page(&mut self) {
         if self.advance_column_track() {
             return;
@@ -2515,17 +2595,10 @@ impl<'a> Pager<'a> {
             all_elements.append(&mut page_borders);
         }
 
-        if let Some(hf) = self.header_footer {
-            let watermark = if self.is_first_page && self.title_pg {
-                hf.first_watermark.as_ref()
-            } else if hf.even_headers_active && self.header_page_number.is_multiple_of(2) {
-                hf.even_watermark.as_ref()
-            } else {
-                hf.watermark.as_ref()
-            };
-            if let Some(watermark) = watermark {
-                all_elements.push(PositionedElement::Group(watermark.clone()));
-            }
+        if let Some(hf) = self.header_footer
+            && let Some(watermark) = hf.watermark(self.story_variant(hf))
+        {
+            all_elements.push(PositionedElement::Group(watermark.clone()));
         }
 
         // behindDoc drawings render underneath everything else on the page.
@@ -2535,23 +2608,11 @@ impl<'a> Pager<'a> {
         let mut furniture_front = Vec::new();
 
         if let Some(hf) = self.header_footer {
-            // Choose header blocks: first-page or default
-            let header_blocks = if self.is_first_page && self.title_pg {
-                &hf.first_header_blocks
-            } else if hf.even_headers_active && self.header_page_number.is_multiple_of(2) {
-                &hf.even_header_blocks
-            } else {
-                &hf.header_blocks
-            };
-            let header_directions = self.header_footer_semantics.map(|semantics| {
-                if self.is_first_page && self.title_pg {
-                    semantics.first_header_directions.as_slice()
-                } else if hf.even_headers_active && self.header_page_number.is_multiple_of(2) {
-                    semantics.even_header_directions.as_slice()
-                } else {
-                    semantics.header_directions.as_slice()
-                }
-            });
+            let variant = self.story_variant(hf);
+            let header_blocks = hf.header(variant);
+            let header_directions = self
+                .header_footer_semantics
+                .map(|semantics| semantics.header(variant));
             if !header_blocks.is_empty() {
                 let header_y = self.page_geometry.header_distance;
                 render_hf_blocks(
@@ -2574,31 +2635,13 @@ impl<'a> Pager<'a> {
         all_elements.append(&mut self.elements);
 
         if let Some(hf) = self.header_footer {
-            // Choose footer blocks: first-page or default
-            let footer_blocks = if self.is_first_page && self.title_pg {
-                &hf.first_footer_blocks
-            } else if hf.even_headers_active && self.header_page_number.is_multiple_of(2) {
-                &hf.even_footer_blocks
-            } else {
-                &hf.footer_blocks
-            };
-            let footer_directions = self.header_footer_semantics.map(|semantics| {
-                if self.is_first_page && self.title_pg {
-                    semantics.first_footer_directions.as_slice()
-                } else if hf.even_headers_active && self.header_page_number.is_multiple_of(2) {
-                    semantics.even_footer_directions.as_slice()
-                } else {
-                    semantics.footer_directions.as_slice()
-                }
-            });
+            let variant = self.story_variant(hf);
+            let footer_blocks = hf.footer(variant);
+            let footer_directions = self
+                .header_footer_semantics
+                .map(|semantics| semantics.footer(variant));
             if !footer_blocks.is_empty() {
-                let footer_height: f64 = footer_blocks
-                    .iter()
-                    .map(|b| b.content_height())
-                    .sum::<f64>()
-                    + footer_directions.map_or(0.0, |values| {
-                        values.iter().map(|value| value.1).sum::<f64>()
-                    });
+                let footer_height = story_flow_height(footer_blocks, footer_directions);
                 let footer_y = self.page_geometry.page_height
                     - self.page_geometry.footer_distance
                     - footer_height;
