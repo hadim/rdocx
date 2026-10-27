@@ -617,7 +617,15 @@ the way Word measures it. Each run takes the metrics Windows reports for its
 font: the OS/2 `usWinAscent` and `usWinDescent`, plus the external leading, the
 part of the `hhea` line gap the Windows extent does not already cover, which
 Word puts above the ascent. A face that sets `USE_TYPO_METRICS` is measured on
-its typographic values. A single line of Calibri or Carlito is therefore
+its typographic values. Actual resolved faces advertising OS/2 codepage bits
+17 through 20, for CP932, CP936, CP949 or CP950, instead use gap-free `hhea`
+ascent and positive descent. Word adds fifteen percent of that extent above
+and below the baseline independently, with no additional line gap. This is a
+face classification, independent of font name, text script or requested Word
+font slot. Old or truncated codepage tables and invalid `hhea` metrics keep
+the existing fallback. The policy belongs only to `word_line_metrics`, leaving
+shared metrics and shaping, and PowerPoint, unchanged. A single line of
+Calibri or Carlito is therefore
 2500/2048 em with its baseline 1950/2048 em down, and one of Arial or
 Liberation Sans 2355/2048 em. The line takes the greatest ascent and descent of
 its runs. A line with no run is a line of the font it carries: a blank
