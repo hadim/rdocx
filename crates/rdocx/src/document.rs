@@ -9115,6 +9115,42 @@ impl MainPartBlocks {
         Some(result)
     }
 
+    // Actual source reads only. Staged writer models never certify a paragraph
+    // projection, and this optional inventory proof never fills a read memo.
+    // The immutable block carries its read context: assemble and tail edits
+    // refresh blocks on a frame change, and source splices require the same
+    // head and tail. The exact partition below composes that frame provenance
+    // with the stored namespace context before a paragraph is reused.
+    fn picture_free_paragraph_ends(&self, xml: &[u8]) -> Option<HashMap<usize, usize>> {
+        if !block_proofs_enabled() || !self.part_partition_matches(xml) {
+            return None;
+        }
+        let (_, scopes) = self.proved_document_context(xml)?;
+        let mut at = self.head.len();
+        let mut paragraphs = HashMap::new();
+        for block in &self.blocks {
+            #[cfg(test)]
+            a9_lookup_candidate("pictures.plain_proof_candidate");
+            let end = at.checked_add(block.bytes.len())?;
+            if !block.holds_field_words
+                && let Some(read) = block.proved.get()
+                && read.root_declarations == scopes.root_declarations
+                && read.body_declarations == scopes.body_declarations
+                && read.body_bindings == scopes.body_bindings
+                && read
+                    .parsed
+                    .as_ref()
+                    .is_some_and(BodyContent::owner_facts_reusable_by_value)
+                && let Some(BodyContent::Paragraph(paragraph)) = read.parsed.as_ref()
+                && plain_picture_free_paragraph(paragraph)
+            {
+                paragraphs.insert(at, end);
+            }
+            at = end;
+        }
+        Some(paragraphs)
+    }
+
     fn parsed_document(&mut self) -> Option<CT_Document> {
         let xml = self.part.as_ref()?.clone();
         if !self.part_partition_matches(&xml) {
@@ -10566,6 +10602,48 @@ impl BodyBlockScan {
         }
         cached.parsed.as_ref().map(Cow::Borrowed)
     }
+}
+
+fn plain_picture_free_paragraph(paragraph: &CT_P) -> bool {
+    if !paragraph.hyperlinks.is_empty()
+        || !paragraph.comment_ranges.is_empty()
+        || !paragraph.bookmark_markers.is_empty()
+        || !paragraph.extra_xml.is_empty()
+        || !paragraph.content_controls.is_empty()
+        || !paragraph.revisions.is_empty()
+        || !paragraph.equations.is_empty()
+        || !paragraph.rubies.is_empty()
+        || paragraph.properties.as_ref().is_some_and(|p| {
+            p.tabs.is_some()
+                || p.change.is_some()
+                || p.numbering_revision.is_some()
+                || !p.revision_xml.is_empty()
+                || !p.numbering_revision_xml.is_empty()
+                || !p.num_pr_extra_xml.is_empty()
+                || !p.num_pr_extra_attributes.is_empty()
+                || p.rpr.as_ref().is_some_and(|r| {
+                    !r.revision_xml.is_empty()
+                        || r.change.is_some()
+                        || !r.revision_markers.is_empty()
+                })
+        })
+    {
+        return false;
+    }
+    paragraph.runs.iter().all(|run| {
+        run.extra_xml.is_empty()
+            && run.extra_xml_positions.is_empty()
+            && run.alt_drawings.is_empty()
+            && run.properties.as_ref().is_none_or(|p| {
+                p.revision_xml.is_empty() && p.change.is_none() && p.revision_markers.is_empty()
+            })
+            && run.content.iter().all(|content| {
+                matches!(
+                    content,
+                    RunContent::Text(_) | RunContent::Tab | RunContent::Break(_)
+                )
+            })
+    })
 }
 
 struct MainStoryLayout {
@@ -29641,7 +29719,19 @@ impl Document {
     pub fn pictures(&self) -> Result<Vec<PictureOccurrence>> {
         let mut result = Vec::new();
         let mut seen = HashSet::new();
-        for source in self.story_sources()? {
+        let prepared = self.prepared_main_read()?;
+        let mut sources = vec![StorySource {
+            root_kind: StoryKind::Body,
+            part_name: self.doc_part_name.clone(),
+            xml: Cow::Borrowed(&prepared.xml),
+        }];
+        sources.extend(self.related_story_sources()?);
+        // Optional, read-only qualification. No child reader or memo filling.
+        let plain_proofs = prepared
+            .writer
+            .as_ref()
+            .and_then(|record| record.picture_free_paragraph_ends(&prepared.xml));
+        for source in sources {
             let owners = scan_story_owners(&source.xml, source.root_kind)?
                 .into_iter()
                 .inspect(|_| {
@@ -29722,6 +29812,24 @@ impl Document {
                     };
                     let closed =
                         close_content_fragment_namespaces(&source.xml[span.clone()], &scope)?;
+                    #[cfg(test)]
+                    a9_lookup_candidate("pictures.plain_paragraph_candidate");
+                    let proof = (source.part_name == self.doc_part_name
+                        && source.root_kind == StoryKind::Body)
+                        .then(|| {
+                            plain_proofs
+                                .as_ref()
+                                .and_then(|proofs| proofs.get(&span.start))
+                        })
+                        .flatten()
+                        .filter(|end| **end == span.end);
+                    if proof.is_some() && block_proofs_enabled() {
+                        #[cfg(test)]
+                        a9_lookup_candidate("pictures.actual_plain_skip");
+                        continue;
+                    }
+                    #[cfg(test)]
+                    a9_lookup_read("pictures.fragment_parse", 1, closed.len());
                     let paragraph = CT_P::from_xml_fragment(&closed)?;
                     let accepted = paragraph.accepted_view();
                     let drawings = accepted
@@ -51247,6 +51355,240 @@ mod tests {
                 assert_eq!(outputs["scoped.canonical_record_copy"][0], 1);
             }
         }
+    }
+
+    // Warm inventory guards use real source reads and the actual frame publishers.
+    #[cfg(debug_assertions)]
+    fn plain_picture_read_record(body: &str) -> (Vec<u8>, MainPartBlocks) {
+        let document = producer_current_document(body);
+        let (xml, record) = document.canonical_source().unwrap();
+        let mut record = record.unwrap();
+        record.parsed_document().unwrap();
+        (xml, record)
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn picture_plain_read_requires_existing_actual_source_and_exact_partition() {
+        let (xml, record) = plain_picture_read_record(&issue407_runs(3));
+        let expected = record.picture_free_paragraph_ends(&xml).unwrap();
+        assert_eq!(expected.len(), 3);
+        assert!(
+            record
+                .blocks
+                .iter()
+                .all(|block| block.proved.get().is_some())
+        );
+        let cloned = record.clone();
+        assert_eq!(
+            cloned.picture_free_paragraph_ends(&xml),
+            Some(expected.clone())
+        );
+        let missing = MainPartBlocks {
+            blocks: record
+                .blocks
+                .iter()
+                .map(BodyBlockScan::fresh_context_piece)
+                .collect(),
+            ..record.clone()
+        };
+        assert!(missing.blocks.iter().all(|block| block.staged.is_some()));
+        assert!(
+            missing
+                .picture_free_paragraph_ends(&xml)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            missing
+                .blocks
+                .iter()
+                .all(|block| block.proved.get().is_none())
+        );
+        let _off = CanonicalBlockProofOff::enter();
+        assert!(record.picture_free_paragraph_ends(&xml).is_none());
+        drop(_off);
+        let mut stale = xml.clone();
+        let at = stale
+            .windows(b"paragraph".len())
+            .position(|bytes| bytes == b"paragraph")
+            .unwrap();
+        stale[at] = b'P';
+        assert!(record.picture_free_paragraph_ends(&stale).is_none());
+        let (start, end) = expected.iter().next().unwrap();
+        assert_eq!(expected.get(start), Some(end));
+        assert!(!expected.get(start).is_some_and(|end| *end == start + 1));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn picture_plain_read_real_frame_publishers_clear_old_child_proofs() {
+        let (xml, record) = plain_picture_read_record(&issue407_runs(3));
+        let frame = record.proved_document(&xml).unwrap();
+        for tail in [false, true] {
+            let mut changed = frame.clone();
+            if tail {
+                changed.body.sect_pr = Some(rdocx_oxml::document::CT_SectPr::default_letter());
+            } else {
+                changed
+                    .root_attributes
+                    .push(("probe".into(), "new-frame".into()));
+            }
+            let (new_xml, mut published) = MainPartBlocks::assemble(
+                &changed,
+                record.blocks.clone(),
+                None,
+                Some((&record.head, &record.tail)),
+            )
+            .unwrap()
+            .unwrap();
+            assert!(published.head != record.head || published.tail != record.tail);
+            assert!(
+                published
+                    .blocks
+                    .iter()
+                    .all(|block| block.proved.get().is_none())
+            );
+            assert!(published.picture_free_paragraph_ends(&new_xml).is_none());
+            // canonical_source binds an assembled record to its actual output.
+            published.part = Some(Arc::new(new_xml.clone()));
+            assert!(
+                published
+                    .picture_free_paragraph_ends(&new_xml)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                record
+                    .blocks
+                    .iter()
+                    .all(|block| block.proved.get().is_some())
+            );
+        }
+        let content_end = xml.len() - record.tail.len();
+        let edited = record
+            .edited(&[(content_end, content_end, b" ".to_vec())])
+            .unwrap();
+        let edited_xml = edited.bytes();
+        assert_ne!(edited.tail, record.tail);
+        assert!(
+            edited
+                .blocks
+                .iter()
+                .all(|block| block.proved.get().is_none())
+        );
+        assert!(
+            edited
+                .picture_free_paragraph_ends(&edited_xml)
+                .unwrap()
+                .is_empty()
+        );
+        // The whitespace-bootstrap publisher uses these same fresh-context pieces.
+        // A fresh frame cannot reuse the old read until its own actual reader runs.
+        let fresh = record.blocks[0].fresh_context_piece();
+        assert_eq!(fresh.bytes, record.blocks[0].bytes);
+        assert_eq!(fresh.staged, record.blocks[0].staged);
+        assert!(fresh.proved.get().is_none());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn picture_plain_read_declines_fields_private_and_opaque_projections() {
+        let cases = [
+            r#"<w:p><w:fldSimple w:instr="DATE"><w:r><w:t>field</w:t></w:r></w:fldSimple></w:p>"#,
+            r#"<w:p><w:bookmarkStart w:id="1" w:name="held"/><w:r><w:t>bookmarked</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>"#,
+            r#"<w:p><x:opaque xmlns:x="urn:opaque"/><w:r><w:t>raw paragraph</w:t></w:r></w:p>"#,
+            r#"<w:p><w:r><x:opaque xmlns:x="urn:opaque"/><w:t>raw run</w:t></w:r></w:p>"#,
+            r#"<w:p><w:sdt><w:sdtPr><w:tag w:val="nested"/><w:richText/></w:sdtPr><w:sdtContent><w:r><w:t>controlled</w:t></w:r></w:sdtContent></w:sdt></w:p>"#,
+            r#"<w:p><w:ins w:id="1" w:author="Ada"><w:r><w:t>revision</w:t></w:r></w:ins></w:p>"#,
+            r#"<w:p><w:hyperlink w:anchor="somewhere"><w:r><w:t>link</w:t></w:r></w:hyperlink></w:p>"#,
+            r#"<w:p><w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr><w:r><w:t>private tab</w:t></w:r></w:p>"#,
+        ];
+        for body in cases {
+            let (xml, record) = plain_picture_read_record(body);
+            assert!(
+                record.picture_free_paragraph_ends(&xml).unwrap().is_empty(),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn picture_plain_read_preserves_whole_inventory_and_actual_parser_forceoff() {
+        let document = a9_lookup_fixture(25);
+        let story = document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|story| story.kind() == StoryKind::Body)
+            .unwrap();
+        let (document, _) = document
+            .insert_picture_to_story_with_options_owned(
+                &story,
+                None,
+                super::watermark_tests::PNG,
+                "new.png",
+                Some(Length::pt(12.0)),
+                Some(Length::pt(15.0)),
+                None,
+            )
+            .unwrap();
+        let mut on_pictures = Vec::new();
+        let on = a9_lookup_sample(|| {
+            on_pictures = document.pictures()?;
+            Ok(())
+        });
+        let off_guard = CanonicalBlockProofOff::enter();
+        let mut off_pictures = Vec::new();
+        let off = a9_lookup_sample(|| {
+            off_pictures = document.pictures()?;
+            Ok(())
+        });
+        drop(off_guard);
+        assert_eq!(on_pictures, off_pictures);
+        assert_eq!(on_pictures.len(), 2);
+        let reused = on
+            .get("pictures.actual_plain_skip")
+            .map_or(0, |count| count[2]);
+        assert!(reused > 0, "{on:?}");
+        assert_eq!(off.get("pictures.actual_plain_skip"), None);
+        assert_eq!(
+            off["pictures.fragment_parse"][0] - on["pictures.fragment_parse"][0],
+            reused
+        );
+    }
+
+    #[test]
+    fn picture_plain_read_keeps_alternate_content_picture_occurrence() {
+        let mut seed = Document::new();
+        seed.add_paragraph("plain sibling");
+        seed.add_picture(
+            super::watermark_tests::PNG,
+            "alternate.png",
+            Length::pt(12.0),
+            Length::pt(15.0),
+        );
+        let seed = Document::from_bytes(&seed.to_bytes().unwrap()).unwrap();
+        let mut package = seed.package.clone();
+        let main = package.get_part(&seed.doc_part_name).unwrap();
+        let text = std::str::from_utf8(main).unwrap();
+        let start = text.find("<w:drawing>").unwrap();
+        let end = text[start..].find("</w:drawing>").unwrap() + start + "</w:drawing>".len();
+        let drawing = &text[start..end];
+        let alternate = format!(
+            r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><mc:Choice Requires="w14">{drawing}</mc:Choice><mc:Fallback/></mc:AlternateContent>"#
+        );
+        let changed = format!("{}{}{}", &text[..start], alternate, &text[end..]);
+        package.set_part(&seed.doc_part_name, changed.into_bytes());
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let actual = document.pictures().unwrap();
+        assert_eq!(actual.len(), 1);
+        assert_eq!(actual[0].bytes, super::watermark_tests::PNG);
+        assert_eq!((actual[0].width, actual[0].height), (152400, 190500));
+        let _off = CanonicalBlockProofOff::enter();
+        assert_eq!(document.pictures().unwrap(), actual);
     }
 
     // A genuine byte-opened canonical producer, not the factory's pre-normalized root model.
