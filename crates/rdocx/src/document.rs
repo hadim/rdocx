@@ -9265,15 +9265,14 @@ impl MainPartBlocks {
     }
 
     fn reconcile_readback(&self, xml: &[u8], current: &mut CT_Document) -> bool {
-        let Some((frame, scopes)) = self.cached_document_read_context(xml, current) else {
+        let Some((frame, _scopes)) = self.cached_document_read_context(xml, current) else {
             return false;
         };
         let mut replacements = Vec::new();
         for (index, block) in self.blocks.iter().enumerate() {
-            let Some(child) = block.read_child(&self.head, &self.tail, &scopes) else {
-                return false;
-            };
-            let Cow::Borrowed(actual) = child else {
+            // The complete guard above qualified this exact immutable read.
+            // Consume it without repeating private-owner or namespace checks.
+            let Some(actual) = block.proved.get().and_then(|proof| proof.parsed.as_ref()) else {
                 return false;
             };
             if actual != &current.body.content[index] {
@@ -51807,6 +51806,24 @@ mod tests {
             "<w:p><w:r><w:t>source</w:t></w:r></w:p><w:p><w:r><w:t>stable</w:t></w:r></w:p>",
         );
         let before = CT_Document::from_xml(format!("<w:document xmlns:w=\"{W_NS}\" probe=\"old\"><w:body><w:p><w:r><w:t>old</w:t></w:r></w:p><w:p><w:r><w:t>stable</w:t></w:r></w:p></w:body></w:document>").as_bytes()).unwrap();
+        // The complete immutable guard proves the direct getter and old
+        // accessor return the very same parsed object, not only equal values.
+        let (_, scopes) = record
+            .cached_document_read_context(&xml, &expected)
+            .unwrap();
+        for block in &record.blocks {
+            let direct = block
+                .proved
+                .get()
+                .and_then(|proof| proof.parsed.as_ref())
+                .unwrap();
+            let old = block
+                .read_child(&record.head, &record.tail, &scopes)
+                .unwrap();
+            assert!(matches!(&old, Cow::Borrowed(_)));
+            assert!(std::ptr::eq(direct, old.as_ref()));
+        }
+
         assert!(record.current_source_model_matches(&xml, &expected));
         assert!(!record.current_source_model_matches(&xml, &before));
         let mut results = BTreeMap::<String, bool>::new();
