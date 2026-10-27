@@ -24,7 +24,7 @@ use rdocx_oxml::revision::{CT_Revision, RevisionContent, RevisionKind};
 use rdocx_oxml::ruby::{CT_Ruby, ST_RubyAlign};
 use rdocx_oxml::shared::ST_HighlightColor;
 use rdocx_oxml::styles::CT_Styles;
-use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent, ST_VerticalJc};
+use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent, ST_VerticalJc, VMerge};
 use rdocx_oxml::text::{
     BookmarkMarker, BreakType, CT_P, CT_R, FieldArgument, FieldInstruction, RunContent,
     SpecialCharacter, hyperlink_revision_index,
@@ -220,6 +220,10 @@ pub(crate) struct SourceRegistry {
     story_owner_children: HashMap<WordStory, Vec<usize>>,
     revision_view: RevisionView,
     text_box_sources: HashMap<SourceNodeId, Vec<TextBoxSourceBinding>>,
+    /// Paragraphs table layout never lays out: the content of a vertically
+    /// merged continuation cell, and in the accepted view the rows accepting
+    /// every change removes.
+    dropped_by_tables: Vec<SourceNodeId>,
 }
 
 impl SourceRegistry {
@@ -238,6 +242,7 @@ impl SourceRegistry {
             story_owner_children: HashMap::new(),
             revision_view: input.revision_view,
             text_box_sources: HashMap::new(),
+            dropped_by_tables: Vec::new(),
         };
         registry.collect_story_body(body, &WordStory::Document);
         registry
@@ -419,6 +424,7 @@ impl SourceRegistry {
             story_owner_children: HashMap::new(),
             revision_view: input.revision_view,
             text_box_sources: HashMap::new(),
+            dropped_by_tables: Vec::new(),
         };
 
         for (body_index, content) in input.document.body.content.iter().enumerate() {
@@ -562,12 +568,49 @@ impl SourceRegistry {
 
     fn collect_table(&mut self, table: &CT_Tbl, story: &WordStory, prefix: &[usize]) {
         for (row, row_path) in table::layout_table_rows(table, prefix) {
+            let row_removed =
+                self.revision_view == RevisionView::Accepted && row.accepted_view_removes();
             for (cell, cell_path) in table::layout_row_cells(row, &row_path) {
+                let first = self.nodes.len();
                 for (content_index, content) in cell.content.iter().enumerate() {
                     let mut content_path = cell_path.clone();
                     content_path.push(content_index);
                     self.collect_cell_content(content, story, &content_path);
                 }
+                let continues_merge = cell
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.v_merge)
+                    == Some(VMerge::Continue);
+                if row_removed || continues_merge {
+                    // The cell's paragraphs were registered just now, in order.
+                    self.dropped_by_tables.extend(
+                        (first..self.nodes.len())
+                            .filter_map(|index| SourceNodeId::new(u32::try_from(index + 1).ok()?)),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Record the paragraphs table layout drops as unplaced navigation facts.
+    ///
+    /// Navigation keeps every registered paragraph, placed or not. These reach
+    /// no page and no outline, so they carry no outline level, and no style
+    /// that STYLEREF could select. Facts the layout recorded itself stay.
+    fn record_dropped_navigation(
+        &self,
+        navigation: &mut HashMap<SourceNodeId, crate::ParagraphNavigation>,
+    ) {
+        for node in &self.dropped_by_tables {
+            if let Some(facts) = self.navigation_sources.get(node) {
+                navigation
+                    .entry(*node)
+                    .or_insert_with(|| crate::ParagraphNavigation {
+                        level: None,
+                        style: None,
+                        ..facts.clone()
+                    });
             }
         }
     }
@@ -5320,6 +5363,9 @@ impl Engine {
         drop(restart_identity_memo);
         self.navigation_by_source
             .extend(num_state.take_navigation());
+        if let Some(registry) = sources {
+            registry.record_dropped_navigation(&mut self.navigation_by_source);
+        }
         if let Some(registry) = sources
             && input
                 .sequence_snapshot
@@ -25297,6 +25343,46 @@ mod tests {
             (moved_gap - plain_gap).abs() < 1e-9,
             "the endnote follows the moved body as it follows a plain one: {moved_gap} and {plain_gap}"
         );
+    }
+
+    #[test]
+    fn issue426_paragraphs_table_layout_drops_keep_unplaced_navigation_facts() {
+        // A vertically merged continuation cell and a row the accepted view
+        // removes are never laid out. Navigation still holds a fact for each
+        // of their paragraphs, unplaced, with no outline level and no style.
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Before</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>Kept</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Right</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Merged away</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Right below</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:trPr><w:del w:id="9" w:author="A" w:date="2026-01-01T00:00:00Z"/></w:trPr><w:tc><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Deleted row</w:t></w:r></w:p></w:tc><w:tc><w:p/></w:tc></w:tr></w:tbl></w:body></w:document>"#;
+        let mut input = make_input_with_text("");
+        input.document = CT_Document::from_xml(xml).expect("document parses");
+        let output = crate::layout_document_deterministic_with_provenance(&input)
+            .expect("layout with sources");
+        let mut documented = 0;
+        for index in 1u32.. {
+            let Some(node) = SourceNodeId::new(index) else {
+                break;
+            };
+            let Some(path) = output.source_node(node) else {
+                break;
+            };
+            if path.story == WordStory::Document {
+                documented += 1;
+                assert!(
+                    output.paragraph_navigation_source(node).is_some(),
+                    "{path:?} has navigation facts"
+                );
+            }
+        }
+        assert_eq!(documented, 7);
+        let facts = |wanted: &str| {
+            output
+                .paragraph_navigation()
+                .find(|(_, _, _, text, ..)| *text == wanted)
+                .map(|(_, _, level, _, style, _, page)| (level, style.map(str::to_owned), page))
+                .expect("paragraph facts")
+        };
+        assert_eq!(facts("Before"), (Some(1), Some("Heading1".into()), Some(1)));
+        assert_eq!(facts("Kept"), (None, None, Some(1)));
+        assert_eq!(facts("Merged away"), (None, None, None));
+        assert_eq!(facts("Deleted row"), (None, None, None));
     }
 
     #[test]
