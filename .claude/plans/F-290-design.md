@@ -325,6 +325,7 @@ No new test binary. Provider dependencies are already done, so this story has no
 
 ## HLD impact
 
+- `docs/hld/14-development-backlog.md`, the implemented F-290 package contract, with final acceptance kept separate
 - `docs/hld/02-scope-and-non-goals.md`, row DOCX-057 for F-290 (offline declaration, no connector execution)
 - `docs/hld/03-architecture.md`, "What stays put"
 - `docs/hld/04-opc-and-packaging.md`, "The package" and "Relationship types"

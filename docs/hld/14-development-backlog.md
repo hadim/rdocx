@@ -3136,11 +3136,11 @@ status, default, formatting, size, list, and calculation properties.
 **Depends on**: F-237, F-278.
 **Test gate**: differential. Public-created legacy fields match Word and retain
 their typed values through update and reopen.
-The pending definition reads an explicit reset default through
-`Field::legacy_form_default_value` and one batch
-`Document::legacy_form_fields_with_defaults`. It does not add a `default_value`
-field to `LegacyFormFieldData` or `LegacyFormFieldInfo`. Q15, answered
-2026-10-23, is that additive query disposition. It is not implemented.
+Explicit reset defaults use `Field::legacy_form_default_value` and the batch
+`Document::legacy_form_fields_with_defaults` query. The public
+`LegacyFormFieldData` and `LegacyFormFieldInfo` structs keep their existing
+fields. Python exposes the readonly `default_value` property. Implemented
+queries and native evidence remain separate from final sprint acceptance.
 
 ### F-289, Modern Word form authoring (L)
 Compose content controls, protection, editable ranges, validation, placeholders,
@@ -3162,8 +3162,9 @@ The story does not execute connectors or arbitrary MERGEFIELD aliases.
 remains. Opaque residual XML is not a configuration. A package has at most
 one recipient-data part. The source relationship type is `mailMergeSource`
 for both data source and ODSO source, and header ownership follows the
-qualified XML reference. Codex root approved the F-290 contract on
-2026-10-23. The story is not implemented.
+qualified XML reference. The implemented package API stores and reads this
+metadata without executing a connector. Final integrated acceptance remains
+required.
 **Depends on**: F-233, F-270, F-278.
 **Test gate**: round-trip. A public-created merge package retains its declared
 source and mappings, and unavailable external data returns diagnostics.
@@ -8656,9 +8657,9 @@ The bounded native remediation covers visibility ownership, native numeric alias
 **Test gate**: regression
 **Spec reference**: `10-bindings-spec.md`, Packaging, Explicit PowerPoint text fitting, and PowerPoint footer, field, theme and transition authoring. `04-opc-and-packaging.md`, Checked PowerPoint XML transactions. `03-architecture.md`, PowerPoint checked XML ownership. `12-testing-strategy.md`, PowerPoint checked XML qualification, and PowerPoint footer and transition acceptance.
 
-Local implementation stores part bytes in `Arc<Vec<u8>>` and reuses a trusted read baseline. Release timings, the measured M21 digest and the 248-call execution stay pending. Donor timings are not evidence.
+Local implementation stores part bytes in `Arc<Vec<u8>>` and reuses a trusted read baseline. Timing acceptance, the measured M21 digest and all 248 calls require actual selected-artifact evidence and current source applicability. Donor timings are not evidence.
 
-[Issue403](https://github.com/tensorbee/rdocx/issues/403), candidate [PR413](https://github.com/tensorbee/rdocx/pull/413) at bdf22890de1762d025b89b83b549c56941ef7199 and stacked candidate [PR416](https://github.com/tensorbee/rdocx/pull/416) at 768f8c109bd43fb9c1f6ecdfe2d913382bcc0368 stay unmerged. The inventory is all 248 public mutating calls from the external pin 3374348a48164f198ef077af46df485d0a1c469d. 159 of those calls grow with the deck, not only the five cases already recorded. Record 5 and 20 slide timings and 10, 40 and 80 media-rich timings, plus counters. Whole-deck operations and fallbacks that are by design are documented as such. PR413 alone leaves 107 package-bound calls. PR416 is incremental only once, on top of PR413 head bdf22890de1762d025b89b83b549c56941ef7199. Q9 on 2026-10-23 allows a bounded Rust change from owned `Vec<u8>` part storage to `Arc<Vec<u8>>`. Python stays unchanged. A release version waits. Q13 adopts the three PR416 behavior changes only as separate declared reviewed behavior commits: untouched slide bytes and digest, `fit_text` local scope, and transition and footer owner scope. The contract is approved. The local implementation is reviewed. Final digest, timings, and the full 248-call execution stay pending. The pins, the Q13 behavior labels, and the expected deltas stay. Preserve atomicity, errors, bytes and handle validity across new, reopened, in-memory, signed and embedded paths.
+[Issue403](https://github.com/tensorbee/rdocx/issues/403), candidate [PR413](https://github.com/tensorbee/rdocx/pull/413) at bdf22890de1762d025b89b83b549c56941ef7199 and stacked candidate [PR416](https://github.com/tensorbee/rdocx/pull/416) at 768f8c109bd43fb9c1f6ecdfe2d913382bcc0368 stay unmerged. The inventory is all 248 public mutating calls from the external pin 3374348a48164f198ef077af46df485d0a1c469d. 159 of those calls grow with the deck, not only the five cases already recorded. Record 5 and 20 slide timings and 10, 40 and 80 media-rich timings, plus counters. Whole-deck operations and fallbacks that are by design are documented as such. PR413 alone leaves 107 package-bound calls. PR416 is incremental only once, on top of PR413 head bdf22890de1762d025b89b83b549c56941ef7199. Q9 on 2026-10-23 allows a bounded Rust change from owned `Vec<u8>` part storage to `Arc<Vec<u8>>`. Python stays unchanged. Prepared releases retain Word 0.16.3 and shared/PowerPoint 0.14.3, with the Rust shared-buffer migration stated prominently for both families. Q13 adopts the three PR416 behavior changes only as separate declared reviewed behavior commits: untouched slide bytes and digest, `fit_text` local scope, and transition and footer owner scope. The contract is approved. The local implementation is reviewed. Digest and timing acceptance bind the selected artifact, all 248 calls, original workloads and disclosed safety fallbacks through exact current source applicability. The pins, the Q13 behavior labels, and the expected deltas stay. Preserve atomicity, errors, bytes and handle validity across new, reopened, in-memory, signed and embedded paths.
 
 ### F-X268, Bound Word owner inventory and unchanged package staging
 
@@ -8674,6 +8675,8 @@ Codex root approved the refresh4 extension on 2026-10-25. The baseline is `d1f42
 The full picture inventory reuses existing actual parses only for ordinary picture-free direct main-body paragraphs under exact current source, physical span, frame and namespace proofs. All story and owner traversal, scope closure, picture validation and error ordering remain authoritative. Opaque, private, drawing-bearing, nested, related and unproved paragraphs keep the original parser. Actual warm-hit and real force-off controls accompany the unchanged final timing rider. No new retained cache or public API is introduced. Qualification remains in progress.
 
 Canonical relationship and retained-source readback reconcile exact validated values into the current owned model instead of copying every equal private-free child. Mandatory source reads, complete frame replacement, resource validation and full rollback remain. Drawing no-op publication still requires exact source bytes and complete actual model equality. Original private and whole fallbacks, retained slot rejection, record publication and signature authority remain. These changes introduce no retained cache or public interface. Their actual mechanism evidence does not complete the timing or memory rider.
+
+Field-free picture insertion can share an exact immutable story projection across direct-item selection and body boundary discovery, and share its reopened projection for the final returned location. Field-bearing sources keep their original scan schedule. Namespace vectors are shared only within a scanner, with ordered copy-on-write declaration updates and all original attribute checks. No persistent cache or public API is added.
 
 The one regression gate covers native and Python atomic namespace guards, owner-inventory reuse, unchanged package staging, eligible in-memory reopen, direct-body addressing, main-part body-child staging, scoped replacement proof, and deterministic work controls. The same gate carries a final release rider for the pinned 252-call catalogue, the current 79 flat calls, the five linear calls, the original 407 gate, the F-X267 248-call run, and a memory measurement. The body-child calls are counted-work obligations inside that regression gate. The approved counted-work set is 14. The current flat set is 79. The historical Q23 flat set of 73 stays historical. The five linear calls stay. That rider is not a second test gate. Q22 measures each added cache layer, the `decodes` fact, and the combined footprint. No question is pending. F-289 and F-290 publication and related-owner proofs stay in force.
 

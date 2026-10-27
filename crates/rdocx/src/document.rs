@@ -11554,7 +11554,7 @@ struct XmlElementFrame {
     item_kind: Option<StoryItemKind>,
     direct_owner_child: bool,
     sdt_context: Option<StorySdtContext>,
-    word_prefixes: Vec<String>,
+    word_prefixes: Arc<Vec<String>>,
     opaque: bool,
     typed_sdt_content_seen: bool,
 }
@@ -11926,10 +11926,10 @@ fn field_instruction_has_name(instruction: &str) -> bool {
 
 fn story_word_prefixes_at(
     element: &BytesStart<'_>,
-    inherited: &[String],
+    inherited: &Arc<Vec<String>>,
     is_word_element: bool,
-) -> Result<Vec<String>> {
-    let mut prefixes = inherited.to_vec();
+) -> Result<Arc<Vec<String>>> {
+    let mut prefixes = Arc::clone(inherited);
     for attribute in element.attributes() {
         let attribute = attribute.map_err(|error| {
             Error::Other(format!("story namespace declaration scan failed: {error}"))
@@ -11953,6 +11953,7 @@ fn story_word_prefixes_at(
                 ))
             })?
             .into_owned();
+        let prefixes = Arc::make_mut(&mut prefixes);
         prefixes.retain(|candidate| {
             candidate != &prefix
                 && candidate
@@ -11974,10 +11975,9 @@ fn story_word_prefixes_at(
             .filter(|_| name.as_ref().contains(&b':'))
             .unwrap_or(b"");
         let prefix = std::str::from_utf8(prefix)
-            .map_err(|error| Error::Other(format!("story element prefix is invalid: {error}")))?
-            .to_owned();
-        if !prefixes.contains(&prefix) {
-            prefixes.push(prefix);
+            .map_err(|error| Error::Other(format!("story element prefix is invalid: {error}")))?;
+        if !prefixes.iter().any(|value| value == prefix) {
+            Arc::make_mut(&mut prefixes).push(prefix.to_owned());
         }
     }
     Ok(prefixes)
@@ -13475,13 +13475,13 @@ fn content_fragment_root_is_section_properties(xml: &[u8], item: &StoryItemSpan)
 }
 
 fn direct_story_content_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemSpan>> {
-    direct_story_content_items_in(xml, owner, scan_story_items(xml, owner, None)?)
+    direct_story_content_items_in(xml, owner, &scan_story_items(xml, owner, None)?)
 }
 
 fn direct_story_content_items_in(
     xml: &[u8],
     owner: &StoryOwnerSpan,
-    story_items: Vec<StoryItemSpan>,
+    story_items: &[StoryItemSpan],
 ) -> Result<Vec<StoryItemSpan>> {
     let mut items = Vec::new();
     for item in story_items {
@@ -13490,11 +13490,11 @@ fn direct_story_content_items_in(
         }
         if owner.kind == StoryKind::Body
             && item.kind == StoryItemKind::PreservedNode
-            && content_fragment_root_is_section_properties(xml, &item)?
+            && content_fragment_root_is_section_properties(xml, item)?
         {
             continue;
         }
-        items.push(item);
+        items.push(item.clone());
     }
     Ok(items)
 }
@@ -13541,11 +13541,24 @@ fn validate_fragment_block_item(xml: &[u8]) -> Result<()> {
 }
 
 fn story_owner_content_end(xml: &[u8], owner: &StoryOwnerSpan) -> Result<usize> {
+    let items = if owner.kind == StoryKind::Body {
+        scan_story_items(xml, owner, None)?
+    } else {
+        Vec::new()
+    };
+    story_owner_content_end_in(xml, owner, &items)
+}
+
+fn story_owner_content_end_in(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    items: &[StoryItemSpan],
+) -> Result<usize> {
     if owner.kind == StoryKind::Body {
-        for item in scan_story_items(xml, owner, None)? {
+        for item in items {
             if item.direct_owner_child
                 && item.kind == StoryItemKind::PreservedNode
-                && content_fragment_root_is_section_properties(xml, &item)?
+                && content_fragment_root_is_section_properties(xml, item)?
             {
                 return Ok(item.full.start);
             }
@@ -15485,8 +15498,9 @@ fn modeled_story_event(
     ) {
         let inherited = stack
             .last()
-            .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
-        let word_prefixes = story_word_prefixes_at(element, inherited, true)?;
+            .map(|frame| Arc::clone(&frame.word_prefixes))
+            .unwrap_or_else(|| Arc::new(Vec::new()));
+        let word_prefixes = story_word_prefixes_at(element, &inherited, true)?;
         let raw_end = if empty {
             after
         } else {
@@ -15575,6 +15589,7 @@ struct PairedTextBoxCopy {
 }
 
 fn scoped_alternate_text_box_copies(xml: &[u8]) -> Result<Vec<PairedTextBoxCopy>> {
+    let empty_word_prefixes = Arc::new(Vec::new());
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
     let mut stack = Vec::<XmlElementFrame>::new();
@@ -15645,7 +15660,7 @@ fn scoped_alternate_text_box_copies(xml: &[u8]) -> Result<Vec<PairedTextBoxCopy>
                         item_kind: None,
                         direct_owner_child: false,
                         sdt_context,
-                        word_prefixes: Vec::new(),
+                        word_prefixes: Arc::clone(&empty_word_prefixes),
                         opaque: !modeled,
                         typed_sdt_content_seen: false,
                     });
@@ -15705,11 +15720,13 @@ fn paired_text_box_projection(xml: &[u8], range: Range<usize>) -> Result<PairedT
                 let namespace = story_namespace(&namespace);
                 let local = local.as_ref();
                 let inherited = if stack.is_empty() {
-                    story_namespace_scope_at(xml, before)?
-                        .into_iter()
-                        .filter(|(_, uri)| uri == rdocx_oxml::namespace::W_NS)
-                        .map(|(prefix, _)| prefix)
-                        .collect::<Vec<_>>()
+                    Arc::new(
+                        story_namespace_scope_at(xml, before)?
+                            .into_iter()
+                            .filter(|(_, uri)| uri == rdocx_oxml::namespace::W_NS)
+                            .map(|(prefix, _)| prefix)
+                            .collect::<Vec<_>>(),
+                    )
                 } else {
                     stack.last().unwrap().word_prefixes.clone()
                 };
@@ -15882,6 +15899,7 @@ struct PairedReplacement<'a> {
 fn template_direct_table_children(
     xml: &[u8],
 ) -> Result<BTreeMap<usize, Vec<(Range<usize>, bool)>>> {
+    let empty_word_prefixes = Arc::new(Vec::new());
     let mut reader = NsReader::from_reader(xml);
     let mut stack = Vec::<XmlElementFrame>::new();
     let mut buffer = Vec::new();
@@ -15900,7 +15918,7 @@ fn template_direct_table_children(
                 let local = local.as_ref();
                 let inherited = stack
                     .last()
-                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                    .map_or(&empty_word_prefixes, |frame| &frame.word_prefixes);
                 let word_prefixes =
                     story_word_prefixes_at(&element, inherited, namespace == StoryNamespace::Word)?;
                 let modeled = !stack.last().is_some_and(|frame| frame.opaque)
@@ -16821,6 +16839,7 @@ fn scan_story_owners_with_special(
     root_kind: StoryKind,
     include_special: bool,
 ) -> Result<Vec<StoryOwnerSpan>> {
+    let empty_word_prefixes = Arc::new(Vec::new());
     #[cfg(test)]
     STORY_OWNER_SCANS.set(STORY_OWNER_SCANS.get() + 1);
     let mut reader = NsReader::from_reader(xml);
@@ -16879,7 +16898,7 @@ fn scan_story_owners_with_special(
                 }
                 let inherited = stack
                     .last()
-                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                    .map_or(&empty_word_prefixes, |frame| &frame.word_prefixes);
                 let word_prefixes = story_word_prefixes_at(&element, inherited, is_word)?;
                 stack.push(XmlElementFrame {
                     namespace: namespace_kind,
@@ -17558,6 +17577,7 @@ fn typed_complex_field_candidate_is_admitted(
 }
 
 fn scan_story_control_paragraphs(xml: &[u8], control: &StoryItemSpan) -> Result<Vec<Range<usize>>> {
+    let empty_word_prefixes = Arc::new(Vec::new());
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut stack = Vec::<XmlElementFrame>::new();
@@ -17628,14 +17648,19 @@ fn scan_story_control_paragraphs(xml: &[u8], control: &StoryItemSpan) -> Result<
                 }
                 if !empty {
                     let inherited = if root {
-                        story_namespace_scope_at(xml, before)?
-                            .into_iter()
-                            .filter_map(|(prefix, uri)| (uri == WORD_NAMESPACE).then_some(prefix))
-                            .collect::<Vec<_>>()
+                        Arc::new(
+                            story_namespace_scope_at(xml, before)?
+                                .into_iter()
+                                .filter_map(|(prefix, uri)| {
+                                    (uri == WORD_NAMESPACE).then_some(prefix)
+                                })
+                                .collect::<Vec<_>>(),
+                        )
                     } else {
-                        stack
-                            .last()
-                            .map_or_else(Vec::new, |parent| parent.word_prefixes.clone())
+                        stack.last().map_or_else(
+                            || Arc::clone(&empty_word_prefixes),
+                            |parent| Arc::clone(&parent.word_prefixes),
+                        )
                     };
                     let word_prefixes = story_word_prefixes_at(element, &inherited, is_word)?;
                     let sdt_context = if root {
@@ -17720,11 +17745,11 @@ fn scan_story_items(
     let mut items = Vec::new();
     let mut complex_fields = Vec::<ComplexFieldScan>::new();
     let mut template_open_fields = Vec::<usize>::new();
-    let mut paragraphs = Vec::<(Range<usize>, Vec<String>)>::new();
+    let mut paragraphs = Vec::<(Range<usize>, Arc<Vec<String>>)>::new();
     let mut active = false;
     let mut buffer = Vec::new();
-    let mut ancestor_prefixes: Vec<String> = Vec::new();
-    let mut ancestor_frames: Vec<Vec<String>> = Vec::new();
+    let mut ancestor_prefixes = Arc::new(Vec::new());
+    let mut ancestor_frames: Vec<Arc<Vec<String>>> = Vec::new();
     loop {
         let before = reader.buffer_position() as usize;
         let (namespace, event) = match reader.read_resolved_event_into(&mut buffer) {
@@ -17750,8 +17775,7 @@ fn scan_story_items(
                 match &event {
                     Event::Start(element) => {
                         let next = story_word_prefixes_at(element, &ancestor_prefixes, false)?;
-                        ancestor_frames.push(std::mem::take(&mut ancestor_prefixes));
-                        ancestor_prefixes = next;
+                        ancestor_frames.push(std::mem::replace(&mut ancestor_prefixes, next));
                     }
                     Event::End(_) => {
                         if let Some(previous) = ancestor_frames.pop() {
@@ -17854,8 +17878,8 @@ fn scan_story_items(
                 }
                 let inherited = stack
                     .last()
-                    .map(|frame| frame.word_prefixes.as_slice())
-                    .unwrap_or(ancestor_prefixes.as_slice());
+                    .map(|frame| &frame.word_prefixes)
+                    .unwrap_or(&ancestor_prefixes);
                 let word_prefixes = story_word_prefixes_at(&element, inherited, is_word_namespace)?;
                 stack.push(XmlElementFrame {
                     namespace: namespace_kind,
@@ -18050,6 +18074,7 @@ fn scan_story_items(
 }
 
 fn scan_story_item_links(xml: &[u8], item: &StoryItemSpan) -> Result<Vec<StoryLinkSpan>> {
+    let empty_word_prefixes = Arc::new(Vec::new());
     let mut reader = NsReader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut stack: Vec<XmlElementFrame> = Vec::new();
@@ -18112,7 +18137,7 @@ fn scan_story_item_links(xml: &[u8], item: &StoryItemSpan) -> Result<Vec<StoryLi
                 }
                 let inherited = stack
                     .last()
-                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                    .map_or(&empty_word_prefixes, |frame| &frame.word_prefixes);
                 let word_prefixes = story_word_prefixes_at(&element, inherited, is_word_namespace)?;
                 stack.push(XmlElementFrame {
                     namespace: namespace_kind,
@@ -18504,6 +18529,7 @@ struct BookmarkMarkerSpan {
 }
 
 fn bookmark_marker_spans(xml: &[u8]) -> Result<Vec<BookmarkMarkerSpan>> {
+    let empty_word_prefixes = Arc::new(Vec::new());
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
     let mut stack = Vec::<XmlElementFrame>::new();
@@ -18578,7 +18604,7 @@ fn bookmark_marker_spans(xml: &[u8]) -> Result<Vec<BookmarkMarkerSpan>> {
                     let sdt_context = story_element_sdt_context(&stack, namespace, &local);
                     let inherited = stack
                         .last()
-                        .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                        .map_or(&empty_word_prefixes, |frame| &frame.word_prefixes);
                     let word_prefixes = story_word_prefixes_at(
                         element,
                         inherited,
@@ -18797,6 +18823,7 @@ fn story_item_text(
     source_scan: Range<usize>,
     added: usize,
 ) -> Result<Option<String>> {
+    let empty_word_prefixes = Arc::new(Vec::new());
     #[cfg(test)]
     {
         let mut counts = FX211_PROFILE.get();
@@ -18942,7 +18969,7 @@ fn story_item_text(
                 }
                 let inherited = element_stack
                     .last()
-                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                    .map_or(&empty_word_prefixes, |frame| &frame.word_prefixes);
                 let word_prefixes = story_word_prefixes_at(&element, inherited, is_word_namespace)?;
                 element_stack.push(XmlElementFrame {
                     namespace: namespace_kind,
@@ -19214,6 +19241,7 @@ fn story_text_start(element: &BytesStart<'_>, preserve_space: bool) -> Result<Ve
 }
 
 fn replace_story_item_text(source: &[u8], item: &StoryItemSpan, value: &str) -> Result<Vec<u8>> {
+    let empty_word_prefixes = Arc::new(Vec::new());
     let mut reader = NsReader::from_reader(source);
     reader.config_mut().trim_text(false);
     let mut text_depth = 0usize;
@@ -19332,7 +19360,7 @@ fn replace_story_item_text(source: &[u8], item: &StoryItemSpan, value: &str) -> 
                 }
                 let inherited = element_stack
                     .last()
-                    .map_or(&[][..], |frame| frame.word_prefixes.as_slice());
+                    .map_or(&empty_word_prefixes, |frame| &frame.word_prefixes);
                 let word_prefixes = story_word_prefixes_at(&element, inherited, is_word_namespace)?;
                 element_stack.push(XmlElementFrame {
                     namespace: namespace_kind,
@@ -19649,7 +19677,7 @@ fn track_story_field_marker(
         edit.end_marker_start = Some(position);
         edit.word_prefixes = stack
             .last()
-            .map_or_else(Vec::new, |frame| frame.word_prefixes.clone());
+            .map_or_else(Vec::new, |frame| frame.word_prefixes.as_ref().clone());
     }
     update_complex_field_results(complex_results, marker);
 }
@@ -29369,7 +29397,17 @@ impl Document {
                 .find(|owner| owner.kind == story.kind && owner.owner_index == story.owner_index)
                 .ok_or_else(|| Error::Other("picture story source disappeared".to_owned()))?;
         }
-        let direct_items = direct_story_content_items(&source_xml, &story_owner)?;
+        // Typed projection can allocate private field identities. Field-bearing
+        // sources keep the original scan schedule before and after publication.
+        let shared_items = if !holds_field_words(&source_xml) {
+            Some(scan_story_items(&source_xml, &story_owner, None)?)
+        } else {
+            None
+        };
+        let direct_items = match &shared_items {
+            Some(items) => direct_story_content_items_in(&source_xml, &story_owner, items)?,
+            None => direct_story_content_items(&source_xml, &story_owner)?,
+        };
         let (boundary, inserted_direct_index) = match after {
             Some(after) => {
                 if after.story != *story {
@@ -29389,7 +29427,10 @@ impl Document {
                 (item.full.end, index + 1)
             }
             None => (
-                story_owner_content_end(&source_xml, &story_owner)?,
+                match &shared_items {
+                    Some(items) => story_owner_content_end_in(&source_xml, &story_owner, items)?,
+                    None => story_owner_content_end(&source_xml, &story_owner)?,
+                },
                 direct_items.len(),
             ),
         };
@@ -29443,11 +29484,22 @@ impl Document {
                 })
                 .ok_or_else(|| Error::Other("inserted picture story was not found".to_owned()))?;
             let (source, owner, _) = read.owner_and_layout(&refreshed_story, false, &related)?;
-            let direct = direct_story_content_items(source.xml.as_ref(), &owner)?;
+            let shared_projected = if !holds_field_words(source.xml.as_ref()) {
+                Some(scan_story_items(source.xml.as_ref(), &owner, None)?)
+            } else {
+                None
+            };
+            let direct = match &shared_projected {
+                Some(items) => direct_story_content_items_in(source.xml.as_ref(), &owner, items)?,
+                None => direct_story_content_items(source.xml.as_ref(), &owner)?,
+            };
             let inserted = direct.get(inserted_direct_index).ok_or_else(|| {
                 Error::Other("inserted picture paragraph was not found".to_owned())
             })?;
-            let projected = scan_story_items(source.xml.as_ref(), &owner, None)?;
+            let projected = match shared_projected {
+                Some(items) => items,
+                None => scan_story_items(source.xml.as_ref(), &owner, None)?,
+            };
             let index = projected
                 .iter()
                 .inspect(|_| {
@@ -44016,11 +44068,8 @@ impl Document {
                     "scoped replacement requires a block owner item".into(),
                 ));
             }
-            let canonical_direct = direct_story_content_items_in(
-                &canonical.xml,
-                &canonical_owner,
-                canonical_items.clone(),
-            )?;
+            let canonical_direct =
+                direct_story_content_items_in(&canonical.xml, &canonical_owner, &canonical_items)?;
             let actual_direct = direct_story_content_items(&source.xml, &owner)?;
             let slot = canonical_direct
                 .iter()
@@ -51565,6 +51614,252 @@ mod tests {
     }
 
     #[cfg(debug_assertions)]
+    #[test]
+    fn story_prefix_contexts_share_without_changing_values_or_first_errors() {
+        fn old_prefixes(
+            element: &BytesStart<'_>,
+            inherited: &[String],
+            is_word_element: bool,
+        ) -> Result<Vec<String>> {
+            let mut prefixes = inherited.to_vec();
+            for attribute in element.attributes() {
+                let attribute = attribute.map_err(|error| {
+                    Error::Other(format!("story namespace declaration scan failed: {error}"))
+                })?;
+                let name = attribute.key.as_ref();
+                let prefix = if name == b"xmlns" {
+                    b"".as_slice()
+                } else if let Some(prefix) = name.strip_prefix(b"xmlns:") {
+                    prefix
+                } else {
+                    continue;
+                };
+                let prefix = std::str::from_utf8(prefix)
+                    .map_err(|error| {
+                        Error::Other(format!("story namespace prefix is invalid: {error}"))
+                    })?
+                    .to_owned();
+                let value = attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())
+                    .map_err(|error| {
+                        Error::Other(format!(
+                            "story namespace declaration decode failed: {error}"
+                        ))
+                    })?
+                    .into_owned();
+                prefixes.retain(|candidate| {
+                    candidate != &prefix
+                        && candidate
+                            .strip_prefix('\0')
+                            .and_then(|rest| rest.split_once('\0'))
+                            .is_none_or(|(bound, _)| bound != prefix)
+                });
+                prefixes.push(format!("\0{prefix}\0{value}"));
+                if value == WORD_NAMESPACE {
+                    prefixes.push(prefix);
+                }
+            }
+            if is_word_element {
+                let name = element.name();
+                let prefix = name
+                    .as_ref()
+                    .split(|byte| *byte == b':')
+                    .next()
+                    .filter(|_| name.as_ref().contains(&b':'))
+                    .unwrap_or(b"");
+                let prefix = std::str::from_utf8(prefix)
+                    .map_err(|error| {
+                        Error::Other(format!("story element prefix is invalid: {error}"))
+                    })?
+                    .to_owned();
+                if !prefixes.contains(&prefix) {
+                    prefixes.push(prefix);
+                }
+            }
+            Ok(prefixes)
+        }
+
+        let cases = [
+            ("unchanged", "<w:p/>", vec!["w".to_owned()], true),
+            (
+                "ordinary-value-not-decoded",
+                "<w:p a=\"&bogus;\"/>",
+                vec!["w".into()],
+                true,
+            ),
+            ("new-element-prefix", "<a:p/>", vec![], true),
+            (
+                "default-word",
+                "<p xmlns=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"/>",
+                vec![],
+                true,
+            ),
+            (
+                "alias-word",
+                "<a:p xmlns:a=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"/>",
+                vec!["w".into()],
+                true,
+            ),
+            (
+                "undeclare",
+                "<p xmlns=\"\"/>",
+                vec!["\0\0urn:old".into(), "".into()],
+                false,
+            ),
+            (
+                "shadow",
+                "<a:p xmlns:a=\"urn:other\"/>",
+                vec![
+                    "\0a\0http://schemas.openxmlformats.org/wordprocessingml/2006/main".into(),
+                    "a".into(),
+                ],
+                false,
+            ),
+            (
+                "same-binding-tail",
+                "<a:p xmlns:a=\"urn:other\"/>",
+                vec!["\0a\0urn:other".into()],
+                false,
+            ),
+            (
+                "same-binding-reorders",
+                "<a:p xmlns:a=\"urn:other\"/>",
+                vec!["\0a\0urn:other".into(), "\0b\0urn:b".into()],
+                false,
+            ),
+            (
+                "namespace-entity-error",
+                "<p xmlns:a=\"&bogus;\"/>",
+                vec![],
+                false,
+            ),
+            ("bad-attribute", "<p bad/>", vec![], false),
+            ("duplicate-attribute", "<p a=\"1\" a=\"2\"/>", vec![], false),
+            (
+                "later-bad-namespace",
+                "<p xmlns:a=\"urn:ok\" xmlns:b=\"&bogus;\"/>",
+                vec![],
+                false,
+            ),
+            (
+                "first-bad-namespace",
+                "<p xmlns:a=\"&bogus;\" bad/>",
+                vec![],
+                false,
+            ),
+        ];
+        for (name, xml, inherited, is_word) in cases {
+            let mut reader = quick_xml::Reader::from_reader(xml.as_bytes());
+            let event = reader.read_event().unwrap();
+            let element = match event {
+                Event::Start(x) | Event::Empty(x) => x,
+                _ => panic!("missing root"),
+            };
+            let before = inherited.clone();
+            let parent = Arc::new(inherited);
+            let old = old_prefixes(&element, parent.as_slice(), is_word).map_err(|e| e.to_string());
+            let new = story_word_prefixes_at(&element, &parent, is_word).map_err(|e| e.to_string());
+            assert_eq!(
+                old.as_ref().map(|v| v.as_slice()),
+                new.as_ref().map(|v| v.as_slice()),
+                "{name}"
+            );
+            assert_eq!(
+                parent.as_slice(),
+                before.as_slice(),
+                "parent mutation {name}"
+            );
+            if name == "unchanged" {
+                assert!(Arc::ptr_eq(new.as_ref().unwrap(), &parent));
+            }
+            if name == "same-binding-tail" {
+                assert!(!Arc::ptr_eq(new.as_ref().unwrap(), &parent));
+            }
+            println!("PASS\t{name}\t{:?}", old);
+        }
+        let mut reader = quick_xml::Reader::from_reader(b"<a:p xmlns:a=\"urn:new\"/>".as_slice());
+        let Event::Empty(element) = reader.read_event().unwrap() else {
+            panic!()
+        };
+        let parent = Arc::new(vec!["w".to_owned()]);
+        let sibling = Arc::clone(&parent);
+        let child = story_word_prefixes_at(&element, &parent, false).unwrap();
+        assert_eq!(parent.as_slice(), &["w"]);
+        assert_eq!(sibling.as_slice(), &["w"]);
+        assert_ne!(child.as_slice(), parent.as_slice());
+        println!("PASS\tparent-sibling-isolation");
+    }
+
+    #[test]
+    fn picture_item_snapshots_keep_physical_boundaries_and_field_fallback_eligibility() {
+        let xml = format!(r#"<w:document xmlns:w="{WORD_NAMESPACE}"><w:body><w:p><w:r><w:t>body</w:t></w:r><w:sdt><w:sdtContent><w:r><w:t>inline</w:t></w:r></w:sdtContent></w:sdt></w:p><w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1440"/></w:tblGrid><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>controlled</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>tail</w:t></w:r></w:p><w:sectPr/></w:body></w:document>"#).into_bytes();
+        assert!(!holds_field_words(&xml));
+        let owners = scan_story_owners(&xml, StoryKind::Body).unwrap();
+        assert_eq!(
+            owners
+                .iter()
+                .filter(|owner| owner.kind == StoryKind::TableCell)
+                .count(),
+            1
+        );
+        for owner in owners
+            .iter()
+            .filter(|owner| matches!(owner.kind, StoryKind::Body | StoryKind::TableCell))
+        {
+            let raw = scan_story_items(&xml, owner, None).unwrap();
+            let direct = direct_story_content_items_in(&xml, owner, &raw).unwrap();
+            let old = direct_story_content_items(&xml, owner).unwrap();
+            assert_eq!(direct.len(), old.len());
+            for (current, reference) in direct.iter().zip(&old) {
+                assert_eq!(current.kind, reference.kind);
+                assert_eq!(current.full, reference.full);
+                assert_eq!(current.scan, reference.scan);
+                assert_eq!(current.direct_owner_child, reference.direct_owner_child);
+                assert_eq!(current.complex_field, reference.complex_field);
+                assert_eq!(current.complex_ancestors, reference.complex_ancestors);
+                assert!(current.sdt_context == reference.sdt_context);
+            }
+            assert_eq!(
+                story_owner_content_end(&xml, owner).unwrap(),
+                story_owner_content_end_in(&xml, owner, &raw).unwrap()
+            );
+            if owner.kind == StoryKind::Body {
+                assert!(raw.len() > direct.len());
+                let tail = direct.last().unwrap();
+                assert!(
+                    raw.iter().position(|item| item.full == tail.full).unwrap() > direct.len() - 1
+                );
+                assert_eq!(
+                    &xml[story_owner_content_end_in(&xml, owner, &raw).unwrap()..][..11],
+                    b"<w:sectPr/>"
+                );
+            }
+            if owner.kind != StoryKind::Body {
+                // The nonbody boundary path must not require any item scan result.
+                assert_eq!(
+                    story_owner_content_end(&xml, owner).unwrap(),
+                    story_owner_content_end_in(&xml, owner, &[]).unwrap()
+                );
+            }
+            for inserted in &direct {
+                let index = raw
+                    .iter()
+                    .position(|item| item.full == inserted.full)
+                    .unwrap();
+                let projected = scan_story_items(&xml, owner, None).unwrap();
+                assert_eq!(projected[index].full, inserted.full);
+                assert_eq!(projected[index].kind, inserted.kind);
+            }
+        }
+        for token in [b"fldChar".as_slice(), b"fldSimple".as_slice()] {
+            assert!(holds_field_words(token));
+            let mut opaque = b"<x:opaque xmlns:x=\"urn:x\">literal ".to_vec();
+            opaque.extend_from_slice(token);
+            opaque.extend_from_slice(b"</x:opaque>");
+            assert!(holds_field_words(&opaque));
+        }
+    }
+
     #[test]
     fn picture_plain_read_requires_existing_actual_source_and_exact_partition() {
         let (xml, record) = plain_picture_read_record(&issue407_runs(3));
