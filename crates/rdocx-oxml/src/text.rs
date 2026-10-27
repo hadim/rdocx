@@ -6163,6 +6163,58 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<bool
     Ok(retain_namespace_frame)
 }
 
+// A native TextInput can own one ordinary complex child in either region.
+// Instruction ownership requires the single direct operand, never both regions.
+fn legacy_ordinary_bookmarked_child(field: &Field) -> bool {
+    if field.instruction.name != "FORMTEXT"
+        || !field
+            .legacy_form
+            .as_ref()
+            .is_some_and(|form| form.kind == LegacyFormFieldKind::TextInput)
+    {
+        return false;
+    }
+    let instruction = field.nested_fields_in_source_order();
+    let result = field.cached_fields_in_source_order();
+    let child = match (instruction.as_slice(), result.as_slice()) {
+        ([], [child]) => *child,
+        ([child], [])
+            if matches!(field.instruction.arguments.as_slice(),
+            [FieldArgument::Nested(argument)] if std::ptr::eq(argument.as_ref(), *child)) =>
+        {
+            *child
+        }
+        _ => return false,
+    };
+    if !matches!(
+        child.source,
+        FieldSource::Parsed {
+            form: FieldForm::Complex,
+            ..
+        }
+    ) || !(matches!(child.instruction.name.as_str(), "TIME" | "DATE")
+        || child.instruction.name.starts_with('='))
+        || child.legacy_form.is_some()
+        || child.validate_legacy_form_owner().is_err()
+        || !child.all_nested_fields_in_source_order().is_empty()
+    {
+        return false;
+    }
+    [field, child].into_iter().all(|owner| {
+        owner.parsed_cached_comment_ranges.is_empty()
+            && owner.typed_cached_comment_ranges.is_empty()
+            && owner.cached_result_runs().is_none_or(|runs| {
+                runs.iter()
+                    .flat_map(|run| &run.content)
+                    .all(|content| match content {
+                        RunContent::Text(_) | RunContent::Tab | RunContent::Break(_) => true,
+                        RunContent::Field(nested) => std::ptr::eq(nested, child),
+                        _ => false,
+                    })
+            })
+    })
+}
+
 // Word's own-name bookmark surrounds the result and instruction, with its
 // start just after the pure begin run and its end just after the pure end run.
 // Only this complete isolated pair can project onto one virtual field run.
@@ -6176,8 +6228,42 @@ fn legacy_form_own_bookmark_start(
 ) -> Option<usize> {
     field.validate_legacy_form_owner().ok()?;
     let name = field.legacy_form.as_ref()?.name.as_deref()?;
-    if name.is_empty() || !field.all_nested_fields_in_source_order().is_empty() {
+    if name.is_empty()
+        || (!field.all_nested_fields_in_source_order().is_empty()
+            && !legacy_ordinary_bookmarked_child(field))
+    {
         return None;
+    }
+    // A simple instruction child is not modeled as an operand by the generic
+    // parser. Inspect actual sources rather than treating that omission as zero
+    // children. The bounded complex case also excludes private run owners in
+    // either region, including instruction content without projected display.
+    let nested = !field.all_nested_fields_in_source_order().is_empty();
+    for raw in sources.get(start..=end)? {
+        let raw = raw.as_deref()?;
+        if parse_simple_field(raw, word_prefixes).ok()?.is_some() {
+            return None;
+        }
+        if nested {
+            let run = parse_run_raw(raw, word_prefixes).ok()?;
+            // AlternateContent drawings and classified VML rules are typed
+            // owners outside content. Scope records and opaque raw children
+            // carry no additional owner and remain eligible.
+            if !run.alt_drawings.is_empty()
+                || run
+                    .extra_xml_positions
+                    .iter()
+                    .any(|position| CT_R::raw_child_is_legacy_horizontal_rule(*position))
+                || run.content.iter().any(|content| {
+                    !matches!(
+                        content,
+                        RunContent::Text(_) | RunContent::Tab | RunContent::Break(_)
+                    )
+                })
+            {
+                return None;
+            }
+        }
     }
     for (index, begin) in [(start, true), (end, false)] {
         let raw = sources.get(index)?.as_deref()?;
@@ -10977,6 +11063,35 @@ fn write_field<W: std::io::Write>(
     write_field_with_result_properties(writer, field, foreign_word_namespace, None)
 }
 
+fn source_contains_own_bookmark(raw: &[u8], prefixes: &[String], name: &str) -> Result<bool> {
+    let mut reader = Reader::from_reader(raw);
+    let mut contexts = Vec::<Vec<String>>::new();
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buffer)?;
+        match &event {
+            Event::Start(element) | Event::Empty(element) => {
+                let inherited = contexts.last().map(Vec::as_slice).unwrap_or(prefixes);
+                let current = word_prefixes_at(element, inherited)?;
+                if is_word_element(element.name().as_ref(), b"bookmarkStart", &current)
+                    && optional_word_attribute(element, b"name", &current).as_deref() == Some(name)
+                {
+                    return Ok(true);
+                }
+                if matches!(event, Event::Start(_)) {
+                    contexts.push(current);
+                }
+            }
+            Event::End(_) => {
+                contexts.pop();
+            }
+            Event::Eof => return Ok(false),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
 fn write_field_with_result_properties<W: std::io::Write>(
     writer: &mut Writer<W>,
     field: &Field,
@@ -11053,6 +11168,23 @@ fn write_field_with_result_properties<W: std::io::Write>(
             updated
         };
         return write_raw_with_word_override(writer, &updated, foreign_word_namespace);
+    }
+
+    // Rebuilding a retained own-bookmarked field would omit its physical
+    // start, which the paragraph deliberately leaves inside this source.
+    if let FieldSource::Parsed {
+        raw_xml,
+        word_prefixes,
+        original_legacy_form: Some(form),
+        ..
+    } = &field.source
+        && let Some(name) = form.name.as_deref()
+        && source_contains_own_bookmark(raw_xml, word_prefixes, name)?
+    {
+        return Err(OxmlError::InvalidValue(
+            "a source-owned legacy bookmark requires its original field instruction identity"
+                .into(),
+        ));
     }
 
     let mut field = field.clone();
@@ -17805,12 +17937,8 @@ mod tests {
         assert!(xml.contains("flagged"));
     }
 
-    #[test]
-    fn alternate_content_is_preserved_once_and_parsed_for_layout() {
-        // A shape as Word writes it: DrawingML in mc:Choice, VML in the
-        // fallback. The block has to come back out verbatim, exactly once,
-        // while still being visible to layout.
-        let src = concat!(
+    fn alternate_content_shape_run() -> &'static str {
+        concat!(
             r#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><mc:AlternateContent><mc:Choice Requires="wps">"#,
             r#"<w:drawing><wp:anchor behindDoc="0">"#,
             r#"<wp:positionH relativeFrom="column"><wp:posOffset>914400</wp:posOffset></wp:positionH>"#,
@@ -17826,7 +17954,16 @@ mod tests {
             r#"</wp:anchor></w:drawing></mc:Choice>"#,
             r#"<mc:Fallback><w:pict><v:rect/></w:pict></mc:Fallback>"#,
             r#"</mc:AlternateContent></w:r>"#,
-        );
+        )
+    }
+
+    #[test]
+    fn alternate_content_is_preserved_once_and_parsed_for_layout() {
+        // A shape as Word writes it: DrawingML in mc:Choice, VML in the
+        // fallback. The block has to come back out verbatim, exactly once,
+        // while still being visible to layout.
+        let src = alternate_content_shape_run();
+
         let p = parse_paragraph(src);
         assert_eq!(p.runs.len(), 1);
         let run = &p.runs[0];
@@ -20404,6 +20541,693 @@ mod tests {
         }
     }
 
+    fn native_legacy_ordinary_result(
+        instruction: &str,
+        subtype: &str,
+        default: &str,
+        display: &str,
+    ) -> String {
+        format!(
+            concat!(
+                r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Legacy"/><w:enabled w:val="0"/><w:textInput><w:type w:val="{subtype}"/>{default}</w:textInput></w:ffData></w:fldChar></w:r>"#,
+                r#"<w:bookmarkStart w:id="7" w:name="Legacy"/><w:r><w:instrText> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> {instruction} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+                r#"<w:r><w:rPr><w:b/></w:rPr><w:t>{display}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:instrText>{display}</w:instrText></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="end"/></w:r><w:bookmarkEnd w:id="7"/>"#,
+            ),
+            subtype = subtype,
+            default = default,
+            instruction = instruction,
+            display = display
+        )
+    }
+
+    fn native_legacy_ordinary_instruction(
+        instruction: &str,
+        subtype: &str,
+        default: &str,
+        inner: &str,
+        outer: &str,
+    ) -> String {
+        format!(
+            concat!(
+                r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Legacy"/><w:enabled w:val="0"/><w:textInput><w:type w:val="{subtype}"/>{default}</w:textInput></w:ffData></w:fldChar></w:r>"#,
+                r#"<w:bookmarkStart w:id="7" w:name="Legacy"/><w:r><w:instrText> FORMTEXT </w:instrText></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> {instruction} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+                r#"<w:r><w:rPr><w:noProof/></w:rPr><w:instrText>{inner}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:noProof/></w:rPr><w:t>{outer}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:bookmarkEnd w:id="7"/>"#,
+            ),
+            instruction = instruction,
+            subtype = subtype,
+            default = default,
+            inner = inner,
+            outer = outer
+        )
+    }
+
+    #[test]
+    fn native_legacy_instruction_child_preserves_outer_current_and_physical_source() {
+        for (instruction, subtype, default, inner, outer, reset) in [
+            (
+                r#"TIME \@ "HH:mm:ss""#,
+                "currentDate",
+                "",
+                "12:34:56",
+                "12:34:56",
+                None,
+            ),
+            (
+                r#"DATE \@ "yyyy-MM-dd""#,
+                "currentTime",
+                "",
+                "2026-10-26",
+                "2026-10-26",
+                None,
+            ),
+            (
+                "=2+3",
+                "calculated",
+                r#"<w:default w:val="=2+3"/>"#,
+                "5",
+                "5.00",
+                Some(LegacyFormFieldValue::Text("=2+3".into())),
+            ),
+        ] {
+            let raw =
+                native_legacy_ordinary_instruction(instruction, subtype, default, inner, outer);
+            let prefix = concat!(
+                r#"<w:sdt><w:sdtContent><w:r><w:t>lead</w:t></w:r></w:sdtContent></w:sdt>"#,
+                r#"<w:del w:id="9" w:author="Ada"><w:r><w:delText>gone</w:delText></w:r></w:del>"#,
+                r#"<w:r><w:t>before</w:t></w:r>"#
+            );
+            let mut paragraph =
+                parse_paragraph(&format!("{prefix}{raw}<w:r><w:t>after</w:t></w:r>"));
+            assert_eq!(paragraph.runs.len(), 3, "{instruction}");
+            let RunContent::Field(parent) = &mut paragraph.runs[1].content[0] else {
+                panic!("native instruction owner")
+            };
+            assert_eq!(parent.cached_result, outer);
+            assert_eq!(
+                parent.legacy_form_value().unwrap(),
+                Some(LegacyFormFieldValue::Text(outer.into()))
+            );
+            assert_eq!(parent.legacy_form_default_value().unwrap(), reset);
+            assert!(parent.cached_fields_in_source_order().is_empty());
+            let [FieldArgument::Nested(child)] = parent.instruction.arguments.as_slice() else {
+                panic!("one native operand")
+            };
+            assert_eq!(
+                child.cached_result, "",
+                "result instrText remains raw, not a new display"
+            );
+            let owner = parent.source_owner_id();
+            let child_id = parent.nested_fields_in_source_order()[0].source_owner_id();
+            assert!(owner.is_some() && child_id.is_some() && owner != child_id);
+            let initial = serialized_paragraph(&paragraph);
+            assert!(initial.contains(&raw));
+            let RunContent::Field(parent) = &mut paragraph.runs[1].content[0] else {
+                unreachable!()
+            };
+            parent
+                .set_legacy_form_value(LegacyFormFieldValue::Text(outer.into()))
+                .unwrap();
+            assert_eq!(serialized_paragraph(&paragraph), initial);
+            let RunContent::Field(parent) = &mut paragraph.runs[1].content[0] else {
+                unreachable!()
+            };
+            let FieldArgument::Nested(child) = &mut parent.instruction.arguments[0] else {
+                unreachable!()
+            };
+            child.cached_result = "child changed".into();
+            assert_eq!(child.source_owner_id(), child_id);
+            assert_eq!(
+                parent.legacy_form_value().unwrap(),
+                Some(LegacyFormFieldValue::Text(outer.into()))
+            );
+            let after_child = serialized_paragraph(&paragraph);
+            assert!(after_child.contains("child changed"));
+            let RunContent::Field(parent) = &mut paragraph.runs[1].content[0] else {
+                unreachable!()
+            };
+            parent
+                .set_legacy_form_value(LegacyFormFieldValue::Text("literal\tline\nnext".into()))
+                .unwrap();
+            assert_eq!(parent.source_owner_id(), owner);
+            assert_eq!(
+                parent.nested_fields_in_source_order()[0].source_owner_id(),
+                child_id
+            );
+            assert_eq!(parent.legacy_form_default_value().unwrap(), reset);
+            let xml = serialized_paragraph(&paragraph);
+            assert!(xml.contains("child changed"));
+            assert!(xml.contains(&format!("<w:instrText>{inner}</w:instrText>")));
+            assert_eq!(
+                xml.matches("fldCharType=\"begin\"").count(),
+                2,
+                "instruction child retained"
+            );
+            assert_eq!(xml.matches("<w:bookmarkStart ").count(), 1);
+            assert_eq!(xml.matches("<w:bookmarkEnd ").count(), 1);
+            let part = format!(
+                r#"<w:document xmlns:w="{}"><w:body>{xml}</w:body></w:document>"#,
+                crate::namespace::W_NS
+            );
+            let reopened = crate::document::CT_Document::from_xml(part.as_bytes()).unwrap();
+            let p = reopened.body.paragraphs().next().unwrap();
+            let RunContent::Field(parent) = &p.runs[1].content[0] else {
+                panic!("reopened instruction owner")
+            };
+            assert_eq!(
+                parent.legacy_form_value().unwrap(),
+                Some(LegacyFormFieldValue::Text("literal\tline\nnext".into()))
+            );
+            assert_eq!(parent.legacy_form_default_value().unwrap(), reset);
+            for p in [&paragraph, p] {
+                assert_eq!(
+                    p.bookmark_markers
+                        .iter()
+                        .map(BookmarkMarker::run_index)
+                        .collect::<Vec<_>>(),
+                    [1, 2]
+                );
+                assert_eq!(
+                    p.bookmark_markers
+                        .iter()
+                        .map(BookmarkMarker::projected_run_index)
+                        .collect::<Vec<_>>(),
+                    [2, 3]
+                );
+                assert_eq!(
+                    p.bookmark_markers
+                        .iter()
+                        .map(BookmarkMarker::tracked_run_index)
+                        .collect::<Vec<_>>(),
+                    [3, 4]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_legacy_instruction_shapes_keep_private_and_ambiguous_sources_untyped() {
+        let raw = native_legacy_ordinary_instruction("DATE", "currentTime", "", "inner", "outer");
+        let child = concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> DATE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:rPr><w:noProof/></w:rPr><w:instrText>inner</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+        );
+        assert!(raw.contains(child));
+        let leaf = r#"<w:r><w:rPr><w:noProof/></w:rPr><w:instrText>inner</w:instrText></w:r>"#;
+        let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#;
+        for (name,raw) in [
+            ("two regions",raw.replace("<w:t>outer</w:t>",&format!("<w:t>outer</w:t></w:r>{child}<w:r>"))),
+            ("extra operand",raw.replace(" FORMTEXT "," FORMTEXT extra ")),
+            ("nested switch",raw.replace(" FORMTEXT ",r#" FORMTEXT \@ "#)),
+            ("multiple",raw.replace(child,&format!("{child}{child}"))),
+            ("deep",raw.replace(leaf,child)),
+            ("simple",raw.replace(child,r#"<w:fldSimple w:instr=" DATE "><w:r><w:t>inner</w:t></w:r></w:fldSimple>"#)),
+            ("other ordinary",raw.replace(" DATE "," PAGE ")),
+            ("nested legacy",raw.replacen(begin,r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Child"/><w:textInput/></w:ffData></w:fldChar></w:r>"#,1)),
+            ("note in instruction",raw.replace(leaf,&format!(r#"{leaf}<w:r><w:footnoteReference w:id="1"/></w:r>"#))),
+            ("private outside child",raw.replace(" FORMTEXT </w:instrText></w:r>",r#" FORMTEXT </w:instrText></w:r><w:r><w:commentReference w:id="1"/></w:r>"#)),
+            ("child bookmark",raw.replace(leaf,&format!(r#"<w:bookmarkStart w:id="8" w:name="Other"/>{leaf}<w:bookmarkEnd w:id="8"/>"#))),
+            ("shared begin",raw.replacen("</w:ffData></w:fldChar>","</w:ffData></w:fldChar><w:t>shared</w:t>",1)),
+            ("checkbox",raw.replace(r#"<w:textInput><w:type w:val="currentTime"/></w:textInput>"#,r#"<w:checkBox><w:sizeAuto/></w:checkBox>"#)),
+        ] {
+            let p=parse_paragraph(&raw);
+            assert!(!p.runs.iter().flat_map(|r|&r.content).any(|c|matches!(c,RunContent::Field(f) if f.legacy_form.as_ref().is_some_and(|f|f.name.as_deref()==Some("Legacy")))),"admitted {name}");
+            let output=serialized_paragraph(&p);
+            assert_eq!(output.matches("bookmarkStart").count(),raw.matches("bookmarkStart").count(),"{name}");
+            assert_eq!(output.matches("bookmarkEnd").count(),raw.matches("bookmarkEnd").count(),"{name}");
+        }
+    }
+
+    #[test]
+    fn native_legacy_instruction_alias_and_scalar_switches_keep_the_source_frame() {
+        let raw = native_legacy_ordinary_instruction("DATE", "currentTime", "", "inner", "outer")
+            .replace(" FORMTEXT ", r#" FORMTEXT \* MERGEFORMAT "#)
+            .replace("w:", "q:")
+            .replace("<q:bookmarkEnd", "<z:bookmarkEnd");
+        let part = format!(
+            r#"<w:document xmlns:w="{0}" xmlns:q="{0}" xmlns:z="{0}" xmlns:x="urn:opaque"><w:body><w:p x:keep="yes">{raw}<x:opaque/></w:p></w:body></w:document>"#,
+            crate::namespace::W_NS
+        );
+        let document = crate::document::CT_Document::from_xml(part.as_bytes()).unwrap();
+        let p = document.body.paragraphs().next().unwrap();
+        assert_eq!(p.runs.len(), 1);
+        let RunContent::Field(f) = &p.runs[0].content[0] else {
+            panic!("aliased instruction owner")
+        };
+        assert_eq!(f.instruction.switches.len(), 1);
+        let xml = serialized_paragraph(p);
+        assert!(xml.contains(&raw));
+        let reopen = format!(
+            r#"<w:document xmlns:w="{}"><w:body>{xml}</w:body></w:document>"#,
+            crate::namespace::W_NS
+        );
+        let document = crate::document::CT_Document::from_xml(reopen.as_bytes()).unwrap();
+        assert_eq!(
+            document
+                .body
+                .paragraphs()
+                .next()
+                .unwrap()
+                .bookmark_markers
+                .len(),
+            2
+        );
+        for prefix in ["w", "w14", "w15", "r", "mc", "wp"] {
+            let body =
+                native_legacy_ordinary_instruction("DATE", "currentTime", "", "inner", "outer")
+                    .replace("w:", "q:");
+            let p = CT_P::from_xml_fragment(
+                format!(
+                    r#"<q:p xmlns:q="{}" xmlns:{prefix}="urn:foreign">{body}</q:p>"#,
+                    crate::namespace::W_NS
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            assert!(
+                p.runs
+                    .iter()
+                    .flat_map(|r| &r.content)
+                    .all(|c| !matches!(c, RunContent::Field(_))),
+                "{prefix}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_legacy_ordinary_children_keep_typed_run_sidecars_outside_projection() {
+        let alternate = alternate_content_shape_run();
+        let wrapper = &alternate
+            [alternate.find("<mc:AlternateContent>").unwrap()..alternate.rfind("</w:r>").unwrap()];
+        let rule = r#"<w:r><w:pict xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><v:rect o:hr="t"/></w:pict></w:r>"#;
+        for instruction_region in [false, true] {
+            let raw = if instruction_region {
+                native_legacy_ordinary_instruction("DATE", "currentTime", "", "inner", "outer")
+            } else {
+                native_legacy_ordinary_result("DATE", "currentTime", "", "outer")
+            };
+            let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#;
+            let leaf = if instruction_region {
+                r#"<w:r><w:rPr><w:noProof/></w:rPr><w:instrText>inner</w:instrText></w:r>"#
+            } else {
+                r#"<w:r><w:rPr><w:b/></w:rPr><w:t>outer</w:t></w:r>"#
+            };
+            for inside_child in [false, true] {
+                let target = if inside_child { leaf } else { begin };
+                for (source, drawings, rules) in [(alternate, 1, 0), (rule, 0, 1)] {
+                    let xml = raw.replacen(target, &format!("{source}{target}"), 1);
+                    assert_ne!(xml, raw);
+                    let p = parse_paragraph(&xml);
+                    assert!(
+                        !p.runs
+                            .iter()
+                            .flat_map(|run| &run.content)
+                            .any(|c| matches!(c,RunContent::Field(f) if f.legacy_form.is_some())),
+                        "typed owner collapsed: instruction={instruction_region}, child={inside_child}"
+                    );
+                    assert_eq!(
+                        p.runs.iter().map(|r| r.alt_drawings.len()).sum::<usize>(),
+                        drawings
+                    );
+                    assert_eq!(
+                        p.runs
+                            .iter()
+                            .flat_map(|r| &r.extra_xml_positions)
+                            .filter(|position| CT_R::raw_child_is_legacy_horizontal_rule(
+                                **position
+                            ))
+                            .count(),
+                        rules
+                    );
+                    if drawings == 1 {
+                        let drawing = p.runs.iter().flat_map(|r| &r.alt_drawings).next().unwrap();
+                        let shape = drawing.anchor.as_ref().unwrap().shape.as_ref().unwrap();
+                        let body = shape.text_body.as_ref().unwrap();
+                        let crate::document::BodyContent::Paragraph(text) = &body.content[0] else {
+                            panic!("typed text box")
+                        };
+                        assert_eq!(text.text(), "boxed");
+                    }
+                    let output = serialized_paragraph(&p);
+                    let retained = if drawings == 1 {
+                        wrapper
+                    } else {
+                        rule.strip_prefix("<w:r>")
+                            .unwrap()
+                            .strip_suffix("</w:r>")
+                            .unwrap()
+                    };
+                    assert_eq!(output.matches(retained).count(), 1);
+                    assert_eq!(output.matches("<w:bookmarkStart ").count(), 1);
+                    assert_eq!(output.matches("<w:bookmarkEnd ").count(), 1);
+                }
+            }
+            for opaque in [
+                r#"<w:r><x:opaque xmlns:x="urn:opaque">keep</x:opaque></w:r>"#,
+                r#"<w:r><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x="urn:opaque"><mc:Choice Requires="x"><x:opaque/></mc:Choice><mc:Fallback><x:other/></mc:Fallback></mc:AlternateContent></w:r>"#,
+            ] {
+                let xml = raw.replacen(begin, &format!("{opaque}{begin}"), 1);
+                let p = parse_paragraph(&xml);
+                assert!(
+                    matches!(p.runs[0].content.first(),Some(RunContent::Field(f)) if f.legacy_form.is_some())
+                );
+                assert!(
+                    serialized_paragraph(&p).contains(opaque),
+                    "opaque source must stay eligible and exact"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_legacy_instruction_replacement_cannot_drop_physical_bookmark() {
+        assert!(
+            !source_contains_own_bookmark(
+                br#"<x:bookmarkStart xmlns:x="urn:foreign" x:name="Legacy"/>"#,
+                &[],
+                "Legacy"
+            )
+            .unwrap()
+        );
+        let alias = format!(
+            r#"<q:bookmarkStart xmlns:q="{}" q:name="Legacy"/>"#,
+            crate::namespace::W_NS
+        );
+        assert!(source_contains_own_bookmark(alias.as_bytes(), &[], "Legacy").unwrap());
+        let raw = native_legacy_ordinary_instruction("DATE", "currentTime", "", "inner", "outer");
+        let mut paragraph = parse_paragraph(&raw);
+        assert_eq!(paragraph.runs.len(), 1);
+        let RunContent::Field(parent) = &mut paragraph.runs[0].content[0] else {
+            panic!("instruction owner")
+        };
+        parent.instruction.arguments[0] = FieldArgument::Nested(Box::new(Field::new("DATE", "")));
+        let invalid = parent.clone();
+        assert!(
+            parent
+                .set_legacy_form_value(LegacyFormFieldValue::Text("replacement".into()))
+                .is_err()
+        );
+        assert_eq!(
+            *parent, invalid,
+            "checked literal publication refuses before changing the owner"
+        );
+        let mut writer = Writer::new(Vec::new());
+        assert!(
+            paragraph.to_xml(&mut writer).is_err(),
+            "canonical replacement must refuse rather than drop its retained own bookmark"
+        );
+    }
+
+    #[test]
+    fn native_named_legacy_text_fields_keep_ordinary_result_children() {
+        for (instruction, subtype, default, display, expected_default) in [
+            (r#"TIME \@ "HH:mm:ss""#, "currentDate", "", "12:34:56", None),
+            (
+                r#"DATE \@ "yyyy-MM-dd""#,
+                "currentTime",
+                "",
+                "2026-10-26",
+                None,
+            ),
+            (
+                "=2+3",
+                "calculated",
+                r#"<w:default w:val="=2+3"/>"#,
+                "5.00",
+                Some(LegacyFormFieldValue::Text("=2+3".into())),
+            ),
+        ] {
+            let raw = native_legacy_ordinary_result(instruction, subtype, default, display);
+            let prefix = concat!(
+                r#"<w:sdt><w:sdtContent><w:r><w:t>lead</w:t></w:r></w:sdtContent></w:sdt>"#,
+                r#"<w:del w:id="9" w:author="Ada"><w:r><w:delText>gone</w:delText></w:r></w:del>"#,
+                r#"<w:r><w:t>before</w:t></w:r>"#
+            );
+            let mut paragraph =
+                parse_paragraph(&format!("{prefix}{raw}<w:r><w:t>after</w:t></w:r>"));
+            assert_eq!(paragraph.runs.len(), 3, "{instruction}");
+            let RunContent::Field(parent) = &mut paragraph.runs[1].content[0] else {
+                panic!("Q25 outer legacy field not projected: {instruction}")
+            };
+            assert_eq!(
+                parent.legacy_form_value().unwrap(),
+                Some(LegacyFormFieldValue::Text(display.into()))
+            );
+            assert_eq!(
+                parent.legacy_form_default_value().unwrap(),
+                expected_default
+            );
+            assert_eq!(parent.nested_fields_in_source_order().len(), 0);
+            assert_eq!(parent.cached_fields_in_source_order().len(), 1);
+            let source = parent.source_owner_id();
+            let child = parent.cached_fields_in_source_order()[0].source_owner_id();
+            assert!(source.is_some() && child.is_some() && source != child);
+            let initial = serialized_paragraph(&paragraph);
+            assert!(
+                initial.contains(&raw),
+                "untouched physical field source changed: {instruction}"
+            );
+            let check = |paragraph: &CT_P| {
+                assert_eq!(
+                    paragraph
+                        .bookmark_markers
+                        .iter()
+                        .map(BookmarkMarker::run_index)
+                        .collect::<Vec<_>>(),
+                    [1, 2]
+                );
+                assert_eq!(
+                    paragraph
+                        .bookmark_markers
+                        .iter()
+                        .map(BookmarkMarker::projected_run_index)
+                        .collect::<Vec<_>>(),
+                    [2, 3]
+                );
+                assert_eq!(
+                    paragraph
+                        .bookmark_markers
+                        .iter()
+                        .map(BookmarkMarker::tracked_run_index)
+                        .collect::<Vec<_>>(),
+                    [3, 4]
+                );
+                let xml = serialized_paragraph(paragraph);
+                assert_eq!(xml.matches("<w:bookmarkStart ").count(), 1);
+                assert_eq!(xml.matches("<w:bookmarkEnd ").count(), 1);
+                xml
+            };
+            check(&paragraph);
+            let RunContent::Field(parent) = &mut paragraph.runs[1].content[0] else {
+                unreachable!()
+            };
+            parent
+                .set_legacy_form_value(LegacyFormFieldValue::Text(display.into()))
+                .unwrap();
+            assert_eq!(parent.source_owner_id(), source);
+            assert_eq!(
+                parent.cached_fields_in_source_order()[0].source_owner_id(),
+                child
+            );
+            assert_eq!(
+                serialized_paragraph(&paragraph),
+                initial,
+                "same-current is a byte no-op"
+            );
+            let RunContent::Field(parent) = &mut paragraph.runs[1].content[0] else {
+                unreachable!()
+            };
+            parent.cached_field_mut(0).unwrap().cached_result = "child changed".into();
+            parent.refresh_cached_field_projection();
+            assert_eq!(parent.source_owner_id(), source);
+            assert_eq!(
+                parent.cached_fields_in_source_order()[0].source_owner_id(),
+                child
+            );
+            assert_eq!(
+                parent.legacy_form_value().unwrap(),
+                Some(LegacyFormFieldValue::Text("child changed".into()))
+            );
+            assert_eq!(
+                parent.legacy_form_default_value().unwrap(),
+                expected_default
+            );
+            assert!(check(&paragraph).contains("child changed"));
+            let RunContent::Field(parent) = &mut paragraph.runs[1].content[0] else {
+                unreachable!()
+            };
+            parent
+                .set_legacy_form_value(LegacyFormFieldValue::Text("literal\tline\nnext".into()))
+                .unwrap();
+            assert_eq!(
+                parent.legacy_form_value().unwrap(),
+                Some(LegacyFormFieldValue::Text("literal\tline\nnext".into()))
+            );
+            assert_eq!(
+                parent.legacy_form_default_value().unwrap(),
+                expected_default
+            );
+            let xml = check(&paragraph);
+            assert_eq!(
+                xml.matches("fldCharType=\"begin\"").count(),
+                1,
+                "explicit literal assignment removes the ordinary result child"
+            );
+            let part = format!(
+                r#"<w:document xmlns:w="{}"><w:body>{xml}</w:body></w:document>"#,
+                crate::namespace::W_NS
+            );
+            let reopened = crate::document::CT_Document::from_xml(part.as_bytes()).unwrap();
+            let p = reopened.body.paragraphs().next().unwrap();
+            let RunContent::Field(parent) = &p.runs[1].content[0] else {
+                panic!("reopened field")
+            };
+            assert_eq!(
+                parent.legacy_form_value().unwrap(),
+                Some(LegacyFormFieldValue::Text("literal\tline\nnext".into()))
+            );
+            assert_eq!(
+                parent.legacy_form_default_value().unwrap(),
+                expected_default
+            );
+            check(p);
+        }
+    }
+
+    #[test]
+    fn native_legacy_result_parent_override_and_child_identity_remain_authoritative() {
+        let raw = native_legacy_ordinary_result(
+            "DATE",
+            "currentTime",
+            r#"<w:default w:val="keep"/>"#,
+            "stored",
+        );
+        let mut paragraph = parse_paragraph(&raw);
+        let RunContent::Field(parent) = &mut paragraph.runs[0].content[0] else {
+            unreachable!()
+        };
+        let source = parent.source_owner_id();
+        let child = parent.cached_fields_in_source_order()[0].source_owner_id();
+        parent.cached_result = "parent override".into();
+        parent.cached_field_mut(0).unwrap().cached_result = "child changed".into();
+        assert_eq!(
+            parent.legacy_form_value().unwrap(),
+            Some(LegacyFormFieldValue::Text("parent override".into()))
+        );
+        assert_eq!(parent.source_owner_id(), source);
+        assert_eq!(
+            parent.cached_fields_in_source_order()[0].source_owner_id(),
+            child
+        );
+        assert_eq!(
+            parent.legacy_form_default_value().unwrap(),
+            Some(LegacyFormFieldValue::Text("keep".into()))
+        );
+        let xml = serialized_paragraph(&paragraph);
+        assert!(xml.contains("parent override"));
+        assert!(!xml.contains("child changed"));
+        assert_eq!(xml.matches("fldCharType=\"begin\"").count(), 1);
+        assert_eq!(xml.matches("<w:bookmarkStart ").count(), 1);
+        assert_eq!(xml.matches("<w:bookmarkEnd ").count(), 1);
+
+        let mut paragraph = parse_paragraph(&raw);
+        let RunContent::Field(parent) = &mut paragraph.runs[0].content[0] else {
+            unreachable!()
+        };
+        *parent.cached_field_mut(0).unwrap() = Field::new("DATE", "stored");
+        let mut writer = Writer::new(Vec::new());
+        assert!(
+            paragraph.to_xml(&mut writer).is_err(),
+            "a new child cannot inherit the parsed child's source identity"
+        );
+    }
+
+    #[test]
+    fn native_legacy_result_nesting_keeps_excluded_shapes_untyped() {
+        let raw = native_legacy_ordinary_result("DATE", "currentTime", "", "now");
+        let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#;
+        let child = concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> DATE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:rPr><w:b/></w:rPr><w:t>now</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+        );
+        assert!(raw.contains(child));
+        let leaf = r#"<w:r><w:rPr><w:b/></w:rPr><w:t>now</w:t></w:r>"#;
+        let cases=[
+            ("multiple",raw.replace(child,&format!("{child}{child}"))),
+            ("deep",raw.replacen(leaf,child,1)),
+            ("simple",raw.replace(child,r#"<w:fldSimple w:instr=" DATE "><w:r><w:t>now</w:t></w:r></w:fldSimple>"#)),
+            ("ordinary kind",raw.replace(" DATE "," PAGE ")),
+            ("instruction operand",raw.replace(" FORMTEXT ",&format!(" FORMTEXT </w:instrText></w:r>{child}<w:r><w:instrText> "))),
+            ("nested legacy",raw.replacen(begin,r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Inner"/><w:textInput/></w:ffData></w:fldChar></w:r>"#,1)),
+            ("malformed child owner",raw.replacen(begin,r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:textInput/><w:checkBox><w:sizeAuto/></w:checkBox></w:ffData></w:fldChar></w:r>"#,1)),
+            ("checkbox outer",raw.replace(r#"<w:textInput><w:type w:val="currentTime"/></w:textInput>"#,r#"<w:checkBox><w:sizeAuto/></w:checkBox>"#)),
+            ("list outer",raw.replace(r#"<w:textInput><w:type w:val="currentTime"/></w:textInput>"#,r#"<w:ddList><w:listEntry w:val="now"/></w:ddList>"#)),
+            ("child bookmark",raw.replace(leaf,&format!(r#"<w:bookmarkStart w:id="8" w:name="Other"/>{leaf}<w:bookmarkEnd w:id="8"/>"#))),
+            ("child note",raw.replace(leaf,r#"<w:r><w:footnoteReference w:id="1"/></w:r>"#)),
+            ("child comment",raw.replace(leaf,&format!(r#"<w:commentRangeStart w:id="8"/>{leaf}<w:commentRangeEnd w:id="8"/>"#))),
+        ];
+        for (name, raw) in cases {
+            let paragraph = parse_paragraph(&raw);
+            assert!(!paragraph.runs.iter().flat_map(|r| &r.content).any(|c| matches!(c,RunContent::Field(field) if field.legacy_form.as_ref().is_some_and(|form| form.name.as_deref()==Some("Legacy")))),"admitted outer legacy owner: {name}");
+            let xml = serialized_paragraph(&paragraph);
+            assert_eq!(
+                xml.matches("bookmarkStart").count(),
+                raw.matches("bookmarkStart").count(),
+                "{name}"
+            );
+            assert_eq!(
+                xml.matches("bookmarkEnd").count(),
+                raw.matches("bookmarkEnd").count(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_legacy_ordinary_result_keeps_alias_frame_and_declines_conflicts() {
+        let raw = native_legacy_ordinary_result("DATE", "currentTime", "", "now")
+            .replace("w:", "q:")
+            .replace("<q:bookmarkEnd", "<z:bookmarkEnd");
+        let word = crate::namespace::W_NS;
+        let input = format!(
+            r#"<q:p xmlns:q="{word}" xmlns:z="{word}" xmlns:x="urn:producer">{raw}<x:keep x:val="opaque"/></q:p>"#
+        );
+        let paragraph = CT_P::from_xml_fragment(input.as_bytes()).unwrap();
+        assert!(matches!(paragraph.runs[0].content[0], RunContent::Field(_)));
+        let xml = serialized_paragraph(&paragraph);
+        assert!(xml.contains(&raw));
+        assert!(xml.contains(r#"<x:keep x:val="opaque"/>"#));
+        let part = format!(r#"<w:document xmlns:w="{word}"><w:body>{xml}</w:body></w:document>"#);
+        let reopened = crate::document::CT_Document::from_xml(part.as_bytes()).unwrap();
+        assert_eq!(
+            reopened
+                .body
+                .paragraphs()
+                .next()
+                .unwrap()
+                .bookmark_markers
+                .len(),
+            2
+        );
+        for prefix in ["w", "w14", "w15", "r", "mc", "wp"] {
+            let input = format!(
+                r#"<q:p xmlns:q="{word}" xmlns:z="{word}" xmlns:{prefix}="urn:producer">{raw}</q:p>"#
+            );
+            let paragraph = CT_P::from_xml_fragment(input.as_bytes()).unwrap();
+            assert!(
+                !paragraph
+                    .runs
+                    .iter()
+                    .flat_map(|r| &r.content)
+                    .any(|c| matches!(c, RunContent::Field(_))),
+                "{prefix}"
+            );
+        }
+    }
+
     #[test]
     fn partial_or_ambiguous_legacy_bookmarks_keep_the_untyped_source() {
         let raw = concat!(
@@ -20431,8 +21255,8 @@ mod tests {
             raw.replace(
                 "<w:r><w:t>now</w:t></w:r>",
                 concat!(
-                    r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
-                    r#"<w:r><w:instrText> DATE </w:instrText></w:r>"#,
+                    r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Inner"/><w:textInput/></w:ffData></w:fldChar></w:r>"#,
+                    r#"<w:r><w:instrText> FORMTEXT </w:instrText></w:r>"#,
                     r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
                     r#"<w:r><w:t>now</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
                 ),

@@ -9306,6 +9306,73 @@ def test_native_named_legacy_fields_keep_frozen_and_reopened_defaults(
         assert document.legacy_form_fields()[0].default_value == default
 
 
+@pytest.mark.parametrize("instruction_region", [False, True])
+@pytest.mark.parametrize(
+    "instruction,subtype,default_xml,current,default",
+    [
+        ('TIME \\@ "HH:mm:ss"', "currentDate", "", "12:34:56", None),
+        ('DATE \\@ "yyyy-MM-dd"', "currentTime", "", "2026-10-26", None),
+        ("=2+3", "calculated", '<w:default w:val="=2+3"/>', "5.00", "=2+3"),
+    ],
+)
+def test_native_legacy_result_fields_keep_inventory_defaults_and_literal_assignments(
+    instruction, subtype, default_xml, current, default, instruction_region
+):
+    import rdocx
+
+    xml = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p>'
+        '<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Legacy"/>'
+        f'<w:textInput><w:type w:val="{subtype}"/>{default_xml}</w:textInput></w:ffData></w:fldChar></w:r>'
+        '<w:bookmarkStart w:id="7" w:name="Legacy"/><w:r><w:instrText> FORMTEXT </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        f'<w:r><w:instrText> {instruction} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        f'<w:r><w:rPr><w:b/></w:rPr><w:t>{current}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        f'<w:r><w:instrText>{current}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        '<w:bookmarkEnd w:id="7"/></w:p><w:sectPr/></w:body></w:document>'
+    ).encode()
+    if instruction_region:
+        separator = b'<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        begin = b'<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        xml = xml.replace(separator + begin, begin, 1)
+        inner = "5" if instruction == "=2+3" else current
+        xml = xml.replace(f"<w:t>{current}</w:t>".encode(), f"<w:instrText>{inner}</w:instrText>".encode(), 1)
+        xml = xml.replace(f"<w:r><w:instrText>{current}</w:instrText></w:r>".encode(), separator + f"<w:r><w:t>{current}</w:t></w:r>".encode(), 1)
+    document = _fx261_replace_part(rdocx.Document(), "word/document.xml", lambda _: xml)
+    fields = document.legacy_form_fields()
+    assert len(fields) == 1
+    held = fields[0]
+    paragraph = document.paragraphs[0]
+    assert held.type == "text" and held.value == current and held.default_value == default
+    before = document.to_bytes()
+    revision = document.revisions
+    document.set_legacy_form_field_value("Legacy", current)
+    document.set_legacy_form_field_value(None, current, source_part=held.source_part, ordinal=held.ordinal)
+    assert document.to_bytes() == before and document.revisions == revision
+    assert paragraph.text == current
+    with pytest.raises(TypeError):
+        document.set_legacy_form_field_value("Legacy", True)
+    with pytest.raises(rdocx.XmlError):
+        document.set_legacy_form_field_value("Legacy", "invalid\x01")
+    assert document.to_bytes() == before and document.revisions == revision
+    assert paragraph.text == current
+    reopened = rdocx.Document.from_bytes(before)
+    assert reopened.legacy_form_fields()[0].value == current
+    assert reopened.legacy_form_fields()[0].default_value == default
+    assert reopened.part_xml("/word/document.xml").count('fldCharType="begin"') == 2
+    document.set_legacy_form_field_value(None, "literal", source_part=held.source_part, ordinal=held.ordinal)
+    fresh = document.legacy_form_fields()[0]
+    assert fresh.value == "literal" and fresh.default_value == default
+    assert held.value == current and held.default_value == default
+    raw = document.part_xml("/word/document.xml")
+    assert raw.count('fldCharType="begin"') == (2 if instruction_region else 1)
+    if instruction_region:
+        assert f"<w:instrText>{inner}</w:instrText>" in raw
+    assert raw.count("<w:bookmarkStart ") == raw.count("<w:bookmarkEnd ") == 1
+    final = rdocx.Document.from_bytes(document.to_bytes()).legacy_form_fields()
+    assert len(final) == 1 and final[0].value == "literal" and final[0].default_value == default
+
+
 def test_legacy_field_factories_and_attachment_refuse_atomically():
     import rdocx
     document = rdocx.Document()

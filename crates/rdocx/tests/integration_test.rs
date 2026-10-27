@@ -14482,6 +14482,256 @@ mod legacy_forms_and_building_blocks {
         Document::from_bytes(&package_bytes(package)).unwrap()
     }
 
+    fn native_named_child_document(
+        name: &str,
+        instruction: &str,
+        display: &str,
+        bookmarked: bool,
+        locked: bool,
+        instruction_region: bool,
+    ) -> Document {
+        let mut source = native_named_form_document(name);
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap())).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        let needle = r#"<w:r><w:rPr><w:b/></w:rPr><w:t>now</w:t></w:r>"#;
+        assert_eq!(xml.matches(needle).count(), 1);
+        let lock = if locked { r#" w:fldLock="1""# } else { "" };
+        let child = format!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"{lock}/></w:r><w:r><w:instrText> {instruction} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>{display}</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:instrText>{display}</w:instrText></w:r>"#
+        );
+        let mut xml = if instruction_region {
+            let separator = r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
+            let child = format!(
+                r#"<w:r><w:fldChar w:fldCharType="begin"{lock}/></w:r><w:r><w:instrText> {instruction} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:noProof/></w:rPr><w:instrText>inner</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+            );
+            xml.replacen(separator, &format!("{child}{separator}"), 1)
+                .replace(
+                    needle,
+                    &format!(r#"<w:r><w:rPr><w:b/></w:rPr><w:t>{display}</w:t></w:r>"#),
+                )
+        } else {
+            xml.replace(needle, &child)
+        };
+        if !bookmarked {
+            xml = xml
+                .replace(
+                    &format!(r#"<w:bookmarkStart w:id="7" w:name="{name}"/>"#),
+                    "",
+                )
+                .replace(r#"<w:bookmarkEnd w:id="7"/>"#, "");
+        }
+        package.set_part("/word/document.xml", xml.into_bytes());
+        Document::from_bytes(&package_bytes(package)).unwrap()
+    }
+
+    #[test]
+    fn native_named_legacy_result_fields_keep_public_defaults_updates_and_bookmarks() {
+        for instruction_region in [false, true] {
+            for instruction in [r#"TIME \@ "HH:mm:ss""#, r#"DATE \@ "yyyy-MM-dd""#, "= 2+3"] {
+                for locked in [false, true] {
+                    for now in [
+                        None,
+                        Some(rdocx::FieldDateTime {
+                            year: 2026,
+                            month: 10,
+                            day: 27,
+                            hour: 12,
+                            minute: 34,
+                            second: 56,
+                        }),
+                    ] {
+                        let mut named = native_named_child_document(
+                            "Legacy",
+                            instruction,
+                            "stored",
+                            true,
+                            locked,
+                            instruction_region,
+                        );
+                        let mut control = native_named_child_document(
+                            "Legacy",
+                            instruction,
+                            "stored",
+                            false,
+                            locked,
+                            instruction_region,
+                        );
+                        let held = named.legacy_form_fields_with_defaults().unwrap();
+                        assert_eq!(held.len(), 1);
+                        assert_eq!(held[0].0.value, LegacyFormFieldValue::Text("stored".into()));
+                        assert_eq!(held[0].1, Some(LegacyFormFieldValue::Text("keep".into())));
+                        let context = rdocx::FieldEvaluationContext {
+                            now,
+                            ..Default::default()
+                        };
+                        let outcome = |d: &Document| {
+                            d.evaluate_fields(&context)
+                                .unwrap()
+                                .into_iter()
+                                .filter(|f| f.instruction.trim() == instruction)
+                                .map(|f| format!("{:?}", f.outcome))
+                                .collect::<Vec<_>>()
+                        };
+                        assert_eq!(
+                            outcome(&named),
+                            outcome(&control),
+                            "{instruction} locked={locked}"
+                        );
+                        assert_eq!(
+                            outcome(&named).len(),
+                            1,
+                            "ordinary child must be visited once"
+                        );
+                        named.update_fields(&context).unwrap();
+                        control.update_fields(&context).unwrap();
+                        let fresh = named.legacy_form_fields_with_defaults().unwrap();
+                        assert_eq!(fresh, control.legacy_form_fields_with_defaults().unwrap());
+                        assert_eq!(fresh[0].1, held[0].1);
+                        if instruction_region || locked {
+                            assert_eq!(fresh[0].0.value, held[0].0.value);
+                        }
+                        if !instruction_region
+                            && !locked
+                            && (context.now.is_some() || instruction.starts_with('='))
+                        {
+                            assert_ne!(
+                                fresh[0].0.value, held[0].0.value,
+                                "ordinary child update must actually change cache"
+                            );
+                        }
+                        assert_eq!(
+                            held[0].0.value,
+                            LegacyFormFieldValue::Text("stored".into()),
+                            "owned snapshot stays old"
+                        );
+                        let LegacyFormFieldValue::Text(current) = &fresh[0].0.value else {
+                            unreachable!()
+                        };
+                        assert_eq!(named.bookmarks()[0].text(), current);
+                        // REF reads the document snapshot. A second call compares
+                        // its cache against the already materialized child result.
+                        named.update_fields(&context).unwrap();
+                        let mut references = Vec::new();
+                        for run in named.paragraph(1).unwrap().runs() {
+                            for item in run.items() {
+                                if let rdocx::RunItemRef::Field(f) = item {
+                                    references.push(f.cached_result().to_owned());
+                                }
+                            }
+                        }
+                        assert_eq!(references.as_slice(), std::slice::from_ref(current));
+                        let bytes = named.to_bytes().unwrap();
+                        let reopened = Document::from_bytes(&bytes).unwrap();
+                        assert_eq!(reopened.legacy_form_fields_with_defaults().unwrap(), fresh);
+                        assert_eq!(reopened.bookmarks()[0].text(), current);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_named_legacy_result_parent_assignments_are_atomic_literal_replacements() {
+        for instruction_region in [false, true] {
+            for instruction in ["TIME", "DATE", "=2+3"] {
+                let mut document = native_named_child_document(
+                    "Legacy",
+                    instruction,
+                    "stored",
+                    true,
+                    false,
+                    instruction_region,
+                );
+                let before = document.to_bytes().unwrap();
+                document
+                    .set_legacy_form_field_value(
+                        "/word/document.xml",
+                        0,
+                        LegacyFormFieldValue::Text("stored".into()),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    document.to_bytes().unwrap(),
+                    before,
+                    "same-current byte no-op"
+                );
+                assert!(
+                    document
+                        .set_legacy_form_field_value(
+                            "/word/document.xml",
+                            0,
+                            LegacyFormFieldValue::Checked(false)
+                        )
+                        .is_err()
+                );
+                assert_eq!(document.to_bytes().unwrap(), before, "wrong kind is atomic");
+                document
+                    .set_legacy_form_field_value(
+                        "/word/document.xml",
+                        0,
+                        LegacyFormFieldValue::Text("literal".into()),
+                    )
+                    .unwrap();
+                // Qualify literal publication before a separate ordinary update,
+                // whose existing policy may change a child dirty marker.
+                let assigned_bytes = document.to_bytes().unwrap();
+                let assigned_package =
+                    OpcPackage::from_reader(std::io::Cursor::new(assigned_bytes)).unwrap();
+                let assigned_xml =
+                    std::str::from_utf8(assigned_package.get_part("/word/document.xml").unwrap())
+                        .unwrap();
+                if instruction_region {
+                    let child = format!(
+                        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> {instruction} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:noProof/></w:rPr><w:instrText>inner</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+                    );
+                    let original =
+                        OpcPackage::from_reader(std::io::Cursor::new(before.as_slice())).unwrap();
+                    let original =
+                        std::str::from_utf8(original.get_part("/word/document.xml").unwrap())
+                            .unwrap();
+                    assert!(original.contains(&child));
+                    assert!(
+                        assigned_xml.contains(&child),
+                        "literal parent preserves the entire instruction configuration: expected {child}, got {assigned_xml}"
+                    );
+                }
+                document
+                    .update_fields(&rdocx::FieldEvaluationContext::default())
+                    .unwrap();
+                let fields = document.legacy_form_fields_with_defaults().unwrap();
+                assert_eq!(
+                    fields[0].0.value,
+                    LegacyFormFieldValue::Text("literal".into())
+                );
+                assert_eq!(fields[0].1, Some(LegacyFormFieldValue::Text("keep".into())));
+                assert_eq!(document.bookmarks()[0].text(), "literal");
+                let bytes = document.to_bytes().unwrap();
+                let package = OpcPackage::from_reader(std::io::Cursor::new(bytes.clone())).unwrap();
+                let xml =
+                    std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+                assert_eq!(
+                    xml.matches("fldCharType=\"begin\"").count(),
+                    if instruction_region { 2 } else { 1 },
+                    "only a result-region child is removed by literal replacement"
+                );
+                if instruction_region {
+                    assert!(xml.contains("<w:instrText>inner</w:instrText>"));
+                    assert!(xml.contains(&format!("<w:instrText> {instruction} </w:instrText>")));
+                }
+                assert_eq!(xml.matches("<w:bookmarkStart ").count(), 1);
+                assert_eq!(xml.matches("<w:bookmarkEnd ").count(), 1);
+                assert_eq!(
+                    Document::from_bytes(&bytes)
+                        .unwrap()
+                        .legacy_form_fields_with_defaults()
+                        .unwrap(),
+                    fields
+                );
+            }
+        }
+    }
+
     #[test]
     fn native_named_legacy_bookmarks_keep_current_defaults_and_reference_text() {
         let mut document = native_named_form_document("Legacy");
@@ -14531,65 +14781,71 @@ mod legacy_forms_and_building_blocks {
 
     #[test]
     fn native_named_legacy_rich_fragment_remaps_both_markers_before_authored_bookmarks() {
-        let mut source = native_named_form_document("MailMerge1");
-        let source_bytes = source.to_bytes().unwrap();
-        let mut package = base_package();
-        package.set_part("/word/document.xml", format!(
+        for nested in [0, 1, 2] {
+            let mut source = if nested != 0 {
+                native_named_child_document("MailMerge1", "DATE", "now", true, false, nested == 2)
+            } else {
+                native_named_form_document("MailMerge1")
+            };
+            let source_bytes = source.to_bytes().unwrap();
+            let mut package = base_package();
+            package.set_part("/word/document.xml", format!(
             r#"<w:document xmlns:w="{WORD_NS}"><w:body><w:p><w:fldSimple w:instr=" MERGEFIELD Insert "><w:r><w:t>Insert</w:t></w:r></w:fldSimple></w:p><w:p><w:r><w:t>tail</w:t></w:r></w:p><w:sectPr/></w:body></w:document>"#
         ).into_bytes());
-        let mut template = Document::from_bytes(&package_bytes(package)).unwrap();
-        let existing = template
-            .add_bookmark(
-                "Tail",
-                rdocx::RunRange {
-                    start: rdocx::RunPosition {
-                        body_index: 1,
-                        run_index: 0,
+            let mut template = Document::from_bytes(&package_bytes(package)).unwrap();
+            let existing = template
+                .add_bookmark(
+                    "Tail",
+                    rdocx::RunRange {
+                        start: rdocx::RunPosition {
+                            body_index: 1,
+                            run_index: 0,
+                        },
+                        end: rdocx::RunPosition {
+                            body_index: 1,
+                            run_index: 1,
+                        },
                     },
-                    end: rdocx::RunPosition {
-                        body_index: 1,
-                        run_index: 1,
+                )
+                .unwrap();
+            assert_eq!(existing, 0);
+            let mut record = rdocx::MailMergeRecord::default();
+            record.values.insert(
+                "Insert".into(),
+                rdocx::MailMergeValue::Fragment(source_bytes),
+            );
+            let mut destination = template
+                .mail_merge_rich(
+                    &rdocx::MailMergeData {
+                        records: vec![record],
+                        sources: Default::default(),
                     },
-                },
-            )
-            .unwrap();
-        assert_eq!(existing, 0);
-        let mut record = rdocx::MailMergeRecord::default();
-        record.values.insert(
-            "Insert".into(),
-            rdocx::MailMergeValue::Fragment(source_bytes),
-        );
-        let mut destination = template
-            .mail_merge_rich(
-                &rdocx::MailMergeData {
-                    records: vec![record],
-                    sources: Default::default(),
-                },
-                None,
-            )
-            .unwrap()
-            .remove(0);
-        for _ in 0..2 {
-            let fields = destination.legacy_form_fields_with_defaults().unwrap();
-            assert_eq!(fields.len(), 1);
-            assert_eq!(fields[0].0.name.as_deref(), Some("MailMerge1"));
-            assert_eq!(fields[0].0.value, LegacyFormFieldValue::Text("now".into()));
-            assert_eq!(fields[0].1, Some(LegacyFormFieldValue::Text("keep".into())));
-            let bookmarks = destination.bookmarks();
-            assert_eq!(bookmarks.len(), 2);
-            assert!(bookmarks.iter().all(|bookmark| bookmark.issue().is_none()));
-            let imported = bookmarks
-                .iter()
-                .find(|bookmark| bookmark.name() == Some("MailMerge1"))
-                .unwrap();
-            let tail = bookmarks
-                .iter()
-                .find(|bookmark| bookmark.name() == Some("Tail"))
-                .unwrap();
-            assert_eq!((imported.id(), tail.id()), (Some(0), Some(1)));
-            assert_eq!(imported.text(), "now");
-            assert_eq!(tail.text(), "tail");
-            destination = Document::from_bytes(&destination.to_bytes().unwrap()).unwrap();
+                    None,
+                )
+                .unwrap()
+                .remove(0);
+            for _ in 0..2 {
+                let fields = destination.legacy_form_fields_with_defaults().unwrap();
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].0.name.as_deref(), Some("MailMerge1"));
+                assert_eq!(fields[0].0.value, LegacyFormFieldValue::Text("now".into()));
+                assert_eq!(fields[0].1, Some(LegacyFormFieldValue::Text("keep".into())));
+                let bookmarks = destination.bookmarks();
+                assert_eq!(bookmarks.len(), 2);
+                assert!(bookmarks.iter().all(|bookmark| bookmark.issue().is_none()));
+                let imported = bookmarks
+                    .iter()
+                    .find(|bookmark| bookmark.name() == Some("MailMerge1"))
+                    .unwrap();
+                let tail = bookmarks
+                    .iter()
+                    .find(|bookmark| bookmark.name() == Some("Tail"))
+                    .unwrap();
+                assert_eq!((imported.id(), tail.id()), (Some(0), Some(1)));
+                assert_eq!(imported.text(), "now");
+                assert_eq!(tail.text(), "tail");
+                destination = Document::from_bytes(&destination.to_bytes().unwrap()).unwrap();
+            }
         }
     }
 
