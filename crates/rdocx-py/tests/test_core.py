@@ -9558,9 +9558,79 @@ def _source_built_dense_form():
     return document, rules, assignments
 
 
+@pytest.mark.parametrize("name", [
+    "FormFieldRule",
+    "FormFieldAssignment",
+    "DocumentProtection",
+    "MailMergeSettings",
+    "MailMergeFieldMapping",
+    "MailMergeRecipient",
+    "MailMergePackageOptions",
+])
+def test_form_and_mail_merge_constructor_metadata_matches_abi(name):
+    import inspect
+    import sys
+    import rdocx
+
+    # PyO3 0.29 documents that abi3 class text signatures require CPython 3.10.
+    # This checks metadata only. The public behavioral tests run on both versions.
+    constructor = getattr(rdocx, name)
+    assert constructor is getattr(rdocx._rdocx, name)
+    assert name in rdocx.__all__
+    if sys.version_info[:2] == (3, 9):
+        assert constructor.__text_signature__ is None
+        with pytest.raises(ValueError, match="no signature found for builtin type"):
+            inspect.signature(constructor)
+    else:
+        # Required names, positional-or-keyword names, then optional defaults.
+        contracts = {
+            "FormFieldRule": (("target", "reset"), (), {"required": False}),
+            "FormFieldAssignment": (("target", "value"), (), {}),
+            "DocumentProtection": (("mode",), (), {
+                "enforcement": None, "formatting": None, "provider_type": None,
+                "algorithm_class": None, "algorithm_type": None,
+                "algorithm_sid": None, "spin_count": None, "hash": None, "salt": None,
+            }),
+            "MailMergeSettings": ((), (), {
+                "main_document_type": "formLetters", "link_to_query": None,
+                "data_type": "textFile", "connect_string": None, "query": None,
+                "do_not_suppress_blank_lines": None, "destination": None,
+                "address_field_name": None, "mail_subject": None,
+                "mail_as_attachment": None, "view_merged_data": None,
+                "active_record": None, "check_errors": None,
+            }),
+            "MailMergeFieldMapping": (
+                ("column", "source_name", "mapped_name"),
+                ("column", "source_name", "mapped_name"),
+                {"language": None, "dynamic_address": None},
+            ),
+            "MailMergeRecipient": (
+                ("column", "unique_tag"), ("column", "unique_tag"), {"active": True},
+            ),
+            "MailMergePackageOptions": (
+                ("source",), ("source",), {"settings": None, "mappings": (), "recipients": ()},
+            ),
+        }
+        required, positional, defaults = contracts[name]
+        assert constructor.__text_signature__
+        signature = inspect.signature(constructor)
+        assert list(signature.parameters) == [*required, *defaults]
+        for parameter_name, parameter in signature.parameters.items():
+            expected_kind = (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD if parameter_name in positional
+                else inspect.Parameter.KEYWORD_ONLY
+            )
+            assert parameter.kind is expected_kind
+            if parameter_name in required:
+                assert parameter.default is inspect.Parameter.empty
+            else:
+                expected_default = defaults[parameter_name]
+                assert type(parameter.default) is type(expected_default)
+                assert parameter.default == expected_default
+
+
 def test_form_rules_fill_reset_and_protect_public_api(tmp_path):
     # Basic public carriers stay. The dense half is public creation only.
-    import inspect
     import rdocx
 
     for name in (
@@ -9638,37 +9708,6 @@ def test_form_rules_fill_reset_and_protect_public_api(tmp_path):
     ):
         with pytest.raises(AttributeError):
             setattr(frozen, name, None)
-    rule_signature = inspect.signature(rdocx.FormFieldRule)
-    assert [item.kind for item in rule_signature.parameters.values()] == [
-        inspect.Parameter.KEYWORD_ONLY
-    ] * 3
-    assert rule_signature.parameters["required"].default is False
-    assignment_signature = inspect.signature(rdocx.FormFieldAssignment)
-    assert list(assignment_signature.parameters) == ["target", "value"]
-    assert all(
-        item.kind is inspect.Parameter.KEYWORD_ONLY
-        for item in assignment_signature.parameters.values()
-    )
-    protection_signature = inspect.signature(rdocx.DocumentProtection)
-    assert list(protection_signature.parameters) == [
-        "mode",
-        "enforcement",
-        "formatting",
-        "provider_type",
-        "algorithm_class",
-        "algorithm_type",
-        "algorithm_sid",
-        "spin_count",
-        "hash",
-        "salt",
-    ]
-    assert protection_signature.parameters["mode"].default is inspect.Parameter.empty
-    assert all(
-        protection_signature.parameters[name].default is None
-        for name in protection_signature.parameters
-        if name != "mode"
-    )
-    assert protection_signature.parameters["mode"].kind is inspect.Parameter.KEYWORD_ONLY
     for factory in (
         rdocx.FormFieldTarget,
         rdocx.FormFieldValue,
@@ -13172,16 +13211,6 @@ def test_mail_merge_package_authoring_round_trips_public_api():
     ):
         with pytest.raises(AttributeError):
             setattr(carrier, attribute, value)
-    signature = inspect.signature(rdocx.MailMergeSettings)
-    assert signature.parameters["main_document_type"].default == "formLetters"
-    assert signature.parameters["data_type"].default == "textFile"
-    assert signature.parameters["link_to_query"].default is None
-    assert inspect.signature(rdocx.MailMergeFieldMapping).parameters["language"].default is None
-    assert inspect.signature(rdocx.MailMergeRecipient).parameters["active"].default is True
-    options_signature = inspect.signature(rdocx.MailMergePackageOptions)
-    assert options_signature.parameters["settings"].default is None
-    assert options_signature.parameters["mappings"].default == ()
-    assert options_signature.parameters["recipients"].default == ()
     assert inspect.signature(rdocx.Document.prepare_mail_merge_data).parameters["policy"].default == "offline"
     document = rdocx.Document()
     document.set_mail_merge_package(options)
