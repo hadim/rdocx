@@ -11,6 +11,8 @@ An applicable visibility set or shape effect owns visibility independently of ma
 
 Native wipes reveal from the named edge and exits remove that edge. Their private evaluated source record projects an additive local_opacity_mask only while the public clip remains the evaluator-authored value. A changed or cleared clip disables that automatic mask. Other oriented and explicit clips remain authoritative. The qualified plain-paint alpha is clamp(8*p-7*u,0,1), complemented for exit, with exact start/stop endpoints. Outgoing fade retains its opacity overwrite behavior.
 
+Native qualification isolates an entrance wipe with fill=remove before later opacity and exit phases. A held wipe can mask those later properties in PowerPoint. The current evaluator does not qualify that interaction. F-X269 owns the explicit effect-composition follow-up, alongside the separate shadow domain work. Source-preserving timing import and export do not imply native compositing parity.
+
 Owner: `rpptx-oxml`, with the facade in `rpptx`.
 
 ## Parts

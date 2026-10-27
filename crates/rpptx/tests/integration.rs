@@ -22791,7 +22791,7 @@ fn powerpoint_timeline_oracle_source_bytes() -> Vec<u8> {
     let timing = format!(
         r#"<p:timing xmlns:p="{P_NS}"><p:tnLst><p:seq><p:cTn id="100" dur="4000"><p:childTnLst>
         <p:set><p:cBhvr><p:cTn id="101" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>
-        <p:animEffect transition="in" filter="wipe(left)"><p:cBhvr><p:cTn id="102" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl></p:cBhvr></p:animEffect>
+        <p:animEffect transition="in" filter="wipe(left)"><p:cBhvr><p:cTn id="102" dur="500" fill="remove"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl></p:cBhvr></p:animEffect>
         <p:anim from="1" to="0.5" calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="103" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl><p:attrNameLst><p:attrName>style.opacity</p:attrName></p:attrNameLst></p:cBhvr></p:anim>
         <p:par><p:cTn id="104" dur="1000"><p:childTnLst>
         <p:anim from="1" to="1.5" calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="105" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl><p:attrNameLst><p:attrName>ScaleX</p:attrName></p:attrNameLst></p:cBhvr></p:anim>

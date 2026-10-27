@@ -11,6 +11,8 @@ Backend controls cover translated/scaled masks, clips, colored and transparent b
 
 The animation oracle fixture explicitly suppresses inherited line and effects on every animated/control rectangle. It uses native visibility set and fractional opacity, independent ScaleX/ScaleY and degree rotation while preserving all existing cases, local/encoded times and thresholds. Historical shadowed failures remain evidence for the separate shadow qualification story. New source requires fresh independent native capture and trusted review. Successful local tests do not adopt pins or pass native gates.
 
+The canonical wipe releases its completed filter before the later opacity phases. A source-bound one-literal held/remove native control preserves all nine sample clocks and retains the held-source failure as explicit unsupported effect-composition evidence. Native reference admission still checks the fixed halo240 invariance and250 negative control independently. Neither a passing timeline SSIM nor a source change relaxes those assertions.
+
 ## Numbering-aware navigation regression
 
 One source-built multilevel document compares visible markers, TOC, numbered
