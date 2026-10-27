@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use oxml_chart::{render_chart, render_chart_placeholder};
 use oxml_drawing::color::{ColorChoice, ColorMap, ColorMapSlot, RgbColor, resolve_color};
@@ -3583,6 +3583,7 @@ fn apply_timeline_state(
             .entry(group_id)
             .or_insert_with(|| TimelineGroupGeometry::from_page_bounds(bounds));
     }
+    let mut diagnosed_group_wipes = HashSet::new();
     let shape_states = identities
         .iter()
         .zip(&mut slide.shapes)
@@ -3607,6 +3608,13 @@ fn apply_timeline_state(
                 let target_transform =
                     target_state.resolved_page_transform(geometry.center(), slide_size);
                 group_transform = target_transform.then(group_transform);
+                if target_state.local_opacity_mask((1.0, 1.0)).is_some()
+                    && diagnosed_group_wipes.insert(*group_id)
+                {
+                    state.diagnostics.push(Diagnostic {
+                        message: format!("group-target soft wipe {group_id} retains the flattened hard-clip fallback; soft masks qualify direct leaf owners"),
+                    });
+                }
                 if let Some(clip) = target_state.clip {
                     group_page_clips.push(group_clip_page_points(clip, geometry, group_transform));
                 }
@@ -3616,6 +3624,7 @@ fn apply_timeline_state(
                 evaluated.visible &= direct_state.visible;
                 evaluated.opacity *= direct_state.opacity;
                 evaluated.clip = intersect_optional_rect(evaluated.clip, direct_state.clip);
+                evaluated.retain_source_wipe(direct_state);
             }
             let (scale_x, scale_y, rotation_deg) = direct_state.map_or(
                 (1.0, 1.0, 0.0),
@@ -9663,5 +9672,66 @@ mod tests {
             }
             assert_eq!(fixture.slide, before);
         }
+    }
+
+    #[test]
+    fn native_list_round_rect_text_rectangle_uses_the_preset_owner() {
+        let xml = shape_with_details(
+            None,
+            None,
+            r#"<a:xfrm><a:off x="365760" y="64439"/><a:ext cx="5120640" cy="1003680"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom>"#,
+            None,
+        );
+        let fixture = Fixture::new(&xml, "", "");
+        let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+        let ResolvedGeometry::Custom {
+            text_rect: Some(rect),
+            ..
+        } = &resolved.shapes[0].geometry
+        else {
+            panic!("preset text rectangle");
+        };
+        // Independent native txXfrm inset. The outer roundRect is retained.
+        assert!((rect.x - 3.857952756).abs() < 0.002);
+        assert!((rect.y - 3.857952756).abs() < 0.002);
+        assert!((rect.width - (403.2 - 2.0 * 3.857952756)).abs() < 0.002);
+    }
+    #[test]
+    fn native_soft_wipe_survives_resolved_leaf_state_publication() {
+        let shape = shape_with_details(None, None, &transform(127_000), None).replacen(
+            "<p:cNvPr/>",
+            "<p:cNvPr id=\"7\" name=\"Hero\"/>",
+            1,
+        );
+        let xml = format!(
+            r#"<p:sld xmlns:p="{P_NS}" xmlns:a="{A_NS}"><p:cSld>{}</p:cSld><p:timing><p:tnLst><p:animEffect transition="in" filter="wipe(left)"><p:cBhvr><p:cTn id="1" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="7"/></p:tgtEl></p:cBhvr></p:animEffect></p:tnLst></p:timing></p:sld>"#,
+            shape_tree(&shape)
+        );
+        let fixture = Fixture::from_xml(&xml, &layout_xml(""), &master_xml(""));
+        let resolved = fixture
+            .context()
+            .resolve_slide_at(
+                (720.0, 540.0),
+                crate::timeline::TimelinePosition {
+                    elapsed_ms: 500,
+                    click_count: 0,
+                },
+            )
+            .unwrap();
+        assert!(
+            resolved.state.shapes[&7]
+                .local_opacity_mask((10.0, 10.0))
+                .is_some()
+        );
+        assert!(
+            resolved.shape_states[0]
+                .local_opacity_mask((10.0, 10.0))
+                .is_some()
+        );
+        assert!(
+            resolved.shape_states[0]
+                .local_clip_paths((10.0, 10.0))
+                .is_empty()
+        );
     }
 }
