@@ -9184,13 +9184,13 @@ impl MainPartBlocks {
     // refresh blocks on a frame change, and source splices require the same
     // head and tail. The exact partition below composes that frame provenance
     // with the stored namespace context before a paragraph is reused.
-    fn picture_free_paragraph_ends(&self, xml: &[u8]) -> Option<HashMap<usize, usize>> {
+    fn picture_free_block_ranges(&self, xml: &[u8]) -> Option<Vec<(Range<usize>, StoryItemKind)>> {
         if !block_proofs_enabled() || !self.part_partition_matches(xml) {
             return None;
         }
         let (_, scopes) = self.proved_document_context(xml)?;
         let mut at = self.head.len();
-        let mut paragraphs = HashMap::new();
+        let mut ranges = Vec::new();
         for block in &self.blocks {
             #[cfg(test)]
             a9_lookup_candidate("pictures.plain_proof_candidate");
@@ -9204,14 +9204,25 @@ impl MainPartBlocks {
                     .parsed
                     .as_ref()
                     .is_some_and(BodyContent::owner_facts_reusable_by_value)
-                && let Some(BodyContent::Paragraph(paragraph)) = read.parsed.as_ref()
-                && plain_picture_free_paragraph(paragraph)
             {
-                paragraphs.insert(at, end);
+                let kind = match read.parsed.as_ref() {
+                    Some(BodyContent::Paragraph(paragraph))
+                        if plain_picture_free_paragraph(paragraph) =>
+                    {
+                        Some(StoryItemKind::Paragraph)
+                    }
+                    Some(BodyContent::Table(table)) if plain_picture_free_table(table) => {
+                        Some(StoryItemKind::Table)
+                    }
+                    _ => None,
+                };
+                if let Some(kind) = kind {
+                    ranges.push((at..end, kind));
+                }
             }
             at = end;
         }
-        Some(paragraphs)
+        Some(ranges)
     }
 
     fn cached_document_read_context(
@@ -10814,6 +10825,94 @@ fn plain_picture_free_paragraph(paragraph: &CT_P) -> bool {
                 )
             })
     })
+}
+
+// Only the complete typed table/row/cell owner chain grants this proof.
+// Property subtrees stay opaque to the unchanged story paragraph discovery.
+fn plain_picture_free_table(table: &CT_Tbl) -> bool {
+    let plain_borders = |borders: &rdocx_oxml::table::CT_TblBorders| {
+        borders.extra_xml.is_empty()
+            && [
+                borders.top.as_ref(),
+                borders.bottom.as_ref(),
+                borders.left.as_ref(),
+                borders.right.as_ref(),
+                borders.inside_h.as_ref(),
+                borders.inside_v.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            .all(|edge| edge.extra_attributes.is_empty() && edge.source_xml.is_none())
+    };
+    table.extra_xml.is_empty()
+        && table.content_controls.is_empty()
+        && table.properties.as_ref().is_none_or(|p| {
+            p.change.is_none()
+                && p.revision_xml.is_empty()
+                && p.extra_xml.is_empty()
+                && p.borders.as_ref().is_none_or(plain_borders)
+                && p.shading
+                    .as_ref()
+                    .is_none_or(|shading| shading.extra_attributes.is_empty())
+        })
+        && table
+            .grid
+            .as_ref()
+            .is_none_or(|grid| grid.grid_change_xml.is_none() && grid.extra_xml.is_empty())
+        && table.rows.iter().all(|row| {
+            row.extra_xml.is_empty()
+                && row.content_controls.is_empty()
+                && row.table_property_exception.is_none()
+                && row.properties.as_ref().is_none_or(|p| {
+                    p.revision_markers.is_empty()
+                        && p.revision_xml.is_empty()
+                        && p.revision_xml_positions.is_empty()
+                        && p.extra_xml.is_empty()
+                        && !p.moved_away
+                })
+                && row.cells.iter().all(|cell| {
+                    cell.extra_xml.is_empty()
+                        && cell.properties.as_ref().is_none_or(|p| {
+                            p.extra_xml.is_empty()
+                                && p.borders.as_ref().is_none_or(plain_borders)
+                                && p.shading
+                                    .as_ref()
+                                    .is_none_or(|shading| shading.extra_attributes.is_empty())
+                        })
+                        && cell.content.iter().all(|content| match content {
+                            CellContent::Paragraph(paragraph) => {
+                                plain_picture_free_paragraph(paragraph)
+                            }
+                            CellContent::Table(_) | CellContent::ContentControl(_) => false,
+                        })
+                })
+        })
+}
+
+fn picture_free_span_kind(
+    ranges: &[(Range<usize>, StoryItemKind)],
+    owner: &StoryOwnerSpan,
+    span: &Range<usize>,
+) -> Option<StoryItemKind> {
+    if span.start >= span.end {
+        return None;
+    }
+    let index = ranges.partition_point(|(range, _)| range.start <= span.start);
+    let (range, kind) = ranges.get(index.checked_sub(1)?)?;
+    match kind {
+        StoryItemKind::Paragraph if range == span => Some(*kind),
+        StoryItemKind::Table
+            if owner.kind == StoryKind::TableCell
+                && range.start < owner.full.start
+                && owner.full.start < owner.full.end
+                && owner.full.end < range.end
+                && owner.full.start < span.start
+                && span.end < owner.full.end =>
+        {
+            Some(*kind)
+        }
+        _ => None,
+    }
 }
 
 struct MainStoryLayout {
@@ -18033,19 +18132,21 @@ fn scan_story_items(
         buffer.clear();
     }
     let mut typed_complex_admission = HashMap::<usize, bool>::new();
-    for (paragraph, word_prefixes) in &paragraphs {
-        for candidate in items.iter().filter(|item| {
-            item.complex_field
-                && paragraph.start <= item.scan.start
-                && item.scan.end <= paragraph.end
-        }) {
-            let admitted = typed_complex_field_candidate_is_admitted(
-                xml,
-                paragraph,
-                candidate,
-                word_prefixes,
-            )?;
-            typed_complex_admission.insert(candidate.full.start, admitted);
+    if items.iter().any(|item| item.complex_field) {
+        for (paragraph, word_prefixes) in &paragraphs {
+            for candidate in items.iter().filter(|item| {
+                item.complex_field
+                    && paragraph.start <= item.scan.start
+                    && item.scan.end <= paragraph.end
+            }) {
+                let admitted = typed_complex_field_candidate_is_admitted(
+                    xml,
+                    paragraph,
+                    candidate,
+                    word_prefixes,
+                )?;
+                typed_complex_admission.insert(candidate.full.start, admitted);
+            }
         }
     }
     items.retain(|item| {
@@ -29979,7 +30080,7 @@ impl Document {
         let plain_proofs = prepared
             .writer
             .as_ref()
-            .and_then(|record| record.picture_free_paragraph_ends(&prepared.xml));
+            .and_then(|record| record.picture_free_block_ranges(&prepared.xml));
         for source in sources {
             let owners = scan_story_owners(&source.xml, source.root_kind)?
                 .into_iter()
@@ -30068,10 +30169,9 @@ impl Document {
                         .then(|| {
                             plain_proofs
                                 .as_ref()
-                                .and_then(|proofs| proofs.get(&span.start))
+                                .and_then(|ranges| picture_free_span_kind(ranges, owner, span))
                         })
-                        .flatten()
-                        .filter(|end| **end == span.end);
+                        .flatten();
                     if proof.is_some() && block_proofs_enabled() {
                         #[cfg(test)]
                         a9_lookup_candidate("pictures.actual_plain_skip");
@@ -51861,9 +51961,338 @@ mod tests {
     }
 
     #[test]
+    fn picture_plain_table_source_ranges_and_complex_admission_guards() {
+        fn source_record(body: &str) -> (Vec<u8>, MainPartBlocks) {
+            let seed = Document::new();
+            let mut package = seed.package.clone();
+            package.set_part(&seed.doc_part_name, format!("<w:document xmlns:w=\"{W_NS}\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:body>{body}</w:body></w:document>").into_bytes());
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            let opened = Document::from_bytes(bytes.get_ref()).unwrap();
+            opened.serialized_main_part().unwrap();
+            let (xml, record) = opened.canonical_source().unwrap();
+            let mut record = record.unwrap();
+            record.qualify_document_children().unwrap();
+            (xml, record)
+        }
+        let body = "<w:p><w:r><w:t>before</w:t></w:r></w:p><w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"1440\"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w=\"1440\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>";
+        let (xml, record) = source_record(body);
+        let ranges = record.picture_free_block_ranges(&xml).unwrap();
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].1, StoryItemKind::Paragraph);
+        assert_eq!(ranges[1].1, StoryItemKind::Table);
+        let owners = scan_story_owners(&xml, StoryKind::Body).unwrap();
+        let main = owners
+            .iter()
+            .find(|owner| owner.kind == StoryKind::Body)
+            .unwrap();
+        let cell = owners
+            .iter()
+            .find(|owner| owner.kind == StoryKind::TableCell)
+            .unwrap();
+        let paragraph = scan_story_items(&xml, cell, None)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.kind == StoryItemKind::Paragraph)
+            .unwrap();
+        assert_eq!(
+            picture_free_span_kind(&ranges, main, &ranges[0].0),
+            Some(StoryItemKind::Paragraph)
+        );
+        assert_eq!(
+            picture_free_span_kind(&ranges, cell, &paragraph.full),
+            Some(StoryItemKind::Table)
+        );
+        assert_eq!(picture_free_span_kind(&ranges, main, &paragraph.full), None);
+        assert_eq!(picture_free_span_kind(&ranges, main, &ranges[1].0), None);
+        assert_eq!(
+            picture_free_span_kind(&ranges, cell, &(paragraph.full.start..paragraph.full.start)),
+            None
+        );
+        assert_eq!(
+            picture_free_span_kind(&ranges, cell, &(paragraph.full.end..paragraph.full.start)),
+            None
+        );
+        assert_eq!(
+            picture_free_span_kind(&ranges, main, &(ranges[0].0.start..ranges[0].0.start + 1)),
+            None
+        );
+        assert_eq!(picture_free_span_kind(&[], cell, &paragraph.full), None);
+        let mut crossing = cell.clone();
+        crossing.full.end = ranges[1].0.end + 1;
+        assert_eq!(
+            picture_free_span_kind(&ranges, &crossing, &paragraph.full),
+            None
+        );
+        let mut crossing = cell.clone();
+        crossing.full.start = ranges[1].0.start - 1;
+        assert_eq!(
+            picture_free_span_kind(&ranges, &crossing, &paragraph.full),
+            None
+        );
+        assert_eq!(
+            picture_free_span_kind(&ranges, cell, &(paragraph.full.start..cell.full.end + 1)),
+            None
+        );
+        let missing = MainPartBlocks {
+            blocks: record
+                .blocks
+                .iter()
+                .map(BodyBlockScan::fresh_context_piece)
+                .collect(),
+            ..record.clone()
+        };
+        assert!(
+            missing
+                .blocks
+                .iter()
+                .all(|block| block.proved.get().is_none())
+        );
+        assert!(missing.picture_free_block_ranges(&xml).unwrap().is_empty());
+        assert!(
+            missing
+                .blocks
+                .iter()
+                .all(|block| block.proved.get().is_none())
+        );
+        let mut stale = xml.clone();
+        let at = stale.windows(4).position(|value| value == b"cell").unwrap();
+        stale[at] = b'C';
+        assert!(record.picture_free_block_ranges(&stale).is_none());
+        let frame = record.proved_document(&xml).unwrap();
+        let mut frame = frame.clone();
+        frame
+            .root_attributes
+            .push(("probe".into(), "changed".into()));
+        let (new_xml, mut published) = MainPartBlocks::assemble(
+            &frame,
+            record.blocks.clone(),
+            None,
+            Some((&record.head, &record.tail)),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            published
+                .blocks
+                .iter()
+                .all(|block| block.proved.get().is_none())
+        );
+        assert!(published.picture_free_block_ranges(&new_xml).is_none());
+        published.part = Some(Arc::new(new_xml));
+        assert!(
+            published
+                .picture_free_block_ranges(published.part.as_ref().unwrap())
+                .unwrap()
+                .is_empty()
+        );
+        let table = record
+            .blocks
+            .iter()
+            .find_map(|block| match block.proved.get()?.parsed.as_ref()? {
+                BodyContent::Table(table) => Some(table),
+                _ => None,
+            })
+            .unwrap();
+        assert!(plain_picture_free_table(table));
+        macro_rules! decline {
+            ($name:literal, $changed:ident, $body:block) => {{
+                let mut $changed = table.clone();
+                $body;
+                assert!(!plain_picture_free_table(&$changed), $name);
+            }};
+        }
+        decline!("table_raw_root_or_child", t, {
+            t.extra_xml.push((0, b"<x:opaque/>".to_vec()));
+        });
+        decline!("table_property_extra", t, {
+            t.properties
+                .as_mut()
+                .unwrap()
+                .extra_xml
+                .push((0, b"<x:opaque/>".to_vec()));
+        });
+        decline!("table_property_revision", t, {
+            t.properties
+                .as_mut()
+                .unwrap()
+                .revision_xml
+                .push(b"<w:tblPrChange/>".to_vec());
+        });
+        decline!("grid_change", t, {
+            t.grid.as_mut().unwrap().grid_change_xml = Some(b"<w:tblGridChange/>".to_vec());
+        });
+        decline!("grid_extra", t, {
+            t.grid
+                .as_mut()
+                .unwrap()
+                .extra_xml
+                .push(b"<x:opaque/>".to_vec());
+        });
+        decline!("row_raw_root_or_child", t, {
+            t.rows[0]
+                .extra_xml
+                .push((usize::MAX, b"<x:opaque/>".to_vec()));
+        });
+        decline!("row_table_property_exception", t, {
+            t.rows[0].table_property_exception = Some(b"<w:tblPrEx/>".to_vec());
+        });
+        decline!("row_property_raw", t, {
+            t.rows[0]
+                .properties
+                .get_or_insert_with(Default::default)
+                .extra_xml
+                .push((0, b"<x:opaque/>".to_vec()));
+        });
+        decline!("row_property_revision", t, {
+            t.rows[0]
+                .properties
+                .get_or_insert_with(Default::default)
+                .revision_xml
+                .push(b"<w:ins/>".to_vec());
+        });
+        decline!("row_property_move", t, {
+            t.rows[0]
+                .properties
+                .get_or_insert_with(Default::default)
+                .moved_away = true;
+        });
+        decline!("cell_raw_root_or_child", t, {
+            t.rows[0].cells[0]
+                .extra_xml
+                .push((0, b"<x:opaque/>".to_vec()));
+        });
+        decline!("cell_property_extra", t, {
+            t.rows[0].cells[0]
+                .properties
+                .as_mut()
+                .unwrap()
+                .extra_xml
+                .push((0, b"<x:opaque/>".to_vec()));
+        });
+        decline!("cell_nested_table", t, {
+            t.rows[0].cells[0]
+                .content
+                .push(CellContent::Table(CT_Tbl::new()));
+        });
+        decline!("cell_private_bookmark", t, {
+            let CellContent::Paragraph(p) = &mut t.rows[0].cells[0].content[0] else {
+                unreachable!()
+            };
+            p.extra_xml.push((0, b"<w:bookmarkStart/>".to_vec()));
+        });
+        decline!("cell_raw_run", t, {
+            let CellContent::Paragraph(p) = &mut t.rows[0].cells[0].content[0] else {
+                unreachable!()
+            };
+            p.runs[0].extra_xml.push(b"<x:opaque/>".to_vec());
+        });
+        for cell_border in [false, true] {
+            let mut t = table.clone();
+            let mut borders = rdocx_oxml::table::CT_TblBorders::default();
+            let mut edge =
+                rdocx_oxml::borders::CT_BorderEdge::new(rdocx_oxml::shared::ST_Border::Single);
+            edge.source_xml = Some(b"<w:top><x:opaque/></w:top>".to_vec());
+            borders.top = Some(edge);
+            if cell_border {
+                t.rows[0].cells[0].properties.as_mut().unwrap().borders = Some(borders);
+            } else {
+                t.properties.as_mut().unwrap().borders = Some(borders);
+            }
+            assert!(!plain_picture_free_table(&t));
+        }
+        for cell_shading in [false, true] {
+            let mut t = table.clone();
+            let mut shading = rdocx_oxml::properties::CT_Shd::default();
+            shading
+                .extra_attributes
+                .push(("x:opaque".into(), "kept".into()));
+            if cell_shading {
+                t.rows[0].cells[0].properties.as_mut().unwrap().shading = Some(shading);
+            } else {
+                t.properties.as_mut().unwrap().shading = Some(shading);
+            }
+            assert!(!plain_picture_free_table(&t));
+        }
+        let cell_xml = "<w:tc><w:p><w:r><w:t>controlled</w:t></w:r></w:p></w:tc>";
+        let row_xml = format!("<w:tr>{cell_xml}</w:tr>");
+        let control = |content: &str| {
+            format!(
+                "<w:sdt><w:sdtPr><w:tag w:val=\"control\"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>"
+            )
+        };
+        for (name, table_xml, storage) in [
+            (
+                "table",
+                format!(
+                    "<w:tbl><w:tblGrid><w:gridCol w:w=\"1440\"/></w:tblGrid>{}</w:tbl>",
+                    control(&row_xml)
+                ),
+                0,
+            ),
+            (
+                "row",
+                format!(
+                    "<w:tbl><w:tblGrid><w:gridCol w:w=\"1440\"/></w:tblGrid><w:tr>{}</w:tr></w:tbl>",
+                    control(cell_xml)
+                ),
+                1,
+            ),
+            (
+                "cell",
+                format!(
+                    "<w:tbl><w:tblGrid><w:gridCol w:w=\"1440\"/></w:tblGrid><w:tr><w:tc>{}</w:tc></w:tr></w:tbl>",
+                    control("<w:p><w:r><w:t>controlled</w:t></w:r></w:p>")
+                ),
+                2,
+            ),
+        ] {
+            let raw =
+                format!("<w:document xmlns:w=\"{W_NS}\"><w:body>{table_xml}</w:body></w:document>");
+            let model = CT_Document::from_xml(raw.as_bytes()).unwrap();
+            let BodyContent::Table(table) = &model.body.content[0] else {
+                panic!("missing typed table {name}")
+            };
+            assert!(
+                match storage {
+                    0 => !table.content_controls.is_empty(),
+                    1 => !table.rows[0].content_controls.is_empty(),
+                    _ => matches!(
+                        table.rows[0].cells[0].content.first(),
+                        Some(CellContent::ContentControl(_))
+                    ),
+                },
+                "control fixture did not populate {name} storage"
+            );
+            assert!(!plain_picture_free_table(table), "{name} control admitted");
+        }
+        let field = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>7</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+        for (name, body) in [
+            ("positive", format!("<w:p>{field}</w:p>")),
+            (
+                "aliased",
+                format!(
+                    "<q:p xmlns:q=\"{W_NS}\">{}</q:p>",
+                    field.replace("w:", "q:")
+                ),
+            ),
+        ] {
+            let raw =
+                format!("<w:document xmlns:w=\"{W_NS}\"><w:body>{body}</w:body></w:document>")
+                    .into_bytes();
+            let owner = scan_story_owners(&raw, StoryKind::Body).unwrap().remove(0);
+            let items = scan_story_items(&raw, &owner, None).unwrap();
+            assert!(
+                items.iter().any(|item| item.complex_field),
+                "{name} complex item missing"
+            );
+        }
+    }
+
+    #[test]
     fn picture_plain_read_requires_existing_actual_source_and_exact_partition() {
         let (xml, record) = plain_picture_read_record(&issue407_runs(3));
-        let expected = record.picture_free_paragraph_ends(&xml).unwrap();
+        let expected = record.picture_free_block_ranges(&xml).unwrap();
         assert_eq!(expected.len(), 3);
         assert!(
             record
@@ -51873,7 +52302,7 @@ mod tests {
         );
         let cloned = record.clone();
         assert_eq!(
-            cloned.picture_free_paragraph_ends(&xml),
+            cloned.picture_free_block_ranges(&xml),
             Some(expected.clone())
         );
         let missing = MainPartBlocks {
@@ -51885,12 +52314,7 @@ mod tests {
             ..record.clone()
         };
         assert!(missing.blocks.iter().all(|block| block.staged.is_some()));
-        assert!(
-            missing
-                .picture_free_paragraph_ends(&xml)
-                .unwrap()
-                .is_empty()
-        );
+        assert!(missing.picture_free_block_ranges(&xml).unwrap().is_empty());
         assert!(
             missing
                 .blocks
@@ -51898,7 +52322,7 @@ mod tests {
                 .all(|block| block.proved.get().is_none())
         );
         let _off = CanonicalBlockProofOff::enter();
-        assert!(record.picture_free_paragraph_ends(&xml).is_none());
+        assert!(record.picture_free_block_ranges(&xml).is_none());
         drop(_off);
         let mut stale = xml.clone();
         let at = stale
@@ -51906,10 +52330,18 @@ mod tests {
             .position(|bytes| bytes == b"paragraph")
             .unwrap();
         stale[at] = b'P';
-        assert!(record.picture_free_paragraph_ends(&stale).is_none());
-        let (start, end) = expected.iter().next().unwrap();
-        assert_eq!(expected.get(start), Some(end));
-        assert!(!expected.get(start).is_some_and(|end| *end == start + 1));
+        assert!(record.picture_free_block_ranges(&stale).is_none());
+        let (range, kind) = expected.first().unwrap();
+        assert_eq!(*kind, StoryItemKind::Paragraph);
+        let owner = scan_story_owners(&xml, StoryKind::Body).unwrap().remove(0);
+        assert_eq!(
+            picture_free_span_kind(&expected, &owner, range),
+            Some(StoryItemKind::Paragraph)
+        );
+        assert_eq!(
+            picture_free_span_kind(&expected, &owner, &(range.start..range.start + 1)),
+            None
+        );
     }
 
     #[cfg(debug_assertions)]
@@ -51941,12 +52373,12 @@ mod tests {
                     .iter()
                     .all(|block| block.proved.get().is_none())
             );
-            assert!(published.picture_free_paragraph_ends(&new_xml).is_none());
+            assert!(published.picture_free_block_ranges(&new_xml).is_none());
             // canonical_source binds an assembled record to its actual output.
             published.part = Some(Arc::new(new_xml.clone()));
             assert!(
                 published
-                    .picture_free_paragraph_ends(&new_xml)
+                    .picture_free_block_ranges(&new_xml)
                     .unwrap()
                     .is_empty()
             );
@@ -51971,7 +52403,7 @@ mod tests {
         );
         assert!(
             edited
-                .picture_free_paragraph_ends(&edited_xml)
+                .picture_free_block_ranges(&edited_xml)
                 .unwrap()
                 .is_empty()
         );
@@ -51999,8 +52431,16 @@ mod tests {
         for body in cases {
             let (xml, record) = plain_picture_read_record(body);
             assert!(
-                record.picture_free_paragraph_ends(&xml).unwrap().is_empty(),
+                record.picture_free_block_ranges(&xml).unwrap().is_empty(),
                 "{body}"
+            );
+            let nested = format!(
+                "<w:tbl><w:tblGrid><w:gridCol w:w=\"1440\"/></w:tblGrid><w:tr><w:tc>{body}</w:tc></w:tr></w:tbl>"
+            );
+            let (xml, record) = plain_picture_read_record(&nested);
+            assert!(
+                record.picture_free_block_ranges(&xml).unwrap().is_empty(),
+                "{nested}"
             );
         }
     }
