@@ -1,5 +1,10 @@
 # 10, Bindings spec
 
+
+## Additive native timeline projection
+
+The neutral Effect enum adds LinearOpacityMask { bounds, start, end, stops }. Its doc-hidden linear_opacity_mask_is_valid query is shared by raster and SVG. EvaluatedShapeState adds local_opacity_mask(size) -> Option<Effect>, preserving existing signatures and public clip authority. The evaluated page retains one physical child/text scene. Partial soft wipes report that raster and SVG support their mask while PDF group effects remain unsupported. Python signatures and exports do not change.
+
 Owners: `oxml-py-support`, `rdocx-py`, `rpptx-py`, `rdocx-wasm`, `rpptx-wasm`,
 `oxml-cli-support`, `rdocx-cli`, `rpptx-cli`.
 

@@ -1,5 +1,14 @@
 # 06, PresentationML model
 
+
+Timeline soft-mask qualification covers direct leaf owners. Group-target timing retains the existing flattened hard-clip fallback with an explicit diagnostic. The neutral mask still composes an existing complete group scene once, including nested and overlapping children.
+
+## Native bounded timeline semantics
+
+An applicable visibility set or shape effect owns visibility independently of map entries created by opacity and motion. Pending entrances supply the initial hidden state only when no applicable visibility operation owns that target. Both traversal orders preserve explicit visible and hidden sets. Native ScaleX and ScaleY use raw factors and style.rotation uses raw degrees, including factors above 10 and rotations above 360. Existing scale, spin, rotation and numeric opacity aliases retain their prior units.
+
+Native wipes reveal from the named edge and exits remove that edge. Their private evaluated source record projects an additive local_opacity_mask only while the public clip remains the evaluator-authored value. A changed or cleared clip disables that automatic mask. Other oriented and explicit clips remain authoritative. The qualified plain-paint alpha is clamp(8*p-7*u,0,1), complemented for exit, with exact start/stop endpoints. Outgoing fade retains its opacity overwrite behavior.
+
 Owner: `rpptx-oxml`, with the facade in `rpptx`.
 
 ## Parts

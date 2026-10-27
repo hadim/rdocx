@@ -1,5 +1,14 @@
 # 12, Testing strategy
 
+
+## Native linear mask and profile discriminators
+
+Timeline regressions distinguish real visibility writes from opacity/motion map entries, both traversal orders, distinct targets, click and parent endpoints. Native numeric controls include ScaleX 12, ScaleY 20 and style.rotation 720 separately from legacy scale 100000 and spin 5400000. Four directions, entrance/exit and exact endpoints exercise the same native spatial alpha policy.
+
+Backend controls cover translated/scaled masks, clips, colored and transparent backgrounds, overlapping descendants, shadows, multiple masks, invalid geometry/stops and one text occurrence. SVG and raster compare the same bounded scene. Ordinary PDF output deliberately ignores the effect while checked conformance refuses it. SmartArt tests retain native physical text frames, explicit data overrides, empty/multiple paragraphs and nonorigin/nonsquare bounds. Exact caller fonts and native geometry remain independent reference inputs.
+
+The animation oracle fixture explicitly suppresses inherited line and effects on every animated/control rectangle. It uses native visibility set and fractional opacity, independent ScaleX/ScaleY and degree rotation while preserving all existing cases, local/encoded times and thresholds. Historical shadowed failures remain evidence for the separate shadow qualification story. New source requires fresh independent native capture and trusted review. Successful local tests do not adopt pins or pass native gates.
+
 ## Numbering-aware navigation regression
 
 One source-built multilevel document compares visible markers, TOC, numbered

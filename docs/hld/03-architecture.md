@@ -1,5 +1,10 @@
 # 03, Architecture
 
+
+## Neutral linear opacity ownership
+
+The neutral non-exhaustive Effect carries LinearOpacityMask with child-local bounds, endpoints and alpha stops. One doc-hidden inherent validation query supplies the raster and SVG consumers with identical geometry and stop rules. A masked group retains one child scene and one physical text/font/source owner. Masks multiply over the complete painted group after ordinary effects, then group opacity applies once. No format dependency is introduced into the neutral output model.
+
 ## Numbering-aware navigation sources
 
 Navigation reads the production paragraph cascade and its resolved numbering

@@ -23261,7 +23261,7 @@ fn powerpoint_timeline_oracle_source_round_trips_through_f213_model() {
     let static_paint =
         oxml_pdf::render_page_to_png(&static_layout, 0, F214_POWERPOINT_COMPARISON_DPI).unwrap();
     assert_ne!(
-        raster(wipe.page),
+        raster(wipe.page.clone()),
         static_paint,
         "wipe must alter visible Hero paint"
     );
@@ -23274,6 +23274,12 @@ fn powerpoint_timeline_oracle_source_round_trips_through_f213_model() {
         raster(parallel.page),
         static_paint,
         "transform must alter visible Hero paint"
+    );
+    let soft_wipe = tiny_skia::Pixmap::decode_png(&raster(wipe.page.clone())).unwrap();
+    let middle = soft_wipe.pixel(450, 450).unwrap();
+    assert!(
+        (150..=170).contains(&middle.green()),
+        "resolved public timeline must retain a partial alpha front, not a hard clip: {middle:?}"
     );
     let mut no_exit_package = open_opc(&bytes, "same-time timeline without exit");
     let mut no_exit_xml = String::from_utf8(

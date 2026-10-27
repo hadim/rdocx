@@ -5591,4 +5591,40 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn native_profile_percent_spacing_keeps_first_last_and_anchor_policy() {
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let p = ResolvedParagraph {
+            line_spacing: Some(ResolvedTextSpacing::Percent(0.9)),
+            space_before: Some(ResolvedTextSpacing::Percent(0.0)),
+            space_after: Some(ResolvedTextSpacing::Percent(0.35)),
+            runs: vec![ResolvedTextRun::Text {
+                text: "line".to_owned(),
+                style: ResolvedRunStyle {
+                    font_size: Some(20.0),
+                    latin_typeface: Some("Carlito".to_owned()),
+                    ..ResolvedRunStyle::default()
+                },
+            }],
+            ..ResolvedParagraph::default()
+        };
+        let mut body = ResolvedTextBody {
+            paragraphs: vec![p.clone(), p],
+            ..text_body(TextInsets::default())
+        };
+        let natural = stack_text(&mut fonts, test_content_box(200.0), &body).unwrap();
+        assert_close(natural.height, 51.6);
+        body.space_first_last_paragraph = true;
+        let edges = stack_text(&mut fonts, test_content_box(200.0), &body).unwrap();
+        assert_close(edges.height - natural.height, 8.4);
+        body.paragraphs.truncate(1);
+        body.space_first_last_paragraph = false;
+        body.anchor = TextAnchor::Center;
+        let single = stack_text(&mut fonts, test_content_box(200.0), &body).unwrap();
+        assert_close(single.height, 21.6);
+        body.paragraphs[0].space_after = None;
+        let no_after = stack_text(&mut fonts, test_content_box(200.0), &body).unwrap();
+        assert_eq!(single.lines[0].baseline, no_after.lines[0].baseline);
+    }
 }

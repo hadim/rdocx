@@ -8649,6 +8649,8 @@ Pending future intent only. Donor tests, contributor CI and benchmarks are not l
 
 ### F-X267, Bound PowerPoint mutation cost across public publishers
 
+The bounded native remediation covers visibility ownership, native numeric aliases, all four wipe directions, a shared raster/SVG linear alpha mask with explicit unsupported PDF effects, and six native SmartArt text profiles. Canonical animation fixtures isolate plain paint and preserve all nine clocks and thresholds. Historical shadow falloff and expanded paint-domain failures remain the explicit F-X269 follow-up. Native capture, trusted pin adoption and final gates remain required.
+
 **Size**: L
 **Depends on**: F-X260, F-X262
 **Test gate**: regression
