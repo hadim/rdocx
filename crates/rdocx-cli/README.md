@@ -119,7 +119,11 @@ story of the original, where `KIND` is a Python `Story.kind` name: `body`,
 the `comment` story excludes only the comments part, so a pair whose comments
 differ needs `--ignore-comments`. An unknown granularity or story name is a
 usage error, a repeated story fails, and neither creates the output. The
-`--json` record states the options that ran.
+`--json` record states the options that ran. The original may already hold
+tracked changes, such as the redline of an earlier `compare`. A paragraph,
+table or content control that holds one is kept byte for byte when the edited
+file holds it unchanged, and any other change to it fails with its location
+and creates no output.
 
 Revision `list` reports every supported story and names the story of each
 revision. Revision `accept` and `reject` operate across every supported story
