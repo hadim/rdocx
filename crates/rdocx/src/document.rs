@@ -10219,7 +10219,7 @@ fn scoped_normalization_reuse_allowed(
 
 /// Only the freshly constructed producer record may offer this actual read.
 /// Its head/tail have not changed since read_source_child, and the complete
-/// record was checked by proved_document immediately before this call.
+/// record received complete borrowed source qualification before this call.
 fn producer_scoped_normalization_seed<'a>(
     source: &MainPartBlocks,
     normal: &MainPartBlocks,
@@ -10484,12 +10484,17 @@ impl BodyBlockScan {
         xml.extend_from_slice(tail);
         closed_word_body(&xml, head.len()..end)?;
         note_staging_work(|work| work.children_read += 1);
+        note_scoped_normalization_work("source_read", "child_parse", 1, xml.len());
         let mut parsed = CT_Document::from_xml(&xml).ok()?;
         if parsed.body.content.len() != 1 {
             return None;
         }
         let item = parsed.body.content.pop()?;
-        let round_trips = parsed.body_item_xml(&item).ok()? == self.bytes;
+        note_scoped_normalization_work("source_read", "child_write", 1, 0);
+        let written_child = parsed.body_item_xml(&item).ok()?;
+        note_scoped_normalization_work("source_read", "child_write", 0, written_child.len());
+        let round_trips = written_child == self.bytes;
+        drop(written_child);
         if !round_trips
             && (self.bytes.contains(&b'&')
                 || self.holds_field_words
@@ -10497,8 +10502,22 @@ impl BodyBlockScan {
         {
             return None;
         }
-        let shell = CT_Document::from_xml(&[head, tail].concat()).ok()?;
-        if !shell.body.content.is_empty() || parsed.to_xml().ok()? != shell.to_xml().ok()? {
+        let shell_xml = [head, tail].concat();
+        note_scoped_normalization_work("source_read", "shell_parse", 1, shell_xml.len());
+        let shell = CT_Document::from_xml(&shell_xml).ok()?;
+        if !shell.body.content.is_empty() {
+            return None;
+        }
+        note_scoped_normalization_work("source_read", "emptied_write", 1, 0);
+        let emptied = parsed.to_xml().ok()?;
+        note_scoped_normalization_work("source_read", "emptied_write", 0, emptied.len());
+        note_scoped_normalization_work("source_read", "shell_write", 1, 0);
+        let expected_shell = shell.to_xml().ok()?;
+        note_scoped_normalization_work("source_read", "shell_write", 0, expected_shell.len());
+        let frames_match = emptied == expected_shell;
+        drop(emptied);
+        drop(expected_shell);
+        if !frames_match {
             return None;
         }
         self.proved = OnceLock::from(ParsedChild {
@@ -24990,11 +25009,64 @@ impl Document {
             namespace_frame: OnceLock::new(),
             namespace_frame_spans: OnceLock::new(),
         };
-        record.proved_document(source)?;
+        // Complete actual source equality is read authority only.
+        note_scoped_normalization_work("producer_current", "compare_attempt", 1, source.len());
+        let source_matches = record.proved_document_matches(source, &self.document)?;
+        note_scoped_normalization_work(
+            "producer_current",
+            if source_matches {
+                "compare_true"
+            } else {
+                "compare_false"
+            },
+            1,
+            source.len(),
+        );
         if record.blocks.len() != normal.blocks.len() {
             return None;
         }
+        // Preserve the original fallible frame/resource preflight before either route.
         let context = scoped_normalization_context(&self.document, &record, normal)?;
+        if source_matches {
+            let lexical_and_private = record
+                .blocks
+                .iter()
+                .zip(&normal.blocks)
+                .zip(&self.document.body.content)
+                .all(|((left, right), item)| {
+                    scoped_normalization_reuse_allowed(&record, normal, left, right, item)
+                });
+            if lexical_and_private && let Some(actual_normal_part) = &normal.part {
+                note_scoped_normalization_work(
+                    "producer_current",
+                    "writer_attempt",
+                    1,
+                    actual_normal_part.len(),
+                );
+                let writer_matches = normal.writer_bytes_match(&self.document, actual_normal_part);
+                let label = match writer_matches {
+                    Some(true) => "writer_true",
+                    Some(false) => "writer_false",
+                    None => "writer_none",
+                };
+                note_scoped_normalization_work(
+                    "producer_current",
+                    label,
+                    1,
+                    actual_normal_part.len(),
+                );
+                if writer_matches == Some(true) {
+                    // No scoped correspondence memo is created by this different proof.
+                    note_scoped_normalization_work(
+                        "producer_current",
+                        "admitted_children",
+                        record.blocks.len(),
+                        source.len(),
+                    );
+                    return Some(record);
+                }
+            }
+        }
         for children in record.blocks.iter().zip(&normal.blocks) {
             let seed = producer_scoped_normalization_seed(
                 &record, normal, children.0, children.1, &scopes,
@@ -51177,6 +51249,278 @@ mod tests {
         }
     }
 
+    // A genuine byte-opened canonical producer, not the factory's pre-normalized root model.
+    #[cfg(debug_assertions)]
+    fn producer_current_document(body: &str) -> Document {
+        let seed = writer_comparison_document(body, true);
+        let (xml, _) = seed.canonical_source().unwrap();
+        let mut package = seed.package.clone();
+        package.set_part(&seed.doc_part_name, xml);
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let opened = Document::from_bytes(bytes.get_ref()).unwrap();
+        opened.serialized_main_part().unwrap();
+        opened
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn producer_current_complete_fields_and_late_unproved_child() {
+        let document = producer_current_document(&issue407_runs(3));
+        let (source, normal) = document.canonical_source().unwrap();
+        let normal = normal.unwrap();
+        let record = document.producer_source_blocks(&source, &normal).unwrap();
+        assert_eq!(
+            record.proved_document_matches(&source, &document.document),
+            Some(true)
+        );
+        for changed in 0..6 {
+            let mut model = document.document.clone();
+            match changed {
+                0 => model
+                    .root_attributes
+                    .push(("probe".into(), "changed".into())),
+                1 => model
+                    .extra_namespaces
+                    .push(("xmlns:probe".into(), "urn:changed".into())),
+                2 => model.background_xml = Some(br#"<w:background w:color="123456"/>"#.to_vec()),
+                3 => model
+                    .background_extra_xml
+                    .push(br#"<x:background xmlns:x="urn:foreign"/>"#.to_vec()),
+                4 => model.body.sect_pr = Some(rdocx_oxml::document::CT_SectPr::default_letter()),
+                5 => {
+                    if let Some(BodyContent::Paragraph(p)) = model.body.content.last_mut() {
+                        p.runs.clear();
+                    }
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                record.proved_document_matches(&source, &model),
+                Some(false),
+                "field {changed}"
+            );
+            let mut candidate = document.clone_for_staging();
+            candidate.document = model;
+            let _ = Document::take_scoped_normalization_work();
+            let _ = candidate.producer_source_blocks(&source, &normal);
+            let work = Document::take_scoped_normalization_work();
+            assert!(
+                !work.contains_key("producer_current.admitted_children"),
+                "field {changed}: {work:?}"
+            );
+        }
+        // A prior mismatch may not mask a later missing actual source read.
+        let mut bad = record.clone();
+        let index = bad.blocks.len() - 1;
+        let actual = bad.blocks[index].proved.get().unwrap();
+        let mut last = BodyBlockScan::from_source(bad.blocks[index].bytes.clone());
+        last.proved = std::sync::OnceLock::from(ParsedChild {
+            root_declarations: actual.root_declarations.clone(),
+            body_declarations: actual.body_declarations.clone(),
+            body_bindings: actual.body_bindings.clone(),
+            parsed: None,
+        });
+        bad.blocks[index] = Arc::new(last);
+        let mut mismatch = document.document.clone();
+        mismatch.body.content.remove(0);
+        assert_eq!(bad.proved_document_matches(&source, &mismatch), None);
+        let mut late_source = source.clone();
+        late_source.push(b' ');
+        assert_eq!(
+            record.proved_document_matches(&late_source, &document.document),
+            None
+        );
+        let mut head = record.clone();
+        head.head.push(b' ');
+        assert_eq!(
+            head.proved_document_matches(&source, &document.document),
+            None
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn producer_current_private_alias_w14_and_frame_declines_are_real() {
+        for body in [
+            r#"<w:p><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>"#,
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> UNKNOWN_PRIVATE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>opaque</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+            r#"<w:p><w:bookmarkStart w:id="1" w:name="own"/><w:r><w:t>x</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>"#,
+            r#"<w:p><w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr><w:r><w:t>x</w:t></w:r></w:p>"#,
+        ] {
+            let document = writer_comparison_document(body, true);
+            let (source, normal) = document.canonical_source().unwrap();
+            let normal = normal.unwrap();
+            let _ = Document::take_scoped_normalization_work();
+            assert!(document.producer_source_blocks(&source, &normal).is_none());
+            assert!(
+                !Document::take_scoped_normalization_work()
+                    .contains_key("producer_current.admitted_children")
+            );
+            assert!(CT_Document::from_xml(&source).is_ok());
+        }
+        let document = writer_comparison_document(&issue407_runs(2), true);
+        let (source, normal) = document.canonical_source().unwrap();
+        let normal = normal.unwrap();
+        let alias = String::from_utf8(source.clone())
+            .unwrap()
+            .replace("w:", "q:")
+            .replace("xmlns:w=", "xmlns:q=")
+            .into_bytes();
+        assert!(CT_Document::from_xml(&alias).is_ok());
+        assert!(document.producer_source_blocks(&alias, &normal).is_none());
+        // Normal frame and field-bearing frame facts cannot be silently promoted.
+        for field_frame in [false, true] {
+            let mut changed = normal.clone();
+            if field_frame {
+                changed.head.extend_from_slice(b"<!-- fldSimple -->");
+            } else {
+                changed.tail.push(b' ');
+            }
+            let _ = Document::take_scoped_normalization_work();
+            let _ = document.producer_source_blocks(&source, &changed);
+            assert!(
+                !Document::take_scoped_normalization_work()
+                    .contains_key("producer_current.admitted_children")
+            );
+        }
+        let no_w14 = writer_comparison_document(&issue407_runs(2), false);
+        let (source, normal) = no_w14.canonical_source().unwrap();
+        let normal = normal.unwrap();
+        assert_eq!(normal.writer_bytes_match(&no_w14.document, &source), None);
+        let _ = Document::take_scoped_normalization_work();
+        let _ = no_w14.producer_source_blocks(&source, &normal);
+        assert!(
+            !Document::take_scoped_normalization_work()
+                .contains_key("producer_current.admitted_children")
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn producer_current_source_writer_authority_and_memo_separation() {
+        let document = producer_current_document(&issue407_runs(3));
+        let (canonical, normal) = document.canonical_source().unwrap();
+        let normal = normal.unwrap();
+        for source in [
+            canonical.clone(),
+            String::from_utf8(canonical.clone())
+                .unwrap()
+                .replacen("<w:body>", "<w:body>\n ", 1)
+                .into_bytes(),
+        ] {
+            let _ = Document::take_scoped_normalization_work();
+            let record = document.producer_source_blocks(&source, &normal).unwrap();
+            let counts = Document::take_scoped_normalization_work();
+            assert_eq!(counts["producer_current.compare_true"][0], 1, "{counts:?}");
+            assert_eq!(counts["producer_current.writer_true"][0], 1, "{counts:?}");
+            assert_eq!(
+                counts["producer_current.admitted_children"][0],
+                record.blocks.len()
+            );
+            assert!(!counts.contains_key("left.write1"), "{counts:?}");
+            assert!(
+                record
+                    .blocks
+                    .iter()
+                    .all(|b| b.staged.is_none() && b.scoped_correspondence.get().is_none())
+            );
+            assert_eq!(
+                record.proved_document_matches(&source, &document.document),
+                Some(true)
+            );
+            assert_eq!(
+                record.proved_document(&source).unwrap(),
+                CT_Document::from_xml(&source).unwrap()
+            );
+        }
+        for count in [0, 1, 3] {
+            let duplicate = issue407_runs(1).repeat(count);
+            let opened = producer_current_document(&duplicate);
+            let (xml, writer) = opened.canonical_source().unwrap();
+            let writer = writer.unwrap();
+            let _ = Document::take_scoped_normalization_work();
+            let record = opened.producer_source_blocks(&xml, &writer);
+            if count == 0 {
+                assert!(record.is_none());
+            } else {
+                let record = record.unwrap();
+                assert_eq!(record.blocks.len(), count);
+                assert!(record.blocks.windows(2).all(|p| p[0].bytes == p[1].bytes));
+                assert_eq!(
+                    record.proved_document_matches(&xml, &opened.document),
+                    Some(true)
+                );
+                assert!(
+                    record
+                        .blocks
+                        .iter()
+                        .all(|b| b.staged.is_none() && b.scoped_correspondence.get().is_none())
+                );
+            }
+        }
+        let mut bad = normal.clone();
+        let mut bytes = canonical.clone();
+        bytes.push(b' ');
+        bad.part = Some(Arc::new(bytes));
+        let _ = Document::take_scoped_normalization_work();
+        assert!(document.producer_source_blocks(&canonical, &bad).is_some());
+        let counts = Document::take_scoped_normalization_work();
+        assert_eq!(counts["producer_current.writer_false"][0], 1);
+        assert!(!counts.contains_key("producer_current.admitted_children"));
+        assert!(counts["left.write1"][0] > 0);
+        let mut bad = normal.clone();
+        let index = bad.blocks.len() - 1;
+        let mut last = bad.blocks[index].fresh_context_piece();
+        Arc::get_mut(&mut last).unwrap().staged = None;
+        bad.blocks[index] = last;
+        let _ = Document::take_scoped_normalization_work();
+        assert!(document.producer_source_blocks(&canonical, &bad).is_some());
+        let counts = Document::take_scoped_normalization_work();
+        assert_eq!(counts["producer_current.writer_none"][0], 1);
+        assert!(!counts.contains_key("producer_current.admitted_children"));
+        assert!(counts["left.write1"][0] > 0);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn producer_current_mismatch_and_namespace_fallbacks_are_not_equality() {
+        let document = producer_current_document(&issue407_runs(3));
+        let (source, normal) = document.canonical_source().unwrap();
+        let normal = normal.unwrap();
+        let mut changed = document.clone_for_staging();
+        changed.document.body.content.pop();
+        let _ = Document::take_scoped_normalization_work();
+        let result = changed.producer_source_blocks(&source, &normal);
+        let counts = Document::take_scoped_normalization_work();
+        assert_eq!(counts["producer_current.compare_false"][0], 1);
+        assert!(!counts.contains_key("producer_current.admitted_children"));
+        if let Some(record) = result {
+            assert_eq!(
+                record.proved_document(&source).unwrap(),
+                CT_Document::from_xml(&source).unwrap()
+            );
+        }
+        for (a, b) in [
+            ("<w:document ", "<w:document xmlns=\"urn:foreign\" "),
+            ("<w:body>", "<w:body xmlns:x=\"urn:private\">"),
+        ] {
+            let changed = String::from_utf8(source.clone())
+                .unwrap()
+                .replacen(a, b, 1)
+                .into_bytes();
+            let _ = Document::take_scoped_normalization_work();
+            assert!(document.producer_source_blocks(&changed, &normal).is_none());
+            assert!(
+                !Document::take_scoped_normalization_work()
+                    .contains_key("producer_current.admitted_children")
+            );
+        }
+        let _off = CanonicalBlockProofOff::enter();
+        assert!(document.source_blocks(&Arc::new(source)).is_none());
+    }
+
     #[cfg(debug_assertions)]
     #[test]
     fn scoped_normalization_producer_reuses_actual_reads_with_uncached_control() {
@@ -51198,6 +51542,8 @@ mod tests {
         let counts = Document::take_scoped_normalization_work();
         let pieces = source.blocks.len();
         assert!(pieces > 0);
+        assert_eq!(counts["producer_current.compare_false"][0], 1);
+        assert!(!counts.contains_key("producer_current.admitted_children"));
         assert_eq!(counts["producer.seed_eligible"][0], pieces);
         assert_eq!(counts["left.seed_used"][0], pieces);
         assert_eq!(counts["pair.fixed_used"][0], pieces);

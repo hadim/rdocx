@@ -2,6 +2,10 @@
 
 Owner: `oxml-opc`, with media naming in `oxml-media`.
 
+## Producer read and writer authority
+
+Word producer reconstruction first proves the exact source partition, namespace frame and actual child reads. Its complete borrowed source-model comparison qualifies all children even after a mismatch and includes root, background and section metadata. A positive current-model result may compose with the independent normal record's exact current writer-byte proof, after the existing fallible resource/frame preflight and conservative field/private checks. None leaves the whole reader authoritative. A valid but unequal source or unavailable writer proof keeps the existing normalization route. Source facts retain no writer staged permission and do not create a generic normalization memo. Generic normalization still executes its own checked relation and full right side after a failed left. No source cache, history edge or publication shortcut is added.
+
 ## The package
 Bibliography source transactions resolve the qualified source collection
 through the document-owned custom XML graph. Source identity, GUID, relationship
