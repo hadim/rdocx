@@ -36757,3 +36757,88 @@ fn fx239_notes_frame_projection_admits_only_one_direct_body() {
         Some("exact body")
     );
 }
+
+#[test]
+fn native_scaled_preset_paints_all_expected_corners_at_parallel_phase() {
+    let p = Presentation::from_bytes(&powerpoint_timeline_oracle_source_bytes()).unwrap();
+    let frame = p
+        .render_timeline_deterministic(
+            0,
+            TimelinePosition {
+                elapsed_ms: 1980,
+                click_count: 0,
+            },
+            None,
+        )
+        .unwrap();
+    let mut actual = Vec::new();
+    oxml_layout::walk(&frame.page.elements, &mut |element, transform| {
+        if let oxml_layout::PositionedElement::Path(path) = element
+            && matches!(&path.fill, Some(oxml_layout::Paint::Solid(color)) if *color == oxml_layout::Color::from_hex("D63C32"))
+        {
+            for c in &path.path.commands {
+                if let oxml_layout::PathCommand::MoveTo(point)
+                | oxml_layout::PathCommand::LineTo(point) = c
+                {
+                    actual.push(transform.apply(*point));
+                }
+            }
+        }
+    });
+    assert_eq!(actual.len(), 4, "one physical plain Hero");
+    let theta = 43.2_f64.to_radians();
+    let (cx, cy) = (216.0 + 0.072 * 960.0, 216.0 + 0.048 * 540.0);
+    let expected = [
+        (-144.0, -108.0),
+        (144.0, -108.0),
+        (144.0, 108.0),
+        (-144.0, 108.0),
+    ]
+    .map(|(x, y)| {
+        let (x, y) = (x * 1.24, y * 1.24);
+        oxml_layout::Point {
+            x: cx + x * theta.cos() - y * theta.sin(),
+            y: cy + x * theta.sin() + y * theta.cos(),
+        }
+    });
+    for (a, e) in actual.iter().zip(expected) {
+        assert!(
+            (a.x - e.x).abs() < 1e-8 && (a.y - e.y).abs() < 1e-8,
+            "actual {a:?}, expected {e:?}"
+        );
+    }
+    let layout =
+        oxml_layout::LayoutResult::new(vec![frame.page.into()], Vec::new(), None, Vec::new());
+    let png = oxml_pdf::render_page_to_png(&layout, 0, 150.0).unwrap();
+    let pix = tiny_skia::Pixmap::decode_png(&png).unwrap();
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+    for y in 0..pix.height() {
+        for x in 0..pix.width() {
+            let p = pix.pixel(x, y).unwrap();
+            if p.red().min(p.green()).min(p.blue()) < 240 {
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x + 1);
+                y1 = y1.max(y + 1);
+            }
+        }
+    }
+    let bounds = [
+        expected.iter().map(|p| p.x).fold(f64::INFINITY, f64::min),
+        expected.iter().map(|p| p.y).fold(f64::INFINITY, f64::min),
+        expected
+            .iter()
+            .map(|p| p.x)
+            .fold(f64::NEG_INFINITY, f64::max),
+        expected
+            .iter()
+            .map(|p| p.y)
+            .fold(f64::NEG_INFINITY, f64::max),
+    ];
+    for (a, e) in [x0, y0, x1, y1].into_iter().zip(bounds) {
+        assert!(
+            (f64::from(a) - e * 150.0 / 72.0).abs() <= 1.0,
+            "painted{a} expected{e}"
+        );
+    }
+}

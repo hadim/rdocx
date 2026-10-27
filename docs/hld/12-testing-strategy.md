@@ -1,6 +1,8 @@
 # 12, Testing strategy
 
 
+Materialized timeline geometry controls start with actual CT_Slide presets/custom paths, then inspect positioned corners and raster extents at the native1980ms scale/rotation/motion phase. Asymmetric nonorigin cubic controls and text rectangles distinguish independent axes and parent transforms. Factor1, signed/zero factors, overflow refusal, picture custom clipping, ordinary/fallback geometry and a single text/content owner protect the existing consumer boundaries. Numeric state or changed bounds alone cannot discharge painted-geometry correctness.
+
 ## Native linear mask and profile discriminators
 
 Timeline regressions distinguish real visibility writes from opacity/motion map entries, both traversal orders, distinct targets, click and parent endpoints. Native numeric controls include ScaleX 12, ScaleY 20 and style.rotation 720 separately from legacy scale 100000 and spin 5400000. Four directions, entrance/exit and exact endpoints exercise the same native spatial alpha policy.

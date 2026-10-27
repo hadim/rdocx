@@ -352,6 +352,12 @@ Native-qualified timeline soft wipes target direct leaf owners. Group-target tim
 
 EvaluatedShapeState may retain a private source-derived wipe record. Its existing private fields already prevent external struct literals. Keep public clip authority: a caller-modified or cleared clip must not silently keep the previous automatic wipe mask. An additive `local_opacity_mask(size) -> Option<Effect>` projection may accompany the existing local_clip_paths method. For an unchanged evaluator-authored wipe clip, the renderer uses the qualified mask rather than the old hard front. Other explicit and oriented clips remain effective. No existing signature or Python method changes.
 
+### Materialized timeline geometry consistency
+
+Root approved the bounded A13 correction on2026-10-27 after the actual native1980ms comparison exposed correct numeric scale with stale materialized paths. At candidate publication, apply actual signed axis factors to every Custom path MoveTo/LineTo point, cubic control and endpoint, and Custom text_rect x/y/width/height before group clip projection. Keep center-resized bounds, rotation, motion and parent composition. Rectangle and BoundsFallback remain dynamically sized and receive no second geometry scale. Picture extents and custom clipping stay distinct. Factor1 is structurally equivalent. Zero and negative finite factors retain existing policy without abs or clamp.
+
+Coordinate overflow or non-finite geometry declines the entire candidate through the existing diagnostic, leaving the original shape and default resolved leaf state. The qualified repair scales materialized local geometry. It does not scale font sizes, body insets, strokes, shadows or precomputed paint coordinates and does not promise general PowerPoint emphasis fidelity for those domains. No public field, API or whole-object affine replacement is introduced. The frozen canonical fixture generator and alpha-admission investigation remain separate.
+
 ### Consumers, acceptance and discriminators
 
 | ID | Input and expected result | Consumers and local evidence | Final evidence |

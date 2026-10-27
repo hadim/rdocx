@@ -1,6 +1,8 @@
 # 08, Rendering spec
 
 
+Timeline axis scaling keeps materialized Custom paths and their text rectangle consistent with center-resized bounds before group-clip projection. Move/line points, every cubic control/end and text-rectangle coordinates use the actual signed factors. Rectangle and fallback geometry remain dynamically sized. Overflow declines the whole candidate with the original shape and default resolved state. This bounded geometry repair preserves legacy font sizes, insets, stroke/shadow parameters and precomputed paint coordinates. It does not claim general emphasis fidelity for those separate domains.
+
 Timeline soft-mask qualification covers direct leaf owners. Group-target timing retains the existing flattened hard-clip fallback with an explicit diagnostic. The neutral mask still composes an existing complete group scene once, including nested and overlapping children.
 
 ## Bounded linear group opacity masks

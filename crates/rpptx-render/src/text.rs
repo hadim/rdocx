@@ -5627,4 +5627,40 @@ mod tests {
         let no_after = stack_text(&mut fonts, test_content_box(200.0), &body).unwrap();
         assert_eq!(single.lines[0].baseline, no_after.lines[0].baseline);
     }
+
+    #[test]
+    fn native_scaled_custom_text_rectangle_consumes_legacy_insets_once() {
+        let s = shape(
+            Rect {
+                x: 37.0,
+                y: 41.0,
+                width: 45.0,
+                height: 30.0,
+            },
+            ResolvedGeometry::Custom {
+                paths: Vec::new(),
+                text_rect: Some(Rect {
+                    x: 3.0,
+                    y: 2.25,
+                    width: 34.5,
+                    height: 24.0,
+                }),
+            },
+        );
+        let text = text_body(TextInsets {
+            left: 1.0,
+            top: 3.0,
+            right: 2.0,
+            bottom: 4.0,
+        });
+        assert_eq!(
+            content_box(&s, &text),
+            Rect {
+                x: 4.0,
+                y: 5.25,
+                width: 31.5,
+                height: 17.0
+            }
+        );
+    }
 }
