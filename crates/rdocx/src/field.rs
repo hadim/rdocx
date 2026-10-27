@@ -911,6 +911,10 @@ impl Document {
     ) -> Result<LegacyFormFieldInfo> {
         let mut candidate = self.clone_for_staging();
         candidate.prepare_staged_package()?;
+        // Keep the pre-edit legacy owners, including related-part owners whose
+        // source is rewritten below. Defer any inventory error until the
+        // requested mutation has run its existing kind and identity checks.
+        let expected_owners = candidate.legacy_form_fields();
         if source_part == candidate.doc_part_name {
             let mut remaining = ordinal;
             if !set_nth_legacy_form_in_body(
@@ -961,9 +965,29 @@ impl Document {
             candidate.package.set_part(source_part, updated);
         }
 
+        // The changed field must remain the same accepted owner. An ordinal
+        // alone can select its neighbor if publication loses a projection.
+        // Ordinary result children may legitimately disappear on literal edits,
+        // so compare only the legacy owners, after validating the requested edit.
+        let expected_owners = expected_owners?;
         let reopened = candidate.prepare_and_reopen_staged()?;
-        let result = reopened
-            .legacy_form_fields()?
+        let actual_owners = reopened.legacy_form_fields()?;
+        if expected_owners.len() != actual_owners.len()
+            || expected_owners
+                .iter()
+                .zip(&actual_owners)
+                .any(|(before, after)| {
+                    before.source_part != after.source_part
+                        || before.ordinal != after.ordinal
+                        || before.name != after.name
+                        || before.kind != after.kind
+                })
+        {
+            return Err(Error::Other(
+                "legacy form identity did not survive reopen".to_owned(),
+            ));
+        }
+        let result = actual_owners
             .into_iter()
             .find(|field| field.source_part == source_part && field.ordinal == ordinal)
             .ok_or_else(|| {

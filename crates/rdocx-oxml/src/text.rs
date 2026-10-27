@@ -13198,6 +13198,39 @@ fn parsed_complex_cache_runs(
     ))
 }
 
+/// Put a new cache run before the source's still-open, pure end-marker run.
+/// Its formatting and namespace scope follow that run, while owner attributes
+/// remain on the original run. The original marker bytes are written normally.
+fn insert_legacy_cache_before_end_run(
+    writer: &mut Writer<&mut Vec<u8>>,
+    source_run_start: &BytesStart<'_>,
+    (run_start, content_start): (usize, usize),
+    display: &str,
+    canonical_word_binding: bool,
+) -> Result<()> {
+    let properties = writer
+        .get_ref()
+        .get(content_start..)
+        .ok_or_else(|| OxmlError::InvalidValue("legacy end run output boundary".into()))?;
+    let mut start = source_run_start.to_owned();
+    start.clear_attributes();
+    for attribute in source_run_start.attributes() {
+        let attribute = attribute?;
+        if attribute.key.as_ref() == b"xmlns" || attribute.key.as_ref().starts_with(b"xmlns:") {
+            start.push_attribute(attribute);
+        }
+    }
+    let mut cache = Writer::new(Vec::new());
+    cache.write_event(Event::Start(start.clone()))?;
+    cache.get_mut().extend_from_slice(properties);
+    write_field_result_content_with_binding(&mut cache, display, canonical_word_binding)?;
+    cache.write_event(Event::End(start.to_end()))?;
+    writer
+        .get_mut()
+        .splice(run_start..run_start, cache.into_inner());
+    Ok(())
+}
+
 fn update_complex_field_source(
     field: &Field,
     raw: &[u8],
@@ -13205,12 +13238,21 @@ fn update_complex_field_source(
     cached_changed: bool,
     publish_missing_result: bool,
 ) -> Result<Vec<u8>> {
+    let keep_end_run_pure = cached_changed
+        && field
+            .legacy_form
+            .as_ref()
+            .and_then(|form| form.name.as_deref())
+            .map(|name| source_contains_own_bookmark(raw, word_prefixes, name))
+            .transpose()?
+            .unwrap_or(false);
     let mut reader = Reader::from_reader(raw);
     reader.config_mut().trim_text(false);
     let mut output = Vec::new();
     let mut writer = Writer::new(&mut output);
     let mut contexts = Vec::<FieldRewriteContext>::new();
     let mut source_run_start: Option<BytesStart<'static>> = None;
+    let mut source_run_output = None;
     let mut buffer = Vec::new();
     let mut field_depth = 0usize;
     let mut outer_result = false;
@@ -13258,11 +13300,25 @@ fn update_complex_field_source(
                         && !wrote_result
                         && cached_changed
                     {
-                        write_field_result_content_with_binding(
-                            &mut writer,
-                            &field.cached_result,
-                            canonical_word_binding,
-                        )?;
+                        if keep_end_run_pure {
+                            insert_legacy_cache_before_end_run(
+                                &mut writer,
+                                source_run_start.as_ref().ok_or_else(|| {
+                                    OxmlError::MissingElement("legacy field end run".into())
+                                })?,
+                                source_run_output.ok_or_else(|| {
+                                    OxmlError::MissingElement("legacy field end boundary".into())
+                                })?,
+                                &field.cached_result,
+                                canonical_word_binding,
+                            )?;
+                        } else {
+                            write_field_result_content_with_binding(
+                                &mut writer,
+                                &field.cached_result,
+                                canonical_word_binding,
+                            )?;
+                        }
                         wrote_result = true;
                     }
                     if cached_changed
@@ -13358,10 +13414,14 @@ fn update_complex_field_source(
                 } else {
                     let word_run =
                         depth == 0 && is_word_element(element.name().as_ref(), b"r", &prefixes);
-                    if publish_missing_result && word_run {
+                    let run_start = writer.get_ref().len();
+                    if (publish_missing_result || keep_end_run_pure) && word_run {
                         source_run_start = Some(element.clone().into_owned());
                     }
                     writer.write_event(Event::Start(element.into_owned()))?;
+                    if keep_end_run_pure && word_run {
+                        source_run_output = Some((run_start, writer.get_ref().len()));
+                    }
                     contexts.push(FieldRewriteContext {
                         prefixes,
                         word_run,
@@ -13408,11 +13468,25 @@ fn update_complex_field_source(
                         && !wrote_result
                         && cached_changed
                     {
-                        write_field_result_content_with_binding(
-                            &mut writer,
-                            &field.cached_result,
-                            canonical_word_binding,
-                        )?;
+                        if keep_end_run_pure {
+                            insert_legacy_cache_before_end_run(
+                                &mut writer,
+                                source_run_start.as_ref().ok_or_else(|| {
+                                    OxmlError::MissingElement("legacy field end run".into())
+                                })?,
+                                source_run_output.ok_or_else(|| {
+                                    OxmlError::MissingElement("legacy field end boundary".into())
+                                })?,
+                                &field.cached_result,
+                                canonical_word_binding,
+                            )?;
+                        } else {
+                            write_field_result_content_with_binding(
+                                &mut writer,
+                                &field.cached_result,
+                                canonical_word_binding,
+                            )?;
+                        }
                         wrote_result = true;
                     }
                     if cached_changed
@@ -20375,6 +20449,156 @@ mod tests {
                 );
                 let reopened = crate::document::CT_Document::from_xml(part.as_bytes()).unwrap();
                 paragraph = reopened.body.paragraphs().next().unwrap().clone();
+            }
+        }
+    }
+
+    #[test]
+    fn native_legacy_empty_cache_keeps_end_marker_run_pure() {
+        for (prefix, attribute, declarations) in [
+            (
+                "w:",
+                "w:",
+                format!(r#"xmlns:w="{}""#, crate::namespace::W_NS),
+            ),
+            (
+                "q:",
+                "q:",
+                format!(r#"xmlns:q="{}""#, crate::namespace::W_NS),
+            ),
+            (
+                "",
+                "q:",
+                format!(r#"xmlns="{0}" xmlns:q="{0}""#, crate::namespace::W_NS),
+            ),
+        ] {
+            for paired_end in [false, true] {
+                for initial in [false, true] {
+                    let checked = if initial { r#"<CHECKED/>"# } else { "" }
+                        .replace("CHECKED", &format!("{prefix}checked"));
+                    let end = if paired_end {
+                        format!(
+                            r#"<{prefix}fldChar {attribute}fldCharType="end"></{prefix}fldChar>"#
+                        )
+                    } else {
+                        format!(r#"<{prefix}fldChar {attribute}fldCharType="end"/>"#)
+                    };
+                    let raw = format!(
+                        concat!(
+                            r#"<{p}p {ns}><{p}r><{p}fldChar {a}fldCharType="begin"><{p}ffData>"#,
+                            r#"<{p}name {a}val="Legacy"/><{p}checkBox><{p}sizeAuto/><{p}default {a}val="0"/>{checked}"#,
+                            r#"</{p}checkBox></{p}ffData></{p}fldChar></{p}r>"#,
+                            r#"<{p}bookmarkStart {a}id="7" {a}name="Legacy"/>"#,
+                            r#"<{p}r><{p}instrText> FORMCHECKBOX </{p}instrText></{p}r>"#,
+                            r#"<{p}r><{p}fldChar {a}fldCharType="separate"/></{p}r>"#,
+                            r#"<{p}r {a}rsidRPr="00ABCDEF"><{p}rPr><{p}b/></{p}rPr>{end}</{p}r>"#,
+                            r#"<{p}bookmarkEnd {a}id="7"/></{p}p>"#,
+                        ),
+                        p = prefix,
+                        a = attribute,
+                        ns = declarations,
+                        checked = checked,
+                        end = end,
+                    );
+                    let mut paragraph = CT_P::from_xml_fragment(raw.as_bytes()).unwrap();
+                    let mut previous = None;
+                    for value in [initial, !initial, initial, initial] {
+                        let fields = paragraph
+                            .runs
+                            .iter_mut()
+                            .flat_map(|run| &mut run.content)
+                            .filter_map(|content| match content {
+                                RunContent::Field(field) => Some(field),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(fields.len(), 1, "{raw}");
+                        fields
+                            .into_iter()
+                            .next()
+                            .unwrap()
+                            .set_legacy_form_value(LegacyFormFieldValue::Checked(value))
+                            .unwrap();
+                        let xml = serialized_paragraph(&paragraph);
+                        assert_eq!(xml.matches("rsidRPr=\"00ABCDEF\"").count(), 1, "{xml}");
+                        assert_eq!(xml.matches("bookmarkStart ").count(), 1, "{xml}");
+                        assert_eq!(xml.matches("bookmarkEnd ").count(), 1, "{xml}");
+                        if let Some((old_value, old_xml)) = &previous
+                            && *old_value == value
+                        {
+                            assert_eq!(
+                                &xml, old_xml,
+                                "a canonical same-current edit is byte-identical"
+                            );
+                        }
+                        previous = Some((value, xml.clone()));
+                        let part = format!(
+                            r#"<w:document xmlns:w="{}"><w:body>{xml}</w:body></w:document>"#,
+                            crate::namespace::W_NS,
+                        );
+                        let reopened =
+                            crate::document::CT_Document::from_xml(part.as_bytes()).unwrap();
+                        paragraph = reopened.body.paragraphs().next().unwrap().clone();
+                        let fields = paragraph
+                            .runs
+                            .iter()
+                            .flat_map(|run| &run.content)
+                            .filter_map(|content| match content {
+                                RunContent::Field(field) => Some(field),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(
+                            fields.len(),
+                            1,
+                            "end run lost its own-bookmark projection: {xml}"
+                        );
+                        let field = fields[0];
+                        assert_eq!(
+                            field.legacy_form_value().unwrap(),
+                            Some(LegacyFormFieldValue::Checked(value))
+                        );
+                        assert_eq!(
+                            field.legacy_form_default_value().unwrap(),
+                            Some(LegacyFormFieldValue::Checked(false))
+                        );
+                        assert!(
+                            field.cached_display_field_segments().iter().any(
+                                |(text, properties, _)| {
+                                    !text.is_empty()
+                                        && properties
+                                            .is_some_and(|properties| properties.bold == Some(true))
+                                }
+                            ),
+                            "the dedicated result must inherit the end run's bold formatting"
+                        );
+                        assert_eq!(paragraph.bookmark_markers.len(), 2);
+                        assert_eq!(
+                            paragraph
+                                .bookmark_markers
+                                .iter()
+                                .map(BookmarkMarker::run_index)
+                                .collect::<Vec<_>>(),
+                            [0, 1]
+                        );
+                        assert_eq!(
+                            paragraph
+                                .bookmark_markers
+                                .iter()
+                                .map(BookmarkMarker::projected_run_index)
+                                .collect::<Vec<_>>(),
+                            [0, 1]
+                        );
+                        assert_eq!(
+                            paragraph
+                                .bookmark_markers
+                                .iter()
+                                .map(BookmarkMarker::tracked_run_index)
+                                .collect::<Vec<_>>(),
+                            [0, 1]
+                        );
+                    }
+                }
             }
         }
     }

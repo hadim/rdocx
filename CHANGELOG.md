@@ -21,6 +21,7 @@ Word 0.16.3 completes the bounded navigation, template and content-control work 
 
 ### Fixed
 
+- preserve native legacy checkbox ownership when filling an empty result cache. A dedicated result run keeps the own-name bookmark boundary valid, and setter reopen checks reject a shifted neighboring field.
 - write numeric line multiples consistently through defaults, paragraph formatting and styles, including exact stored-value round trips. List cross-cell comments in physical paragraph order and diagnose an individual unrepresentable anchor without losing the remaining comments. `part_names` and `part_xml` expose relationship parts and `[Content_Types].xml` through the same serialization and validation as saving. Addresses [#402](https://github.com/tensorbee/rdocx/issues/402), [#405](https://github.com/tensorbee/rdocx/issues/405) and [#406](https://github.com/tensorbee/rdocx/issues/406).
 - preserve imported and returned picture relationship targets through staged edits and save/reopen. Resolve duplicate imported style IDs by their first definition, without redundant renamed copies for equal definitions or importing shadowed dependencies. Addresses the available [#404](https://github.com/tensorbee/rdocx/issues/404) cases and [#408](https://github.com/tensorbee/rdocx/issues/408).
 - reduce repeated body scanning, package copying and normalization in qualified Word reads and edits while retaining current-owner, namespace, private-field and resource validation. Add checked Rust `try_add_paragraph`, `try_insert_paragraph`, `try_add_table` and `try_insert_table` paths. Python insertion uses those checked paths. Addresses [#407](https://github.com/tensorbee/rdocx/issues/407) and the captured Word follow-up performance contributions.
@@ -33,6 +34,8 @@ Word 0.16.3 completes the bounded navigation, template and content-control work 
 - Nested control relocation, unwrapping and repeating-section admission inspect decoded text and the actual destination content model before publication. Repeating types also retain their permitted physical level and section/item ownership across type changes and unwrap. Imported type-marker aliases retain namespace identity through modeled edits, including locally shadowed canonical prefixes.
 
 ### Compatibility
+
+- Python 3.9 remains supported for constructor calls and defaults. With the stable-ABI wheel, native class constructor signatures are available to `inspect.signature` on CPython 3.10 or newer. On CPython 3.9, pinned PyO3 exposes no class text signature, so constructor introspection raises `ValueError`. No constructor, stub or class identity changes.
 
 - **Approved Rust source break in both prepared version lines:** `oxml_opc::OpcPackage.parts` now stores `Arc<Vec<u8>>`, and `remove_part` returns `Option<Arc<Vec<u8>>>`. The Word `rdocx_opc` re-export exposes the same change. Migrate direct map writes and owned removal results as described below. `set_part` accepts both `Vec<u8>` and `Arc<Vec<u8>>` through `Into`, and `get_part` still returns borrowed bytes. Python signatures are unchanged. These releases retain the explicitly requested 0.16.x and 0.14.x lines and do not claim unrestricted Rust source compatibility.
 

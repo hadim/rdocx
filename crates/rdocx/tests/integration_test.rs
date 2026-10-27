@@ -15817,6 +15817,97 @@ mod legacy_forms_and_building_blocks {
     }
 
     #[test]
+    fn native_empty_checkbox_setters_retain_legacy_identity_and_neighbors() {
+        for placement in ["body", "cell", "header"] {
+            for (ordinal, value) in [(0, false), (0, true), (1, false), (1, true)] {
+                let mut package = base_package();
+                let mut paragraphs = String::new();
+                for (index, name, initial) in [(7, "AutoFlag", false), (8, "ExactFlag", true)] {
+                    paragraphs.push_str(&format!(
+                        concat!(
+                            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="{name}"/>"#,
+                            r#"<w:checkBox><w:sizeAuto/><w:default w:val="{default}"/></w:checkBox></w:ffData></w:fldChar></w:r>"#,
+                            r#"<w:bookmarkStart w:id="{index}" w:name="{name}"/><w:r><w:instrText> FORMCHECKBOX </w:instrText></w:r>"#,
+                            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:i/></w:rPr><w:fldChar w:fldCharType="end"/></w:r>"#,
+                            r#"<w:bookmarkEnd w:id="{index}"/></w:p>"#,
+                        ), default = u8::from(initial), name = name, index = index,
+                    ));
+                }
+                paragraphs.push_str(&drop_down_form("Tail"));
+                let part = if placement == "header" {
+                    package
+                        .get_or_create_part_rels("/word/document.xml")
+                        .add(rel_types::HEADER, "header-native.xml");
+                    add_story_content_type(
+                        &mut package,
+                        "/word/header-native.xml",
+                        rel_types::HEADER,
+                    );
+                    package.set_part(
+                        "/word/header-native.xml",
+                        format!(r#"<w:hdr xmlns:w="{WORD_NS}">{paragraphs}</w:hdr>"#,).into_bytes(),
+                    );
+                    "/word/header-native.xml"
+                } else {
+                    let body = if placement == "cell" {
+                        format!(r#"<w:tbl><w:tr><w:tc>{paragraphs}</w:tc></w:tr></w:tbl>"#)
+                    } else {
+                        paragraphs
+                    };
+                    package.set_part("/word/document.xml", format!(
+                        r#"<?xml version="1.0"?><w:document xmlns:w="{WORD_NS}"><w:body>{body}<w:sectPr/></w:body></w:document>"#,
+                    ).into_bytes());
+                    "/word/document.xml"
+                };
+                let mut document = Document::from_bytes(&package_bytes(package)).unwrap();
+                let before = document.legacy_form_fields().unwrap();
+                assert_eq!(before.len(), 3);
+                let expected_name = before[ordinal].name.clone();
+                let result = document
+                    .set_legacy_form_field_value(
+                        part,
+                        ordinal,
+                        LegacyFormFieldValue::Checked(value),
+                    )
+                    .unwrap();
+                assert_eq!(result.name, expected_name);
+                assert_eq!(result.kind, LegacyFormFieldKind::CheckBox);
+                assert_eq!(result.ordinal, ordinal);
+                let bytes = document.to_bytes().unwrap();
+                let reopened = Document::from_bytes(&bytes).unwrap();
+                let actual = reopened.legacy_form_fields().unwrap();
+                assert_eq!(actual.len(), before.len());
+                for (index, (old, new)) in before.iter().zip(&actual).enumerate() {
+                    assert_eq!(
+                        (&old.source_part, old.ordinal, &old.name, old.kind),
+                        (&new.source_part, new.ordinal, &new.name, new.kind)
+                    );
+                    assert_eq!(
+                        new.value,
+                        if index == ordinal {
+                            LegacyFormFieldValue::Checked(value)
+                        } else {
+                            old.value.clone()
+                        }
+                    );
+                }
+                let defaults = reopened.legacy_form_fields_with_defaults().unwrap();
+                assert_eq!(defaults[0].1, Some(LegacyFormFieldValue::Checked(false)));
+                assert_eq!(defaults[1].1, Some(LegacyFormFieldValue::Checked(true)));
+                let same = document.to_bytes().unwrap();
+                document
+                    .set_legacy_form_field_value(
+                        part,
+                        ordinal,
+                        LegacyFormFieldValue::Checked(value),
+                    )
+                    .unwrap();
+                assert_eq!(document.to_bytes().unwrap(), same);
+            }
+        }
+    }
+
+    #[test]
     fn generic_field_updates_preserve_legacy_form_state() {
         let mut document = Document::new();
         let form = rdocx::Field::from_legacy_form(
