@@ -4631,6 +4631,30 @@ missing historical timeline and SmartArt oracle fixtures as unqualified.
 Focused applicable feature gates do not infer oracle credit from early returns
 or substitute package inspection for native application acceptance.
 
+### Native PowerPoint reference admission
+
+Reference requalification retains versioned application, source, movie, frame
+and font identities. Historical pins and failed captures remain available.
+New trusted pins require actual independent native output and review. SmartArt
+geometry comes from native saved drawing owners, with explicit mapping for
+different primitive representations. Rust bounds never supply native expected
+geometry. Existing geometry, line-count, ink and SSIM limits remain gates.
+
+Timeline fixture targets are unique authored ordinary rectangles selected by
+exact name and the same owner's unique nonzero ID. Template position cannot
+select an empty placeholder. Admission rejects missing or duplicate names/IDs,
+placeholders, wrong kind/paint and absent, empty or off-page geometry. Reordered
+template children preserve selection. Local state checks address the selected
+Hero and click marker by ID, and wipe, opacity, transform and exit must change
+visible Hero paint. A state-map value or unequal compressed frame bytes alone
+cannot prove that an animation affected its intended visible owner.
+
+Native admission retains all nine logical cases, exact local and encoded movie
+times, zero extraction tolerances, the terminal outgoing fade binding and the
+existing normalization. A corrected fixture needs a fresh source-bound movie.
+Unavailable, semantically ineffective or failing reference observations remain
+unqualified until their actual replacement passes the unchanged checks.
+
 ## Embedded font acceptance
 
 Font regressions exercise actual supported caller bytes, all four face kinds,

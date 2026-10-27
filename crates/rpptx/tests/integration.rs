@@ -22638,6 +22638,56 @@ fn smartart_oracle_sources_preserve_the_valid_default_presentation_graph() {
     }
 }
 
+fn authored_timeline_rectangle(slide: &CT_Slide, name: &str, color: &str) -> Option<u32> {
+    let children = &slide.common_slide_data.shape_tree.children;
+    let mut matches = children
+        .iter()
+        .filter(|child| child.non_visual_name().as_deref() == Some(name));
+    let child = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    let ShapeTreeChild::Shape(shape) = child else {
+        return None;
+    };
+    let id = child.non_visual_id()?;
+    if id == 0
+        || children
+            .iter()
+            .filter(|candidate| candidate.non_visual_id() == Some(id))
+            .count()
+            != 1
+        || shape.placeholder.is_some()
+    {
+        return None;
+    }
+    let properties = &shape.shape_properties;
+    if properties.custom_geometry.is_some() || properties.preset_geometry.as_ref()?.preset != "rect"
+    {
+        return None;
+    }
+    let transform = properties.transform.as_ref()?;
+    let offset = transform.offset?;
+    let extent = transform.extent?;
+    if offset.x.0 < 0
+        || offset.y.0 < 0
+        || extent.cx.0 <= 0
+        || extent.cy.0 <= 0
+        || offset.x.0.checked_add(extent.cx.0)? > 12_192_000
+        || offset.y.0.checked_add(extent.cy.0)? > 6_858_000
+    {
+        return None;
+    }
+    let expected_fill = Fill::from_xml(
+        format!(
+            r#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="{color}"/></a:solidFill>"#
+        )
+        .as_bytes(),
+    )
+    .ok()?;
+    (properties.fill.as_ref() == Some(&expected_fill)).then_some(id)
+}
+
 fn powerpoint_timeline_oracle_source_bytes() -> Vec<u8> {
     let mut presentation = Presentation::new().expect("create PowerPoint timeline oracle source");
     for slide_index in 0..6 {
@@ -22705,9 +22755,8 @@ fn powerpoint_timeline_oracle_source_bytes() -> Vec<u8> {
     let evaluator_part = &slide_parts[0];
     let mut evaluator_slide =
         CT_Slide::from_xml(package.get_part(evaluator_part).unwrap()).unwrap();
-    let evaluator_target = evaluator_slide.common_slide_data.shape_tree.children[0]
-        .non_visual_id()
-        .unwrap();
+    let evaluator_target = authored_timeline_rectangle(&evaluator_slide, "!!Hero", "D63C32")
+        .expect("one visible authored Hero rectangle");
     let timing = format!(
         r#"<p:timing xmlns:p="{P_NS}"><p:tnLst><p:seq><p:cTn id="100" dur="4000"><p:childTnLst>
         <p:animEffect transition="in" filter="appear"><p:cBhvr><p:cTn id="101" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl></p:cBhvr></p:animEffect>
@@ -22735,9 +22784,8 @@ fn powerpoint_timeline_oracle_source_bytes() -> Vec<u8> {
 
     let click_part = &slide_parts[1];
     let mut click_slide = CT_Slide::from_xml(package.get_part(click_part).unwrap()).unwrap();
-    let click_target = click_slide.common_slide_data.shape_tree.children[1]
-        .non_visual_id()
-        .unwrap();
+    let click_target = authored_timeline_rectangle(&click_slide, "Click fill marker", "F0C541")
+        .expect("one visible authored click marker rectangle");
     let click_timing = format!(
         r#"<p:timing xmlns:p="{P_NS}"><p:tnLst><p:set><p:cBhvr><p:cTn id="109" dur="500" fill="remove" nodeType="clickEffect"><p:stCondLst><p:cond evt="onClick" delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="{click_target}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="hidden"/></p:to></p:set></p:tnLst></p:timing>"#
     );
@@ -22998,10 +23046,144 @@ fn normalize_powerpoint_timeline_oracle_frame_for_comparison(
 }
 
 #[test]
+fn powerpoint_timeline_authored_targets_reject_ambiguous_or_invisible_owners() {
+    let bytes = powerpoint_timeline_oracle_source_bytes();
+    let package = open_opc(&bytes, "timeline authored targets");
+    let original = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    let id = authored_timeline_rectangle(&original, "!!Hero", "D63C32").unwrap();
+    let index = original
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .position(|child| child.non_visual_name().as_deref() == Some("!!Hero"))
+        .unwrap();
+    let ShapeTreeChild::Shape(hero) = &original.common_slide_data.shape_tree.children[index] else {
+        panic!("authored Hero must be an ordinary shape")
+    };
+    assert_eq!(
+        authored_timeline_rectangle(&original, "Title 1", "D63C32"),
+        None
+    );
+    assert_eq!(
+        authored_timeline_rectangle(&original, "missing", "D63C32"),
+        None
+    );
+    assert_eq!(
+        authored_timeline_rectangle(&original, "!!Hero", "F0C541"),
+        None
+    );
+
+    let mut reordered = original.clone();
+    reordered.common_slide_data.shape_tree.children.reverse();
+    assert_eq!(
+        authored_timeline_rectangle(&reordered, "!!Hero", "D63C32"),
+        Some(id)
+    );
+
+    let mut duplicate_name = original.clone();
+    duplicate_name
+        .common_slide_data
+        .shape_tree
+        .children
+        .push(ShapeTreeChild::Shape(hero.clone_with_id(id + 100).unwrap()));
+    assert_eq!(
+        authored_timeline_rectangle(&duplicate_name, "!!Hero", "D63C32"),
+        None
+    );
+
+    let mut duplicate_id = original.clone();
+    let ShapeTreeChild::Shape(placeholder) = &original.common_slide_data.shape_tree.children[0]
+    else {
+        panic!("source contains a template placeholder")
+    };
+    assert!(placeholder.placeholder.is_some());
+    duplicate_id.common_slide_data.shape_tree.children[0] =
+        ShapeTreeChild::Shape(placeholder.clone_with_id(id).unwrap());
+    assert_eq!(
+        authored_timeline_rectangle(&duplicate_id, "!!Hero", "D63C32"),
+        None
+    );
+
+    let xml = String::from_utf8(original.to_xml().unwrap()).unwrap();
+    let owned_id = format!(r#"id="{id}" name="!!Hero""#);
+    assert!(xml.contains(&owned_id));
+    let missing_id =
+        CT_Slide::from_xml(xml.replace(&owned_id, r#"name="!!Hero""#).as_bytes()).unwrap();
+    assert_eq!(
+        authored_timeline_rectangle(&missing_id, "!!Hero", "D63C32"),
+        None
+    );
+
+    let mut wrong_kind = original.clone();
+    wrong_kind.common_slide_data.shape_tree.children[index] = ShapeTreeChild::GroupShape(Box::new(
+        rpptx_oxml::shape_tree::CT_GroupShape::new_empty(id, "!!Hero"),
+    ));
+    assert_eq!(
+        authored_timeline_rectangle(&wrong_kind, "!!Hero", "D63C32"),
+        None
+    );
+
+    for invalid in ["placeholder", "empty extent", "off page"] {
+        let mut candidate = original.clone();
+        let ShapeTreeChild::Shape(shape) =
+            &mut candidate.common_slide_data.shape_tree.children[index]
+        else {
+            unreachable!()
+        };
+        match invalid {
+            "placeholder" => shape.placeholder = placeholder.placeholder.clone(),
+            "empty extent" => {
+                shape
+                    .shape_properties
+                    .transform
+                    .as_mut()
+                    .unwrap()
+                    .extent
+                    .as_mut()
+                    .unwrap()
+                    .cx = Emu(0);
+            }
+            "off page" => {
+                shape
+                    .shape_properties
+                    .transform
+                    .as_mut()
+                    .unwrap()
+                    .offset
+                    .as_mut()
+                    .unwrap()
+                    .x = Emu(-1);
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            authored_timeline_rectangle(&candidate, "!!Hero", "D63C32"),
+            None,
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
 fn powerpoint_timeline_oracle_source_round_trips_through_f213_model() {
     let bytes = powerpoint_timeline_oracle_source_bytes();
     let presentation = Presentation::from_bytes(&bytes).unwrap();
     assert!(presentation.validate().is_empty());
+    let first = presentation.slide(0).unwrap();
+    let hero_id = first
+        .shapes()
+        .find(|shape| shape.non_visual_name().as_deref() == Some("!!Hero"))
+        .unwrap()
+        .non_visual_id()
+        .unwrap();
+    let second = presentation.slide(1).unwrap();
+    let marker_id = second
+        .shapes()
+        .find(|shape| shape.non_visual_name().as_deref() == Some("Click fill marker"))
+        .unwrap()
+        .non_visual_id()
+        .unwrap();
 
     let at = |elapsed_ms, click_count| {
         presentation
@@ -23016,19 +23198,83 @@ fn powerpoint_timeline_oracle_source_round_trips_through_f213_model() {
             .unwrap()
     };
     let wipe = at(750, 0);
-    assert!(wipe.state.shapes.values().next().unwrap().clip.is_some());
+    assert_eq!(wipe.state.shapes.len(), 1);
+    assert!(wipe.state.shapes[&hero_id].clip.is_some());
+    assert!(at(330, 0).state.shapes[&hero_id].visible);
     let opacity = at(1_250, 0);
-    assert_eq!(opacity.state.shapes.values().next().unwrap().opacity, 0.75);
+    assert_eq!(opacity.state.shapes[&hero_id].opacity, 0.75);
     let parallel = at(2_000, 0);
-    assert!(
-        !parallel
-            .state
-            .shapes
-            .values()
-            .next()
+    assert!(!parallel.state.shapes[&hero_id].transform.is_identity());
+    let exit = at(2_805, 0);
+    assert!(exit.state.shapes[&hero_id].visible);
+    assert!((exit.state.shapes[&hero_id].opacity - 0.39).abs() < 1e-6);
+    let raster = |page| {
+        let layout = oxml_layout::LayoutResult::new(
+            vec![std::sync::Arc::new(page)],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        oxml_pdf::render_page_to_png(&layout, 0, F214_POWERPOINT_COMPARISON_DPI).unwrap()
+    };
+    let static_layout = presentation.render_deterministic().unwrap().1;
+    let static_paint =
+        oxml_pdf::render_page_to_png(&static_layout, 0, F214_POWERPOINT_COMPARISON_DPI).unwrap();
+    assert_ne!(
+        raster(wipe.page),
+        static_paint,
+        "wipe must alter visible Hero paint"
+    );
+    assert_ne!(
+        raster(opacity.page),
+        static_paint,
+        "opacity must alter visible Hero paint"
+    );
+    assert_ne!(
+        raster(parallel.page),
+        static_paint,
+        "transform must alter visible Hero paint"
+    );
+    let mut no_exit_package = open_opc(&bytes, "same-time timeline without exit");
+    let mut no_exit_xml = String::from_utf8(
+        no_exit_package
+            .get_part("/ppt/slides/slide1.xml")
             .unwrap()
-            .transform
-            .is_identity()
+            .to_vec(),
+    )
+    .unwrap();
+    let exit_start = r#"<p:animEffect transition="out" filter="fade">"#;
+    assert_eq!(no_exit_xml.matches(exit_start).count(), 1);
+    let start = no_exit_xml.find(exit_start).unwrap();
+    let end =
+        start + no_exit_xml[start..].find("</p:animEffect>").unwrap() + "</p:animEffect>".len();
+    assert!(no_exit_xml[start..end].contains(r#"id="108""#));
+    no_exit_xml.replace_range(start..end, "");
+    no_exit_package.set_part("/ppt/slides/slide1.xml", no_exit_xml.into_bytes());
+    let no_exit = Presentation::from_bytes(&package_bytes(no_exit_package)).unwrap();
+    let no_exit = no_exit
+        .render_timeline_deterministic(
+            0,
+            TimelinePosition {
+                elapsed_ms: 2_805,
+                click_count: 0,
+            },
+            None,
+        )
+        .unwrap();
+    assert_eq!(no_exit.state.shapes[&hero_id].opacity, 0.5);
+    assert_eq!(
+        no_exit.state.shapes[&hero_id].transform,
+        exit.state.shapes[&hero_id].transform
+    );
+    assert_eq!(
+        no_exit.state.shapes[&hero_id].clip,
+        exit.state.shapes[&hero_id].clip
+    );
+    assert_ne!(
+        raster(exit.page),
+        raster(no_exit.page),
+        "exit must change Hero paint at the same time with all prior effects retained"
     );
     let click_at = |elapsed_ms| {
         presentation
@@ -23044,7 +23290,7 @@ fn powerpoint_timeline_oracle_source_round_trips_through_f213_model() {
     };
     let click_start = click_at(0);
     assert_eq!(click_start.state.shapes.len(), 1, "{:?}", click_start.state);
-    assert!(!click_start.state.shapes.values().next().unwrap().visible);
+    assert!(!click_start.state.shapes[&marker_id].visible);
     assert_eq!(click_at(499).state.shapes.len(), 1);
     assert_eq!(click_at(500).state.shapes.len(), 1);
     assert!(click_at(501).state.shapes.is_empty());
