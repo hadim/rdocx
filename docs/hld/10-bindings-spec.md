@@ -4388,6 +4388,8 @@ Word scoped replacement and configured document/cell picture insertion pass an a
 
 Document and cell picture insertion continue to run the complete native picture inventory before preparing their conservative revision and returned occurrence. That inventory may reuse already validated ordinary direct main-body paragraph reads without changing collection order, occurrence identity, public operands or atomic refusal. The binding does not replace it with a target-only lookup.
 
+The native canonicalization behind both picture insertion bindings may reconcile the exact actual readback into its already owned candidate. Equal private-free children can retain their storage, while unequal children and complete frame values come from validated source reads. Failed validation restores the candidate before the existing fallback. Public picture objects, conservative revisions, private field behavior and complete inventory validation remain unchanged.
+
 ## Word tables, physical pictures and internal links
 
 Table exposes signed removable indent, autofit, actual table style ID or display-name resolution, six look flags and checked empty-row, logical-column and complete-cell-split operations. Undefined, ambiguous and wrong-type styles refuse without publication. Existing nested Cell.add_table uses the checked physical owner provider. Structural edits invalidate held rows and cells, while a no-op split preserves their revision.

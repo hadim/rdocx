@@ -9026,6 +9026,69 @@ fn same_query_namespace_bindings(left: &[(String, String)], right: &[(String, St
     left == right
 }
 
+fn apply_readback_replacements(
+    current: &mut CT_Document,
+    mut frame: CT_Document,
+    mut replacements: Vec<(usize, BodyContent)>,
+) -> bool {
+    if !frame.body.content.is_empty()
+        || replacements
+            .iter()
+            .any(|(index, _)| *index >= current.body.content.len())
+        || replacements.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+    {
+        return false;
+    }
+    let swap_frame = |left: &mut CT_Document, right: &mut CT_Document| {
+        let CT_Document {
+            body:
+                rdocx_oxml::document::CT_Body {
+                    content: _,
+                    sect_pr: left_sect,
+                },
+            extra_namespaces: left_ns,
+            background_xml: left_bg,
+            background_extra_xml: left_bg_extra,
+            root_attributes: left_attrs,
+        } = left;
+        let CT_Document {
+            body:
+                rdocx_oxml::document::CT_Body {
+                    content: _,
+                    sect_pr: right_sect,
+                },
+            extra_namespaces: right_ns,
+            background_xml: right_bg,
+            background_extra_xml: right_bg_extra,
+            root_attributes: right_attrs,
+        } = right;
+        std::mem::swap(left_sect, right_sect);
+        std::mem::swap(left_ns, right_ns);
+        std::mem::swap(left_bg, right_bg);
+        std::mem::swap(left_bg_extra, right_bg_extra);
+        std::mem::swap(left_attrs, right_attrs);
+    };
+    swap_frame(current, &mut frame);
+    for (index, replacement) in &mut replacements {
+        std::mem::swap(&mut current.body.content[*index], replacement);
+    }
+    // Only this exact pure validator runs while displaced values are held.
+    let valid = current.validate_resource_limits().is_ok();
+    if !valid {
+        for (index, displaced) in &mut replacements {
+            std::mem::swap(&mut current.body.content[*index], displaced);
+        }
+        swap_frame(current, &mut frame);
+    }
+    #[cfg(test)]
+    a9_lookup_candidate(if valid {
+        "readback.committed"
+    } else {
+        "readback.restored_decline"
+    });
+    valid
+}
+
 impl MainPartBlocks {
     fn body_spans(&self) -> Result<(Range<usize>, Vec<Range<usize>>)> {
         let start = self.head.len();
@@ -9151,7 +9214,92 @@ impl MainPartBlocks {
         Some(paragraphs)
     }
 
-    fn parsed_document(&mut self) -> Option<CT_Document> {
+    fn cached_document_read_context(
+        &self,
+        xml: &[u8],
+        current: &CT_Document,
+    ) -> Option<(&CT_Document, DocumentNamespaceScopes)> {
+        // The shared context proves part identity, children and tail. Complete
+        // the literal partition with its head before borrowing any read facts.
+        if !block_proofs_enabled() || !xml.starts_with(&self.head) {
+            return None;
+        }
+        let (frame, scopes) = self.proved_document_context(xml)?;
+        if current.body.content.len() != self.blocks.len()
+            || holds_field_words(&self.head)
+            || holds_field_words(&self.tail)
+            || !current
+                .body
+                .content
+                .iter()
+                .all(BodyContent::owner_facts_reusable_by_value)
+        {
+            return None;
+        }
+        for block in &self.blocks {
+            let read = block.proved.get()?;
+            if block.reads_anew()
+                || read.root_declarations != scopes.root_declarations
+                || read.body_declarations != scopes.body_declarations
+                || read.body_bindings != scopes.body_bindings
+                || !read
+                    .parsed
+                    .as_ref()
+                    .is_some_and(BodyContent::owner_facts_reusable_by_value)
+            {
+                return None;
+            }
+        }
+        Some((frame, scopes))
+    }
+
+    fn current_source_model_matches(&self, xml: &[u8], current: &CT_Document) -> bool {
+        if self.cached_document_read_context(xml, current).is_none() {
+            return false;
+        }
+        let compared = self.proved_document_matches(xml, current);
+        if compared != Some(true) {
+            return false;
+        }
+        current.validate_resource_limits().is_ok()
+    }
+
+    fn reconcile_readback(&self, xml: &[u8], current: &mut CT_Document) -> bool {
+        let Some((frame, scopes)) = self.cached_document_read_context(xml, current) else {
+            return false;
+        };
+        let mut replacements = Vec::new();
+        for (index, block) in self.blocks.iter().enumerate() {
+            let Some(child) = block.read_child(&self.head, &self.tail, &scopes) else {
+                return false;
+            };
+            let Cow::Borrowed(actual) = child else {
+                return false;
+            };
+            if actual != &current.body.content[index] {
+                let replacement = actual.clone();
+                #[cfg(test)]
+                a9_lookup_read(
+                    "readback.changed_child_clone_source_bytes",
+                    0,
+                    block.bytes.len(),
+                );
+                replacements.push((index, replacement));
+            } else {
+                #[cfg(test)]
+                a9_lookup_candidate("readback.equal_owned_child_kept");
+            }
+        }
+        let replacement_frame = frame.clone();
+        #[cfg(test)]
+        a9_lookup_candidate("readback.frame_clone");
+        // Same mandatory certificate completion as old proved_document, before validation.
+        self.store_empty_namespace_owners();
+        // This helper has no fallible/memo/registry work between swap and validation/rollback.
+        apply_readback_replacements(current, replacement_frame, replacements)
+    }
+
+    fn qualify_document_children(&mut self) -> Option<Arc<Vec<u8>>> {
         let xml = self.part.as_ref()?.clone();
         if !self.part_partition_matches(&xml) {
             return None;
@@ -9162,6 +9310,12 @@ impl MainPartBlocks {
                 Arc::make_mut(block).read_source_child(&self.head, &self.tail, &scopes)?;
             }
         }
+        Some(xml)
+    }
+
+    #[cfg(test)]
+    fn parsed_document(&mut self) -> Option<CT_Document> {
+        let xml = self.qualify_document_children()?;
         let parsed = self.proved_document(&xml)?;
         parsed.validate_resource_limits().ok()?;
         Some(parsed)
@@ -9243,7 +9397,8 @@ impl MainPartBlocks {
         modeled: &[u32],
         nested: &HashSet<String>,
         ids: &[(u32, u32)],
-    ) -> Option<Option<(Vec<u8>, Self, CT_Document)>> {
+        current: &mut CT_Document,
+    ) -> Option<Option<(Vec<u8>, Self)>> {
         let mut remapped = self.edited(&self.relationship_remap_edits(remap, &[])?)?;
         let xml = remapped.bytes();
         let slots =
@@ -9262,8 +9417,16 @@ impl MainPartBlocks {
             .map(|((_, span, _), (_, id))| (span.start, span.end, id.to_string().into_bytes()))
             .collect::<Vec<_>>();
         remapped = remapped.edited(&edits)?;
-        let document = remapped.parsed_document()?;
-        Some(Some((remapped.bytes(), remapped, document)))
+        let qualified_xml = remapped.qualify_document_children()?;
+        // Finish output allocation before any reconciliation transaction.
+        let output = remapped.bytes();
+        if !remapped.reconcile_readback(&qualified_xml, current) {
+            // Original phase2 and validation, once after original phase1.
+            let document = remapped.proved_document(&qualified_xml)?;
+            document.validate_resource_limits().ok()?;
+            *current = document;
+        }
+        Some(Some((output, remapped)))
     }
 
     /// A comparison using complete current writer facts. It never grants read
@@ -9500,13 +9663,21 @@ impl MainPartBlocks {
         let (shell, scopes) = self.proved_document_context(doc_xml)?;
         let mut content = Vec::with_capacity(self.blocks.len());
         for block in &self.blocks {
-            content.push(
-                block
-                    .read_child(&self.head, &self.tail, &scopes)?
-                    .into_owned(),
-            );
+            let child = block.read_child(&self.head, &self.tail, &scopes)?;
+            #[cfg(test)]
+            match &child {
+                Cow::Borrowed(_) => a9_lookup_read(
+                    "source_model.borrowed_child_clone_source_bytes",
+                    0,
+                    block.bytes.len(),
+                ),
+                Cow::Owned(_) => a9_lookup_candidate("source_model.owned_child_move"),
+            }
+            content.push(child.into_owned());
         }
         let mut document = shell.clone();
+        #[cfg(test)]
+        a9_lookup_candidate("source_model.frame_clone");
         document.body.content = content;
         self.store_empty_namespace_owners();
         Some(document)
@@ -23302,7 +23473,19 @@ impl Document {
             canonical_drawing_ids.push((old_id, id));
             drawing_edits.push((span.start, span.end, id.to_string().into_bytes()));
         }
-        if !drawing_edits.is_empty() {
+        let drawing_bytes_unchanged = drawing_edits.iter().all(|(start, end, value)| {
+            current_document_xml.get(*start..*end) == Some(value.as_slice())
+        });
+        let drawing_noop = !drawing_edits.is_empty()
+            && drawing_bytes_unchanged
+            && offered_canonical_blocks(blocks.as_ref()).is_some_and(|record| {
+                record.current_source_model_matches(&current_document_xml, &self.document)
+            });
+        if drawing_noop {
+            #[cfg(test)]
+            a9_lookup_candidate("readback.drawing_noop");
+        }
+        if !drawing_edits.is_empty() && !drawing_noop {
             let mut updated = current_document_xml;
             drawing_edits.sort_by_key(|(start, _, _)| *start);
             for (start, end, replacement) in drawing_edits.into_iter().rev() {
@@ -23333,23 +23516,28 @@ impl Document {
                     &modeled_drawing_ids,
                     &nested_image_relationship_ids,
                     &canonical_drawing_ids,
+                    &mut self.document,
                 )
             });
-            let canonical = match fast {
-                Some(value) => value.map(|(xml, record, document)| (xml, Some(record), document)),
-                None => canonical_retained_main_part(
-                    &retained,
-                    &relationship_remap,
-                    &modeled_drawing_ids,
-                    &nested_image_relationship_ids,
-                    &canonical_drawing_ids,
-                )?
-                .map(|(xml, document)| (xml, None, document)),
-            };
-            if let Some((xml, record, document)) = canonical {
-                self.document = document;
-                self.package.set_part(&owner, xml);
-                self.main_part_blocks = record;
+            match fast {
+                Some(Some((xml, record))) => {
+                    self.package.set_part(&owner, xml);
+                    self.main_part_blocks = Some(record);
+                }
+                Some(None) => {}
+                None => {
+                    if let Some((xml, document)) = canonical_retained_main_part(
+                        &retained,
+                        &relationship_remap,
+                        &modeled_drawing_ids,
+                        &nested_image_relationship_ids,
+                        &canonical_drawing_ids,
+                    )? {
+                        self.document = document;
+                        self.package.set_part(&owner, xml);
+                        self.main_part_blocks = None;
+                    }
+                }
             }
         }
         if canonical_nested_drawing_ids.is_empty() {
@@ -23398,11 +23586,21 @@ impl Document {
                 let edits = record
                     .relationship_remap_edits(relationship_remap, &self.body_namespace_bindings)?;
                 let mut edited = record.edited(&edits)?;
-                let document = edited.parsed_document()?;
-                Some((document, edited))
+                let qualified_xml = edited.qualify_document_children()?;
+                let reconciled = edits.is_empty()
+                    && edited.reconcile_readback(&qualified_xml, &mut self.document);
+                if reconciled {
+                    return Some((None, edited));
+                }
+                // Original phase2, exactly once after original mandatory phase1.
+                let document = edited.proved_document(&qualified_xml)?;
+                document.validate_resource_limits().ok()?;
+                Some((Some(document), edited))
             });
             if let Some((document, mut record)) = fast {
-                self.document = document;
+                if let Some(document) = document {
+                    self.document = document;
+                }
                 record.part = None;
                 self.main_body_scans
                     .lock()
@@ -51589,6 +51787,216 @@ mod tests {
         assert_eq!((actual[0].width, actual[0].height), (152400, 190500));
         let _off = CanonicalBlockProofOff::enter();
         assert_eq!(document.pictures().unwrap(), actual);
+    }
+
+    #[test]
+    fn canonical_readback_guard_matrix() {
+        let make_record = |body: &str| {
+            let source = format!(
+                "<w:document xmlns:w=\"{W_NS}\" xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w:body>{body}</w:body></w:document>"
+            );
+            let actual = CT_Document::from_xml(source.as_bytes()).unwrap();
+            let (xml, mut record) =
+                MainPartBlocks::serialize(&actual, &actual.body.content, None).unwrap();
+            record.part = Some(Arc::new(xml.clone()));
+            record.qualify_document_children().unwrap();
+            let exact = record.proved_document(&xml).unwrap();
+            (xml, record, exact)
+        };
+        let (xml, record, expected) = make_record(
+            "<w:p><w:r><w:t>source</w:t></w:r></w:p><w:p><w:r><w:t>stable</w:t></w:r></w:p>",
+        );
+        let before = CT_Document::from_xml(format!("<w:document xmlns:w=\"{W_NS}\" probe=\"old\"><w:body><w:p><w:r><w:t>old</w:t></w:r></w:p><w:p><w:r><w:t>stable</w:t></w:r></w:p></w:body></w:document>").as_bytes()).unwrap();
+        assert!(record.current_source_model_matches(&xml, &expected));
+        assert!(!record.current_source_model_matches(&xml, &before));
+        let mut results = BTreeMap::<String, bool>::new();
+        let mut current = before.clone();
+        assert!(record.reconcile_readback(&xml, &mut current));
+        assert_eq!(current, expected);
+        results.insert("exact_changed_child_and_frame_readback".into(), true);
+        let last = record.blocks.len() - 1;
+        let missing = MainPartBlocks {
+            blocks: record
+                .blocks
+                .iter()
+                .enumerate()
+                .map(|(index, block)| {
+                    if index == last {
+                        block.fresh_context_piece()
+                    } else {
+                        Arc::clone(block)
+                    }
+                })
+                .collect(),
+            ..record.clone()
+        };
+        let mut current = before.clone();
+        assert!(!missing.reconcile_readback(&xml, &mut current));
+        assert_eq!(current, before);
+        assert!(missing.blocks[last].proved.get().is_none());
+        results.insert("late_missing_proof_no_mutation_or_fill".into(), true);
+        let mut stale = xml.clone();
+        let at = stale
+            .windows(6)
+            .position(|bytes| bytes == b"source")
+            .unwrap();
+        stale[at] = b'S';
+        let mut current = before.clone();
+        assert!(!record.reconcile_readback(&stale, &mut current));
+        assert_eq!(current, before);
+        results.insert("stale_source_no_mutation".into(), true);
+        let (starts, _) = record.child_starts().unwrap();
+        let bad_bytes = b"<w:p><w:r><w:t>&bogus;</w:t></w:r></w:p>".to_vec();
+        let bad = record
+            .edited(&[(
+                starts[last],
+                starts[last] + record.blocks[last].bytes.len(),
+                bad_bytes,
+            )])
+            .unwrap();
+        let bad_xml = bad.bytes();
+        let scopes = document_namespace_scopes(&bad_xml).unwrap();
+        assert!(
+            bad.blocks[last]
+                .read_child(&bad.head, &bad.tail, &scopes)
+                .is_none()
+        );
+        assert!(
+            bad.blocks[last]
+                .proved
+                .get()
+                .is_some_and(|value| value.parsed.is_none())
+        );
+        let mut current = before.clone();
+        assert!(!bad.reconcile_readback(&bad_xml, &mut current));
+        assert_eq!(current, before);
+        results.insert("actual_failed_late_reader_no_mutation".into(), true);
+        let mut changed_frame = expected.clone();
+        changed_frame
+            .extra_namespaces
+            .push(("xmlns:foreign".into(), "urn:new".into()));
+        let (changed_xml, mut published) = MainPartBlocks::assemble(
+            &changed_frame,
+            record.blocks.clone(),
+            None,
+            Some((&record.head, &record.tail)),
+        )
+        .unwrap()
+        .unwrap();
+        published.part = Some(Arc::new(changed_xml.clone()));
+        assert!(
+            published
+                .blocks
+                .iter()
+                .all(|block| block.proved.get().is_none())
+        );
+        let mut current = before.clone();
+        assert!(!published.reconcile_readback(&changed_xml, &mut current));
+        assert_eq!(current, before);
+        results.insert("real_changed_frame_publisher_clears_reads".into(), true);
+        let (_, private_record, private_model) = make_record(
+            "<w:p><w:fldSimple w:instr=\"DATE\"><w:r><w:t>field</w:t></w:r></w:fldSimple></w:p>",
+        );
+        let private_xml = private_record.part.as_ref().unwrap();
+        let mut current = private_model.clone();
+        #[cfg(debug_assertions)]
+        let _ = take_staging_work();
+        assert!(!private_record.reconcile_readback(private_xml, &mut current));
+        assert_eq!(current, private_model);
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            take_staging_work()[5],
+            0,
+            "guard must not parse a private child"
+        );
+        // The original phase2 remains the actual private reader, exactly once here.
+        let private_fallback = private_record.proved_document(private_xml).unwrap();
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            take_staging_work()[5],
+            1,
+            "original private phase2 must still read once"
+        );
+        private_fallback.validate_resource_limits().unwrap();
+        assert_eq!(
+            private_fallback.to_xml().unwrap(),
+            private_model.to_xml().unwrap()
+        );
+        results.insert("private_guard_then_original_phase2".into(), true);
+        // A real typed resource rejection tests transaction rollback, not false source provenance.
+        let source = format!(
+            "<w:document xmlns:w=\"{W_NS}\"><w:body><w:sdt><w:sdtPr/><w:sdtContent/></w:sdt></w:body></w:document>"
+        );
+        let mut parsed = CT_Document::from_xml(source.as_bytes()).unwrap();
+        let BodyContent::ContentControl(control) = parsed.body.content.pop().unwrap() else {
+            unreachable!()
+        };
+        let template = *control;
+        let mut deep = template.clone();
+        for _ in 0..300 {
+            let mut parent = template.clone();
+            parent
+                .content
+                .push(rdocx_oxml::content_control::SdtContent::ContentControl(
+                    deep,
+                ));
+            deep = parent;
+        }
+        let replacement = BodyContent::ContentControl(Box::new(deep));
+        let mut actual_frame = record.frame.get().unwrap().as_ref().unwrap().clone();
+        actual_frame.body.sect_pr = Some(rdocx_oxml::document::CT_SectPr::default_letter());
+        actual_frame
+            .extra_namespaces
+            .push(("xmlns:x".into(), "urn:rollback".into()));
+        actual_frame
+            .root_attributes
+            .push(("x:probe".into(), "new".into()));
+        actual_frame.background_xml = Some(b"<w:background w:color=\"ABCDEF\"/>".to_vec());
+        actual_frame
+            .background_extra_xml
+            .push(b"<x:extra xmlns:x=\"urn:rollback\"/>".to_vec());
+        let mut current = before.clone();
+        assert!(!apply_readback_replacements(
+            &mut current,
+            actual_frame,
+            vec![(0, expected.body.content[0].clone()), (1, replacement)]
+        ));
+        assert_eq!(current, before);
+        results.insert(
+            "real_typed_resource_refusal_restores_all_children_and_frame".into(),
+            true,
+        );
+        let mut current = before.clone();
+        assert!(matches!(
+            record.canonical_retained(
+                &HashMap::new(),
+                &[],
+                &HashSet::new(),
+                &[(99, 99)],
+                &mut current
+            ),
+            Some(None)
+        ));
+        assert_eq!(current, before);
+        results.insert("retained_some_none_preserves_current".into(), true);
+        let mut current = before.clone();
+        assert!(
+            bad.canonical_retained(&HashMap::new(), &[], &HashSet::new(), &[], &mut current)
+                .is_none()
+        );
+        assert_eq!(current, before);
+        results.insert("retained_none_preserves_current".into(), true);
+        let mut current = before.clone();
+        let final_record = record
+            .canonical_retained(&HashMap::new(), &[], &HashSet::new(), &[], &mut current)
+            .unwrap()
+            .unwrap();
+        assert_eq!(current, expected);
+        assert_eq!(final_record.0, xml);
+        assert_eq!(final_record.1.bytes(), xml);
+        results.insert("retained_actual_readback_success".into(), true);
+        assert_eq!(results.len(), 10);
+        assert!(results.values().all(|passed| *passed));
     }
 
     // A genuine byte-opened canonical producer, not the factory's pre-normalized root model.
