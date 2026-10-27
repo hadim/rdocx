@@ -22685,7 +22685,14 @@ fn authored_timeline_rectangle(slide: &CT_Slide, name: &str, color: &str) -> Opt
         .as_bytes(),
     )
     .ok()?;
-    (properties.fill.as_ref() == Some(&expected_fill)).then_some(id)
+    let plain_line = oxml_drawing::line::CT_LineProperties::from_xml(
+        br#"<a:ln xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:noFill/></a:ln>"#,
+    )
+    .ok()?;
+    (properties.fill.as_ref() == Some(&expected_fill)
+        && properties.line.as_ref() == Some(&plain_line)
+        && properties.effects.as_ref() == Some(&oxml_drawing::effect::CT_EffectList::default()))
+    .then_some(id)
 }
 
 fn powerpoint_timeline_oracle_source_bytes() -> Vec<u8> {
@@ -22752,6 +22759,30 @@ fn powerpoint_timeline_oracle_source_bytes() -> Vec<u8> {
             OpcPackage::resolve_rel_target(&presentation_part, &relationship.target)
         })
         .collect::<Vec<_>>();
+    // Isolate animation from the template's inherited line and outer shadow.
+    // Keep every authored Hero and the click marker on the same plain-paint policy.
+    for part in &slide_parts {
+        let mut slide = CT_Slide::from_xml(package.get_part(part).unwrap()).unwrap();
+        for child in &mut slide.common_slide_data.shape_tree.children {
+            if !matches!(
+                child.non_visual_name().as_deref(),
+                Some("!!Hero" | "Click fill marker")
+            ) {
+                continue;
+            }
+            if let ShapeTreeChild::Shape(shape) = child {
+                shape.shape_properties.line = Some(
+                    oxml_drawing::line::CT_LineProperties::from_xml(
+                        br#"<a:ln xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:noFill/></a:ln>"#,
+                    )
+                    .unwrap(),
+                );
+                shape.shape_properties.effects =
+                    Some(oxml_drawing::effect::CT_EffectList::default());
+            }
+        }
+        package.set_part(part, slide.to_xml().unwrap());
+    }
     let evaluator_part = &slide_parts[0];
     let mut evaluator_slide =
         CT_Slide::from_xml(package.get_part(evaluator_part).unwrap()).unwrap();
@@ -22759,12 +22790,13 @@ fn powerpoint_timeline_oracle_source_bytes() -> Vec<u8> {
         .expect("one visible authored Hero rectangle");
     let timing = format!(
         r#"<p:timing xmlns:p="{P_NS}"><p:tnLst><p:seq><p:cTn id="100" dur="4000"><p:childTnLst>
-        <p:animEffect transition="in" filter="appear"><p:cBhvr><p:cTn id="101" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl></p:cBhvr></p:animEffect>
+        <p:set><p:cBhvr><p:cTn id="101" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set>
         <p:animEffect transition="in" filter="wipe(left)"><p:cBhvr><p:cTn id="102" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl></p:cBhvr></p:animEffect>
-        <p:anim from="100000" to="50000"><p:cBhvr><p:cTn id="103" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl><p:attrNameLst><p:attrName>style.opacity</p:attrName></p:attrNameLst></p:cBhvr></p:anim>
+        <p:anim from="1" to="0.5" calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="103" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl><p:attrNameLst><p:attrName>style.opacity</p:attrName></p:attrNameLst></p:cBhvr></p:anim>
         <p:par><p:cTn id="104" dur="1000"><p:childTnLst>
-        <p:anim from="100000" to="150000"><p:cBhvr><p:cTn id="105" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl><p:attrNameLst><p:attrName>scale</p:attrName></p:attrNameLst></p:cBhvr></p:anim>
-        <p:anim from="0" to="5400000"><p:cBhvr><p:cTn id="106" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl><p:attrNameLst><p:attrName>spin</p:attrName></p:attrNameLst></p:cBhvr></p:anim>
+        <p:anim from="1" to="1.5" calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="105" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl><p:attrNameLst><p:attrName>ScaleX</p:attrName></p:attrNameLst></p:cBhvr></p:anim>
+        <p:anim from="1" to="1.5" calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="110" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl><p:attrNameLst><p:attrName>ScaleY</p:attrName></p:attrNameLst></p:cBhvr></p:anim>
+        <p:anim from="0" to="90" calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="106" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl><p:attrNameLst><p:attrName>style.rotation</p:attrName></p:attrNameLst></p:cBhvr></p:anim>
         <p:animMotion origin="layout" path="M 0 0 L .15 .1 E"><p:cBhvr><p:cTn id="107" dur="1000" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl></p:cBhvr></p:animMotion>
         </p:childTnLst></p:cTn></p:par>
         <p:animEffect transition="out" filter="fade"><p:cBhvr><p:cTn id="108" dur="500" fill="hold"/><p:tgtEl><p:spTgt spid="{evaluator_target}"/></p:tgtEl></p:cBhvr></p:animEffect>
@@ -23124,7 +23156,13 @@ fn powerpoint_timeline_authored_targets_reject_ambiguous_or_invisible_owners() {
         None
     );
 
-    for invalid in ["placeholder", "empty extent", "off page"] {
+    for invalid in [
+        "placeholder",
+        "empty extent",
+        "off page",
+        "inherited line",
+        "inherited effect",
+    ] {
         let mut candidate = original.clone();
         let ShapeTreeChild::Shape(shape) =
             &mut candidate.common_slide_data.shape_tree.children[index]
@@ -23133,6 +23171,8 @@ fn powerpoint_timeline_authored_targets_reject_ambiguous_or_invisible_owners() {
         };
         match invalid {
             "placeholder" => shape.placeholder = placeholder.placeholder.clone(),
+            "inherited line" => shape.shape_properties.line = None,
+            "inherited effect" => shape.shape_properties.effects = None,
             "empty extent" => {
                 shape
                     .shape_properties
