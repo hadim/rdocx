@@ -7,6 +7,12 @@
 **Base**: a57be365 on sprint/s95.4
 **Design date**: 2026-10-23
 
+## Execution boundary, 2026-10-27
+
+The API, preservation, refusal and acceptance contracts below remain binding. Problem descriptions, approval-time unrun statements and local provider-prefix checkpoints retain their historical source and scope. They do not describe the final integrated execution state. At this checkpoint, the native union and affected corrective cases, installed Python suites and typing, native Word and PowerPoint qualification with explicit source applicability, A7 measured memory and retained-history review, A9, the original Issue407 gate, hash49, lint, WASM, rustdoc, supply chain and policy observations are available. Actual producer identities remain attached to each observation. No old binary is relabelled as a new build.
+
+The remaining integrated acceptance debt at this checkpoint is Cell.add_picture's required flat-cost gate, the active README example batch, the clean22-package publication dry run and the final full-union record. The original failed attempts remain evidence. Status stays approved until the required final acceptance passes. When this plan becomes completed, its final source-bound delivery entry in docs/sprints/AS_BUILT.md supersedes these historical execution-status statements. Completion changes neither the contract nor any threshold. Build-only hosted wheel qualification belongs to release preparation before final release approval. It is not an additional acceptance criterion in these eight sprint designs. Publication remains separately approved at the exact reviewed main SHA.
+
 ## Problem
 
 Public callers can read and fill existing legacy form fields, and they can attach a generic `Field`, but they cannot author a complete text, checkbox, or drop-down legacy field with help, status, defaults, formatting, size, list, and calculation properties. `Field::from_legacy_form` does not exist. The current text projection prefers `w:default` over the result cache (`crates/rdocx-oxml/src/text.rs:4523`). The existing value rewriter writes the new value into `w:default`. That conflates the persistent reset default with the current typed or cached value. `ComplexFieldBuilder::separate_run` (`crates/rdocx-oxml/src/text.rs:5227`) is the physical fact for a present outer result region. The current writer emits an empty begin at `crates/rdocx-oxml/src/text.rs:12632` and has no `ffData` integration. Order and validation already live at `crates/rdocx-oxml/src/text.rs:4820`. Attachment already exists at `Run::add_field_value` (`crates/rdocx/src/run.rs:521`) and `Document::insert_field` (`crates/rdocx/src/field.rs:635`). Inventory and fill remain `Document::legacy_form_fields` and `Document::set_legacy_form_field_value`.
@@ -385,7 +391,7 @@ The Q4 local provider-prefix completion exception remains. Final Word differenti
 The checked local provider work below stays genuine and consumed. Q25 is a new final-native remediation, not a revocation of that completion.
 
 - [ ] Q25 narrow parser admission, all excluded-shape controls, literal/current/default and ordinary-update closure in the existing files.
-- [ ] Q25 independent microscope with zero defects/smells, scoped checks and explicit hash delta, then authenticated installed native-original ten-field GREEN. Keep native A6/final acceptance pending until its actual remaining observations pass.
+- [ ] Q25 independent microscope with zero defects/smells, scoped checks and explicit hash delta, then authenticated installed native-original ten-field GREEN. Qualify native A6 and final acceptance through their actual remaining observations.
 
 - [x] Add the enums, options, definition, and `Field::from_legacy_form` in existing `text.rs` and re-export them. Native and HLD edits stay on files already named in this plan.
 - [x] Bind Python only in existing `crates/rdocx-py/src/document.rs`, `crates/rdocx-py/src/run.rs`, `crates/rdocx-py/src/lib.rs`, `python/rdocx/__init__.py`, `python/rdocx/_rdocx.pyi`, and `tests/test_core.py`. No new tracked file, module, or test binary.
@@ -404,9 +410,9 @@ The checked local provider work below stays genuine and consumed. Q25 is a new f
 - [x] A7 `cross_consumer_render_fallback_before_empty_assignment` covers Rust native text, layout, deterministic PDF text extraction, and CLI `rdocx text` only. It passed in the remediation 7 batch. It does not execute Python fill or CLI fill.
 - [x] CLI fill is `fx241_cli_fill_five_kinds_preserves_order_source_and_old_tag_contract` in `crates/rdocx-cli/tests/integration.rs`. This metadata pass ran that one current-source test. 1 passed, 0 failed, 99 filtered, exit 0. Test binary `target/debug/deps/integration-27068b8b419f3d54` SHA-256 `09d10b975e1d8650695f0cfc73227bdb6d164a81ce2f5ed2789b53c46743bc89`. CLI `target/debug/rdocx` SHA-256 `8c22713ad61ec432a2bf88022fc4f698f12ac9f3e87dbd48072c9341c71ebb00`.
 - [x] Applicability audit. No DOCX converter and no legacy-default to AcroForm consumer was found under `crates/rdocx`. Issue #381 stays a separate later plan. No AcroForm runtime pass is claimed. That future exporter is outside F-288 acceptance. The unchanged low-level PDF backend is not legacy qualification.
-- [ ] Leave Word differential and schema-order native proof pending.
+- [ ] Qualify the required Word differential, schema-order and source-applicability observations with their actual native producers.
 - [x] Reconcile DOCX-055 for the implemented additive surface in this metadata pass. `scripts/test_sprint_workflow.py` excludes F-288 from the incomplete live-owner inventory because the row leaves that set.
-- [ ] The prefix done write, completion-metadata status assertion, and final source freeze remain later. Word A6, full verification, the hash harness, the installed suite, and riders stay unticked.
+- [ ] Reconcile final completion metadata and source freeze after actual Word A6, full verification, hash harness, installed suites and required riders pass.
 
 ## Open questions
 

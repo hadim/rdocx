@@ -7605,7 +7605,9 @@ thread_local! {
 
 fn note_frame_namespace_scan(bytes: usize) {
     #[cfg(debug_assertions)]
-    FRAME_NAMESPACE_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    if !STAGING_WORK_PAUSED.with(std::cell::Cell::get) {
+        FRAME_NAMESPACE_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    }
     #[cfg(not(debug_assertions))]
     let _ = bytes;
 }
@@ -7624,7 +7626,9 @@ thread_local! {
 
 fn note_namespace_scope_bytes(bytes: usize) {
     #[cfg(debug_assertions)]
-    NAMESPACE_SCOPE_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    if !STAGING_WORK_PAUSED.with(std::cell::Cell::get) {
+        NAMESPACE_SCOPE_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    }
     #[cfg(not(debug_assertions))]
     let _ = bytes;
 }
@@ -7643,7 +7647,9 @@ thread_local! {
 
 fn note_canonical_fragment(bytes: usize) {
     #[cfg(debug_assertions)]
-    CANONICAL_FRAGMENT_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    if !STAGING_WORK_PAUSED.with(std::cell::Cell::get) {
+        CANONICAL_FRAGMENT_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    }
     #[cfg(not(debug_assertions))]
     let _ = bytes;
 }
@@ -7663,7 +7669,9 @@ thread_local! {
 
 fn note_relationship_membership() {
     #[cfg(debug_assertions)]
-    RELATIONSHIP_MEMBERSHIP_OPS.with(|cell| cell.set(cell.get() + 1));
+    if !STAGING_WORK_PAUSED.with(std::cell::Cell::get) {
+        RELATIONSHIP_MEMBERSHIP_OPS.with(|cell| cell.set(cell.get() + 1));
+    }
 }
 
 #[cfg(all(test, debug_assertions))]
@@ -7680,7 +7688,9 @@ thread_local! {
 
 fn note_closed_body_guard(bytes: usize) {
     #[cfg(debug_assertions)]
-    CLOSED_BODY_GUARD_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    if !STAGING_WORK_PAUSED.with(std::cell::Cell::get) {
+        CLOSED_BODY_GUARD_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    }
     #[cfg(not(debug_assertions))]
     let _ = bytes;
 }
@@ -7700,7 +7710,9 @@ thread_local! {
 
 fn note_namespace_span_bytes(bytes: usize) {
     #[cfg(debug_assertions)]
-    NAMESPACE_SPAN_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    if !STAGING_WORK_PAUSED.with(std::cell::Cell::get) {
+        NAMESPACE_SPAN_BYTES.with(|cell| cell.set(cell.get() + bytes));
+    }
     #[cfg(not(debug_assertions))]
     let _ = bytes;
 }
@@ -7826,8 +7838,7 @@ fn assert_same_reopen(reopened: &Result<Document>, through_zip: &Result<Document
             assert_eq!(reopened.identifiers, expected.identifiers);
             assert!(reopened.package.same_package_as(&expected.package));
             let saved = |document: &Document| {
-                let mut copy = document.clone_for_staging();
-                copy.parsed = None;
+                let mut copy = document.clone_for_debug_reference();
                 without_reopen_work(|| without_staging_work(|| copy.to_bytes()))
                     .map_err(|error| error.to_string())
             };
@@ -7856,6 +7867,28 @@ fn assert_same_reopen(reopened: &Result<Document>, through_zip: &Result<Document
 pub fn take_reopen_work() -> [usize; 3] {
     let work = REOPEN_WORK.with(|cell| cell.replace(ReopenWork::default()));
     [work.zip_writes, work.main_parses, work.scanned]
+}
+
+/// Compare an already initialized retained read without warming its shared cache.
+#[cfg(debug_assertions)]
+fn assert_kept_main_document_without_initializing(
+    kept: Option<&Parsed>,
+    source: Option<&[u8]>,
+    current: &CT_Document,
+) {
+    let fresh = source.and_then(|xml| CT_Document::from_xml(xml).ok());
+    let fresh_matches = fresh.as_ref() == Some(current);
+    if let Some(cached) = kept.and_then(|kept| kept.main_document.get()) {
+        assert_eq!(
+            cached.as_ref() == Some(current),
+            fresh_matches,
+            "the kept main part parse disagrees with a fresh parse"
+        );
+    }
+    assert!(
+        fresh_matches,
+        "opened-main serialization proof disagrees with a parse"
+    );
 }
 
 /// Keep a debug comparison from counting as staging work.
@@ -22491,6 +22524,16 @@ impl Document {
         }
     }
 
+    /// Independent cold reference state for debug agreement oracles only.
+    #[cfg(debug_assertions)]
+    fn clone_for_debug_reference(&self) -> Self {
+        let mut copy = self.clone_for_staging();
+        copy.parsed = None;
+        copy.main_part_blocks = None;
+        copy.main_body_scans = Arc::new(Mutex::new(MainBodyScans::default()));
+        copy
+    }
+
     fn canonicalize_typed_identifiers(&mut self) -> Result<()> {
         self.canonicalize_bookmark_ids()?;
         self.canonicalize_numbering_ids()?;
@@ -22763,17 +22806,10 @@ impl Document {
                 #[cfg(debug_assertions)]
                 if let Some(kept) = model_kept.as_deref() {
                     without_staging_work(|| {
-                        let cached = kept.main_document();
-                        let fresh = CT_Document::from_xml(source).ok();
-                        let cached_matches = cached == Some(&self.document);
-                        let fresh_matches = fresh.as_ref() == Some(&self.document);
-                        assert_eq!(
-                            cached_matches, fresh_matches,
-                            "the kept main part parse disagrees with a fresh parse"
-                        );
-                        assert!(
-                            fresh_matches,
-                            "opened-main serialization proof disagrees with a parse"
+                        assert_kept_main_document_without_initializing(
+                            Some(kept),
+                            Some(source),
+                            &self.document,
                         );
                     });
                 }
@@ -23013,11 +23049,7 @@ impl Document {
             .and_then(Option::as_ref)
             .expect("checked unchanged main part");
         #[cfg(debug_assertions)]
-        let mut full = self.clone_for_staging();
-        #[cfg(debug_assertions)]
-        {
-            full.parsed = None;
-        }
+        let mut full = self.clone_for_debug_reference();
         let result = self.canonicalize_beside_unchanged_main_part(unchanged);
         #[cfg(debug_assertions)]
         {
@@ -24822,9 +24854,7 @@ impl Document {
         {
             let forgetting = |document: &Document| -> Result<Document> {
                 document.validate_model_resource_limits()?;
-                let mut copy = document.clone_for_staging();
-                copy.parsed = None;
-                Ok(copy)
+                Ok(document.clone_for_debug_reference())
             };
             let bytes = without_staging_work(|| -> Result<bool> {
                 Ok(forgetting(self)?.to_bytes()? == forgetting(other)?.to_bytes()?)
@@ -25026,11 +25056,7 @@ impl Document {
     ) -> Result<Self> {
         let in_memory = limits == PackageReadLimits::UNBOUNDED && self.read_package().is_some();
         #[cfg(debug_assertions)]
-        let through_zip = in_memory.then(|| {
-            let mut copy = self.clone_for_staging();
-            copy.parsed = None;
-            copy
-        });
+        let through_zip = in_memory.then(|| self.clone_for_debug_reference());
         let reopened = self.reopen_staged(in_memory, limits);
         #[cfg(debug_assertions)]
         if let Some(copy) = through_zip {
@@ -26058,17 +26084,10 @@ impl Document {
         let typed_document_is_unchanged = if kept.is_some() && self.opened_main_still_serializes() {
             #[cfg(debug_assertions)]
             without_staging_work(|| {
-                let cached = kept.as_deref().and_then(Parsed::main_document);
-                let fresh = existing_document_xml.and_then(|xml| CT_Document::from_xml(xml).ok());
-                let cached_matches = cached == Some(&self.document);
-                let fresh_matches = fresh.as_ref() == Some(&self.document);
-                assert_eq!(
-                    cached_matches, fresh_matches,
-                    "the kept main part parse disagrees with a fresh parse"
-                );
-                assert!(
-                    fresh_matches,
-                    "opened-main serialization proof disagrees with a parse"
+                assert_kept_main_document_without_initializing(
+                    kept.as_deref(),
+                    existing_document_xml,
+                    &self.document,
                 );
             });
             true
@@ -54092,6 +54111,337 @@ mod tests {
                 .masked_query_relationship_ids(&field_xml, &field)
                 .is_none()
         );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_reference_pause_counts_only_actual_production_proofs() {
+        let take = || {
+            [
+                take_frame_namespace_bytes(),
+                take_namespace_scope_bytes(),
+                take_canonical_fragment_bytes(),
+                take_relationship_membership_ops(),
+                take_closed_body_guard_bytes(),
+                take_namespace_span_bytes(),
+            ]
+        };
+        let probe = || {
+            let mut document = Document::new();
+            document.document.body.content.push(BodyContent::RawXml(Box::new(
+                br#"<w:p xmlns:unused="urn:unused"><w:hyperlink r:id="rIdActual"><w:r><w:t>text</w:t></w:r></w:hyperlink></w:p>"#.to_vec(),
+            )));
+            let (xml, blocks) = MainPartBlocks::serialize(
+                &document.document,
+                &document.document.body.content,
+                None,
+            )
+            .unwrap();
+            let shell = [blocks.head.as_slice(), blocks.tail.as_slice()].concat();
+            let frame = blocks
+                .frame_namespace_policy(&shell)
+                .expect("actual frame policy");
+            assert!(blocks.blocks[0].empty_namespace_owner(frame).is_some());
+            let scopes = document_namespace_scopes(&xml).unwrap();
+            assert!(
+                blocks.blocks[0]
+                    .namespace_span_proof(&blocks.head, &blocks.tail, &scopes,)
+                    .is_some()
+            );
+            assert_eq!(
+                blocks.proved_relationship_ids(&xml, &[]),
+                Some(vec!["rIdActual".to_owned()])
+            );
+            let _ = take_closed_body_guard_bytes();
+            assert!(
+                closed_word_body(&xml, 0..xml.len()).is_none(),
+                "real refusal remains authoritative"
+            );
+            // Only this last real guard is read here. Other five units stay pending.
+            let rejected = take_closed_body_guard_bytes();
+            (xml.len(), rejected)
+        };
+        let _ = take();
+        let (len, rejected) = probe();
+        let mut counted = take();
+        assert_eq!(rejected, len);
+        counted[4] = rejected;
+        assert!(
+            counted.into_iter().all(|value| value > 0),
+            "actual unpaused units {counted:?}"
+        );
+        let (_, rejected) = without_staging_work(probe);
+        assert_eq!(rejected, 0);
+        assert_eq!(take(), [0; 6]);
+        let (_, rejected) = probe();
+        assert!(rejected > 0, "leaving the pause restores real counting");
+        let _ = take();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_reference_main_parse_peek_does_not_warm_or_hide_failure() {
+        let mut seed = Document::new();
+        seed.add_paragraph("original");
+        let mut document = Document::from_bytes(&seed.to_bytes().unwrap()).unwrap();
+        let xml = document
+            .package
+            .get_part(&document.doc_part_name)
+            .unwrap()
+            .to_vec();
+        let mut kept = Parsed::of(
+            &document.package,
+            &document.doc_part_name,
+            true,
+            document.root_namespace_declarations.clone(),
+            document.body_namespace_declarations.clone(),
+            document.body_namespace_bindings.clone(),
+            None,
+        );
+        assert!(kept.main_document.get().is_none());
+        assert_kept_main_document_without_initializing(Some(&kept), Some(&xml), &document.document);
+        assert!(
+            kept.main_document.get().is_none(),
+            "debug peek must leave a cold slot cold"
+        );
+        kept.main_document.set(None).unwrap();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert_kept_main_document_without_initializing(
+                    Some(&kept),
+                    Some(&xml),
+                    &document.document,
+                );
+            }))
+            .is_err(),
+            "a stored failed parse must not be treated as an uninitialized slot"
+        );
+        kept.main_document.take();
+        kept.main_document
+            .set(Some(document.document.clone()))
+            .unwrap();
+        assert_kept_main_document_without_initializing(Some(&kept), Some(&xml), &document.document);
+        document.add_paragraph("different");
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert_kept_main_document_without_initializing(
+                    None,
+                    Some(&xml),
+                    &document.document,
+                );
+            }))
+            .is_err(),
+            "fresh-model agreement remains unconditional"
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_reference_save_and_reopen_leave_original_memos_untouched() {
+        fn child_state(block: &BodyBlockScan) -> (usize, [bool; 8]) {
+            (
+                block as *const BodyBlockScan as usize,
+                [
+                    block.proved.get().is_some(),
+                    block.identifier_proof.get().is_some(),
+                    block.canonical_read.get().is_some(),
+                    block.empty_namespace_owners.get().is_some(),
+                    block.namespace_spans.get().is_some(),
+                    block.decodes.get().is_some(),
+                    block.scoped_correspondence.get().is_some(),
+                    block.staged.is_some(),
+                ],
+            )
+        }
+        fn slots(blocks: &MainPartBlocks) -> Vec<(usize, [bool; 8])> {
+            blocks
+                .blocks
+                .iter()
+                .map(|block| child_state(block))
+                .collect()
+        }
+        #[allow(clippy::type_complexity)]
+        fn record_state(
+            blocks: &MainPartBlocks,
+        ) -> (
+            Vec<u8>,
+            Vec<u8>,
+            Range<usize>,
+            Option<(usize, Vec<u8>)>,
+            [bool; 6],
+            Vec<(usize, [bool; 8])>,
+        ) {
+            (
+                blocks.head.clone(),
+                blocks.tail.clone(),
+                blocks.root.clone(),
+                blocks
+                    .part
+                    .as_ref()
+                    .map(|part| (Arc::as_ptr(part) as usize, part.as_ref().clone())),
+                [
+                    blocks.frame.get().is_some(),
+                    blocks.nested_namespace_owners.get().is_some(),
+                    blocks.identifier_frame.get().is_some(),
+                    blocks.canonical_frame.get().is_some(),
+                    blocks.namespace_frame.get().is_some(),
+                    blocks.namespace_frame_spans.get().is_some(),
+                ],
+                slots(blocks),
+            )
+        }
+        const OPAQUE: &[u8] = br#"<extra:opaque xmlns:extra="urn:kept" extra:flag="keep"><extra:property/></extra:opaque>"#;
+        let preserved = |xml: &[u8]| {
+            let xml = std::str::from_utf8(xml).unwrap();
+            for token in [
+                "<q:fldChar",
+                "fldCharType=\"begin\"",
+                "extra:flag=\"keep\"",
+                "<extra:property",
+                "w:id=\"0\"",
+                "w:name=\"legacy\"",
+                "<w15:repeatingSection",
+                "<w:default w:val=\"keep\"",
+                ">typed</w:t>",
+            ] {
+                assert!(xml.contains(token), "retained token {token} in {xml}");
+            }
+            assert!(xml.contains("urn:kept"));
+            assert!(
+                xml.as_bytes()
+                    .windows(OPAQUE.len())
+                    .any(|bytes| bytes == OPAQUE)
+            );
+        };
+        let body = r#"<w:p><w:bookmarkStart w:id="0" w:name="legacy"/><w:r><q:fldChar xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" q:fldCharType="begin"><w:ffData><w:name w:val="legacy"/><w:textInput><w:default w:val="keep"/></w:textInput></w:ffData></q:fldChar></w:r><w:r><w:instrText> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>typed</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:bookmarkEnd w:id="0"/></w:p><extra:opaque xmlns:extra="urn:kept" extra:flag="keep"><extra:property/></extra:opaque><w:sdt xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w:sdtPr><w15:repeatingSection/></w:sdtPr><w:sdtContent><w:sdt><w:sdtPr><w15:repeatingSectionItem/></w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt></w:sdtContent></w:sdt>"#;
+        let mut seed = issue407_document(body, false);
+        assert!(
+            seed.document.body.content.iter().any(
+                |item| matches!(item, BodyContent::RawXml(bytes) if bytes.as_slice() == OPAQUE)
+            )
+        );
+        seed.set_header("single ' quote header");
+        let mut producer = OpcPackage::from_reader(Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        let main = std::str::from_utf8(producer.get_part(&seed.doc_part_name).unwrap()).unwrap();
+        let quoted = main.replacen(
+            r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#,
+            "xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'",
+            1,
+        );
+        assert_ne!(quoted, main, "real producer namespace uses single quotes");
+        preserved(quoted.as_bytes());
+        producer.set_part(&seed.doc_part_name, quoted.into_bytes());
+        let mut bytes = Cursor::new(Vec::new());
+        producer.write_to(&mut bytes).unwrap();
+        let bytes = bytes.into_inner();
+        for warm in [false, true] {
+            let document = Document::from_bytes(&bytes).unwrap();
+            let fields = format!("{:?}", document.legacy_form_fields_with_defaults().unwrap());
+            assert!(fields.contains("keep") && fields.contains("typed"));
+            let (xml, record) = document.canonical_source().unwrap();
+            let record = record.unwrap();
+            if warm {
+                let _ = record.proved_namespace_spans(&xml);
+                let _ = record.proved_relationship_ids(&xml, &[]);
+            }
+            preserved(document.package.get_part(&document.doc_part_name).unwrap());
+            let before_slots = record_state(&record);
+            let before_owned = document.main_part_blocks.as_ref().map(record_state);
+            let parsed = document.parsed.as_ref().unwrap();
+            let before_parsed = [
+                parsed.main_document.get().is_some(),
+                parsed.nested_namespace_owners.get().is_some(),
+                parsed.source_blocks.get().is_some(),
+                parsed.unchanged_main_part.get().is_some(),
+            ];
+            let before_writer = {
+                let scans = document.main_body_scans.lock().unwrap();
+                (
+                    scans.head.clone(),
+                    scans.tail.clone(),
+                    scans.fingerprint,
+                    scans
+                        .blocks
+                        .iter()
+                        .map(|block| Arc::as_ptr(block) as usize)
+                        .collect::<Vec<_>>(),
+                    scans
+                        .frame
+                        .as_ref()
+                        .map(|frame| (child_state(frame), frame.bytes.clone())),
+                    scans.serialized.as_ref().map(record_state),
+                )
+            };
+            let mut reference = document.clone_for_debug_reference();
+            assert!(reference.parsed.is_none() && reference.main_part_blocks.is_none());
+            assert!(!Arc::ptr_eq(
+                &reference.main_body_scans,
+                &document.main_body_scans
+            ));
+            {
+                let cold = reference.main_body_scans.lock().unwrap();
+                assert!(
+                    cold.frame.is_none() && cold.blocks.is_empty() && cold.serialized.is_none()
+                );
+            }
+            let saved = without_staging_work(|| reference.to_bytes().unwrap());
+            let saved_package = OpcPackage::from_reader(Cursor::new(&saved)).unwrap();
+            preserved(saved_package.get_part(&document.doc_part_name).unwrap());
+            let reopened = without_staging_work(|| {
+                document
+                    .clone_for_debug_reference()
+                    .reopen_prepared_staged()
+                    .unwrap()
+            });
+            assert_eq!(
+                format!("{:?}", reopened.legacy_form_fields_with_defaults().unwrap()),
+                fields
+            );
+            assert_eq!(
+                reopened.document.to_xml().unwrap(),
+                document.document.to_xml().unwrap()
+            );
+            let mut whole = document.clone_for_debug_reference();
+            let _off = CanonicalBlockProofOff::enter();
+            assert_eq!(saved, without_staging_work(|| whole.to_bytes().unwrap()));
+            assert_eq!(
+                before_slots,
+                record_state(&record),
+                "reference cannot initialize shared child facts"
+            );
+            assert_eq!(
+                before_owned,
+                document.main_part_blocks.as_ref().map(record_state)
+            );
+            assert_eq!(
+                before_parsed,
+                [
+                    parsed.main_document.get().is_some(),
+                    parsed.nested_namespace_owners.get().is_some(),
+                    parsed.source_blocks.get().is_some(),
+                    parsed.unchanged_main_part.get().is_some()
+                ]
+            );
+            let scans = document.main_body_scans.lock().unwrap();
+            assert_eq!(
+                before_writer,
+                (
+                    scans.head.clone(),
+                    scans.tail.clone(),
+                    scans.fingerprint,
+                    scans
+                        .blocks
+                        .iter()
+                        .map(|block| Arc::as_ptr(block) as usize)
+                        .collect::<Vec<_>>(),
+                    scans
+                        .frame
+                        .as_ref()
+                        .map(|frame| (child_state(frame), frame.bytes.clone())),
+                    scans.serialized.as_ref().map(record_state)
+                )
+            );
+        }
     }
 
     #[cfg(debug_assertions)]

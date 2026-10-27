@@ -7,6 +7,12 @@
 **Base**: a57be365 on sprint/s95.4
 **Design date**: 2026-10-23
 
+## Execution boundary, 2026-10-27
+
+The API, preservation, refusal and acceptance contracts below remain binding. Problem descriptions, approval-time unrun statements and local provider-prefix checkpoints retain their historical source and scope. They do not describe the final integrated execution state. At this checkpoint, the native union and affected corrective cases, installed Python suites and typing, native Word and PowerPoint qualification with explicit source applicability, A7 measured memory and retained-history review, A9, the original Issue407 gate, hash49, lint, WASM, rustdoc, supply chain and policy observations are available. Actual producer identities remain attached to each observation. No old binary is relabelled as a new build.
+
+The remaining integrated acceptance debt at this checkpoint is Cell.add_picture's required flat-cost gate, the active README example batch, the clean22-package publication dry run and the final full-union record. The original failed attempts remain evidence. Status stays approved until the required final acceptance passes. When this plan becomes completed, its final source-bound delivery entry in docs/sprints/AS_BUILT.md supersedes these historical execution-status statements. Completion changes neither the contract nor any threshold. Build-only hosted wheel qualification belongs to release preparation before final release approval. It is not an additional acceptance criterion in these eight sprint designs. Publication remains separately approved at the exact reviewed main SHA.
+
 ## Problem
 
 Callers can create content controls, set bindings, repeat and remove controls, insert fields, add story permission ranges, and set document protection. They cannot validate, fill, reset, or protect a form as one atomic operation over those authoritative parts. A second document tree, form-builder object, or serialized shadow value would fork the model. Existing high-level control value updates fill main-body controls (`crates/rdocx/src/content_control.rs:208`). Creation is at line 1373, payloads at 1346, binding at 1454, the placeholder flag at 1531, repeat at 1592, and remove at 1625. `set_value_metadata(None)` (`crates/rdocx-oxml/src/content_control.rs:274`, `367`, `402`) does not clear `fullDate`, so a placeholder reset must clear that field explicitly. Permission ranges enter at `crates/rdocx/src/comments.rs:441`. Protection enters at `crates/rdocx/src/document.rs:33289`. Password derivation is an existing non-goal.

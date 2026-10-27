@@ -5,6 +5,12 @@
 **Size**: L
 **Depends on**: F-X260, F-X261
 
+## Execution boundary, 2026-10-27
+
+The API, preservation, refusal and acceptance contracts below remain binding. Problem descriptions, approval-time unrun statements and local provider-prefix checkpoints retain their historical source and scope. They do not describe the final integrated execution state. At this checkpoint, the native union and affected corrective cases, installed Python suites and typing, native Word and PowerPoint qualification with explicit source applicability, A7 measured memory and retained-history review, A9, the original Issue407 gate, hash49, lint, WASM, rustdoc, supply chain and policy observations are available. Actual producer identities remain attached to each observation. No old binary is relabelled as a new build.
+
+The remaining integrated acceptance debt at this checkpoint is Cell.add_picture's required flat-cost gate, the active README example batch, the clean22-package publication dry run and the final full-union record. The original failed attempts remain evidence. Status stays approved until the required final acceptance passes. When this plan becomes completed, its final source-bound delivery entry in docs/sprints/AS_BUILT.md supersedes these historical execution-status statements. Completion changes neither the contract nor any threshold. Build-only hosted wheel qualification belongs to release preparation before final release approval. It is not an additional acceptance criterion in these eight sprint designs. Publication remains separately approved at the exact reviewed main SHA.
+
 ## Problem
 
 Python line spacing is inconsistent across default, paragraph and style writes. The current style writer already handles `Length` in its else branch. The defect is that a plain `int` is treated as EMU, a float is a multiple, and the default surface accepts `Length` only, plus on-grid loss of an absent `lineRule`. The old claim that the `Length` branch misclassified `Length` is withdrawn. Native `Paragraph::set_line_spacing_multiple` at `crates/rdocx/src/paragraph.rs:1613` casts `multiple * 240.0` with `as i32` and does not refuse non-finite values. `auto_line_spacing` stays that infallible cast domain and also repairs the on-grid case. Length-first dispatch is required for the new numeric rule. Default space fields stay `Length` only.
@@ -235,7 +241,7 @@ Expected hash-corpus deltas remain final and unrun. The self-closing endnote `PA
 - [x] Add readonly `anchor_issue` on the frozen comment and CLI JSON.
 - [x] Add `zip_entries` and point `part_names` and `part_xml` at the same entry owner.
 - [x] Land the named tests in existing entrypoints.
-- [ ] Leave A10 open and leave Word evidence pending.
+- [ ] Qualify the required native Word and final-union evidence while retaining A10 as the explicit unsupported limitation outside this gate.
 
 ## Open questions
 

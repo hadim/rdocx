@@ -50,12 +50,13 @@ class SprintWorkflowTests(unittest.TestCase):
         self.assertEqual(wasm["package"]["version"], "0.12.1")
         self.assertFalse(wasm["package"]["publish"])
 
-    def test_s953_release_notes_keep_exact_family_contribution_inventory(self) -> None:
+    def test_s954_release_notes_keep_exact_family_contribution_inventory(self) -> None:
         changelog = (workflow.REPO / "CHANGELOG.md").read_text()
         expected = {
-            "v0.16.3": ({360, 385, 387, 388, 389, 390, 391, 398, 400},
-                         {393, 395, 396, 397, 399, 401}),
-            "rpptx-v0.14.3": ({385, 388, 389, 392}, {393, 394, 397}),
+            "v0.16.3": ({360, 385, 387, 388, 389, 390, 391, 398, 400, 402, 404, 405, 406, 407, 408},
+                         {393, 395, 396, 397, 399, 401, 409, 410, 411, 412, 413, 414, 415,
+                          416, 417, 418, 419, 420, 421, 422}),
+            "rpptx-v0.14.3": ({385, 388, 389, 392, 403}, {393, 394, 397, 413, 416}),
         }
         for tag, (issues, pulls) in expected.items():
             notes = workflow.render_release_notes(changelog, tag)

@@ -39,7 +39,7 @@ rows are the enforced release-mode bounds plus one dated observation.
 
 | Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
 |---|---|---|---|---|---|---|---|---|
-| Crates.io archive: rdocx | 4,050,032 compressed bytes, 53,807,713 member bytes, 37 members | 0.16.3 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo publish --workspace --dry-run --allow-dirty --locked` | Tracked `rdocx` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-26 |
+| Crates.io archive: rdocx | 4,105,920 compressed bytes, 54,118,469 member bytes, 37 members | 0.16.3 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo publish --workspace --dry-run --allow-dirty --locked` | Tracked `rdocx` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-27 |
 | Large-document layout throughput | minimum 250 pages/s, observed 31,019.1 pages/s | rdocx 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | release, one test thread | 1,000 one-page paragraphs with deterministic fonts | `cargo test -p rdocx --test regression_test --release a_thousand_page_document_paginates_and_renders_within_the_declared_limits -- --ignored --exact --nocapture --test-threads=1` | pages per wall-clock second | 2026-09-19 |
 | Large-document layout peak allocation | maximum 64 MiB, observed 29.03 MiB | rdocx 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | release, one test thread | 1,000 one-page paragraphs with deterministic fonts | `cargo test -p rdocx --test regression_test --release a_thousand_page_document_paginates_and_renders_within_the_declared_limits -- --ignored --exact --nocapture --test-threads=1` | peak live allocation | 2026-09-19 |
 | Large-document PDF throughput | minimum 1,000 pages/s, observed 60,058.0 pages/s | rdocx 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | release, one test thread | 1,000 deterministic layout pages | `cargo test -p rdocx --test regression_test --release a_thousand_page_document_paginates_and_renders_within_the_declared_limits -- --ignored --exact --nocapture --test-threads=1` | pages per wall-clock second | 2026-09-19 |
@@ -265,7 +265,7 @@ of a native Rust API, project-owned Word layout, fixed and flow outputs, a CLI,
 Python, and a browser surface. That statement is bounded to the official
 evidence set and review date. See the official [python-docx document guide](https://python-docx.readthedocs.io/en/stable/user/documents.html),
 [docx-rs project](https://github.com/bokuweb/docx-rs), [docx4j PDF paths](https://www.docx4java.org/blog/2020/09/office-pptxxlsxdocx-to-pdf-to-in-docx4j-8-2-3/),
-[docx4j Markdown module](https://github.com/plutext/docx4j/tree/VERSION_17_1_1/docx4j-markdown),
+[docx4j Markdown module](https://github.com/plutext/docx4j/tree/6ae8731f989def24f62b96c2e6bf60eeac48a464/docx4j-markdown),
 [Aspose fixed-page documentation](https://docs.aspose.com/words/python-net/converting-to-fixed-page-format/),
 [Aspose format table](https://docs.aspose.com/words/python-net/supported-document-formats/),
 and [Aspose load behavior](https://docs.aspose.com/words/python-net/supported-features-on-document-load/).

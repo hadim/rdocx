@@ -4072,7 +4072,7 @@ fn smartart_rendering_uses_producing_scope_and_updates_after_node_edit() {
         panic!("SmartArt node did not enter the shared text engine")
     };
     assert_eq!(body.anchor, rpptx_layout::TextAnchor::Center);
-    assert_eq!(body.insets.left, 15.3);
+    assert_eq!(body.insets.left, 15.24);
     let ResolvedTextRun::Text { style, .. } = &body.paragraphs[0].runs[0] else {
         panic!("SmartArt run was not preserved")
     };

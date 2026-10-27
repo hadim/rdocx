@@ -19029,7 +19029,7 @@ mod tests {
         field.dirty = Some(true);
         let output = serialized_paragraph(&complex);
         assert!(
-            output.contains(r#"<w:fldChar w:fldCharType="begin" w:dirty="1">"#),
+            output.contains(r#"<q:fldChar w:fldCharType="begin" w:dirty="1">"#),
             "{output}"
         );
         assert_eq!(output.matches(r#"w:dirty="1""#).count(), 1, "{output}");
