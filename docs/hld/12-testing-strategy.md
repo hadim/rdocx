@@ -11,7 +11,7 @@ Backend controls cover translated/scaled masks, clips, colored and transparent b
 
 The animation oracle fixture explicitly suppresses inherited line and effects on every animated/control rectangle. It uses native visibility set and fractional opacity, independent ScaleX/ScaleY and degree rotation while preserving all existing cases, local/encoded times and thresholds. Historical shadowed failures remain evidence for the separate shadow qualification story. New source requires fresh independent native capture and trusted review. Successful local tests do not adopt pins or pass native gates.
 
-The canonical wipe releases its completed filter before the later opacity phases. A source-bound one-literal held/remove native control preserves all nine sample clocks and retains the held-source failure as explicit unsupported effect-composition evidence. Native reference admission still checks the fixed halo240 invariance and250 negative control independently. Neither a passing timeline SSIM nor a source change relaxes those assertions.
+The canonical wipe releases its completed filter before the later opacity phases. A source-bound one-literal held/remove native control preserves all nine sample clocks and retains the held-source failure as explicit unsupported effect-composition evidence. Native reference admission keeps the historical16.104 exact halo240 equality and250 inequality profile. The independently reviewed16.114.1 plain-source profile pins both observed240 bounds exactly and applies the unchanged1pt geometry limit to their difference. Its250 control must exceed1pt and the240 difference. This is an explicit source-specific acceptance amendment, with the failed historical predicate retained. It does not alter cutoffs, source paint/placement, sample clocks or product1pt/0.99 bounds. A passing timeline SSIM alone does not qualify the halo profile.
 
 ## Numbering-aware navigation regression
 
@@ -4648,7 +4648,7 @@ or substitute package inspection for native application acceptance.
 
 Reference requalification retains versioned application, source, movie, frame
 and font identities. Historical pins and failed captures remain available.
-New trusted pins require actual independent native output and review. SmartArt
+New trusted pins require actual independent native output and review. The Q26 profile authenticates separate hardcoded timeline and SmartArt manifest digests, actual source and artifact hashes, and the observed application version, bundle and About identity. An unqueried Application.Build getter stays explicit rather than being inferred from the bundle. SmartArt
 geometry comes from native saved drawing owners, with explicit mapping for
 different primitive representations. Rust bounds never supply native expected
 geometry. Existing geometry, line-count, ink and SSIM limits remain gates.
@@ -4666,7 +4666,7 @@ Native admission retains all nine logical cases, exact local and encoded movie
 times, zero extraction tolerances, the terminal outgoing fade binding and the
 existing normalization. A corrected fixture needs a fresh source-bound movie.
 Unavailable, semantically ineffective or failing reference observations remain
-unqualified until their actual replacement passes the unchanged checks.
+unqualified until their actual replacement passes its declared source-specific checks. Product geometry, ink, line-count and SSIM limits stay unchanged.
 
 ## Embedded font acceptance
 

@@ -22,7 +22,7 @@ Current storage is `parts: HashMap<String, Vec<u8>>` at `crates/oxml-opc/src/pac
 
 ## Approach
 
-Planning estimate is 6 to 10 developer-days, provisional and not a measurement. No new file or trait. Python signatures stay. Q9 allows one bounded Rust break and no other public break. A release version waits.
+Planning estimate is 6 to 10 developer-days, provisional and not a measurement. No new file or trait. Python signatures stay. Q9 allows one bounded Rust break and no other public break. The retained release-version resolution below applies.
 
 ### OPC storage (Q9)
 
@@ -37,6 +37,10 @@ pub fn remove_part(&mut self, part_name: &str) -> Option<Arc<Vec<u8>>>,
 Instantiation one is the existing `Vec<u8>` caller: `package.set_part(name, mutate(xml).into_bytes())`. Instantiation two is `Arc::clone` of shared media at PR413 diff lines 3230, 3254 and 3268 in `rpptx` embed-media call sites. Both are structural and present in the implemented feature.
 
 `get_part` stays `Option<&[u8]>`.
+
+### Retained release-version resolution
+
+Q9's deferred release-version decision is resolved by the retained-version policy already approved in F-X263 and Root's selection on2026-10-27 under the user's standing instruction to choose recommended options. Keep prepared Word0.16.3 and shared/PowerPoint0.14.3. F-X263's completed plan explicitly superseded the earlier0.17.0/0.15.0 proposals. Disclose the approved Arc storage and removal source break prominently in both family release notes, including the Word OPC re-export and concrete migration examples. This is the existing retained-line exception, not a claim that the source break is semver patch-compatible. No version carrier changes are required. Historical Q9 answer provenance remains intact. Publication stays subject to separate final approval at the reviewed main SHA. The current S95.4 issue/PR contribution inventory is authenticated from preserved intake receipts under /private/tmp/s954-release-notes-assessment/contributions.json. No fresh scope was admitted. Release notes retain earlier unpublished work and add these eight stories, native limitations and source migration. Final acceptance and delivery records remain pending.
 
 ### Reread and compare
 
@@ -218,7 +222,7 @@ Existing `crates/rpptx-py/tests/test_documented_examples.py` and the native inte
 
 ## Risk routing
 
-- Public API. The Arc storage and `remove_part` return are the only approved Rust break. Python unchanged. Release version is later. Dry-run is final-only.
+- Public API. The Arc storage and `remove_part` return are the only approved Rust break. Python unchanged. The retained release-version resolution below applies. Dry-run is final-only.
 - Parser or serialiser. `reread` and `write_to` share entry rules. Child order stays.
 - PyO3 and WASM. No new Python signature. WASM check is final-only. Debug helpers are not exports.
 - Performance. A2 and A3 pin the workload, means, conversion from seconds to milliseconds, and the ban on compilation.
@@ -264,7 +268,7 @@ Trusted reread requires a baseline that is still unmodified and read-equivalent.
 
 A1's 248 count is 212 literal keys plus 36 dynamic keys, with Core 15 inside the 36. It is not a claim that the suite was executed.
 
-HLD impact is 03, 04, 06, 10, 12 and 14. HLD 15 is absent. No version statement is added. The M21 digest is measured here. Word 49 is expected unchanged. A10 is accounting only.
+HLD impact is 03, 04, 06, 10, 12 and 14. HLD 15 is absent. No version carrier is changed. Release notes apply the retained-version resolution recorded below. The M21 digest is measured here. Word 49 is expected unchanged. A10 is accounting only.
 
 ## F-X268 local provider checkpoint
 
@@ -293,7 +297,7 @@ Source head `70573c91030be7073d29e3451383060eb207207a` and integration `d0f17a6a
 
 The user confirmed on 2026-10-27 that the original reference bundle is unavailable and answered "Requalify on installed PowerPoint (Recommended)". The exact decision is recorded at `/private/tmp/s954-q26-powerpoint-requalification-approved.json`. This authorizes fresh independent native evidence for the four existing missing-reference checks. It does not add a PowerPoint comparison for the M21 notes digest, revoke the consumed local provider checkpoint, complete any final rider or guarantee that the new observations pass.
 
-The missing references pin PowerPoint 16.104, bundle 16.104.25121423, application build 1214. The installed application is 16.114.1, bundle 16.114.26102031. Capture and verify its actual application build before admitting a new manifest. Keep the historical pins, fixed frame hashes and missing-input failures. Do not overwrite historical artifacts or globally retarget unrelated recorded tests. Explicit new trusted capture pins and provenance require independent review. Runtime self-authentication by an unreviewed manifest is insufficient.
+The missing references pin PowerPoint 16.104, bundle 16.104.25121423, application build 1214. The installed application is 16.114.1, bundle 16.114.26102031. Record the observed version, bundle and About identity before admitting a new manifest. The Q26 profile records About build26102031 and explicitly leaves the Application.Build getter unqueried. Do not infer a short getter value from those observations. Historical1214 remains only on the legacy profile. Keep the historical pins, fixed frame hashes and missing-input failures. Do not overwrite historical artifacts or globally retarget unrelated recorded tests. Explicit new trusted capture pins and provenance require independent review. Runtime self-authentication by an unreviewed manifest is insufficient.
 
 Use the unchanged deterministic SmartArt source generator. The timeline source receives only the authored-owner correction specified below before fresh capture. SmartArt has exactly six families: list, hierarchy, cycle, relationship, matrix and pyramid. Native PDF export uses local Best for printing. Separate native-saved PPTX copies provide independent generated geometry. Rust diagnostic images and bounds are comparison subjects, never native expected values. All source bytes, native copies, PDFs, raster inputs, fonts, application identities and transformation commands are recorded and authenticated. Preserve original source decks. Use the pinned raster tools and the existing bounded comparison transforms. Native timeline evidence must come from an actual PowerPoint movie and exact encoded-time extraction with zero time tolerances. Preserve all nine cases and the terminal outgoing fade binding. No library-rendered replacement baseline, relabelled time, omitted case or threshold relaxation is authorized.
 
@@ -330,6 +334,10 @@ The plain-paint width/duration corpus qualifies `alpha_in = clamp(8*p - 7*u,0,1)
 The canonical animation fixture must use explicit plain solid rectangles with no line or inherited effects. Its appearance state uses the existing native style.visibility set operation, rather than claiming that the historical appear filter is a native-supported filter. The legacy Rust alias remains supported. This isolates the intended animation from unrelated theme shadows. It retains all six slides, nine logical cases, local and encoded sample times, click-marker binding and thresholds. The fixture change and expected new native source identity are separately labelled and independently reviewed before new capture. All shadowed sources, native files and failed comparisons stay available. Those observations exposed a distinct shadow falloff/effect-domain qualification gap, now pending under F-X269. Do not claim that the new mask qualifies those old shadowed samples or fixes general shadow fidelity. Native trust requires fresh exact-source capture and review, not a transformed old frame.
 
 The canonical wipe has fill=remove at node102 so its completed entrance no longer participates in later opacity and exit observations. This is an explicit isolated-lifetime fixture contract, not a product fix for held filter composition. A one-variable independently captured native experiment changed only that literal: source35bbcdb88f1d469fd0f5d7dc4e3df793316487928e78c4892ac8c7dea9a362e5, movie006367184cf06caced6cea58207806013b9221591db51817433307434d9a3a82. All nine original exact samples decoded, and appear/wipe pixels stayed byte-identical while later opacity became visible. The original held source53d7fdc382b3bd0650a7279626800b1d8f64205083c7772dfd1d4befffabca9c and all failures remain preserved. Native held-wipe interaction with later opacity is not qualified by the current evaluator and joins F-X269's effect-composition design debt. No time, threshold, sequence, root duration or other timing property changes. The independent source assessment is /private/tmp/s954-remove-wipe-native-assessment.json. All nine native comparison metrics now meet the existing limits in /private/tmp/s954-q26-debug-native-remediation-v2/comparison.json, but these remain diagnostic until trusted source/pin review and actual gates. The separate fixed halo assertion currently fails at cutoff240 and remains pending without relaxation. Root selects this recommended bounded fixture contract under the user's standing no-questions instruction on2026-10-27.
+
+### Q26 source-specific native halo acceptance amendment
+
+Root selects the independent recommended contract on2026-10-27 under the user's instruction to select recommended options without questions. This is a semantic acceptance amendment, not a claim that the historical exact-equality predicate passed. The user required preserving geometry and SSIM thresholds, which remain1pt and0.99 for the timeline product gate. The native16.104 fixed observation retains its exact240 equality assertion and original pins. The new16.114.1 plain-source35bbc profile instead authenticates source, application observation, movie, all exact samples and full manifest, pins both observed240 bounding boxes exactly, and requires their maximum edge difference in source points to stay within the existing1pt bound. Its250 control must both exceed1pt and exceed the240 edge difference. Keep cutoff240, cutoff250, original sample times, source placement/color and all product geometry/SSIM thresholds unchanged. Current actual240 boxes are143,215,720,648 and144,216,720,648, a0.5pt maximum difference. Actual250 boxes are143,215,720,648 and138,213,725,650, a2.5pt difference. These are new source-specific native observations, not proof of a codec-only or version-only cause. Source, plain paint and effect lifetime also changed. Preserve the old equality failure in /private/tmp/s954-remove-wipe-native-assessment.json. The stricter250 control rejects a useless cutoff without claiming identical native antialias pixels. The independent assessment and exact alternative are supplied by /root/review_shared_proof_batch. Final qualification requires independent review and actual execution of all four gates against the versioned trusted profile. New code must fail on a changed native frame, unknown manifest/source, exceeded1pt bound or absent250 sensitivity.
 
 ### Concrete output and API contract
 

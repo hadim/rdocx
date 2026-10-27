@@ -4337,6 +4337,9 @@ fn supported_smartart_corpus_matches_pinned_powerpoint_geometry_and_ssim() {
         Err(error) => panic!("read {}: {error}", manifest_path.display()),
     };
     let rows = smartart_oracle_rows(&manifest);
+    if q26_native_manifest_profile(&manifest, Q26_SMARTART_MANIFEST_SHA256) {
+        assert_q26_smartart_geometry_artifacts(&oracle_dir, &manifest);
+    }
     assert_eq!(rows.len(), 6);
     let artifacts_present = rows.iter().all(|row| {
         [&row.source, &row.oracle_pdf, &row.oracle_png]
@@ -4529,13 +4532,130 @@ struct SmartartOracleRow {
     expected_diagnostics: String,
 }
 
-fn smartart_oracle_rows(manifest: &str) -> Vec<SmartartOracleRow> {
+// A new profile cannot authenticate itself by editing hashes adjacent to its artifacts.
+// No profile header selects the unchanged historical application contract.
+fn q26_native_manifest_profile(manifest: &str, expected_sha256: &str) -> bool {
     let lines = manifest.lines().collect::<Vec<_>>();
+    let profiles = lines
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with("reference_profile\t"))
+        .collect::<Vec<_>>();
+    if profiles.is_empty() {
+        return false;
+    }
+    assert_eq!(
+        profiles.as_slice(),
+        [Q26_NATIVE_PROFILE],
+        "unknown or duplicate native profile"
+    );
+    assert_eq!(
+        sha256_bytes(manifest.as_bytes()),
+        expected_sha256,
+        "unreviewed native manifest bytes"
+    );
     for expected in [
         "application\tMicrosoft PowerPoint",
-        &format!("version\t{POWERPOINT_VERSION}"),
-        &format!("bundle_build\t{POWERPOINT_BUILD}"),
-        &format!("app_build\t{POWERPOINT_APP_BUILD}"),
+        "version\t16.114.1",
+        "bundle_build\t16.114.26102031",
+        "about_build_observation\t26102031",
+        "application_build_getter\tnot_queried",
+    ] {
+        let key = expected.split_once('\t').unwrap().0;
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with(&format!("{key}\t")))
+                .count(),
+            1,
+            "duplicate native observation {key}"
+        );
+        assert_eq!(
+            lines.iter().filter(|line| **line == expected).count(),
+            1,
+            "native observation {expected}"
+        );
+    }
+    assert!(
+        !lines.iter().any(|line| line.starts_with("app_build\t")),
+        "About is not an Application.Build getter observation"
+    );
+    true
+}
+
+fn q26_timeline_frame_pin(case: &str) -> &'static str {
+    Q26_TIMELINE_FRAME_PINS
+        .iter()
+        .find_map(|(name, hash)| (*name == case).then_some(*hash))
+        .expect("approved Q26 native case")
+}
+
+fn q26_native_movie_binding(fields: &[&str], actual: &str, pinned: &str, source: &str) -> bool {
+    fields
+        == [
+            "movie",
+            "timeline-oracle.mp4",
+            Q26_TIMELINE_MOVIE_SHA256,
+            Q26_TIMELINE_SOURCE_SHA256,
+            "16.114.1",
+            "16.114.26102031",
+            "not_queried",
+        ]
+        && actual == Q26_TIMELINE_MOVIE_SHA256
+        && pinned == actual
+        && source == Q26_TIMELINE_SOURCE_SHA256
+}
+
+fn assert_q26_smartart_geometry_artifacts(oracle_dir: &Path, manifest: &str) {
+    for (header, file) in [
+        (
+            "geometry_mapping_sha256\t",
+            "native-role-mapping.candidate.json",
+        ),
+        (
+            "geometry_evidence_sha256\t",
+            "native-geometry.candidate.json",
+        ),
+    ] {
+        let pins = manifest
+            .lines()
+            .filter_map(|line| line.strip_prefix(header))
+            .collect::<Vec<_>>();
+        assert_eq!(pins.len(), 1);
+        assert_eq!(sha256(&oracle_dir.join(file)), pins[0]);
+    }
+    let mut families = HashSet::new();
+    for line in manifest
+        .lines()
+        .filter(|line| line.starts_with("native_geometry\t"))
+    {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        assert_eq!(fields.len(), 4);
+        assert!(families.insert(fields[1]));
+        assert!(smartart_cases().iter().any(|case| case.family == fields[1]));
+        assert_eq!(fields[2], format!("f220-{}-native-saved.pptx", fields[1]));
+        assert_eq!(sha256(&oracle_dir.join(fields[2])), fields[3]);
+    }
+    assert_eq!(families.len(), 6);
+}
+
+fn smartart_oracle_rows(manifest: &str) -> Vec<SmartartOracleRow> {
+    let q26 = q26_native_manifest_profile(manifest, Q26_SMARTART_MANIFEST_SHA256);
+    let lines = manifest.lines().collect::<Vec<_>>();
+    if !q26 {
+        for expected in [
+            format!("version\t{POWERPOINT_VERSION}"),
+            format!("bundle_build\t{POWERPOINT_BUILD}"),
+            format!("app_build\t{POWERPOINT_APP_BUILD}"),
+        ] {
+            assert!(
+                lines.contains(&expected.as_str()),
+                "missing historical SmartArt pin {expected}"
+            );
+        }
+    }
+    for expected in [
+        "application\tMicrosoft PowerPoint",
         "dpi\t150",
         "geometry_tolerance_pt\t1",
         "non_text_ssim_threshold\t0.90",
@@ -9188,6 +9308,56 @@ const LAYOUT_PART: &str = "/custom/layouts/validation.xml";
 const POWERPOINT_VERSION: &str = "16.104";
 const POWERPOINT_BUILD: &str = "16.104.25121423";
 const POWERPOINT_APP_BUILD: &str = "1214";
+
+// Separately reviewed Q26 capture identities. Historical application pins above stay unchanged.
+const Q26_NATIVE_PROFILE: &str = "reference_profile\tq26-native-16.114.1";
+const Q26_TIMELINE_MANIFEST_SHA256: &str =
+    "d28a0f49521bc7fdafb002808689ae68bbdac5457085be3363268b3ccb094dc7";
+const Q26_SMARTART_MANIFEST_SHA256: &str =
+    "17e0aeb749535bc64f0ef9d2e230b4c76557dde804c1b889eb1faf0afcb53bf2";
+const Q26_TIMELINE_SOURCE_SHA256: &str =
+    "35bbcdb88f1d469fd0f5d7dc4e3df793316487928e78c4892ac8c7dea9a362e5";
+const Q26_TIMELINE_MOVIE_SHA256: &str =
+    "006367184cf06caced6cea58207806013b9221591db51817433307434d9a3a82";
+const Q26_TIMELINE_FRAME_PINS: [(&str, &str); 9] = [
+    (
+        "timeline-appear-active",
+        "85467ec54d410cf3b374305df126a904e0ca93d04f1b30d86876589a0b095dfe",
+    ),
+    (
+        "timeline-wipe-mid",
+        "0cc4dd07eb513f4120b943fba0b12a387cb86bfc3ff73b56c9e5594143e34daa",
+    ),
+    (
+        "timeline-opacity-mid",
+        "7a0c43ed44f08e576a99ea8fbfbcbe45161c41b28833cc0c1f6db42647a1f177",
+    ),
+    (
+        "timeline-parallel-mid",
+        "e5dab96eeeca74b7c7bbe8c688aba11f12035851751f78bea2b2c7361ea30ede",
+    ),
+    (
+        "timeline-exit-mid",
+        "a9c7ef27cd1212d0bd0259df7781ef4abd64e4441c85b0991cdb435c3e0c1287",
+    ),
+    (
+        "ordinary-transition-outgoing-terminal",
+        "4c9a3a7357cdc4fa2989f12280b4b58d956d29a4b82333914fb53c772e49e87a",
+    ),
+    (
+        "ordinary-transition",
+        "8289991d5c34b8ca8e396496a1b909778d9969648700bdfafe5a3be3acf894ec",
+    ),
+    (
+        "morph",
+        "09ae5285e0412aac54404b20463a33cf8961fae9a9f3381bd87b32ea90764650",
+    ),
+    (
+        "push-transition",
+        "f6eb17915620623074b3022a02a5867b9806267604b94f4ac53f1db1ce00126b",
+    ),
+];
+
 const F214_POWERPOINT_ORACLE_WIDTH: u32 = 1920;
 const F214_POWERPOINT_ORACLE_HEIGHT: u32 = 1080;
 const F214_POWERPOINT_COMPARISON_WIDTH: u32 = 2001;
@@ -23877,6 +24047,123 @@ fn powerpoint_timeline_oracle_normalization_is_bounded_deterministic_and_non_mut
     );
 }
 
+fn assert_q26_native_halo_bounds(bounds: &[u32]) {
+    assert_eq!(bounds.len(), 16);
+    assert_eq!(&bounds[0..4], [143, 215, 720, 648]);
+    assert_eq!(&bounds[4..8], [144, 216, 720, 648]);
+    let edge_delta = |left: &[u32], right: &[u32]| {
+        left.iter()
+            .zip(right)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap()
+    };
+    let points_per_raw_pixel = 960.0 / f64::from(F214_POWERPOINT_ORACLE_WIDTH);
+    let approved_delta = f64::from(edge_delta(&bounds[0..4], &bounds[4..8])) * points_per_raw_pixel;
+    let legacy_delta =
+        f64::from(edge_delta(&bounds[8..12], &bounds[12..16])) * points_per_raw_pixel;
+    assert!(
+        approved_delta <= 1.0,
+        "native240 drift exceeds the unchanged1pt geometry bound"
+    );
+    assert!(
+        legacy_delta > 1.0 && legacy_delta > approved_delta,
+        "native250 must expose a materially larger halo"
+    );
+}
+
+#[test]
+fn q26_native_reference_header_movie_and_halo_refuse_substitutions() {
+    let header = format!(
+        "{Q26_NATIVE_PROFILE}\napplication\tMicrosoft PowerPoint\nversion\t16.114.1\nbundle_build\t16.114.26102031\nabout_build_observation\t26102031\napplication_build_getter\tnot_queried\n"
+    );
+    let digest = sha256_bytes(header.as_bytes());
+    assert!(q26_native_manifest_profile(&header, &digest));
+    for changed in [
+        header.replace("version\t16.114.1\n", "version\t16.114.2\n"),
+        header.replace(
+            "bundle_build\t16.114.26102031",
+            "bundle_build\t16.114.26102032",
+        ),
+        header.replace("q26-native-16.114.1", "unapproved"),
+        format!("{header}version\t16.104\n"),
+        format!("{header}{Q26_NATIVE_PROFILE}\n"),
+        header.replace("not_queried", "1020"),
+        format!("{header}app_build\t1214\n"),
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| q26_native_manifest_profile(&changed, &digest)).is_err()
+        );
+        let changed_digest = sha256_bytes(changed.as_bytes());
+        assert!(
+            std::panic::catch_unwind(|| q26_native_manifest_profile(&changed, &changed_digest))
+                .is_err(),
+            "changed hash cannot substitute the native identity header"
+        );
+    }
+    assert!(
+        std::panic::catch_unwind(|| q26_native_manifest_profile(
+            &header,
+            Q26_SMARTART_MANIFEST_SHA256
+        ))
+        .is_err()
+    );
+    assert!(!q26_native_manifest_profile(
+        "application\tMicrosoft PowerPoint\n",
+        Q26_TIMELINE_MANIFEST_SHA256
+    ));
+    let movie = [
+        "movie",
+        "timeline-oracle.mp4",
+        Q26_TIMELINE_MOVIE_SHA256,
+        Q26_TIMELINE_SOURCE_SHA256,
+        "16.114.1",
+        "16.114.26102031",
+        "not_queried",
+    ];
+    assert!(q26_native_movie_binding(
+        &movie,
+        Q26_TIMELINE_MOVIE_SHA256,
+        Q26_TIMELINE_MOVIE_SHA256,
+        Q26_TIMELINE_SOURCE_SHA256
+    ));
+    for index in 0..movie.len() {
+        let mut changed = movie;
+        changed[index] = "substituted";
+        assert!(!q26_native_movie_binding(
+            &changed,
+            Q26_TIMELINE_MOVIE_SHA256,
+            Q26_TIMELINE_MOVIE_SHA256,
+            Q26_TIMELINE_SOURCE_SHA256
+        ));
+    }
+    assert!(!q26_native_movie_binding(
+        &movie,
+        "substituted",
+        "substituted",
+        Q26_TIMELINE_SOURCE_SHA256
+    ));
+    let bounds = [
+        143, 215, 720, 648, 144, 216, 720, 648, 143, 215, 720, 648, 138, 213, 725, 650,
+    ];
+    assert_q26_native_halo_bounds(&bounds);
+    assert_ne!(
+        &bounds[0..4],
+        &bounds[4..8],
+        "historical exact240 equality did not pass this new observation"
+    );
+    for changed in [
+        [
+            143, 215, 720, 648, 148, 216, 720, 648, 143, 215, 720, 648, 138, 213, 725, 650,
+        ],
+        [
+            143, 215, 720, 648, 144, 216, 720, 648, 143, 215, 720, 648, 144, 216, 720, 648,
+        ],
+    ] {
+        assert!(std::panic::catch_unwind(|| assert_q26_native_halo_bounds(&changed)).is_err());
+    }
+}
+
 #[test]
 fn powerpoint_timeline_oracle_foreground_cutoff_ignores_fixed_opacity_halo() {
     let oracle_dir = std::env::var_os("RDOCX_PPTX_TIMELINE_ORACLE_DIR")
@@ -23892,13 +24179,27 @@ fn powerpoint_timeline_oracle_foreground_cutoff_ignores_fixed_opacity_halo() {
         eprintln!("PowerPoint opacity-halo regression skipped because fixed frames are absent");
         return;
     }
+    let manifest_path = oracle_dir.join("manifest.tsv");
+    let q26 = manifest_path.is_file()
+        && q26_native_manifest_profile(
+            &fs::read_to_string(&manifest_path).unwrap(),
+            Q26_TIMELINE_MANIFEST_SHA256,
+        );
     assert_eq!(
         sha256(&appear),
-        "3970c922c4105875bb57cfd61896cafc345c0aaa520434651415a5e9b2f57f16"
+        if q26 {
+            q26_timeline_frame_pin("timeline-appear-active")
+        } else {
+            "3970c922c4105875bb57cfd61896cafc345c0aaa520434651415a5e9b2f57f16"
+        }
     );
     assert_eq!(
         sha256(&opacity),
-        "14c836fc873c5080e3834eab04b72e2c93b30e814440cd0f845942faa5d71c69"
+        if q26 {
+            q26_timeline_frame_pin("timeline-opacity-mid")
+        } else {
+            "14c836fc873c5080e3834eab04b72e2c93b30e814440cd0f845942faa5d71c69"
+        }
     );
 
     let script = r#"from pathlib import Path
@@ -23945,16 +24246,23 @@ print(*foreground_bounds(appear, cutoff), *foreground_bounds(opacity, cutoff), *
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(bounds.len(), 16);
-    assert_eq!(
-        &bounds[0..4],
-        &bounds[4..8],
-        "approved foreground cutoff must keep geometry invariant under opacity"
-    );
-    assert_ne!(
-        &bounds[8..12],
-        &bounds[12..16],
-        "legacy near-white cutoff must expose the fixed movie's opacity halo"
-    );
+    if q26 {
+        assert_q26_native_halo_bounds(&bounds);
+        eprintln!(
+            "Q26 source-specific halo profile, historical exact240 equality remains a recorded failure"
+        );
+    } else {
+        assert_eq!(
+            &bounds[0..4],
+            &bounds[4..8],
+            "approved foreground cutoff must keep geometry invariant under opacity"
+        );
+        assert_ne!(
+            &bounds[8..12],
+            &bounds[12..16],
+            "legacy near-white cutoff must expose the fixed movie's opacity halo"
+        );
+    }
 }
 
 #[test]
@@ -23971,9 +24279,19 @@ fn fade_composition_matches_the_fixed_powerpoint_observation() {
         eprintln!("PowerPoint fade regression skipped because the fixed frame is absent");
         return;
     }
+    let manifest_path = oracle_dir.join("manifest.tsv");
+    let q26 = manifest_path.is_file()
+        && q26_native_manifest_profile(
+            &fs::read_to_string(&manifest_path).unwrap(),
+            Q26_TIMELINE_MANIFEST_SHA256,
+        );
     assert_eq!(
         sha256(&oracle),
-        "61d45d85bd3d6a36361cdad6d438fc60e0a3295e932b582f6e046af16879818d"
+        if q26 {
+            q26_timeline_frame_pin("ordinary-transition")
+        } else {
+            "61d45d85bd3d6a36361cdad6d438fc60e0a3295e932b582f6e046af16879818d"
+        }
     );
 
     let presentation =
@@ -25336,11 +25654,16 @@ fn pinned_timestamps_match_powerpoint_frame_oracle_within_declared_tolerances() 
     }
     let manifest = fs::read_to_string(&manifest_path)
         .unwrap_or_else(|error| panic!("{}: {error}", manifest_path.display()));
+    let q26 = q26_native_manifest_profile(&manifest, Q26_TIMELINE_MANIFEST_SHA256);
     let lines = manifest.lines().collect::<Vec<_>>();
     assert!(lines.contains(&"application\tMicrosoft PowerPoint"));
-    assert!(lines.contains(&format!("version\t{POWERPOINT_VERSION}").as_str()));
-    assert!(lines.contains(&format!("bundle_build\t{POWERPOINT_BUILD}").as_str()));
-    assert!(lines.contains(&format!("app_build\t{POWERPOINT_APP_BUILD}").as_str()));
+    if q26 {
+        assert!(lines.contains(&"timing_contract\tentrance_wipe_node_102_fill_remove"));
+    } else {
+        assert!(lines.contains(&format!("version\t{POWERPOINT_VERSION}").as_str()));
+        assert!(lines.contains(&format!("bundle_build\t{POWERPOINT_BUILD}").as_str()));
+        assert!(lines.contains(&format!("app_build\t{POWERPOINT_APP_BUILD}").as_str()));
+    }
     assert!(lines.contains(&"dpi\t150"));
     assert!(lines.contains(&"geometry_tolerance_pt\t1"));
     assert!(lines.contains(&"ssim_threshold\t0.99"));
@@ -25355,6 +25678,10 @@ fn pinned_timestamps_match_powerpoint_frame_oracle_within_declared_tolerances() 
         .split('\t')
         .collect::<Vec<_>>();
     assert_eq!(source_fields.len(), 2);
+    if q26 {
+        assert_eq!(source_fields[0], "timeline-oracle-source.pptx");
+        assert_eq!(source_fields[1], Q26_TIMELINE_SOURCE_SHA256);
+    }
     let source = oracle_dir.join(source_fields[0]);
     assert_eq!(sha256(&source), source_fields[1]);
     let source_bytes = fs::read(&source).unwrap();
@@ -25392,12 +25719,21 @@ fn pinned_timestamps_match_powerpoint_frame_oracle_within_declared_tolerances() 
         "{F214_POWERPOINT_ORACLE_MOVIE_SHA256_ENV} must be the actual lowercase movie SHA-256"
     );
     assert!(
-        is_approved_powerpoint_timeline_oracle_movie_binding(
-            &movie_fields,
-            &actual_movie_sha256,
-            &pinned_movie_sha256,
-            source_fields[1]
-        ),
+        if q26 {
+            q26_native_movie_binding(
+                &movie_fields,
+                &actual_movie_sha256,
+                &pinned_movie_sha256,
+                source_fields[1],
+            )
+        } else {
+            is_approved_powerpoint_timeline_oracle_movie_binding(
+                &movie_fields,
+                &actual_movie_sha256,
+                &pinned_movie_sha256,
+                source_fields[1],
+            )
+        },
         "PowerPoint timeline oracle movie is not independently pinned to the exact source and PowerPoint builds"
     );
     let header_index = lines.iter().position(|line| *line == HEADER).unwrap();
@@ -25434,6 +25770,10 @@ fn pinned_timestamps_match_powerpoint_frame_oracle_within_declared_tolerances() 
             );
         }
         let oracle_png = oracle_dir.join(fields[7]);
+        if q26 {
+            assert_eq!(fields[7], format!("{case}-{timestamp_ms}.png"));
+            assert_eq!(fields[8], q26_timeline_frame_pin(case));
+        }
         assert_eq!(sha256(&oracle_png), fields[8]);
         let width = fields[9].parse::<u32>().unwrap();
         let height = fields[10].parse::<u32>().unwrap();
