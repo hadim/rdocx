@@ -101,6 +101,7 @@ consumed local evidence is not a full gate. F-X267 remains the largest repair.
 | F-X266 | Bound Word body reads and structural edit cost | L | done | - |
 | F-X267 | Bound PowerPoint mutation cost across public publishers | L | done | - |
 | F-X268 | Bound Word owner inventory and unchanged package staging | L | in-progress | codex |
+| F-X270 | Prepare Word 0.16.4 and PowerPoint 0.14.4 patch releases | L | pending | - |
 
 ## Sequencing note
 
@@ -279,3 +280,10 @@ Q1 through Q23 stay answered. No new question is opened. Q22 covers the added ca
 Receipt cutoff 2026-10-24T23:05:39Z. The same S95.4 intake in `docs/sprints/SPRINT_PLAN.md` records 11 open issues and 14 open pull requests. No issue changed. Nothing closed or merged. Heads 409 through 421 are unchanged. PR422 is the only new pull request and stays an unmerged candidate. It is not accepted code. F-X268 stays pending, owner `-`, and unclaimed. Eight stories stay. The prior approved scope stays approved. Codex root approved the refresh4 mechanism 8 contract on 2026-10-25. The baseline is `d1f42516eb3747442fe4304a6331eab946dc9a0e`. F-290 stays in progress under its existing approved implementation and review. This checkpoint does not edit run state, `AS_BUILT.md`, or `SPRINT_TRACKER.md`.
 
 Q1 through Q23 stay answered. Q24, answered 2026-10-25 by the user, is `Require all 79 flat-cost gates (Recommended)`. The current flat set is 79, which is 76 catalogue keys plus 3 XML reads, under the same bound of 100 at most 1.5 times 25 plus 5 ms. The historical Q23 set of 73 stays historical. The five A9 linear calls stay, including the two that also sit in the 79. The 252 catalogue, the original 407 gate, and the PowerPoint 248-call run stay. A10 counted work is 14 calls and is independent of that timing gate. A11 and C8 are approved. The combined planning judgment is a provisional 12 to 21 developer-days. The 10 to 17 figure stays historical for the scope before PR422. It is not added to the seven-story 27 to 41 figure. Formal dependencies stay F-X266 and F-X267. Serial order still places F-X268 after F-289 and F-290. This checkpoint does not claim a feature, commit, push, or mark a story done.
+
+
+## Release preparation intake, 2026-10-27
+
+The user's existing instruction requests release preparation after the stories, with publication waiting for login and final approval. Root selects the recommended fresh patch candidates0.16.4/0.14.4 under the user's instruction to select recommended options without further questions. Actual24registry queries and remote-tag query find all candidates absent. The old0.16.3/0.14.3 tags and registry entries already exist from S95.3 and must not be reused. F-X270 is the ninth story for that requested work. Its completed formal provider is F-X263's release machinery. The eight product stories are integrated but their final criteria remain mandatory, including Cell.add_picture's open gate. Release preparation does not bypass that debt. No release tag, publication or fresh approval is granted here.
+
+The eight-story execution descriptions above are historical checkpoints. F-X270 remains pending until its bounded contract is independently reviewed and approved. Root remains sole canonical writer. SizeL is the normal provisional release-preparation planning category, not a measured duration or a new finish-time promise. Actual developer effort remains unknown.

@@ -2874,6 +2874,7 @@ not started. F-X267 is the largest repair. No timing is invented here.
 | F-X266 | Bound Word body reads and structural edit cost | L |
 | F-X267 | Bound PowerPoint mutation cost across public publishers | L |
 | F-X268 | Bound Word owner inventory and unchanged package staging | L |
+| F-X270 | Prepare Word 0.16.4 and PowerPoint 0.14.4 patch releases | L |
 
 Complete and integrate F-288 through its scoped dependency-prefix checkpoint
 before F-289. Its F-285 through F-287 prerequisites complete in S95.3. F-290
@@ -3902,3 +3903,8 @@ riders, sprint review and authorized publication/closure remain due.
 ## Issue378 execution intake, 2026-10-15
 
 The user adds F-X237 to S92 for the reported Python0.16.1 table-cell performance regression. The original five repair contracts remain intact. Qualify linear open and single-edit work, the exact40-by6 fill and authenticated same-host release0.16.0 timing while preserving checked physical-owner and revision semantics. This intake does not alter the historical frozen contribution or compatibility corpora.
+
+
+## S95.4 release preparation intake, 2026-10-27
+
+F-X270 is admitted under the user's existing post-story release-preparation instruction and no-question recommended-choice policy. Fresh exact-family registry and remote-tag inventories select0.16.4/0.14.4 within the previously retained0.16.x/0.14.x lines. Published0.16.3/0.14.3 are immutable. Preserve their notes and all earlier evidence. This adds bounded requested release preparation to the eight integrated product stories, whose complete acceptance remains mandatory. F-X263 is done and supplies the existing release machinery. Hosted source availability follows the canonical reviewed clean-sprint checkpoint, not a red-gate publication shortcut. Publication remains held for separate exact-main approval and any user login. The original eight-story estimates remain historical and are not silently revised into actual effort.
