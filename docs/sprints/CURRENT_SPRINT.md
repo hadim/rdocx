@@ -101,7 +101,7 @@ consumed local evidence is not a full gate. F-X267 remains the largest repair.
 | F-X266 | Bound Word body reads and structural edit cost | L | done | - |
 | F-X267 | Bound PowerPoint mutation cost across public publishers | L | done | - |
 | F-X268 | Bound Word owner inventory and unchanged package staging | L | in-progress | codex |
-| F-X270 | Prepare Word 0.16.4 and PowerPoint 0.14.4 patch releases | L | pending | - |
+| F-X270 | Prepare Word 0.16.4 and PowerPoint 0.14.4 patch releases | L | in-progress | codex |
 
 ## Sequencing note
 

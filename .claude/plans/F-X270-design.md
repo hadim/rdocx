@@ -98,14 +98,14 @@ Expected unchanged49hashes and existing deterministic pixel buffers. Version-con
 
 ## Exclusive resources
 
-Existing Cargo.toml carriers and Cargo.lock, both Python pyproject metadata, current README version/examples/measurement rows, CLAUDE prepared-family prose, existing CHANGELOG.md, scripts/readme_doctests.py dictionaries and scripts/test_sprint_workflow.py current policy assertions, the existing version-carrier test assertions in rdocx-wasm/src/lib.rs, rpptx-wasm/src/lib.rs, oxml-chart/src/lib.rs, oxml-drawing/src/lib.rs, rpptx-render/src/lib.rs, rpptx-oxml/tests/integration.rs and rpptx/tests/integration.rs, and the two named HLD files. Binding initializers have no independent version constant and remain unchanged. No new source module, crate, trait, test binary, dependency or workflow needed. The new canonical plan/progress/handoff/review records are required workflow artifacts for the user's requested release preparation.
+Existing Cargo.toml carriers and Cargo.lock, both Python pyproject metadata, current README version/examples/measurement rows, CLAUDE prepared-family prose, existing CHANGELOG.md, scripts/readme_doctests.py dictionaries and scripts/test_sprint_workflow.py current policy assertions, the existing version-carrier test assertions in rdocx-wasm/src/lib.rs, rpptx-wasm/src/lib.rs, oxml-chart/src/lib.rs, oxml-drawing/src/lib.rs, rpptx-render/src/lib.rs, rpptx-oxml/tests/integration.rs and rpptx/tests/integration.rs, and the two named HLD files. Binding initializers have no independent version constant and remain unchanged. The existing .github/workflows/ci.yml lease is limited to its rdocx-wasm current package-version literal. No new source module, crate, trait, test binary, dependency or workflow is needed. The new canonical plan/progress/handoff/review records are required workflow artifacts for the user's requested release preparation.
 
 ## Implementation checklist
 
-- [ ] Confirm completed provider, fresh candidate absence and exact current carrier map.
-- [ ] Record actual carrier/history RED and retain historical controls.
-- [ ] Align current versions and pins, restore published notes and add only new family outcomes/credits.
-- [ ] Complete named HLD intent and obtain clean independent microscope.
+- [x] Confirm completed provider, fresh candidate absence and exact current carrier map.
+- [x] Record actual carrier/history RED and retain historical controls.
+- [x] Align current versions and pins, restore published notes and add only new family outcomes/credits.
+- [x] Complete named HLD intent and obtain clean independent microscope.
 - [ ] Qualify actual final archives/README and applicable local policies.
 - [ ] Complete reviewed source-availability checkpoint and actual hosted build-only artifact qualification.
 - [ ] Qualify downloaded host CLI and installed Python3.9/3.12 plus typing/stubs.
