@@ -1,6 +1,6 @@
 # F-X266, Bound Word body reads and structural edit cost
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.4
 **Size**: L
 **Depends on**: F-X260
@@ -207,7 +207,7 @@ Expected unchanged. The fragment declaration omission must not change saved pack
 - [x] Keep `plan` returning `None` as the fallback.
 - [x] Publish only after prepare and the native edit succeed.
 - [x] Instrument real owner and byte counters.
-- [ ] Qualify the final release ratios on the pinned original407 workloads and retain every raw sample, artifact identity and prior failure.
+- [x] Qualify the final release ratios on the pinned original407 workloads and retain every raw sample, artifact identity and prior failure.
 
 ## Open questions
 

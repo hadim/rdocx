@@ -1,6 +1,6 @@
 # F-290, Mail-merge package and data-source authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.4
 **Size**: M
 **Depends on**: F-233, F-270, F-278

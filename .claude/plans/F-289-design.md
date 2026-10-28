@@ -1,6 +1,6 @@
 # F-289, Modern Word form authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.4
 **Size**: L
 **Depends on**: F-275, F-285, F-286, F-287, F-288
@@ -378,14 +378,14 @@ Local implementation items from the current worker source and the consumed evide
 
 Final current-artifact evidence, still pending:
 
-- [ ] Final artifact source and input applicability to the complete Word 16.114 A7 evidence.
-- [ ] Fresh CLI for the final union.
-- [ ] Full union WASM check.
-- [ ] Hash harness.
-- [ ] Full suite and full verify.
-- [ ] Publish dry-run.
-- [ ] Strict installed mypy.
-- [ ] Stubtest.
+- [x] Final artifact source and input applicability to the complete Word 16.114 A7 evidence.
+- [x] Fresh CLI for the final union.
+- [x] Full union WASM check.
+- [x] Hash harness.
+- [x] Full suite and full verify.
+- [x] Publish dry-run.
+- [x] Strict installed mypy.
+- [x] Stubtest.
 
 ## Open questions
 

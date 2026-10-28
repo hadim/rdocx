@@ -1,6 +1,6 @@
 # F-X265, Preserve fragment relationship targets and duplicate styles
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.4
 **Size**: M
 **Depends on**: F-X261

@@ -1,6 +1,6 @@
 # F-X268, Bound Word owner inventory and unchanged package staging
 
-**Status**: approved
+**Status**: completed
 **Amendment note**: Codex root approved the refresh4 mechanism 8 contract on 2026-10-25 after the user answered Q24. The baseline is `d1f42516eb3747442fe4304a6331eab946dc9a0e`. The scope approved through refresh3 stays approved. F-X268 stays unclaimed. F-290 keeps its existing approved implementation and review. No gate pass is claimed.
 
 **Current implementation readiness**: Integrated on sprint/s95.4, canonical owner codex. All eight mechanisms and subsequent bounded repairs are implemented and reviewed. Pass30 is clean. Actual affected debug corrections and A7 memory, lifetime and fallback review pass. The dated execution boundary below identifies the remaining final debt. Approval snapshots retain their historical unclaimed and not-started states. This paragraph is not a full acceptance claim.

@@ -1,6 +1,6 @@
 # F-X264, Repair Word defaults package inspection and comment projection
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.4
 **Size**: L
 **Depends on**: F-X260, F-X261
@@ -241,7 +241,7 @@ Expected hash-corpus deltas remain final and unrun. The self-closing endnote `PA
 - [x] Add readonly `anchor_issue` on the frozen comment and CLI JSON.
 - [x] Add `zip_entries` and point `part_names` and `part_xml` at the same entry owner.
 - [x] Land the named tests in existing entrypoints.
-- [ ] Qualify the required native Word and final-union evidence while retaining A10 as the explicit unsupported limitation outside this gate.
+- [x] Qualify the required native Word and final-union evidence while retaining A10 as the explicit unsupported limitation outside this gate.
 
 ## Open questions
 

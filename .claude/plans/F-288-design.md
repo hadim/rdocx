@@ -1,6 +1,6 @@
 # F-288, Legacy form field creation
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.4
 **Size**: M
 **Depends on**: F-237, F-278
@@ -390,8 +390,8 @@ The Q4 local provider-prefix completion exception remains. Final Word differenti
 
 The checked local provider work below stays genuine and consumed. Q25 is a new final-native remediation, not a revocation of that completion.
 
-- [ ] Q25 narrow parser admission, all excluded-shape controls, literal/current/default and ordinary-update closure in the existing files.
-- [ ] Q25 independent microscope with zero defects/smells, scoped checks and explicit hash delta, then authenticated installed native-original ten-field GREEN. Qualify native A6 and final acceptance through their actual remaining observations.
+- [x] Q25 narrow parser admission, all excluded-shape controls, literal/current/default and ordinary-update closure in the existing files.
+- [x] Q25 independent microscope with zero defects/smells, scoped checks and explicit hash delta, then authenticated installed native-original ten-field GREEN. Qualify native A6 and final acceptance through their actual remaining observations.
 
 - [x] Add the enums, options, definition, and `Field::from_legacy_form` in existing `text.rs` and re-export them. Native and HLD edits stay on files already named in this plan.
 - [x] Bind Python only in existing `crates/rdocx-py/src/document.rs`, `crates/rdocx-py/src/run.rs`, `crates/rdocx-py/src/lib.rs`, `python/rdocx/__init__.py`, `python/rdocx/_rdocx.pyi`, and `tests/test_core.py`. No new tracked file, module, or test binary.
@@ -410,9 +410,9 @@ The checked local provider work below stays genuine and consumed. Q25 is a new f
 - [x] A7 `cross_consumer_render_fallback_before_empty_assignment` covers Rust native text, layout, deterministic PDF text extraction, and CLI `rdocx text` only. It passed in the remediation 7 batch. It does not execute Python fill or CLI fill.
 - [x] CLI fill is `fx241_cli_fill_five_kinds_preserves_order_source_and_old_tag_contract` in `crates/rdocx-cli/tests/integration.rs`. This metadata pass ran that one current-source test. 1 passed, 0 failed, 99 filtered, exit 0. Test binary `target/debug/deps/integration-27068b8b419f3d54` SHA-256 `09d10b975e1d8650695f0cfc73227bdb6d164a81ce2f5ed2789b53c46743bc89`. CLI `target/debug/rdocx` SHA-256 `8c22713ad61ec432a2bf88022fc4f698f12ac9f3e87dbd48072c9341c71ebb00`.
 - [x] Applicability audit. No DOCX converter and no legacy-default to AcroForm consumer was found under `crates/rdocx`. Issue #381 stays a separate later plan. No AcroForm runtime pass is claimed. That future exporter is outside F-288 acceptance. The unchanged low-level PDF backend is not legacy qualification.
-- [ ] Qualify the required Word differential, schema-order and source-applicability observations with their actual native producers.
+- [x] Qualify the required Word differential, schema-order and source-applicability observations with their actual native producers.
 - [x] Reconcile DOCX-055 for the implemented additive surface in this metadata pass. `scripts/test_sprint_workflow.py` excludes F-288 from the incomplete live-owner inventory because the row leaves that set.
-- [ ] Reconcile final completion metadata and source freeze after actual Word A6, full verification, hash harness, installed suites and required riders pass.
+- [x] Reconcile final completion metadata and source freeze after actual Word A6, full verification, hash harness, installed suites and required riders pass.
 
 ## Open questions
 

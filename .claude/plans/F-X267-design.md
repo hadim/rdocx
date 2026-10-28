@@ -1,6 +1,6 @@
 # F-X267, Bound PowerPoint mutation cost across public publishers
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.4
 **Size**: L
 **Depends on**: F-X260, F-X262

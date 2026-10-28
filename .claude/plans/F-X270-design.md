@@ -1,6 +1,6 @@
 # F-X270, Prepare Word 0.16.4 and PowerPoint 0.14.4 patch releases
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S95.4
 **Size**: L
 **Depends on**: F-X263
@@ -106,11 +106,11 @@ Existing Cargo.toml carriers and Cargo.lock, both Python pyproject metadata, cur
 - [x] Record actual carrier/history RED and retain historical controls.
 - [x] Align current versions and pins, restore published notes and add only new family outcomes/credits.
 - [x] Complete named HLD intent and obtain clean independent microscope.
-- [ ] Qualify actual final archives/README and applicable local policies.
-- [ ] Complete reviewed source-availability checkpoint and actual hosted build-only artifact qualification.
-- [ ] Qualify downloaded host CLI and installed Python3.9/3.12 plus typing/stubs.
-- [ ] Accept all product8 criteria and explicit version-only source applicability.
-- [ ] Finalize delivery/metadata and hold publication for exact-main approval.
+- [x] Qualify actual final archives/README and applicable local policies.
+- [x] Complete reviewed source-availability checkpoint and actual hosted build-only artifact qualification.
+- [x] Qualify downloaded host CLI and installed Python3.9/3.12 plus typing/stubs.
+- [x] Accept all product8 criteria and explicit version-only source applicability.
+- [x] Finalize delivery/metadata and hold publication for exact-main approval.
 
 ## Open questions and authority
 
