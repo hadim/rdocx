@@ -37429,3 +37429,103 @@ fn issue435_new_shapes_refuse_a_negative_size() {
     let reopened = Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
     assert!(reopened.validate().is_empty());
 }
+
+#[test]
+fn a_picture_the_renderer_cannot_decode_is_not_reported_as_a_missing_relationship() {
+    use rpptx::{Emu, Presentation};
+    // A valid header over too few pixel bytes: the part and its relationship
+    // are present, only the decode fails.
+    let mut png = png_header(4, 4);
+    let idat = miniz_oxide::deflate::compress_to_vec_zlib(&[0; 5], 6);
+    png.extend_from_slice(&(idat.len() as u32).to_be_bytes());
+    png.extend_from_slice(b"IDAT");
+    png.extend_from_slice(&idat);
+    png.extend_from_slice(&[0; 4]);
+    png.extend_from_slice(&0_u32.to_be_bytes());
+    png.extend_from_slice(b"IEND");
+    png.extend_from_slice(&[0; 4]);
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.add_picture(
+        0,
+        &png,
+        "short.png",
+        Emu(0),
+        Emu(0),
+        Some(Emu(914_400)),
+        Some(Emu(914_400)),
+    )
+    .unwrap();
+    let (_, diagnostics) = deck
+        .render_slide_to_png_with_diagnostics(0, 20.0, &[])
+        .unwrap();
+    let messages: Vec<_> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("picture image relationship")
+                && message.ends_with("could not be decoded")),
+        "{messages:?}"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.starts_with("missing")),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn markdown_and_html_exports_hold_a_chart_as_a_table_of_its_data() {
+    use rpptx::{Emu, Presentation};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    let data = ChartData {
+        categories: vec!["Q1".into(), "Q2".into()],
+        series: vec![("Zeta region".into(), vec![1150.0, 1190.5])],
+        ..ChartData::default()
+    };
+    deck.add_chart(
+        0,
+        ChartKind::Bar,
+        Emu(0),
+        Emu(0),
+        Emu(3_000_000),
+        Emu(2_000_000),
+        &data,
+    )
+    .unwrap();
+
+    let markdown = deck.to_markdown().unwrap();
+    assert!(
+        markdown
+            .text
+            .contains("| | Zeta region |\n| --- | --- |\n| Q1 | 1150 |\n| Q2 | 1190\\.5 |\n"),
+        "{}",
+        markdown.text
+    );
+    assert!(
+        !markdown
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("chart")),
+        "{:?}",
+        markdown.diagnostics
+    );
+    let html = deck.to_html().unwrap();
+    assert!(
+        html.text.contains(
+            "<table><thead><tr><th></th><th>Zeta region</th></tr></thead><tbody>\n<tr><th>Q1</th><td>1150</td></tr>\n<tr><th>Q2</th><td>1190.5</td></tr>\n</tbody></table>"
+        ),
+        "{}",
+        html.text
+    );
+    assert!(
+        !html
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("chart")),
+        "{:?}",
+        html.diagnostics
+    );
+}

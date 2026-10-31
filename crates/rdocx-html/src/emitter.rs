@@ -12,14 +12,16 @@ use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent, SpecialCharacter};
 
 use crate::css;
 use crate::sanitize::{escape_html, escape_html_attr, safe_url};
-use crate::{Block, HtmlOptions, ImageData, body_blocks, cell_blocks};
+use crate::{
+    Block, ChartTable, HtmlOptions, ImageData, body_blocks, cell_blocks, paragraph_chart_ids,
+};
 
 /// Emit the full body content as HTML.
 pub(crate) fn emit_body(
     body: &CT_Body,
     styles: &CT_Styles,
     numbering: Option<&CT_Numbering>,
-    images: &HashMap<String, ImageData>,
+    (images, charts): (&HashMap<String, ImageData>, &HashMap<String, ChartTable>),
     hyperlink_urls: &HashMap<String, String>,
     options: &HtmlOptions,
 ) -> String {
@@ -66,6 +68,11 @@ pub(crate) fn emit_body(
                         close_list(&mut out, &mut list_stack);
                     }
                     emit_paragraph(&mut out, &p, styles, images, hyperlink_urls, options);
+                }
+                for id in paragraph_chart_ids(&p) {
+                    if let Some(chart) = charts.get(id) {
+                        emit_chart_table(&mut out, chart);
+                    }
                 }
             }
             Block::Table(tbl) => {
@@ -431,6 +438,24 @@ fn emit_field_display(out: &mut String, text: &str, properties: Option<&CT_RPr>)
 }
 
 /// Emit an inline image as a base64 data URI.
+/// Writes a chart's data as a table: series names across, categories down.
+fn emit_chart_table(out: &mut String, chart: &ChartTable) {
+    out.push_str("<table class=\"chart-data\">\n");
+    for (index, row) in chart.rows().iter().enumerate() {
+        out.push_str("<tr>");
+        for (column, cell) in row.iter().enumerate() {
+            let tag = if index == 0 || column == 0 {
+                "th"
+            } else {
+                "td"
+            };
+            out.push_str(&format!("<{tag}>{}</{tag}>", escape_html(cell)));
+        }
+        out.push_str("</tr>\n");
+    }
+    out.push_str("</table>\n");
+}
+
 fn emit_image(out: &mut String, img: &ImageData) {
     let base64 = base64_encode(&img.data);
     // `content_type` is a public field, so it is not necessarily one of the

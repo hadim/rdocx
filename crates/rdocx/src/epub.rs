@@ -136,6 +136,7 @@ impl<'a> EpubWriter<'a> {
             numbering,
             images: html_images,
             hyperlink_urls: self.epub_hyperlinks(),
+            charts: HashMap::new(),
         };
         self.collect_diagnostics()?;
         let body = unwrap_block_controls(&self.document.document.body.content);

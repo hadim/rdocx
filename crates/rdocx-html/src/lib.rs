@@ -39,6 +39,61 @@ pub struct HtmlInput {
     pub images: HashMap<String, ImageData>,
     /// Hyperlink URLs keyed by relationship ID.
     pub hyperlink_urls: HashMap<String, String>,
+    /// Cached chart data keyed by relationship ID. A chart in a body
+    /// paragraph is written after that paragraph as a table of its data.
+    pub charts: HashMap<String, ChartTable>,
+}
+
+/// The cached categories and series of one chart, as a table.
+pub struct ChartTable {
+    pub categories: Vec<String>,
+    pub series: Vec<(String, Vec<f64>)>,
+}
+
+impl ChartTable {
+    /// The rows of the table: a header of series names under an empty
+    /// corner cell, then one row per category.
+    fn rows(&self) -> Vec<Vec<String>> {
+        let count = self.series.iter().map(|(_, values)| values.len()).max();
+        let count = self.categories.len().max(count.unwrap_or(0));
+        let mut rows = vec![
+            std::iter::once(String::new())
+                .chain(self.series.iter().map(|(name, _)| name.clone()))
+                .collect(),
+        ];
+        for index in 0..count {
+            rows.push(
+                std::iter::once(self.categories.get(index).cloned().unwrap_or_default())
+                    .chain(self.series.iter().map(|(_, values)| {
+                        values.get(index).map_or_else(String::new, f64::to_string)
+                    }))
+                    .collect(),
+            );
+        }
+        rows
+    }
+}
+
+/// The relationship ids of the charts a paragraph draws, in run order.
+fn paragraph_chart_ids(paragraph: &CT_P) -> Vec<&str> {
+    paragraph
+        .runs()
+        .into_iter()
+        .flat_map(|run| &run.content)
+        .filter_map(|content| match content {
+            rdocx_oxml::text::RunContent::Drawing(drawing) => drawing
+                .inline
+                .as_ref()
+                .and_then(|inline| inline.chart_rel_id.as_deref())
+                .or_else(|| {
+                    drawing
+                        .anchor
+                        .as_ref()
+                        .and_then(|anchor| anchor.chart_rel_id.as_deref())
+                }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Image data for HTML embedding.
@@ -62,7 +117,7 @@ pub fn to_html_fragment(input: &HtmlInput, options: &HtmlOptions) -> String {
         &input.document.body,
         &input.styles,
         input.numbering.as_ref(),
-        &input.images,
+        (&input.images, &input.charts),
         &input.hyperlink_urls,
         options,
     )
@@ -198,6 +253,7 @@ mod tests {
             numbering: None,
             images: HashMap::new(),
             hyperlink_urls: HashMap::new(),
+            charts: HashMap::new(),
         }
     }
 
@@ -238,6 +294,7 @@ mod tests {
             numbering: None,
             images: HashMap::new(),
             hyperlink_urls: HashMap::new(),
+            charts: HashMap::new(),
         };
 
         let html = to_html_fragment(&input, &HtmlOptions::default());
@@ -321,6 +378,7 @@ mod tests {
                     "rId1".to_owned(),
                     "https://example.com/".to_owned(),
                 )]),
+                charts: HashMap::new(),
             }
         };
         let (wrapped, plain) = (input(true), input(false));
@@ -368,6 +426,7 @@ mod tests {
             numbering: None,
             images: HashMap::new(),
             hyperlink_urls: HashMap::new(),
+            charts: HashMap::new(),
         };
 
         let html = to_html_fragment(&input, &HtmlOptions::default());
@@ -394,6 +453,7 @@ mod tests {
             numbering: None,
             images: HashMap::new(),
             hyperlink_urls: HashMap::new(),
+            charts: HashMap::new(),
         };
 
         let html = to_html_fragment(&input, &HtmlOptions::default());
@@ -419,6 +479,7 @@ mod tests {
             numbering: None,
             images: HashMap::new(),
             hyperlink_urls: HashMap::new(),
+            charts: HashMap::new(),
         };
 
         let md = to_markdown(&input);
@@ -444,6 +505,7 @@ mod tests {
             numbering: None,
             images: HashMap::new(),
             hyperlink_urls: HashMap::new(),
+            charts: HashMap::new(),
         };
 
         let html = to_html_fragment(&input, &HtmlOptions::default());
@@ -474,6 +536,7 @@ mod tests {
                 numbering: None,
                 images: HashMap::new(),
                 hyperlink_urls: HashMap::from([("rId1".into(), "https://example.com/a".into())]),
+                charts: HashMap::new(),
             };
             let before = input.document.to_xml().unwrap();
             if body.contains("fldSimple") {

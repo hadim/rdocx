@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 
-use oxml_chart::{render_chart, render_chart_placeholder};
+use oxml_chart::{render_chart, render_chart_placeholder, unsupported_number_formats};
 use oxml_drawing::color::{ColorChoice, ColorMap, ColorMapSlot, RgbColor, resolve_color};
 use oxml_drawing::effect::CT_OuterShadowEffect;
 use oxml_drawing::fill::{
@@ -1311,6 +1311,15 @@ impl<'a> ResolveCtx<'a> {
                     fonts,
                 ) {
                     Ok(group) => {
+                        for code in
+                            unsupported_number_formats(&chart_space.chart).unwrap_or_default()
+                        {
+                            diagnostics.push(Diagnostic {
+                                message: format!(
+                                    "chart number format `{code}` is not supported, its labels are drawn as General"
+                                ),
+                            });
+                        }
                         return Ok((ResolvedContent::Group(group), None, false));
                     }
                     Err(error) => error.to_string(),
@@ -4078,6 +4087,11 @@ fn emit_tree_inner<'a>(
         .map(|c| (c, parent_transform, parent_issues))
         .collect::<Vec<_>>();
     while let Some((child, parent, inherited_issues)) = pending.pop() {
+        // PowerPoint leaves a hidden shape or group out of the show, print and
+        // export, on slides, layouts and masters alike.
+        if child.hidden() {
+            continue;
+        }
         match child {
             ShapeTreeChild::GroupShape(group) => {
                 let (transform, issues) = group
@@ -4385,8 +4399,75 @@ fn placeholder_chain<'a>(
     else {
         return (None, None);
     };
-    let master_shape = find_placeholder(&master.common_slide_data.shape_tree.children, &layout_key);
+    let master_shape =
+        find_master_placeholder(&master.common_slide_data.shape_tree.children, &layout_key);
     (Some(layout_shape), master_shape)
+}
+
+/// Finds the master placeholder a layout placeholder inherits from.
+///
+/// The master is searched by type first: titles inherit from the title, the
+/// date, footer and slide number from their own, and every other kind (`obj`,
+/// `body`, `pic`, `chart`, ...) from the body. Among several of that type the
+/// one with the layout's `idx` wins. A master without that type falls back to
+/// the plain `idx` match. Matching by `idx` alone let the second content
+/// placeholder of the default "Two Content" layout (idx 2) inherit the master's
+/// date placeholder, which that template also numbers 2.
+fn find_master_placeholder<'a>(
+    children: &'a [ShapeTreeChild],
+    layout_key: &PlaceholderKey,
+) -> Option<&'a CT_Shape> {
+    let base_type = match &layout_key.ph_type {
+        PhType::Title | PhType::CenteredTitle | PhType::VerticalTitle => PhType::Title,
+        PhType::DateTime => PhType::DateTime,
+        PhType::Footer => PhType::Footer,
+        PhType::SlideNumber => PhType::SlideNumber,
+        PhType::Header => PhType::Header,
+        _ => PhType::Body,
+    };
+    let base_key = PlaceholderKey {
+        ph_type: base_type,
+        idx: None,
+    };
+    let mut placeholders = Vec::new();
+    collect_placeholders(children, &mut placeholders);
+    let of_base_type: Vec<&CT_Shape> = placeholders
+        .into_iter()
+        .filter(|shape| {
+            shape
+                .placeholder
+                .as_ref()
+                .is_some_and(|placeholder| placeholder_keys_match(&base_key, &placeholder.key()))
+        })
+        .collect();
+    of_base_type
+        .iter()
+        .find(|shape| {
+            layout_key.idx.is_some()
+                && shape
+                    .placeholder
+                    .as_ref()
+                    .and_then(|placeholder| placeholder.idx)
+                    == layout_key.idx
+        })
+        .or_else(|| of_base_type.first())
+        .copied()
+        .or_else(|| find_placeholder(children, layout_key))
+}
+
+fn collect_placeholders<'a>(children: &'a [ShapeTreeChild], output: &mut Vec<&'a CT_Shape>) {
+    for child in children {
+        match child {
+            ShapeTreeChild::Shape(shape) if shape.placeholder.is_some() => output.push(shape),
+            ShapeTreeChild::GroupShape(group) => collect_placeholders(&group.children, output),
+            ShapeTreeChild::AlternateContent(alternate) => {
+                if let Some(fallback) = alternate.selected_fallback() {
+                    collect_placeholders(fallback, output);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn find_placeholder<'a>(
@@ -5070,6 +5151,24 @@ mod tests {
     }
 
     #[test]
+    fn a_layout_content_placeholder_inherits_the_master_body_not_a_date_with_its_idx() {
+        let fixture = Fixture::new(
+            &shape(None, Some(2)),
+            &shape(None, Some(2)),
+            &[shape(Some("body"), Some(1)), shape(Some("dt"), Some(2))].join(""),
+        );
+
+        let context = fixture.context();
+        let (layout, master) = context.placeholder_chain(fixture.slide_shape(0));
+
+        assert!(layout.is_some());
+        assert_eq!(
+            master.unwrap().placeholder.as_ref().unwrap().ph_type,
+            Some(PhType::Body)
+        );
+    }
+
+    #[test]
     fn master_match_uses_the_layout_placeholder_key() {
         let fixture = Fixture::new(
             &shape(Some("title"), Some(8)),
@@ -5645,6 +5744,34 @@ mod tests {
             texts.iter().filter(|text| *text == "Master logo").count(),
             1
         );
+    }
+
+    #[test]
+    fn flattener_leaves_out_hidden_shapes_and_groups_on_slides_and_masters() {
+        let hide = |xml: String| xml.replacen("<p:cNvPr/>", r#"<p:cNvPr hidden="1"/>"#, 1);
+        let hidden_group = format!(
+            r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="9" name="Group" hidden="true"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{}</p:grpSp>"#,
+            shape_with_text(None, None, "in hidden group")
+        );
+        let fixture = Fixture::new(
+            &[
+                hide(shape_with_text(None, None, "hidden slide shape")),
+                hidden_group,
+                shape_with_text(None, None, "visible"),
+            ]
+            .join(""),
+            "",
+            &hide(shape_with_text(None, None, "hidden master shape")),
+        );
+
+        let texts: Vec<_> = fixture
+            .context()
+            .flatten()
+            .iter()
+            .filter_map(item_text)
+            .collect();
+
+        assert_eq!(texts, ["visible"]);
     }
 
     #[test]

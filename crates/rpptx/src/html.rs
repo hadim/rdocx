@@ -324,6 +324,7 @@ impl<'a> SemanticExporter<'a> {
                     self.close_lists();
                     match frame.graphic_data.payload() {
                         GraphicDataPayload::Table(table) => self.table(index, table, &path)?,
+                        GraphicDataPayload::Chart(_) if self.chart(index, shape) => {}
                         _ => self.diagnostic(
                             &path,
                             "unsupported chart, SmartArt or embedded-object projection omitted",
@@ -334,6 +335,80 @@ impl<'a> SemanticExporter<'a> {
             }
         }
         Ok(())
+    }
+    /// Writes a chart's cached categories and series as a table, the series
+    /// as columns. Returns false when the chart data cannot be read, so the
+    /// caller reports the omission.
+    fn chart(&mut self, index: usize, shape: ShapeRef<'_>) -> bool {
+        let Some(id) = shape.non_visual_id() else {
+            return false;
+        };
+        let Ok((_, data)) = self
+            .deck
+            .chart_source_owner(index, id, "export chart")
+            .and_then(|(_, _, part)| required_part(&self.deck.package, &part).map(<[u8]>::to_vec))
+            .and_then(|xml| {
+                oxml_chart::read_chart_data(&xml)
+                    .map_err(|error| invalid_chart_mutation("export chart", error.to_string()))
+            })
+        else {
+            return false;
+        };
+        let html = self.format == SemanticFormat::Html;
+        let cell = |text: &str| {
+            if html {
+                semantic_escape(text)
+            } else {
+                semantic_md_text(text)
+            }
+        };
+        let rows = data.categories.len().max(
+            data.series
+                .iter()
+                .map(|(_, values)| values.len())
+                .max()
+                .unwrap_or(0),
+        );
+        let text = &mut self.result.text;
+        if html {
+            text.push_str("<table><thead><tr><th></th>");
+            for (name, _) in &data.series {
+                text.push_str(&format!("<th>{}</th>", cell(name)));
+            }
+            text.push_str("</tr></thead><tbody>\n");
+        } else {
+            text.push_str("| |");
+            for (name, _) in &data.series {
+                text.push_str(&format!(" {} |", cell(name)));
+            }
+            text.push_str("\n| --- |");
+            for _ in &data.series {
+                text.push_str(" --- |");
+            }
+            text.push('\n');
+        }
+        for row in 0..rows {
+            let category = cell(data.categories.get(row).map_or("", String::as_str));
+            let values = data
+                .series
+                .iter()
+                .map(|(_, values)| values.get(row).map_or_else(String::new, f64::to_string));
+            if html {
+                text.push_str(&format!("<tr><th>{category}</th>"));
+                for value in values {
+                    text.push_str(&format!("<td>{}</td>", cell(&value)));
+                }
+                text.push_str("</tr>\n");
+            } else {
+                text.push_str(&format!("| {category} |"));
+                for value in values {
+                    text.push_str(&format!(" {} |", cell(&value)));
+                }
+                text.push('\n');
+            }
+        }
+        text.push_str(if html { "</tbody></table>\n" } else { "\n" });
+        true
     }
     fn close_lists(&mut self) {
         if self.format == SemanticFormat::Html {

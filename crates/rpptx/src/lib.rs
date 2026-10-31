@@ -29612,13 +29612,21 @@ fn render_compatible_media(
         {
             ImageFormat::Jpeg
         }
-        _ => return Ok(false),
+        Some(ImageFormat::Emf)
+            if content_type.eq_ignore_ascii_case("image/x-emf")
+                || content_type.eq_ignore_ascii_case("image/emf") =>
+        {
+            ImageFormat::Emf
+        }
+        Some(ImageFormat::Png | ImageFormat::Jpeg) => return Ok(false),
+        Some(_) => return Err("uses an image format the renderer does not draw"),
+        None => return Err("is not an image format the renderer recognises"),
     };
     if !render_media_within_decode_bounds(bytes, format)? {
-        return Ok(false);
+        return Err("could not be decoded");
     }
     let Some(info) = probe(bytes).filter(|info| info.width_px > 0 && info.height_px > 0) else {
-        return Ok(false);
+        return Err("could not be decoded");
     };
     if format == ImageFormat::Jpeg && (info.bit_depth != 8 || info.channels != 3) {
         return Ok(false);
@@ -29626,7 +29634,7 @@ fn render_compatible_media(
     let width = f64::from(info.width_px);
     let height = f64::from(info.height_px);
     let media_id = MediaId::from_bytes(bytes);
-    Ok([Color::BLACK, Color::WHITE].into_iter().any(|background| {
+    let visible = [Color::BLACK, Color::WHITE].into_iter().any(|background| {
         let background_element = PositionedElement::FilledRect {
             rect: Rect {
                 x: 0.0,
@@ -29672,7 +29680,11 @@ fn render_compatible_media(
         oxml_pdf::render_page_to_png(&baseline, 0, 72.0)
             .zip(oxml_pdf::render_page_to_png(&candidate, 0, 72.0))
             .is_some_and(|(baseline, candidate)| baseline != candidate)
-    }))
+    });
+    if !visible && format == ImageFormat::Emf {
+        return Err("holds no EMF record the renderer draws");
+    }
+    Ok(visible)
 }
 
 #[cfg(feature = "render")]
@@ -29704,12 +29716,33 @@ fn render_media_within_decode_bounds(
     if format != ImageFormat::Png {
         return Ok(true);
     }
-    let Some(expected) = usize::try_from(info.width_px)
-        .ok()
-        .and_then(|width| width.checked_mul(info.channels as usize))
-        .and_then(|stride| stride.checked_add(1))
-        .and_then(|row| row.checked_mul(info.height_px as usize))
-    else {
+    // An interlaced (Adam7) PNG stores seven filtered sub-images, each with
+    // its own filter byte per row.
+    let passes: &[(u32, u32, u32, u32)] = if bytes.get(28) == Some(&1) {
+        &[
+            (0, 0, 8, 8),
+            (4, 0, 8, 8),
+            (0, 4, 4, 8),
+            (2, 0, 4, 4),
+            (0, 2, 2, 4),
+            (1, 0, 2, 2),
+            (0, 1, 1, 2),
+        ]
+    } else {
+        &[(0, 0, 1, 1)]
+    };
+    let Some(expected) = passes.iter().try_fold(0usize, |total, &(x0, y0, dx, dy)| {
+        let columns = info.width_px.saturating_sub(x0).div_ceil(dx) as usize;
+        let rows = info.height_px.saturating_sub(y0).div_ceil(dy) as usize;
+        if columns == 0 || rows == 0 {
+            return Some(total);
+        }
+        columns
+            .checked_mul(info.channels as usize)
+            .and_then(|stride| stride.checked_add(1))
+            .and_then(|row| row.checked_mul(rows))
+            .and_then(|pass| total.checked_add(pass))
+    }) else {
         return Err("has dimensions that overflow the decoded-image size");
     };
     if expected > MAX_RENDER_PREVIEW_DECODED_BYTES {

@@ -12544,3 +12544,153 @@ def test_issue435_add_textbox_and_add_shape_refuse_a_negative_size():
     assert len(slide.shapes) == 0
     line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(1), Inches(1), Inches(3), 0)
     assert line.height == 0
+
+
+def _issue436_red_emf(width=200, height=100):
+    records = [
+        struct.pack("<IIIIII", 39, 24, 1, 0, 0x001E1EC8, 0),
+        struct.pack("<III", 37, 12, 1),
+        struct.pack("<II4i", 43, 24, 10, 10, width - 10, height - 10),
+        struct.pack("<IIIII", 14, 20, 0, 16, 20),
+    ]
+    body = b"".join(records)
+    header = struct.pack("<II4i4iIIIIHHIIIiiii", 1, 88, 0, 0, width - 1, height - 1, 0, 0,
+                         width * 2645 // 100, height * 2645 // 100, 0x464D4520, 0x10000,
+                         88 + len(body), 1 + len(records), 2, 0, 0, 0, 0, 1024, 768, 270, 203)
+    return header + body
+
+
+def _issue436_red_png(interlaced, width=64, height=48):
+    passes = ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2),
+              (0, 1, 1, 2)) if interlaced else ((0, 0, 1, 1),)
+    raw = b""
+    for x0, y0, dx, dy in passes:
+        columns, rows = len(range(x0, width, dx)), len(range(y0, height, dy))
+        if columns and rows:
+            raw += (b"\x00" + bytes((200, 30, 30)) * columns) * rows
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, int(interlaced))
+    return (b"\x89PNG\r\n\x1a\n" + _png_chunk(b"IHDR", header) + _png_chunk(b"IDAT", zlib.compress(raw))
+            + _png_chunk(b"IEND", b""))
+
+
+def _issue436_red_pixels(png):
+    from PIL import Image
+    pixels = Image.open(io.BytesIO(png)).convert("RGB").getdata()
+    return sum(1 for r, g, b in pixels if r > 150 and g < 80 and b < 80)
+
+
+def test_issue436_emf_and_interlaced_png_pictures_are_drawn():
+    import rpptx
+    from rpptx.util import Inches
+    for picture, width, height in ((_issue436_red_emf(), Inches(3), None),
+                                   (_issue436_red_png(True), Inches(3), Inches(2.25))):
+        prs = rpptx.Presentation()
+        prs.slides.add_slide(prs.slide_layouts[6]).shapes.add_picture(
+            io.BytesIO(picture), Inches(1), Inches(1), width, height)
+        png, diagnostics = prs.render_slide_to_png_with_diagnostics(0, 30)
+        # 3 x 1.5 in for the EMF from its frame, 3 x 2.25 in for the PNG, at 30 dpi.
+        assert _issue436_red_pixels(png) > (2700 if height is None else 5000), diagnostics
+        assert not [d for d in diagnostics if "image relationship" in d], diagnostics
+
+
+def test_issue436_charts_with_a_third_axis_id_or_a_grouped_number_format_are_drawn():
+    import rpptx
+    from rpptx.util import Inches
+    for number_format, third_axis_id in (("#,##0", False), ('"EUR "#,##0.0', False), ("General", True)):
+        prs = rpptx.Presentation()
+        data = rpptx.CategoryChartData(number_format=number_format)
+        data.categories = ["x", "y"]
+        data.add_series("A", (1820, 1910))
+        prs.slides.add_slide(prs.slide_layouts[6]).shapes.add_chart(
+            rpptx.XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(1), Inches(1), Inches(6), Inches(4), data)
+        package = prs.to_bytes()
+        if third_axis_id:
+            out = io.BytesIO()
+            with zipfile.ZipFile(io.BytesIO(package)) as source, zipfile.ZipFile(out, "w") as target:
+                for member in source.infolist():
+                    xml = source.read(member.filename)
+                    if member.filename == "ppt/charts/chart1.xml":
+                        xml, count = re.subn(rb"(<c:axId val=\"\d+\"/>)(</c:barChart>)",
+                                             rb'\1<c:axId val="99999"/>\2', xml)
+                        assert count == 1
+                    target.writestr(member, xml)
+            package = out.getvalue()
+        deck = rpptx.Presentation.from_bytes(package)
+        chart = next(shape for shape in deck.slides[0].shapes if shape.has_chart).chart
+        assert tuple(chart.categories) == ("x", "y")
+        diagnostics = deck.render_slide_to_png_with_diagnostics(0, 30)[1]
+        assert not [d for d in diagnostics if "chart" in d], (number_format, diagnostics)
+
+
+def test_issue436_exports_hold_a_chart_as_a_table():
+    import rpptx
+    from rpptx.util import Inches
+    prs = rpptx.Presentation()
+    data = rpptx.CategoryChartData()
+    data.categories = ["Q1", "Q2"]
+    data.add_series("Zeta region", (1150, 1190))
+    prs.slides.add_slide(prs.slide_layouts[6]).shapes.add_chart(
+        rpptx.XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(1), Inches(1), Inches(6), Inches(4), data)
+    for result in (prs.export_markdown(), prs.export_html()):
+        assert "Zeta region" in result.text and "1150" in result.text and "Q1" in result.text
+        assert not [d for d in result.diagnostics if "chart" in d], result.diagnostics
+
+
+def test_issue436_hidden_shapes_and_groups_are_not_drawn():
+    import rpptx
+    from rpptx.enum.shapes import MSO_SHAPE
+    from rpptx.util import Inches
+
+    def red_box(shapes, x):
+        shape = shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x), Inches(1), Inches(1.5), Inches(1.5))
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = "C81E1E"
+        return shape
+
+    def hide(element):
+        element.replace_xml(re.sub(r"<p:cNvPr ", '<p:cNvPr hidden="1" ', element.xml, count=1))
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    hide(red_box(slide.shapes, 0.5).element)
+    red_box(slide.shapes.add_group_shape().shapes, 4)
+    hide(slide.shapes[1].element)
+    red_box(slide.shapes, 7.5)
+    hide(red_box(prs.slide_masters[0].shapes, 10.5).element)
+    # One visible 1.5 in square at 20 dpi.
+    assert 800 < _issue436_red_pixels(prs.render_slide_to_png(0, 20)) < 1000
+
+
+def test_issue436_pdf_words_keep_their_own_actual_text():
+    import rpptx
+    from rpptx.util import Inches
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1)).text_frame.text = "Alpha beta gamma"
+    content = b""
+    for stream in re.findall(rb"stream\r?\n(.*?)\r?\nendstream", prs.to_pdf(), re.S):
+        try:
+            content += zlib.decompress(stream)
+        except zlib.error:
+            pass
+    spans = re.findall(rb"/ActualText \((.*?)\)", content)
+    assert b"Alpha beta gamma" not in spans and b"" not in spans, spans
+
+
+def test_issue436_two_content_right_column_renders_level_and_black():
+    import rpptx
+    from PIL import Image
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(next(layout for layout in prs.slide_layouts if layout.name == "Two Content"))
+    slide.shapes.title.text = "Two columns"
+    slide.placeholders[1].text = "Left column text"
+    slide.placeholders[2].text = "Right column text"
+    image = Image.open(io.BytesIO(prs.render_slide_to_png(0, 50))).convert("L")
+    width, height = image.size
+
+    def first_ink(left, right):
+        rows = [(y, min(image.getpixel((x, y)) for x in range(left, right))) for y in range(80, height)]
+        return next(y for y, value in rows if value < 200), min(value for _, value in rows)
+
+    (left_top, left_dark), (right_top, right_dark) = first_ink(0, width // 2), first_ink(width // 2, width)
+    assert abs(left_top - right_top) <= 5 and right_dark <= 40, (left_top, right_top, right_dark)

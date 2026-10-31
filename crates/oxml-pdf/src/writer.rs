@@ -1345,6 +1345,18 @@ fn logical_line_spans(elements: &[PositionedElement]) -> Vec<LogicalLineSpan> {
                     start += 1;
                     continue;
                 };
+                // Runs already drawn in logical order map to their own text,
+                // so each keeps its own ActualText and its own word boxes.
+                // Only a line the bidi pass reordered needs the whole logical
+                // text on its first span.
+                let reordered = runs
+                    .iter()
+                    .zip(&logical)
+                    .any(|((_, drawn), (_, logical))| drawn.logical_index != logical.logical_index);
+                if !reordered {
+                    start = *end + 1;
+                    continue;
+                }
                 spans.push(LogicalLineSpan {
                     start,
                     end: *end,
@@ -2408,6 +2420,40 @@ mod tests {
         );
     }
 
+    /// rpptx's PDF gave a whole run's text to the span of its first word and an
+    /// empty ActualText to the others, so text extraction saw one word on the
+    /// first word's box.
+    #[test]
+    fn runs_drawn_in_logical_order_keep_their_own_actual_text() {
+        let source_node = oxml_layout::SourceNodeId::new(1).unwrap();
+        let word = |text: &'static str, index: usize, x: f64, start: u32| {
+            PositionedElement::MultilingualText(multilingual_run(
+                text,
+                index,
+                Point { x, y: 20.0 },
+                Some(oxml_layout::SourceSpan {
+                    node: source_node,
+                    char_start: start,
+                    char_end: start + text.len() as u32,
+                }),
+            ))
+        };
+        let content = content_for_multilingual_runs(vec![
+            word("Alpha", 0, 10.0, 0),
+            word(" ", 1, 40.0, 5),
+            word("beta", 2, 45.0, 6),
+        ]);
+
+        assert_eq!(content.matches("/ActualText").count(), 3, "{content}");
+        for text in ["(Alpha)", "( )", "(beta)"] {
+            assert!(
+                content.contains(&format!("/ActualText {text}")),
+                "{content}"
+            );
+        }
+        assert!(!content.contains("/ActualText ()"), "{content}");
+    }
+
     #[test]
     fn logical_line_coalescing_respects_owner_and_baseline_boundaries() {
         let first_node = oxml_layout::SourceNodeId::new(1).unwrap();
@@ -2454,7 +2500,9 @@ mod tests {
         ]);
 
         assert_eq!(content.matches("/ActualText").count(), 8, "{content}");
-        assert!(content.contains("/ActualText (one two)"), "{content}");
+        assert!(content.contains("/ActualText (one )"), "{content}");
+        assert!(content.contains("/ActualText (two)"), "{content}");
+        assert!(!content.contains("/ActualText (one two)"), "{content}");
         assert!(
             !content.contains("/ActualText (owned boundary)"),
             "{content}"

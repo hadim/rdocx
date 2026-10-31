@@ -11743,7 +11743,19 @@ fn render_word_chart(
         None => Err("relationship was not resolved from the document part".to_owned()),
     };
     match rendered {
-        Ok(group) => Ok(group),
+        Ok(group) => {
+            if let Some(Ok(chart)) = input.charts.get(relationship_id) {
+                for code in oxml_chart::unsupported_number_formats(&chart.chart).unwrap_or_default()
+                {
+                    diagnostics.push(Diagnostic {
+                        message: format!(
+                            "Word chart relationship {relationship_id}: number format `{code}` is not supported, its labels are drawn as General"
+                        ),
+                    });
+                }
+            }
+            Ok(group)
+        }
         Err(detail) => {
             diagnostics.push(Diagnostic {
                 message: format!("Word chart relationship {relationship_id}: {detail}"),

@@ -212,6 +212,16 @@ impl CT_ConnectionShape {
             .map(|(_, value)| value.as_str())
     }
 
+    /// Reports the explicit `p:cNvPr/@hidden` flag without changing source.
+    pub fn hidden(&self) -> bool {
+        self.raw
+            .non_visual
+            .drawing_properties
+            .raw_attributes
+            .iter()
+            .any(|(key, value)| key == "hidden" && matches!(value.as_str(), "true" | "1"))
+    }
+
     /// Returns the direct accessibility description.
     pub fn alt_text(&self) -> Option<String> {
         self.raw

@@ -367,33 +367,33 @@ MEASUREMENT_COLUMNS = (
 )
 MEASUREMENT_DATE = "2026-09-19"
 ARCHIVE_REMEASUREMENT_DATES = {
-    "oxml-chart": "2026-10-28",
+    "oxml-chart": "2026-10-31",
     "oxml-cli-support": "2026-10-28",
     "oxml-core": "2026-10-28",
     "oxml-drawing": "2026-10-28",
     "oxml-layout": "2026-10-28",
-    "oxml-media": "2026-10-28",
+    "oxml-media": "2026-10-31",
     "oxml-opc": "2026-10-28",
-    "oxml-pdf": "2026-10-28",
+    "oxml-pdf": "2026-10-31",
     "oxml-sml": "2026-10-28",
-    "rdocx": "2026-10-28",
+    "rdocx": "2026-10-31",
     "rdocx-cli": "2026-10-28",
-    "rdocx-html": "2026-10-28",
-    "rdocx-layout": "2026-10-28",
+    "rdocx-html": "2026-10-31",
+    "rdocx-layout": "2026-10-31",
     "rdocx-opc": "2026-10-28",
     "rdocx-oxml": "2026-10-28",
     "rdocx-pdf": "2026-10-28",
-    "rpptx": "2026-10-28",
+    "rpptx": "2026-10-31",
     "rpptx-chart": "2026-10-28",
     "rpptx-cli": "2026-10-28",
-    "rpptx-layout": "2026-10-28",
-    "rpptx-oxml": "2026-10-28",
+    "rpptx-layout": "2026-10-31",
+    "rpptx-oxml": "2026-10-31",
     "rpptx-render": "2026-10-28",
 }
 MEASUREMENT_PLATFORM = "macOS 26.6.2, Apple M5 Max, arm64"
 ARCHIVE_COMPRESSION_TOLERANCE_BYTES = 64
 ARCHIVE_MEASUREMENTS = {
-    "oxml-chart": (120_148, 748_108, 6),
+    "oxml-chart": (124_261, 764_905, 6),
     "oxml-cli-support": (14_713, 55_732, 6),
     "oxml-core": (21_804, 104_428, 15),
     "oxml-drawing": (226_588, 1_494_418, 24),
