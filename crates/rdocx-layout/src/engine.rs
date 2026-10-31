@@ -23481,6 +23481,54 @@ mod tests {
     }
 
     #[test]
+    fn issue433_cell_vertical_alignment_does_not_stop_a_row_from_splitting() {
+        // Fifteen filler paragraphs, then a one-cell row of 40 paragraphs
+        // that does not fit in the rest of page 1 and has no w:cantSplit.
+        let row_lines_per_page = |valign: &str| {
+            let mut input = make_input_with_text("");
+            let fillers = (1..=15)
+                .map(|i| format!("<w:p><w:r><w:t>Filler {i}</w:t></w:r></w:p>"))
+                .collect::<String>();
+            let lines = (1..=40)
+                .map(|i| format!("<w:p><w:r><w:t>Row line {i}</w:t></w:r></w:p>"))
+                .collect::<String>();
+            input.document = CT_Document::from_xml(
+                format!(
+                    r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{fillers}<w:tbl><w:tblPr><w:tblW w:w="4000" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:tcPr>{valign}</w:tcPr>{lines}</w:tc></w:tr></w:tbl><w:p/></w:body></w:document>"#
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            let output = deterministic_layout(&input);
+            output
+                .pages
+                .iter()
+                .map(|page| {
+                    let mut count = 0;
+                    oxml_layout::walk(&page.elements, &mut |element, _| {
+                        if let PositionedElement::Text(run) = element
+                            && run.text.starts_with("Row")
+                        {
+                            count += 1;
+                        }
+                    });
+                    count
+                })
+                .collect::<Vec<_>>()
+        };
+        let plain = row_lines_per_page("");
+        assert_eq!(plain.len(), 2, "{plain:?}");
+        assert!(plain[0] > 0 && plain[1] > 0, "{plain:?}");
+        for valign in ["top", "center", "bottom"] {
+            assert_eq!(
+                row_lines_per_page(&format!(r#"<w:vAlign w:val="{valign}"/>"#)),
+                plain,
+                "w:vAlign {valign}"
+            );
+        }
+    }
+
+    #[test]
     fn issue433_first_line_indent_is_one_property_across_levels() {
         // BaseInd hangs 720 twips. Derived sets firstLine over it, DerivedH
         // sets hanging 0, and the third paragraph sets firstLine directly.

@@ -1114,6 +1114,8 @@ fn paginate_pass_from<B: LayoutBlockLike>(
 /// Split plain flowed cells at paragraph or guarded line boundaries. Rows with
 /// merges, exact-height clipping, rotations, or anchored content retain the
 /// existing whole-row path until those cases have their own safe break model.
+/// A cell's vertical alignment does not move the break: each part of the cell
+/// is aligned in its own part of the row.
 fn split_simple_table_row(
     row: &TableRow,
     semantics: Option<&RowSemantics>,
@@ -1141,7 +1143,6 @@ fn split_simple_table_row(
             || cell.merge_with_below
             || cell.clip_content
             || cell.rotation.is_some()
-            || cell.v_align.is_some()
         {
             return None;
         }
