@@ -315,6 +315,8 @@ struct AutofitOwner {
     update: AutofitUpdate,
     empty: bool,
     unsupported: Option<String>,
+    /// The shape ID this owner shares with an earlier shape of its part.
+    duplicate_shape_id: Option<u32>,
     contexts: Vec<AutofitContext>,
 }
 
@@ -1074,6 +1076,67 @@ pub enum ValidationIssue {
         path: String,
         message: String,
     },
+}
+
+/// One sentence per issue. Slides, masters and shapes are numbered from 1, as
+/// PowerPoint shows them, where the fields hold zero-based indexes.
+impl std::fmt::Display for ValidationIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DuplicateShapeId { slide, id } => write!(
+                f,
+                "slide {}: duplicate shape ID {id}, shared by more than one shape",
+                slide + 1
+            ),
+            Self::SlideIdOutOfRange { slide, id } => write!(
+                f,
+                "slide {}: slide ID {id} is outside 256 to 2147483647",
+                slide + 1
+            ),
+            Self::DuplicateSlideId { id } => write!(f, "two slides share slide ID {id}"),
+            Self::MissingContentTypeOverride { part } => {
+                write!(f, "{part} has no content type override")
+            }
+            Self::DanglingRelationship { part, r_id, target } => write!(
+                f,
+                "{part}: relationship {r_id} to {target} is referenced without being defined, \
+                 or defined without being referenced"
+            ),
+            Self::UnreachableRelationshipTarget { part, target } => {
+                write!(
+                    f,
+                    "{part}: relationship target {target} is not in the package"
+                )
+            }
+            Self::EmptyTextBody { slide, shape } => write!(
+                f,
+                "slide {}: shape {} has a text body without a paragraph",
+                slide + 1,
+                shape + 1
+            ),
+            Self::DuplicatePlaceholderIdx { slide, idx } => write!(
+                f,
+                "slide {}: two placeholders share placeholder idx {idx}",
+                slide + 1
+            ),
+            Self::OrphanMedia { part } => write!(f, "{part} is not the target of any relationship"),
+            Self::CustomShowReference { slide_id } => write!(
+                f,
+                "a custom show references relationship rId{slide_id}, which names no slide"
+            ),
+            Self::MissingLayoutRel { slide } => {
+                write!(f, "slide {} has no slide layout relationship", slide + 1)
+            }
+            Self::MissingThemeRel { master } => {
+                write!(f, "slide master {} has no theme relationship", master + 1)
+            }
+            Self::InvalidXmlChild {
+                part,
+                path,
+                message,
+            } => write!(f, "{part} {path}: {message}"),
+        }
+    }
 }
 
 /// One slide master's theme, as [`Presentation::theme`] reads it.
@@ -3866,6 +3929,7 @@ impl Presentation {
             }
         }
         let mut owners = autofit_inventory(self, &package, None)?;
+        refuse_duplicate_shape_ids(&owners)?;
         let mut fonts = authoring_fonts(self, font_files)?;
         let mut plans = Vec::new();
         for owner in &mut owners {
@@ -3947,6 +4011,7 @@ impl Presentation {
             package.write_to(&mut bytes)?;
             let candidate = Self::from_bytes(bytes.get_ref())?;
             let proposed = autofit_inventory(&candidate, &package, None)?;
+            refuse_duplicate_shape_ids(&proposed)?;
             for (location, change) in &plans {
                 if !matches!(change, AuthoringChange::Shape(_)) {
                     continue;
@@ -4042,6 +4107,19 @@ impl Presentation {
                         .cloned(),
                 );
             }
+            if let Some(id) = owner.duplicate_shape_id {
+                let location = &owner.update.location;
+                let diagnostic = oxml_layout::Diagnostic {
+                    message: format!(
+                        "{} {:?}: shape ID {id} is shared with an earlier shape",
+                        location.owner_part, location.child_path
+                    ),
+                };
+                owner.update.diagnostics.push(diagnostic.clone());
+                if !diagnostics.contains(&diagnostic) {
+                    diagnostics.push(diagnostic);
+                }
+            }
             for context in &owner.contexts {
                 if owner.empty {
                     frames.push(FitFrameReport {
@@ -4057,9 +4135,12 @@ impl Presentation {
                     });
                     continue;
                 }
-                if owner.unsupported.is_some() {
+                if let Some(reason) = &owner.unsupported {
                     let mut update = owner.update.clone();
                     update.status = "unsupported".to_owned();
+                    update.diagnostics.push(oxml_layout::Diagnostic {
+                        message: reason.clone(),
+                    });
                     frames.push(FitFrameReport {
                         update,
                         context: context.context.clone(),
@@ -4121,6 +4202,11 @@ impl Presentation {
             if owner.contexts.is_empty() {
                 let mut update = owner.update;
                 update.status = if owner.empty { "empty" } else { "unsupported" }.to_owned();
+                if let Some(reason) = owner.unsupported.filter(|_| !owner.empty) {
+                    update
+                        .diagnostics
+                        .push(oxml_layout::Diagnostic { message: reason });
+                }
                 frames.push(FitFrameReport {
                     update,
                     context: "uninstantiated".to_owned(),
@@ -4192,7 +4278,9 @@ impl Presentation {
             .iter()
             .any(|slide| slide.part_name == location.owner_part)
             .then_some(location.owner_part.as_str());
-        let mut owner = autofit_inventory(self, &package, slide_part)?
+        let owners = autofit_inventory(self, &package, slide_part)?;
+        refuse_duplicate_shape_ids(&owners)?;
+        let mut owner = owners
             .into_iter()
             .find(|owner| owner.update.location == *location)
             .ok_or_else(|| autofit_failure(location, "stale or foreign physical owner"))?;
@@ -27482,6 +27570,21 @@ fn apply_owned_change(
     Ok(())
 }
 
+/// Mutation refuses a part whose text owners repeat a shape ID, which only a
+/// read-only fit report names frame by frame.
+#[cfg(feature = "render")]
+fn refuse_duplicate_shape_ids(owners: &[AutofitOwner]) -> Result<()> {
+    match owners
+        .iter()
+        .find_map(|owner| Some((&owner.update.location.owner_part, owner.duplicate_shape_id?)))
+    {
+        Some((part, id)) => Err(render_failure(format!(
+            "autofit {part}: duplicate shape ID {id}"
+        ))),
+        None => Ok(()),
+    }
+}
+
 #[cfg(feature = "render")]
 fn autofit_failure(location: &TextFrameLocation, detail: impl std::fmt::Display) -> Error {
     render_failure(format!(
@@ -27560,13 +27663,9 @@ fn append_autofit_context(
         else {
             continue;
         };
-        if let Some(id) = child.non_visual_id()
-            && !ids.insert(id)
-        {
-            return Err(render_failure(format!(
-                "autofit {part}: duplicate shape ID {id}"
-            )));
-        }
+        // A read-only report measures a shape that repeats an ID and notes it.
+        // Mutation refuses the whole operation through `refuse_duplicate_shape_ids`.
+        let duplicate_shape_id = child.non_visual_id().filter(|id| !ids.insert(*id));
         let cells: Vec<Option<(usize, usize)>> = match child {
             ShapeTreeChild::Shape(shape) if shape.text_body.is_some() => vec![None],
             ShapeTreeChild::GraphicFrame(frame) => match frame.graphic_data.payload() {
@@ -27719,6 +27818,7 @@ fn append_autofit_context(
                 if unsupported.is_some() {
                     existing.unsupported = unsupported;
                 }
+                existing.duplicate_shape_id = existing.duplicate_shape_id.or(duplicate_shape_id);
             } else {
                 owners.push(AutofitOwner {
                     update: AutofitUpdate {
@@ -27741,6 +27841,7 @@ fn append_autofit_context(
                     },
                     empty,
                     unsupported,
+                    duplicate_shape_id,
                     contexts,
                 });
             }
@@ -27971,6 +28072,7 @@ fn autofit_inventory(
                     unsupported: Some(
                         "opaque text owner has no supported authoring projection".to_owned(),
                     ),
+                    duplicate_shape_id: None,
                     contexts: Vec::new(),
                 });
             }
@@ -28099,13 +28201,29 @@ fn materialize_notes_measurement_bounds(
             }
             ShapeTreeChild::Shape(shape) if shape.shape_properties.transform.is_none() => {
                 if let Some(ph) = &shape.placeholder {
-                    let mut matching = placeholders
-                        .iter()
-                        .filter(|(key, _)| key.matches(&ph.key()));
-                    if let Some((_, parent)) = matching.next() {
-                        if matching.next().is_some() {
+                    let key = ph.key();
+                    let mut matching = placeholders.iter().filter(|(k, _)| k.matches(&key));
+                    let parent = match (matching.next(), matching.next()) {
+                        (Some(_), Some(_)) => {
                             return Err(render_failure("ambiguous notes placeholder geometry"));
                         }
+                        (Some((_, parent)), None) => Some(parent),
+                        // A notes placeholder whose idx no notes-master
+                        // placeholder carries takes the geometry of the one
+                        // master placeholder of its type.
+                        (None, _) => {
+                            let by_type = PlaceholderKey {
+                                ph_type: key.ph_type,
+                                idx: None,
+                            };
+                            let mut typed = placeholders.iter().filter(|(k, _)| by_type.matches(k));
+                            match (typed.next(), typed.next()) {
+                                (Some((_, parent)), None) => Some(parent),
+                                _ => None,
+                            }
+                        }
+                    };
+                    if let Some(parent) = parent {
                         shape.shape_properties.transform =
                             parent.shape_properties.transform.clone();
                     }
@@ -28202,6 +28320,7 @@ fn append_uninstantiated_owners(
                 },
                 empty,
                 unsupported: Some("shared flagged owner has no instantiated context".to_owned()),
+                duplicate_shape_id: None,
                 contexts: Vec::new(),
             });
         }
@@ -36013,6 +36132,92 @@ mod write_tests {
             deck.slide(0).unwrap().notes_text().as_deref(),
             Some("iiiiWWWW\nSecond notes\nThird notes")
         );
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn issue431_fit_report_measures_a_repeated_shape_id_and_a_notes_placeholder_by_type() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        for top in [914400, 2743200] {
+            deck.slide_mut(0)
+                .unwrap()
+                .add_textbox(Emu(914400), Emu(top), Emu(2743200), Emu(914400))
+                .unwrap()
+                .set_text("text")
+                .unwrap();
+        }
+        deck.set_notes_text(0, "A note").unwrap();
+        let package = deck.staged_package(false).unwrap();
+        let slide_part = deck.slides[0].part_name.clone();
+        let notes_part = deck.slides[0].notes.as_ref().unwrap().part_name.clone();
+        let edited = |part: &str, edit: &dyn Fn(&str) -> String| {
+            let mut package = package.clone();
+            let xml = std::str::from_utf8(required_part(&package, part).unwrap()).unwrap();
+            let changed = edit(xml);
+            assert_ne!(changed, xml);
+            package.set_part(part, changed.into_bytes());
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            Presentation::from_bytes(bytes.get_ref()).unwrap()
+        };
+
+        // The second textbox repeats the first one's ID: it is measured and noted.
+        let mut duplicate = edited(&slide_part, &|xml| {
+            xml.replacen(r#"<p:cNvPr id="3""#, r#"<p:cNvPr id="2""#, 1)
+        });
+        let report = duplicate.fit_report(&[]).unwrap();
+        let frame = report
+            .frames
+            .iter()
+            .find(|f| {
+                f.update.location.owner_part == slide_part && f.update.location.child_path == [1]
+            })
+            .unwrap();
+        assert_eq!(
+            (frame.update.status.as_str(), frame.overflow),
+            ("unchanged", false)
+        );
+        let note = format!("{slide_part} [1]: shape ID 2 is shared with an earlier shape");
+        assert!(frame.update.diagnostics.iter().any(|d| d.message == note));
+        assert!(report.diagnostics.iter().any(|d| d.message == note));
+        let issue = duplicate.validate().into_iter().next().unwrap();
+        assert_eq!(
+            issue.to_string(),
+            "slide 1: duplicate shape ID 2, shared by more than one shape"
+        );
+        // Mutation still refuses the deck as a whole.
+        let before = duplicate.to_bytes().unwrap();
+        let error = duplicate.refresh_autofit(&[]).unwrap_err().to_string();
+        assert!(error.contains("duplicate shape ID 2"), "{error}");
+        let location = duplicate.text_frame_location(0, &[0], None).unwrap();
+        let error = duplicate.fit_text_at(&location, None, 20, &[]).unwrap_err();
+        assert!(
+            error.to_string().contains("duplicate shape ID 2"),
+            "{error}"
+        );
+        assert_eq!(duplicate.to_bytes().unwrap(), before);
+
+        // A notes slide number whose idx the notes master's does not carry
+        // takes the master's slide number geometry by type.
+        let notes = edited(&notes_part, &|xml| {
+            xml.replace(
+                "</p:spTree>",
+                r#"<p:sp><p:nvSpPr><p:cNvPr id="9" name="Slide Number 9"/><p:cNvSpPr/><p:nvPr><p:ph type="sldNum" sz="quarter" idx="10"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:fld id="{F7021451-1387-4CA6-816F-3879F97B5CBC}" type="slidenum"><a:t>1</a:t></a:fld></a:p></p:txBody></p:sp></p:spTree>"#,
+            )
+        });
+        let report = notes.fit_report(&[]).unwrap();
+        let frame = report
+            .frames
+            .iter()
+            .find(|f| f.update.name.as_deref() == Some("Slide Number 9"))
+            .unwrap();
+        assert_eq!(frame.context, notes_part);
+        assert_eq!(
+            (frame.update.status.as_str(), frame.overflow),
+            ("unchanged", false)
+        );
+        assert!(report.frames.iter().all(|f| f.context != "uninstantiated"));
     }
 
     #[cfg(feature = "render")]

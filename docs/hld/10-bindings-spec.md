@@ -3942,8 +3942,10 @@ identity/name, contexts, empty/status facts, current measured/stored values,
 needed total scale/reduction, quantized/persisted trials and diagnostics.
 Trial dimensions/heights are points, stored bounds EMU and integer scales or
 reductions hundred-thousandths. No fitting permitted trial reports null needed
-scale and unfit-at-floor. Unsupported mandatory owners refuse. Fit does not
-save, exiting0 without overflow,1 for overflow and2 for checked error.
+scale and unfit-at-floor. An unsupported mandatory owner is reported with
+reason cannot-assess and its cause and counts as an overflow. Fit does not
+save, exiting0 without overflow,1 for overflow or an unassessed owner and2
+for checked error.
 
 `inspect` reports the file, slide and layout counts, slide size, core metadata,
 and each slide's identity, hidden state, and shape count. Its JSON form uses the

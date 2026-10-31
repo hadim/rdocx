@@ -666,7 +666,7 @@ pub fn validate(file: &Path) -> Result<bool> {
     let presentation = Presentation::open(file)?;
     let issues = presentation.validate();
     for issue in &issues {
-        eprintln!("{issue:?}");
+        eprintln!("{issue}");
     }
     if issues.is_empty() {
         // A reader that closes standard output early, as `| head` does, does
@@ -1811,32 +1811,8 @@ pub fn fit(file: &Path, as_json: bool, font_dir: Option<&Path>) -> Result<bool> 
         .collect::<Vec<_>>();
     let presentation = Presentation::open(file)?;
     let report = presentation.fit_report(&refs)?;
-    let unsupported = report
-        .frames
-        .iter()
-        .filter(|f| f.update.status == "unsupported")
-        .collect::<Vec<_>>();
-    if !unsupported.is_empty() {
-        return Err(format!(
-            "fit cannot assess mandatory owners: {}",
-            unsupported
-                .iter()
-                .map(|f| format!(
-                    "{} {:?}: {}",
-                    f.update.location.owner_part,
-                    f.update.location.child_path,
-                    f.update
-                        .diagnostics
-                        .iter()
-                        .map(|d| d.message.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-                .collect::<Vec<_>>()
-                .join(" | ")
-        )
-        .into());
-    }
+    // A frame the provider cannot assess is reported with its reason and
+    // counts as an overflow, so exit 0 still means every frame was assessed.
     let overflow = report.frames.iter().any(|f| f.overflow);
     let frames=report.frames.iter().map(|f| {
         let u=&f.update;
@@ -1845,7 +1821,7 @@ pub fn fit(file: &Path, as_json: bool, font_dir: Option<&Path>) -> Result<bool> 
             "owner_kind":u.owner_kind,"slide":u.slide_index.map(|i|i+1),"shape_id":u.shape_id,"name":u.name,"context":f.context,
             "mode":match u.mode {AutofitMode::None=>"none",AutofitMode::Normal=>"normal",AutofitMode::Shape=>"shape"},
             "status":u.status,"overflow":f.overflow,"needed_scale":f.needed_scale,"needed_reduction":f.needed_reduction,
-            "reason":if f.overflow && f.needed_scale.is_none(){Some("unfit-at-floor")}else{None},
+            "reason":if u.status=="unsupported"{Some("cannot-assess")}else if f.overflow && f.needed_scale.is_none(){Some("unfit-at-floor")}else{None},
             "measured_font_scale":f.measured_font_scale,"current_line_spacing_reduction":f.current_line_spacing_reduction,
             "stored_font_scale":u.font_scale,"stored_line_spacing_reduction":u.line_spacing_reduction,"point_size":u.point_size,
             "old_bounds_emu":u.old_bounds,"new_bounds_emu":u.new_bounds,"changed":u.changed,

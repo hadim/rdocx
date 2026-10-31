@@ -428,8 +428,10 @@ fn validate_reports_duplicate_paragraph_properties_while_text_remains_readable()
     let validated = cli(&["validate", deck.to_str().unwrap()]);
     assert!(!validated.status.success());
     let diagnostic = String::from_utf8(validated.stderr).unwrap();
-    assert!(diagnostic.contains("InvalidXmlChild"), "{diagnostic}");
-    assert!(diagnostic.contains(&slide_part), "{diagnostic}");
+    assert!(
+        diagnostic.starts_with(&format!("{slide_part} /")),
+        "{diagnostic}"
+    );
     assert!(
         diagnostic.contains("finite XML child order or multiplicity is invalid"),
         "{diagnostic}"

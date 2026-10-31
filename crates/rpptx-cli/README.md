@@ -176,10 +176,12 @@ status, current stored values, overflow, needed total scale/reduction and the
 provider's quantized and persisted trials. Dimensions/heights are points,
 old/new bounds are EMU, and needed scale/reduction use hundred-thousandths.
 No permitted fitting trial means nullable needed_scale with
-`reason=unfit-at-floor`. Empty frames remain accounted for. Unsupported
-mandatory owners refuse with diagnostics instead of disappearing. Exit0 means
-all admitted frames were assessed without overflow, exit1 means overflow,
-and exit2 means a checked error. The command does not modify autofit or save.
+`reason=unfit-at-floor`. Empty frames remain accounted for. A frame the
+provider cannot assess is reported with `status=unsupported`,
+`reason=cannot-assess` and its cause in `diagnostics`, and counts as an
+overflow. Exit0 means all admitted frames were assessed without overflow,
+exit1 means overflow or a frame that could not be assessed, and exit2 means a
+checked error. The command does not modify autofit or save.
 
 Core metadata get includes every native core field. Set accepts title, author,
 subject, keywords, description and category, preserving all unspecified fields
