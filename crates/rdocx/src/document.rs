@@ -22569,7 +22569,6 @@ impl Document {
 
     fn canonicalize_typed_identifiers(&mut self) -> Result<()> {
         self.canonicalize_bookmark_ids()?;
-        self.canonicalize_numbering_ids()?;
         Ok(())
     }
 
@@ -22683,6 +22682,12 @@ impl Document {
         Ok(())
     }
 
+    /// Renumber authored numbering definitions and instances by first use in
+    /// the body, for a package that equivalent construction orders write
+    /// identically. Only the output paths run it, on their staged copy: the
+    /// ids `add_numbering_definition` and `add_numbering_instance` return
+    /// are handles the caller holds, and a mutation that publishes its
+    /// reopened candidate must not renumber them under the caller.
     fn canonicalize_numbering_ids(&mut self) -> Result<()> {
         let Some(numbering) = self.numbering.as_ref() else {
             return Ok(());
@@ -25064,6 +25069,7 @@ impl Document {
                 .as_ref()
                 != Some(comments);
         }
+        self.canonicalize_numbering_ids()?;
         self.prepare_staged_package()
     }
 

@@ -408693,3 +408693,59 @@ fn issue432_cells_added_by_insert_column_and_add_row_keep_paragraph_formatting()
         assert!(!cell.contains("<w:r>"), "{label} holds no text: {cell}");
     }
 }
+
+#[test]
+fn issue432_a_numbering_definition_id_names_its_definition_after_a_republishing_edit() {
+    let mut document = Document::new();
+    let bullets = document
+        .add_numbering_definition(&[ListLevel::bullet()])
+        .unwrap();
+    let numbers = document
+        .add_numbering_definition(&[ListLevel::decimal()])
+        .unwrap();
+    let numbered = document.add_numbering_instance(numbers, &[]).unwrap();
+    document
+        .add_paragraph("numbered item")
+        .numbering(numbered, 0);
+    let bulleted = document.add_numbering_instance(bullets, &[]).unwrap();
+    document.add_paragraph("bullet item").numbering(bulleted, 0);
+    // A footnote publishes the package again, as a picture does.
+    document.add_paragraph("text");
+    let location = document.paragraph_story_location(2).unwrap().unwrap();
+    document.create_footnote(&location, "a note").unwrap();
+    let later = document.add_numbering_instance(bullets, &[]).unwrap();
+    let definition = |instance: u32| {
+        document
+            .numbering_instance(instance)
+            .expect("numbering instance")
+            .definition_id
+    };
+    assert_eq!(definition(bulleted), bullets);
+    assert_eq!(definition(numbered), numbers);
+    assert_eq!(definition(later), bullets);
+    // The saved package renumbers by first use, and each list keeps its format.
+    document.add_paragraph("later bullet").numbering(later, 0);
+    let body = document.part_xml("/word/document.xml").unwrap();
+    let numbering = document.part_xml("/word/numbering.xml").unwrap();
+    let attribute = |xml: &str, from: usize, name: &str| {
+        let at = from + xml[from..].find(name).unwrap() + name.len();
+        xml[at..at + xml[at..].find('"').unwrap()].to_owned()
+    };
+    let format = |text: &str| {
+        let paragraph = body[..body.find(&format!("<w:t>{text}</w:t>")).unwrap()]
+            .rfind("<w:p>")
+            .unwrap();
+        let num = attribute(&body, paragraph, r#"<w:numId w:val=""#);
+        let instance = numbering
+            .find(&format!(r#"<w:num w:numId="{num}">"#))
+            .unwrap();
+        let definition = attribute(&numbering, instance, r#"<w:abstractNumId w:val=""#);
+        let start = numbering
+            .find(&format!(r#"<w:abstractNum w:abstractNumId="{definition}""#))
+            .unwrap();
+        attribute(&numbering, start, r#"<w:numFmt w:val=""#)
+    };
+    assert_eq!(format("numbered item"), "decimal", "{numbering}");
+    assert_eq!(format("bullet item"), "bullet", "{numbering}");
+    assert_eq!(format("later bullet"), "bullet", "{numbering}");
+}
