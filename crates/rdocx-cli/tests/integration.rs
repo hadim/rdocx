@@ -2038,12 +2038,12 @@ fn visible_nontext_content_and_empty_controls_keep_distinct_validation_warnings(
         ),
         (
             "inserted-drawing",
-            "<w:ins><w:r><w:drawing/></w:r></w:ins>",
+            "<w:ins w:id='90' w:author='Reviewer'><w:r><w:drawing/></w:r></w:ins>",
             false,
         ),
         (
             "moved-away-drawing",
-            "<w:moveFrom><w:r><w:drawing/></w:r></w:moveFrom>",
+            "<w:moveFrom w:id='92' w:author='Reviewer'><w:r><w:drawing/></w:r></w:moveFrom>",
             true,
         ),
         (
@@ -2066,7 +2066,7 @@ fn visible_nontext_content_and_empty_controls_keep_distinct_validation_warnings(
         ),
         (
             "deleted",
-            "<w:del><w:r><w:delText>deleted</w:delText><w:drawing/></w:r></w:del>",
+            "<w:del w:id='91' w:author='Reviewer'><w:r><w:delText>deleted</w:delText><w:drawing/></w:r></w:del>",
             true,
         ),
         (
@@ -2092,8 +2092,17 @@ fn visible_nontext_content_and_empty_controls_keep_distinct_validation_warnings(
         rewrite_run(&input, "CONTENT", |_| fragment.to_owned());
         let before = fs::read(&input).unwrap();
         let output = cli(&["validate", path_text(&input)]);
-        assert_success(&output, label);
-        let report = String::from_utf8(output.stdout).unwrap();
+        let report = String::from_utf8(output.stdout.clone()).unwrap();
+        if matches!(label, "footnote" | "endnote") {
+            // The reference names a note the package does not hold.
+            assert_eq!(output.status.code(), Some(1), "{label}: {report}");
+            assert!(
+                report.contains(&format!("names {label} 1, which no w:{label} defines")),
+                "{label}: {report}"
+            );
+        } else {
+            assert_success(&output, label);
+        }
         assert_eq!(
             report.contains("1 empty paragraph(s) found"),
             empty,
@@ -2210,17 +2219,17 @@ fn validation_qualified_display_content_and_field_controls_preserve_source() {
         ),
         (
             "deleted-drawing",
-            "<w:del><w:r><w:drawing/></w:r></w:del>",
+            "<w:del w:id='91' w:author='Reviewer'><w:r><w:drawing/></w:r></w:del>",
             false,
         ),
         (
             "moved-away",
-            "<w:moveFrom><w:r><w:drawing/></w:r></w:moveFrom>",
+            "<w:moveFrom w:id='92' w:author='Reviewer'><w:r><w:drawing/></w:r></w:moveFrom>",
             false,
         ),
         (
             "inserted-drawing",
-            "<w:ins><w:r><w:drawing/></w:r></w:ins>",
+            "<w:ins w:id='90' w:author='Reviewer'><w:r><w:drawing/></w:r></w:ins>",
             true,
         ),
         (
@@ -2341,12 +2350,12 @@ fn validation_qualified_display_content_and_field_controls_preserve_source() {
         ),
         (
             "inserted-loose-marker",
-            r#"<w:ins><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:ins>"#,
+            r#"<w:ins w:id='90' w:author='Reviewer'><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:ins>"#,
             false,
         ),
         (
             "deleted-loose-marker",
-            r#"<w:del><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:del>"#,
+            r#"<w:del w:id='91' w:author='Reviewer'><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:del>"#,
             false,
         ),
         (
@@ -2456,7 +2465,7 @@ fn validation_preserves_recursive_block_control_and_table_paragraph_scope() {
     );
     package.set_part(
         &part,
-        xml.replace("</w:body>", &format!("{controls}</w:body>"))
+        xml.replacen("<w:sectPr", &format!("{controls}<w:sectPr"), 1)
             .into_bytes(),
     );
     package.save(&input).unwrap();
@@ -2539,7 +2548,7 @@ fn validation_ignores_opaque_content_control_slots() {
         let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
         package.set_part(
             &part,
-            xml.replace("</w:body>", &format!("{control}</w:body>"))
+            xml.replacen("<w:sectPr", &format!("{control}<w:sectPr"), 1)
                 .into_bytes(),
         );
         package.save(&input).unwrap();

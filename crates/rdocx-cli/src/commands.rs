@@ -2386,8 +2386,10 @@ fn validate_dpi(dpi: f64) -> Result<()> {
 ///
 /// Returns `Ok(false)` when a structural error was found, so the caller can
 /// exit non-zero — a validator that always succeeds cannot gate anything in CI.
-/// A related part that is not well-formed XML and a paragraph, character, or
-/// table style id that no style defines are structural errors too.
+/// An XML part that is not well-formed XML 1.0, a paragraph, character, or
+/// table style id that no style defines, a dangling relationship id or note
+/// reference, and a fault of the WordprocessingML schema subset that
+/// [`rdocx::validate_document_file`] checks are structural errors too.
 /// Advisory findings (empty paragraphs, missing metadata) are reported but do
 /// not affect the exit status.
 pub fn validate(file: &Path) -> Result<bool> {

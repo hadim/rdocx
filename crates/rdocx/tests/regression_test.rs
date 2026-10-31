@@ -408406,3 +408406,227 @@ fn body_range_across_table_includes_cell_text() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+/// Rewrites one entry of a package with `edit`, with no check of the result,
+/// so that a test can store a fault the package writer refuses.
+fn issue435_edit(bytes: &[u8], part: &str, edit: impl Fn(&str) -> String) -> Vec<u8> {
+    use std::io::{Read, Write};
+    let mut source = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut output = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut edited = false;
+    for index in 0..source.len() {
+        let mut entry = source.by_index(index).unwrap();
+        let name = entry.name().unwrap().into_owned();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).unwrap();
+        if name == part {
+            let changed = edit(std::str::from_utf8(&data).unwrap());
+            assert_ne!(changed.as_bytes(), data, "{part} must change");
+            data = changed.into_bytes();
+            edited = true;
+        }
+        output
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        output.write_all(&data).unwrap();
+    }
+    assert!(edited, "{part} must be in the package");
+    output.finish().unwrap().into_inner()
+}
+
+fn issue435_errors(bytes: &[u8]) -> Vec<String> {
+    rdocx::validate_document_bytes(bytes)
+        .unwrap()
+        .findings
+        .into_iter()
+        .filter(|finding| finding.severity == rdocx::ValidationSeverity::Error)
+        .map(|finding| finding.message)
+        .collect()
+}
+
+fn issue435_base() -> Vec<u8> {
+    let mut document = Document::new();
+    document.add_paragraph("Hello");
+    document.add_paragraph("World");
+    document.to_bytes().unwrap()
+}
+
+const ISSUE435_PICTURE: &str = concat!(
+    r#"<w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="914400"/><wp:docPr id="1" name="dot"/>"#,
+    r#"<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">"#,
+    r#"<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">"#,
+    r#"<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill>"#,
+    r#"<a:blip r:embed="rId999"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline>"#,
+    r#"</w:drawing></w:r>"#,
+);
+
+#[test]
+fn issue435_validate_reports_wordprocessingml_schema_faults() {
+    let base = issue435_base();
+    assert_eq!(issue435_errors(&base), Vec::<String>::new());
+    let run = "<w:r><w:t>Hello</w:t></w:r>";
+    let extent = ISSUE435_PICTURE.replace(r#"r:embed="rId999""#, "");
+    let radical = concat!(
+        r#"<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">"#,
+        r#"<m:rad><m:radPr><m:degHide m:val="1"/></m:radPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:rad></m:oMath>"#,
+    );
+    let cases = [
+        (
+            format!(r#"{run}<w:pPr><w:jc w:val="left"/></w:pPr>"#),
+            "w:pPr is not the first child of w:p",
+        ),
+        (
+            "<w:r><w:t>Hello</w:t><w:rPr><w:b/></w:rPr></w:r>".to_owned(),
+            "w:rPr is not the first child of w:r",
+        ),
+        (format!("<w:bogus/>{run}"), "w:bogus is not allowed in w:p"),
+        (
+            format!(r#"<w:pPr><w:jc w:val="middle"/></w:pPr>{run}"#),
+            r#"w:jc w:val="middle" is not an ST_Jc value"#,
+        ),
+        (
+            r##"<w:r><w:rPr><w:color w:val="#FF0000"/></w:rPr><w:t>Hello</w:t></w:r>"##.to_owned(),
+            r##"w:color w:val="#FF0000" is not an ST_HexColor"##,
+        ),
+        ("<w:r>Hello</w:r>".to_owned(), "text directly inside w:r"),
+        (
+            format!(r#"<w:ins w:author="A">{run}</w:ins>"#),
+            "w:ins has no w:id",
+        ),
+        (
+            extent.replace(r#"cx="914400""#, r#"cx="-914400""#),
+            r#"wp:extent cx="-914400" is not an ST_PositiveCoordinate"#,
+        ),
+        (format!("{run}{radical}"), "m:rad has no m:deg"),
+    ];
+    for (replacement, expected) in cases {
+        let bytes = issue435_edit(&base, "word/document.xml", |xml| {
+            xml.replacen(run, &replacement, 1)
+        });
+        let errors = issue435_errors(&bytes);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.starts_with("part /word/document.xml: ")
+                    && error.contains(expected)),
+            "{expected}: {errors:?}"
+        );
+    }
+    let bytes = issue435_edit(&base, "word/document.xml", |xml| {
+        xml.replacen(
+            "<w:sectPr>",
+            "<w:sectPr/><w:p><w:r><w:t>after</w:t></w:r></w:p><w:sectPr>",
+            1,
+        )
+    });
+    let errors = issue435_errors(&bytes);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("w:p follows w:sectPr, the last child of w:body")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn issue435_validate_reports_dangling_references() {
+    let mut original = Document::new();
+    original.add_paragraph("Pay within thirty days.");
+    let mut edited = Document::new();
+    edited.add_paragraph("Pay within sixty days.");
+    original
+        .compare(&edited, "Reviewer", "2026-10-30T12:00:00Z")
+        .unwrap();
+    original.set_header("Header text");
+    let base = original.to_bytes().unwrap();
+    assert_eq!(issue435_errors(&base), Vec::<String>::new());
+    let header = issue435_edit(&base, "word/document.xml", |xml| {
+        let start = xml.find("<w:headerReference ").unwrap();
+        let id = start + xml[start..].find("r:id=\"").unwrap() + 6;
+        let end = id + xml[id..].find('"').unwrap();
+        format!("{}rId998{}", &xml[..id], &xml[end..])
+    });
+    let cases = [
+        (
+            issue435_edit(&base, "word/document.xml", |xml| {
+                xml.replacen(
+                    "<w:sectPr",
+                    &format!("<w:p>{ISSUE435_PICTURE}</w:p><w:sectPr"),
+                    1,
+                )
+            }),
+            r#"r:embed="rId999" on blip names no relationship of the part"#,
+        ),
+        (
+            header,
+            r#"r:id="rId998" on headerReference names no relationship of the part"#,
+        ),
+        (
+            issue435_edit(&base, "word/document.xml", |xml| {
+                xml.replacen(
+                    "<w:sectPr",
+                    r#"<w:p><w:r><w:footnoteReference w:id="99"/></w:r></w:p><w:sectPr"#,
+                    1,
+                )
+            }),
+            "w:footnoteReference names footnote 99, which no w:footnote defines",
+        ),
+        (
+            issue435_edit(&base, "word/document.xml", |xml| {
+                let start = xml.find("<w:delText").unwrap();
+                let end = start + xml[start..].find("</w:delText>").unwrap();
+                format!(
+                    "{}<w:t{}</w:t>{}",
+                    &xml[..start],
+                    &xml[start + "<w:delText".len()..end],
+                    &xml[end + "</w:delText>".len()..]
+                )
+            }),
+            "w:t inside w:del, where deleted text is w:delText",
+        ),
+    ];
+    for (bytes, expected) in cases {
+        let errors = issue435_errors(&bytes);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.starts_with("part /word/document.xml: ")
+                    && error.contains(expected)),
+            "{expected}: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn issue435_validate_reports_a_malformed_document_properties_part() {
+    let base = issue435_base();
+    let bytes = issue435_edit(&base, "docProps/app.xml", |xml| {
+        xml.replacen(
+            "</Properties>",
+            "<Company>Smith & Sons</Company></Properties>",
+            1,
+        )
+    });
+    let errors = issue435_errors(&bytes);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.starts_with("part /docProps/app.xml is not well-formed XML")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn issue435_validate_reports_a_character_xml_forbids() {
+    let base = issue435_base();
+    let bytes = issue435_edit(&base, "word/document.xml", |xml| {
+        xml.replacen(">Hello<", ">He\u{1}llo<", 1)
+    });
+    let errors = issue435_errors(&bytes);
+    assert!(
+        errors.iter().any(|error| error.starts_with(
+            "part /word/document.xml is not well-formed XML: it holds U+0001, a character XML 1.0 forbids"
+        )),
+        "{errors:?}"
+    );
+}

@@ -154,6 +154,17 @@ stderr that names the part when it can, list no other story, and exit
 successfully. `text --json` then states `main` scope. `validate` reports that
 part as an error.
 
+`validate` exits 1 on an error and names the part. It checks the package
+(relationship targets, content types, a part stored twice), that every XML
+part is well-formed XML 1.0, the style ids in use, and a subset of the
+WordprocessingML schema in the body, header, footer, note and comment parts:
+the child order and the allowed children of `w:body`, `w:p` and `w:r`, text
+where only elements may stand, the `w:jc` and `w:color` values, the `w:id` and
+`w:author` of a tracked change, extents, the required children of `m:rad`,
+relationship ids that name no relationship, note references to no note, and
+deleted text in `w:t`. It is not a full schema validator. Two bookmarks that
+share an id are a warning.
+
 `text --json` reports accepted-view paragraphs in source order. Each paragraph
 has a zero-based `body_index`, a typed zero-based path within that body item,
 its direct style and numbering, and accepted-view runs. Its `text` also holds

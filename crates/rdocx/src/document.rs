@@ -79496,11 +79496,20 @@ fn document_word_value(
     reader: &NsReader<&[u8]>,
     element: &BytesStart<'_>,
 ) -> std::result::Result<Option<String>, String> {
+    document_word_attribute(reader, element, b"val")
+}
+
+/// Return one `w:` attribute of a WordprocessingML element.
+fn document_word_attribute(
+    reader: &NsReader<&[u8]>,
+    element: &BytesStart<'_>,
+    wanted: &[u8],
+) -> std::result::Result<Option<String>, String> {
     for attribute in element.attributes() {
         let attribute = attribute.map_err(|error| error.to_string())?;
         let (namespace, local_name) = reader.resolver().resolve_attribute(attribute.key);
         if matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == W_NS.as_bytes())
-            && local_name.as_ref() == b"val"
+            && local_name.as_ref() == wanted
         {
             let value = attribute
                 .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
@@ -79509,6 +79518,541 @@ fn document_word_value(
         }
     }
     Ok(None)
+}
+
+/// The WordprocessingML children `w:body`, `w:p` and `w:r` admit, from the
+/// transitional schema (`CT_Body`, `CT_P`, `CT_R`). Children in another
+/// namespace are not checked here.
+const BODY_CHILDREN: &[&[u8]] = &[
+    b"p",
+    b"tbl",
+    b"sdt",
+    b"customXml",
+    b"altChunk",
+    b"sectPr",
+    b"proofErr",
+    b"permStart",
+    b"permEnd",
+    b"bookmarkStart",
+    b"bookmarkEnd",
+    b"moveFromRangeStart",
+    b"moveFromRangeEnd",
+    b"moveToRangeStart",
+    b"moveToRangeEnd",
+    b"commentRangeStart",
+    b"commentRangeEnd",
+    b"customXmlInsRangeStart",
+    b"customXmlInsRangeEnd",
+    b"customXmlDelRangeStart",
+    b"customXmlDelRangeEnd",
+    b"customXmlMoveFromRangeStart",
+    b"customXmlMoveFromRangeEnd",
+    b"customXmlMoveToRangeStart",
+    b"customXmlMoveToRangeEnd",
+    b"ins",
+    b"del",
+    b"moveFrom",
+    b"moveTo",
+];
+const PARAGRAPH_CHILDREN: &[&[u8]] = &[
+    b"pPr",
+    b"r",
+    b"customXml",
+    b"smartTag",
+    b"sdt",
+    b"dir",
+    b"bdo",
+    b"fldSimple",
+    b"hyperlink",
+    b"subDoc",
+    b"proofErr",
+    b"permStart",
+    b"permEnd",
+    b"bookmarkStart",
+    b"bookmarkEnd",
+    b"moveFromRangeStart",
+    b"moveFromRangeEnd",
+    b"moveToRangeStart",
+    b"moveToRangeEnd",
+    b"commentRangeStart",
+    b"commentRangeEnd",
+    b"customXmlInsRangeStart",
+    b"customXmlInsRangeEnd",
+    b"customXmlDelRangeStart",
+    b"customXmlDelRangeEnd",
+    b"customXmlMoveFromRangeStart",
+    b"customXmlMoveFromRangeEnd",
+    b"customXmlMoveToRangeStart",
+    b"customXmlMoveToRangeEnd",
+    b"ins",
+    b"del",
+    b"moveFrom",
+    b"moveTo",
+];
+const RUN_CHILDREN: &[&[u8]] = &[
+    b"rPr",
+    b"br",
+    b"t",
+    b"contentPart",
+    b"delText",
+    b"instrText",
+    b"delInstrText",
+    b"noBreakHyphen",
+    b"softHyphen",
+    b"dayShort",
+    b"monthShort",
+    b"yearShort",
+    b"dayLong",
+    b"monthLong",
+    b"yearLong",
+    b"annotationRef",
+    b"footnoteRef",
+    b"endnoteRef",
+    b"separator",
+    b"continuationSeparator",
+    b"sym",
+    b"pgNum",
+    b"cr",
+    b"tab",
+    b"object",
+    b"pict",
+    b"fldChar",
+    b"ruby",
+    b"footnoteReference",
+    b"endnoteReference",
+    b"commentReference",
+    b"drawing",
+    b"ptab",
+    b"lastRenderedPageBreak",
+];
+/// WordprocessingML elements whose content is elements only, so that text
+/// directly inside them is not part of the document.
+const ELEMENT_ONLY: &[&[u8]] = &[
+    b"body",
+    b"p",
+    b"r",
+    b"tbl",
+    b"tr",
+    b"tc",
+    b"pPr",
+    b"rPr",
+    b"ins",
+    b"del",
+    b"moveFrom",
+    b"moveTo",
+    b"hyperlink",
+    b"smartTag",
+    b"sdt",
+    b"sdtContent",
+    b"customXml",
+    b"fldSimple",
+];
+/// `ST_Jc` and `ST_JcTable`, transitional values included.
+const PARAGRAPH_JC: &[&str] = &[
+    "start",
+    "center",
+    "end",
+    "both",
+    "mediumKashida",
+    "distribute",
+    "numTab",
+    "highKashida",
+    "lowKashida",
+    "thaiDistribute",
+    "left",
+    "right",
+];
+const TABLE_JC: &[&str] = &["center", "end", "left", "right", "start"];
+/// The largest `ST_PositiveCoordinate`.
+const MAX_POSITIVE_COORDINATE: i64 = 27_273_042_316_900;
+/// At most this many schema findings are listed for one part.
+const MAX_STORY_FINDINGS: usize = 10;
+
+/// What [`document_story_findings`] needs from outside the part.
+struct StoryScanContext<'a> {
+    relationships: Option<&'a oxml_opc::relationship::Relationships>,
+    footnote_ids: &'a HashSet<String>,
+    endnote_ids: &'a HashSet<String>,
+}
+
+#[derive(Default)]
+struct StoryScanFrame {
+    namespace: SchemaNamespace,
+    local: Vec<u8>,
+    word_child: bool,
+    section_seen: bool,
+    math_children: Vec<Vec<u8>>,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum SchemaNamespace {
+    Word,
+    Math,
+    WordDrawing,
+    DrawingMain,
+    #[default]
+    Other,
+}
+
+/// Check one well-formed story part against a subset of the
+/// WordprocessingML schema and against the package: child order and
+/// allowed children of `w:body`, `w:p` and `w:r`, text where only elements
+/// may stand, the values of `w:jc` and `w:color`, the required `w:id` and
+/// `w:author` of a tracked change, extents, the required children of
+/// `m:rad`, relationship ids, note references, and deleted text in `w:t`.
+/// Returns the findings, then the `w:bookmarkStart` ids in the part.
+fn document_story_findings(
+    part_name: &str,
+    xml: &[u8],
+    context: &StoryScanContext<'_>,
+) -> (Vec<String>, Vec<String>) {
+    let mut reader = NsReader::from_reader(xml);
+    let mut stack: Vec<StoryScanFrame> = Vec::new();
+    let mut findings = Vec::new();
+    let mut bookmarks = Vec::new();
+    let mut buffer = Vec::new();
+    let found = |findings: &mut Vec<String>, position: u64, detail: String| {
+        findings.push(format!("part {part_name}: {detail} (at byte {position})"));
+    };
+    loop {
+        let position = reader.buffer_position();
+        let Ok((namespace, event)) = reader.read_resolved_event_into(&mut buffer) else {
+            break;
+        };
+        let namespace = match namespace {
+            ResolveResult::Bound(Namespace(uri)) if uri == W_NS.as_bytes() => SchemaNamespace::Word,
+            ResolveResult::Bound(Namespace(uri)) if uri == M_NS.as_bytes() => SchemaNamespace::Math,
+            ResolveResult::Bound(Namespace(uri)) if uri == drawing_ns::WP.as_bytes() => {
+                SchemaNamespace::WordDrawing
+            }
+            ResolveResult::Bound(Namespace(uri)) if uri == drawing_ns::A.as_bytes() => {
+                SchemaNamespace::DrawingMain
+            }
+            _ => SchemaNamespace::Other,
+        };
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let local = element.local_name().as_ref().to_vec();
+                let word = namespace == SchemaNamespace::Word;
+                let name = String::from_utf8_lossy(&local).into_owned();
+                if let Some(parent) = stack.last_mut() {
+                    if parent.namespace == SchemaNamespace::Word && word {
+                        let allowed = match parent.local.as_slice() {
+                            b"body" => Some(BODY_CHILDREN),
+                            b"p" => Some(PARAGRAPH_CHILDREN),
+                            b"r" => Some(RUN_CHILDREN),
+                            _ => None,
+                        };
+                        if let Some(allowed) = allowed
+                            && !allowed.contains(&local.as_slice())
+                        {
+                            let parent = String::from_utf8_lossy(&parent.local);
+                            found(
+                                &mut findings,
+                                position,
+                                format!("w:{name} is not allowed in w:{parent}"),
+                            );
+                        }
+                        let first = match parent.local.as_slice() {
+                            b"p" => Some(&b"pPr"[..]),
+                            b"r" => Some(&b"rPr"[..]),
+                            b"tc" => Some(&b"tcPr"[..]),
+                            _ => None,
+                        };
+                        if first == Some(local.as_slice()) && parent.word_child {
+                            let parent = String::from_utf8_lossy(&parent.local);
+                            found(
+                                &mut findings,
+                                position,
+                                format!("w:{name} is not the first child of w:{parent}"),
+                            );
+                        }
+                        if parent.local == b"body" && parent.section_seen {
+                            found(
+                                &mut findings,
+                                position,
+                                format!("w:{name} follows w:sectPr, the last child of w:body"),
+                            );
+                        }
+                        parent.word_child = true;
+                        parent.section_seen |= parent.local == b"body" && local == b"sectPr";
+                    }
+                    if parent.namespace == SchemaNamespace::Math
+                        && namespace == SchemaNamespace::Math
+                    {
+                        parent.math_children.push(local.clone());
+                    }
+                }
+                let parent_local = stack
+                    .last()
+                    .filter(|parent| parent.namespace == SchemaNamespace::Word)
+                    .map(|parent| parent.local.as_slice());
+                let attribute = |namespace: Option<&str>, wanted: &[u8]| {
+                    element.attributes().flatten().find_map(|attribute| {
+                        let (bound, attribute_local) =
+                            reader.resolver().resolve_attribute(attribute.key);
+                        let matches = match namespace {
+                            Some(uri) => matches!(
+                                bound,
+                                ResolveResult::Bound(Namespace(found)) if found == uri.as_bytes()
+                            ),
+                            None => matches!(bound, ResolveResult::Unbound),
+                        };
+                        (matches && attribute_local.as_ref() == wanted).then(|| {
+                            attribute
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    reader.decoder(),
+                                )
+                                .map(Cow::into_owned)
+                                .unwrap_or_default()
+                        })
+                    })
+                };
+                if word {
+                    match local.as_slice() {
+                        b"jc" => {
+                            let (allowed, kind) =
+                                if matches!(parent_local, Some(b"tblPr" | b"trPr")) {
+                                    (TABLE_JC, "ST_JcTable")
+                                } else {
+                                    (PARAGRAPH_JC, "ST_Jc")
+                                };
+                            if let Some(value) = attribute(Some(W_NS), b"val")
+                                && !allowed.contains(&value.as_str())
+                            {
+                                found(
+                                    &mut findings,
+                                    position,
+                                    format!("w:jc w:val={value:?} is not an {kind} value"),
+                                );
+                            }
+                        }
+                        b"color" => {
+                            if let Some(value) = attribute(Some(W_NS), b"val")
+                                && value != "auto"
+                                && !(value.len() == 6
+                                    && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                            {
+                                found(
+                                    &mut findings,
+                                    position,
+                                    format!(
+                                        "w:color w:val={value:?} is not an ST_HexColor (auto or six hexadecimal digits)"
+                                    ),
+                                );
+                            }
+                        }
+                        b"ins" | b"del" | b"moveFrom" | b"moveTo" => {
+                            for required in [&b"id"[..], b"author"] {
+                                if attribute(Some(W_NS), required).is_none() {
+                                    let required = String::from_utf8_lossy(required);
+                                    found(
+                                        &mut findings,
+                                        position,
+                                        format!(
+                                            "w:{name} has no w:{required}, which a tracked change requires"
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                        b"t" | b"instrText" => {
+                            let change = stack.iter().rev().find(|frame| {
+                                frame.namespace == SchemaNamespace::Word
+                                    && matches!(
+                                        frame.local.as_slice(),
+                                        b"ins" | b"del" | b"moveFrom" | b"moveTo"
+                                    )
+                            });
+                            if change.is_some_and(|frame| frame.local == b"del") {
+                                let deleted = if local == b"t" {
+                                    "delText"
+                                } else {
+                                    "delInstrText"
+                                };
+                                found(
+                                    &mut findings,
+                                    position,
+                                    format!(
+                                        "w:{name} inside w:del, where deleted text is w:{deleted}"
+                                    ),
+                                );
+                            }
+                        }
+                        b"footnoteReference" | b"endnoteReference" => {
+                            let (ids, kind) = if local == b"footnoteReference" {
+                                (context.footnote_ids, "footnote")
+                            } else {
+                                (context.endnote_ids, "endnote")
+                            };
+                            if let Some(id) = attribute(Some(W_NS), b"id")
+                                && !ids.contains(&id)
+                            {
+                                found(
+                                    &mut findings,
+                                    position,
+                                    format!(
+                                        "w:{name} names {kind} {id}, which no w:{kind} defines"
+                                    ),
+                                );
+                            }
+                        }
+                        b"bookmarkStart" => bookmarks.extend(attribute(Some(W_NS), b"id")),
+                        _ => {}
+                    }
+                }
+                let extent = (namespace == SchemaNamespace::WordDrawing && local == b"extent")
+                    || (namespace == SchemaNamespace::DrawingMain && local == b"ext");
+                if extent {
+                    for axis in [&b"cx"[..], b"cy"] {
+                        if let Some(value) = attribute(None, axis)
+                            && !value
+                                .parse::<i64>()
+                                .is_ok_and(|value| (0..=MAX_POSITIVE_COORDINATE).contains(&value))
+                        {
+                            let prefix = if namespace == SchemaNamespace::WordDrawing {
+                                "wp"
+                            } else {
+                                "a"
+                            };
+                            let axis = String::from_utf8_lossy(axis);
+                            found(
+                                &mut findings,
+                                position,
+                                format!(
+                                    "{prefix}:{name} {axis}={value:?} is not an ST_PositiveCoordinate"
+                                ),
+                            );
+                        }
+                    }
+                }
+                for attribute in element.attributes().flatten() {
+                    let (bound, attribute_local) =
+                        reader.resolver().resolve_attribute(attribute.key);
+                    if !matches!(bound, ResolveResult::Bound(Namespace(uri)) if uri == drawing_ns::R.as_bytes())
+                    {
+                        continue;
+                    }
+                    let id = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                        .map(Cow::into_owned)
+                        .unwrap_or_default();
+                    if context
+                        .relationships
+                        .is_none_or(|relationships| relationships.get_by_id(&id).is_none())
+                    {
+                        let attribute_local = String::from_utf8_lossy(attribute_local.as_ref());
+                        found(
+                            &mut findings,
+                            position,
+                            format!(
+                                "r:{attribute_local}={id:?} on {name} names no relationship of the part"
+                            ),
+                        );
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    stack.push(StoryScanFrame {
+                        namespace,
+                        local,
+                        ..StoryScanFrame::default()
+                    });
+                } else if namespace == SchemaNamespace::Math && local == b"rad" {
+                    found(
+                        &mut findings,
+                        position,
+                        "m:rad has no m:deg and no m:e".into(),
+                    );
+                }
+            }
+            Event::End(_) => {
+                if let Some(frame) = stack.pop()
+                    && frame.namespace == SchemaNamespace::Math
+                    && frame.local == b"rad"
+                {
+                    for required in [&b"deg"[..], b"e"] {
+                        if !frame.math_children.iter().any(|child| child == required) {
+                            let required = String::from_utf8_lossy(required);
+                            found(
+                                &mut findings,
+                                position,
+                                format!("m:rad has no m:{required}, which the schema requires"),
+                            );
+                        }
+                    }
+                }
+            }
+            Event::Text(ref text)
+                if stack.last().is_some_and(|frame| {
+                    frame.namespace == SchemaNamespace::Word
+                        && ELEMENT_ONLY.contains(&frame.local.as_slice())
+                }) && !text.iter().all(u8::is_ascii_whitespace) =>
+            {
+                let parent = String::from_utf8_lossy(&stack.last().expect("checked").local);
+                found(
+                    &mut findings,
+                    position,
+                    format!("text directly inside w:{parent}, which holds elements only"),
+                );
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if findings.len() > MAX_STORY_FINDINGS {
+        let more = findings.len() - MAX_STORY_FINDINGS;
+        findings.truncate(MAX_STORY_FINDINGS);
+        findings.push(format!("part {part_name}: {more} more schema finding(s)"));
+    }
+    (findings, bookmarks)
+}
+
+/// The `w:id` of every `w:footnote` or `w:endnote` in a notes part.
+fn document_note_ids(xml: &[u8], note: &[u8]) -> HashSet<String> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut ids = HashSet::new();
+    let mut buffer = Vec::new();
+    while let Ok((namespace, event)) = reader.read_resolved_event_into(&mut buffer) {
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element)
+                if matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == W_NS.as_bytes())
+                    && element.local_name().as_ref() == note =>
+            {
+                if let Ok(Some(id)) = document_word_attribute(&reader, element, b"id") {
+                    ids.insert(id);
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    ids
+}
+
+/// A literal character XML 1.0 forbids, or another strict XML 1.0 lexical
+/// fault that a namespace-aware parser accepts. A UTF-16 part is not
+/// checked.
+fn document_xml_lexical_fault(xml: &[u8]) -> Option<String> {
+    if xml.starts_with(&[0xFF, 0xFE]) || xml.starts_with(&[0xFE, 0xFF]) {
+        return None;
+    }
+    let error = oxml_core::xml::validate_strict_xml_1_0(xml).err()?;
+    let text = String::from_utf8_lossy(xml);
+    if let Some((offset, character)) = text
+        .char_indices()
+        .find(|(_, character)| !oxml_core::xml::is_xml_1_0_character(*character))
+    {
+        let line = text[..offset].matches('\n').count() + 1;
+        let column = offset - text[..offset].rfind('\n').map_or(0, |at| at + 1) + 1;
+        return Some(format!(
+            "it holds U+{:04X}, a character XML 1.0 forbids, at line {line}, column {column}",
+            u32::from(character)
+        ));
+    }
+    Some(format!("{error:?}"))
 }
 
 /// Validate serialized document bytes without changing a live document.
@@ -79626,6 +80170,8 @@ fn validate_document_package(package: OpcPackage) -> Result<ValidationReport> {
     // Every XML part the main document relates to must be well formed. The
     // style ids that its story parts name are checked once the document opens.
     let mut style_references = Vec::new();
+    let mut checked_parts = HashSet::new();
+    let mut story_parts = Vec::new();
     if let Some(doc_part) = package.main_document_part() {
         let mut parts = vec![(doc_part.clone(), true)];
         for rel in package
@@ -79652,18 +80198,95 @@ fn validate_document_package(package: OpcPackage) -> Result<ValidationReport> {
             let Some(xml) = package.get_part(&part_name).filter(|_| is_xml) else {
                 continue;
             };
-            match document_style_references(xml) {
+            checked_parts.insert(part_name.clone());
+            let references = document_style_references(xml)
+                .and_then(|references| document_xml_lexical_fault(xml).map_or(Ok(references), Err));
+            match references {
                 Err(detail) => {
                     errors.push(format!("part {part_name} is not well-formed XML: {detail}"));
                 }
-                Ok(references) if story => style_references.extend(
-                    references
-                        .into_iter()
-                        .map(|(kind, style_id)| (kind, style_id, part_name.clone())),
-                ),
+                Ok(references) if story => {
+                    style_references.extend(
+                        references
+                            .into_iter()
+                            .map(|(kind, style_id)| (kind, style_id, part_name.clone())),
+                    );
+                    story_parts.push(part_name);
+                }
                 Ok(_) => {}
             }
         }
+    }
+
+    // Every other XML part must be well formed too, the document properties
+    // among them: a consumer may refuse the package for any one of them.
+    let mut other_xml_parts = package
+        .parts
+        .iter()
+        .filter(|(part_name, _)| {
+            !checked_parts.contains(*part_name)
+                && package
+                    .content_types
+                    .content_type_for(part_name)
+                    .is_some_and(|content_type| {
+                        content_type.ends_with("+xml") || content_type.ends_with("/xml")
+                    })
+        })
+        .collect::<Vec<_>>();
+    other_xml_parts.sort();
+    for (part_name, xml) in other_xml_parts {
+        if let Some(detail) = document_style_references(xml)
+            .err()
+            .or_else(|| document_xml_lexical_fault(xml))
+        {
+            errors.push(format!("part {part_name} is not well-formed XML: {detail}"));
+        }
+    }
+
+    // A subset of the schema and the references between the story parts.
+    let notes_part = |relationship_type: &str, note: &[u8]| {
+        let doc_part = package.main_document_part()?;
+        let relationship = package
+            .get_part_rels(&doc_part)?
+            .items
+            .iter()
+            .find(|relationship| {
+                relationship.rel_type == relationship_type && relationship_is_internal(relationship)
+            })?;
+        let target = oxml_opc::OpcPackage::resolve_rel_target(&doc_part, &relationship.target);
+        Some(document_note_ids(package.get_part(&target)?, note))
+    };
+    let footnote_ids = notes_part(rel_types::FOOTNOTES, b"footnote").unwrap_or_default();
+    let endnote_ids = notes_part(rel_types::ENDNOTES, b"endnote").unwrap_or_default();
+    let mut bookmark_parts = BTreeMap::<String, Vec<String>>::new();
+    for part_name in &story_parts {
+        let Some(xml) = package.get_part(part_name) else {
+            continue;
+        };
+        let context = StoryScanContext {
+            relationships: package.get_part_rels(part_name),
+            footnote_ids: &footnote_ids,
+            endnote_ids: &endnote_ids,
+        };
+        let (findings, bookmarks) = document_story_findings(part_name, xml, &context);
+        errors.extend(findings);
+        for id in bookmarks {
+            bookmark_parts
+                .entry(id)
+                .or_default()
+                .push(part_name.clone());
+        }
+    }
+    // Word has saved bookmarks that share an id, which only pairs a start
+    // with its end, and opens such files, so a shared id is a warning.
+    for (id, parts) in bookmark_parts.iter().filter(|(_, parts)| parts.len() > 1) {
+        let mut names = parts.clone();
+        names.dedup();
+        warnings.push(format!(
+            "bookmark id {id} is used by {} bookmarks, in {}",
+            parts.len(),
+            names.join(", ")
+        ));
     }
 
     // A malformed part can keep the document from opening. The errors found
