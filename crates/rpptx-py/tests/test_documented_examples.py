@@ -11069,6 +11069,22 @@ def test_fx238_slide_xml_hack_refuses_with_remove_pointer():
     assert presentation.to_bytes() == before
 
 
+def test_issue431_slides_index_returns_the_position_python_pptx_returns():
+    import rpptx
+    presentation = rpptx.Presentation()
+    for title in ("One", "Two", "Three"):
+        presentation.slides.add_slide(presentation.slide_layouts[5]).shapes.title.text = title
+    slide = presentation.slides[2]
+    assert presentation.slides.index(slide) == 2
+    presentation.slides.move(2, 0)
+    assert presentation.slides.index(slide) == 0
+    other = rpptx.Presentation()
+    with pytest.raises(ValueError, match="not in this collection"):
+        presentation.slides.index(other.slides.add_slide(other.slide_layouts[5]))
+    with pytest.raises(TypeError):
+        presentation.slides.index("slide")
+
+
 @pytest.mark.parametrize("authored,expected,old,new", [
     (51, 58, b'<c:barDir val="col"/>', b'<c:barDir val="bar"/>'),
     (51, 52, b'<c:grouping val="clustered"/>', b'<c:grouping val="stacked"/>'),

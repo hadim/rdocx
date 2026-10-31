@@ -853,6 +853,9 @@ live `FillFormat` over the direct background fill that never changes the slide
 when read, and `follow_master_background` reports and sets whether the slide
 has no `p:bg`. `SlideCollection.remove` and `SlideCollection.move(from_, to)`
 use the native staged slide operations and advance the revision once.
+`SlideCollection.index(slide)` returns the slide's zero-based position, like
+python-pptx `Slides.index`, and raises `ValueError` for a slide of another
+presentation.
 `SlideCollection.import_slide(slide, layout=None, index=None, *,
 keep_source_formatting=False)` returns one live imported Slide. Existing
 positional arguments and the destination-formatting default remain supported.

@@ -1528,6 +1528,16 @@ impl PySlideCollection {
         ))
     }
 
+    /// The zero-based position of `slide`, like python-pptx `Slides.index`.
+    fn index(&self, py: Python<'_>, slide: &Bound<'_, PyAny>) -> PyResult<usize> {
+        self.len(py)?;
+        let slide = slide.extract::<PyRef<'_, PySlide>>()?;
+        if !slide.presentation.is(&self.presentation) {
+            return Err(PyValueError::new_err("slide is not in this collection"));
+        }
+        slide.validate(py)
+    }
+
     /// Removes one slide of this presentation with its notes and owned media.
     fn remove(&self, py: Python<'_>, slide: &Bound<'_, PyAny>) -> PyResult<()> {
         self.len(py)?;
