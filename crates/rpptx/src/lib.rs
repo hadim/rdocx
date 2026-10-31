@@ -307,6 +307,18 @@ struct AutofitContext {
     shape: rpptx_layout::ResolvedShape,
     text: rpptx_layout::ResolvedTextBody,
     directions: Vec<Vec<oxml_layout::TextDirection>>,
+    /// For a table cell, the table whose rows grow to fit their text.
+    table: Option<std::rc::Rc<AutofitTable>>,
+}
+
+/// A table as one context renders it, shared by the contexts of its cells.
+#[cfg(feature = "render")]
+#[derive(Debug, PartialEq)]
+struct AutofitTable {
+    shape: rpptx_layout::ResolvedShape,
+    /// One entry per cell in row order.
+    directions: Vec<Vec<oxml_layout::TextDirection>>,
+    page_height: f64,
 }
 
 #[cfg(feature = "render")]
@@ -4181,12 +4193,21 @@ impl Presentation {
                     })
                     .transpose()
                     .map_err(|e| autofit_failure(&owner.update.location, e))?;
+                // A table row grows to fit its cells, so a cell taller than its
+                // stored row overflows only when the grown table leaves the page.
+                let overflow = match &context.table {
+                    Some(table) if !measured.fits && measured.width_fits => {
+                        !grown_table_fits_page(table, &mut fonts, context.slide_index + 1)
+                            .map_err(|e| autofit_failure(&owner.update.location, e))?
+                    }
+                    _ => !measured.fits,
+                };
                 frames.push(FitFrameReport {
                     update,
                     context: context.context.clone(),
                     quantized_trial: trials.as_ref().map(|(q, _)| q.clone()),
                     persisted_trial: trials.map(|(_, s)| s),
-                    overflow: !measured.fits,
+                    overflow,
                     needed_scale: pair.map(|p| p.0),
                     needed_reduction: pair.map(|p| p.1),
                     measured_font_scale: Some(measured.font_scale),
@@ -27570,6 +27591,37 @@ fn apply_owned_change(
     Ok(())
 }
 
+/// Whether `table`, its rows grown to fit their text, ends on its page.
+#[cfg(feature = "render")]
+fn grown_table_fits_page(
+    table: &AutofitTable,
+    fonts: &mut FontManager,
+    page_number: usize,
+) -> std::result::Result<bool, rpptx_render::RenderInputError> {
+    let shape = &table.shape;
+    let ResolvedContent::Table(content) = &shape.content else {
+        return Ok(false);
+    };
+    if shape.rotation_deg != 0.0 {
+        return Ok(false);
+    }
+    let height =
+        rpptx_render::authoring_table_height(content, fonts, page_number, &table.directions)?;
+    let bottom = [shape.bounds.x, shape.bounds.x + shape.bounds.width]
+        .into_iter()
+        .map(|x| {
+            shape
+                .group_transform
+                .apply(oxml_layout::Point {
+                    x,
+                    y: shape.bounds.y + height,
+                })
+                .y
+        })
+        .fold(f64::NEG_INFINITY, f64::max);
+    Ok(bottom <= table.page_height + 0.01)
+}
+
 /// Mutation refuses a part whose text owners repeat a shape ID, which only a
 /// read-only fit report names frame by frame.
 #[cfg(feature = "render")]
@@ -27692,6 +27744,20 @@ fn append_autofit_context(
         }
         let fingerprint = shape_ref(child).xml()?;
         let resolved = ctx.resolve_owned_text_shape(item, size, hyperlinks);
+        let table = match &resolved {
+            Ok((slide, directions)) => slide
+                .shapes
+                .first()
+                .filter(|shape| matches!(shape.content, ResolvedContent::Table(_)))
+                .map(|shape| {
+                    std::rc::Rc::new(AutofitTable {
+                        shape: shape.clone(),
+                        directions: directions.first().cloned().unwrap_or_default(),
+                        page_height: size.1,
+                    })
+                }),
+            Err(_) => None,
+        };
         for cell in cells {
             let location = TextFrameLocation {
                 owner_part: part.to_owned(),
@@ -27785,6 +27851,7 @@ fn append_autofit_context(
                     shape,
                     text,
                     directions,
+                    table: cell.and(table.clone()),
                 });
             } else {
                 unsupported = Some(match projection {
@@ -36218,6 +36285,45 @@ mod write_tests {
             ("unchanged", false)
         );
         assert!(report.frames.iter().all(|f| f.context != "uninstantiated"));
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn issue431_a_table_cell_overflows_only_when_its_grown_row_leaves_the_slide() {
+        for (top, repeat, overflow) in [(2, 4, false), (6, 8, true)] {
+            let mut deck = Presentation::new().unwrap();
+            deck.add_slide(6).unwrap();
+            {
+                let mut slide = deck.slide_mut(0).unwrap();
+                let mut shape = slide
+                    .add_table(
+                        2,
+                        2,
+                        Emu(914400),
+                        Emu(914400 * top),
+                        Emu(9144000),
+                        Emu(731520),
+                    )
+                    .unwrap();
+                let mut table = shape.table_mut().unwrap();
+                for row in 0..2 {
+                    table.set_row_height(row, Emu(365760)).unwrap();
+                }
+                table
+                    .cell_mut(1, 1)
+                    .unwrap()
+                    .set_text(&"Start interviews in November with two agencies; ".repeat(repeat));
+            }
+            let report = deck.fit_report(&[]).unwrap();
+            let frame = report
+                .frames
+                .iter()
+                .find(|f| f.update.location.cell == Some((1, 1)))
+                .unwrap();
+            // The text is taller than the stored row in both decks.
+            assert!(frame.needed_scale.unwrap() < 100000, "{frame:?}");
+            assert_eq!(frame.overflow, overflow, "table at {top} in");
+        }
     }
 
     #[cfg(feature = "render")]

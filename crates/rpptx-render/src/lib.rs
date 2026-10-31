@@ -608,6 +608,19 @@ pub fn authoring_table_cell(
     Ok((cell_shape, text))
 }
 
+/// The height of `table` as rendering draws it, each row grown to fit its cells' text.
+/// `directions` holds one entry per cell in row order, as rendering takes them.
+pub fn authoring_table_height(
+    table: &ResolvedTable,
+    fonts: &mut FontManager,
+    page_number: usize,
+    directions: &[Vec<oxml_layout::TextDirection>],
+) -> Result<f64, RenderInputError> {
+    Ok(grown_row_heights(table, fonts, page_number, directions)?
+        .iter()
+        .sum())
+}
+
 /// Runs independent Q native-informed and S persisted-render trials for one
 /// candidate. Every invocation re-shapes its own source clone. Q's rounding
 /// never changes the original nominal values or ordinary fractional rendering.

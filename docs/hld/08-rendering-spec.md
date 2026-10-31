@@ -2797,7 +2797,9 @@ quantized and persisted trial containment and provider diagnostics. Trials
 report points, stored bounds EMU and integer solver scale/reduction values in
 hundred-thousandths. An unsupported mandatory owner is reported as
 unsupported with its cause rather than vanishing, and no permitted fitting
-trial retains a null needed scale.
+trial retains a null needed scale. A table cell whose text is taller than its
+stored row overflows only when the table, its rows grown as rendering grows
+them, ends below its page. Its needed scale still describes the stored row.
 A shape that repeats an earlier shape ID in its part is measured with a
 diagnostic, while refresh and fit_text refuse the deck. A notes placeholder
 whose idx no notes-master placeholder carries is measured on the one
