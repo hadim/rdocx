@@ -68,6 +68,7 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     let mut height = 0u32;
     let mut bit_depth = 0u8;
     let mut color_type = 0u8;
+    let mut interlace = 0u8;
     let mut idat_data = Vec::new();
     // Palette entries as RGB triples, for indexed images.
     let mut palette: Vec<u8> = Vec::new();
@@ -94,6 +95,7 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
                     height = u32::from_be_bytes([d[4], d[5], d[6], d[7]]);
                     bit_depth = d[8];
                     color_type = d[9];
+                    interlace = d[12];
                 }
             }
             b"IDAT" => {
@@ -131,77 +133,11 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
         _ => return None,
     };
 
-    let stride = width as usize * channels;
-    let expected = (stride + 1) * height as usize; // +1 for filter byte per row
-    if decompressed.len() < expected {
-        return None;
-    }
-
-    let mut unfiltered = vec![0u8; stride * height as usize];
-    let mut prev_row = vec![0u8; stride];
-
-    for y in 0..height as usize {
-        let row_start = y * (stride + 1);
-        let filter_type = decompressed[row_start];
-        let raw = &decompressed[row_start + 1..row_start + 1 + stride];
-
-        let out_start = y * stride;
-        let out = &mut unfiltered[out_start..out_start + stride];
-
-        match filter_type {
-            0 => {
-                // None
-                out.copy_from_slice(raw);
-            }
-            1 => {
-                // Sub
-                for i in 0..stride {
-                    let a = if i >= channels { out[i - channels] } else { 0 };
-                    out[i] = raw[i].wrapping_add(a);
-                }
-            }
-            2 => {
-                // Up
-                for i in 0..stride {
-                    out[i] = raw[i].wrapping_add(prev_row[i]);
-                }
-            }
-            3 => {
-                // Average
-                for i in 0..stride {
-                    let a = if i >= channels {
-                        out[i - channels] as u16
-                    } else {
-                        0
-                    };
-                    let b = prev_row[i] as u16;
-                    out[i] = raw[i].wrapping_add(((a + b) / 2) as u8);
-                }
-            }
-            4 => {
-                // Paeth
-                for i in 0..stride {
-                    let a = if i >= channels {
-                        out[i - channels] as i32
-                    } else {
-                        0
-                    };
-                    let b = prev_row[i] as i32;
-                    let c = if i >= channels {
-                        prev_row[i - channels] as i32
-                    } else {
-                        0
-                    };
-                    out[i] = raw[i].wrapping_add(paeth_predictor(a, b, c));
-                }
-            }
-            _ => {
-                out.copy_from_slice(raw);
-            }
-        }
-
-        prev_row.copy_from_slice(out);
-    }
+    let unfiltered = match interlace {
+        0 => unfilter_scanlines(&decompressed, width as usize, height as usize, channels)?.0,
+        1 => deinterlace_adam7(&decompressed, width as usize, height as usize, channels)?,
+        _ => return None,
+    };
 
     // Separate color and alpha channels
     match color_type {
@@ -315,6 +251,125 @@ fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     }
 }
 
+/// The seven Adam7 passes: first column, first row, column step, row step.
+const ADAM7_PASSES: [(usize, usize, usize, usize); 7] = [
+    (0, 0, 8, 8),
+    (4, 0, 8, 8),
+    (0, 4, 4, 8),
+    (2, 0, 4, 4),
+    (0, 2, 2, 4),
+    (1, 0, 2, 2),
+    (0, 1, 1, 2),
+];
+
+/// Reassembles an interlaced (Adam7) image: each pass is a filtered
+/// sub-image of its own, and its pixels are scattered to their positions.
+fn deinterlace_adam7(data: &[u8], width: usize, height: usize, channels: usize) -> Option<Vec<u8>> {
+    let mut image = vec![0u8; width.checked_mul(height)?.checked_mul(channels)?];
+    let mut offset = 0;
+    for (x0, y0, dx, dy) in ADAM7_PASSES {
+        let pass_width = width.saturating_sub(x0).div_ceil(dx);
+        let pass_height = height.saturating_sub(y0).div_ceil(dy);
+        if pass_width == 0 || pass_height == 0 {
+            continue;
+        }
+        let (pixels, consumed) =
+            unfilter_scanlines(data.get(offset..)?, pass_width, pass_height, channels)?;
+        offset += consumed;
+        for row in 0..pass_height {
+            for column in 0..pass_width {
+                let from = (row * pass_width + column) * channels;
+                let to = ((y0 + row * dy) * width + x0 + column * dx) * channels;
+                image[to..to + channels].copy_from_slice(&pixels[from..from + channels]);
+            }
+        }
+    }
+    Some(image)
+}
+
+/// Reverses the per-row PNG filters of one image or pass, returning the
+/// pixels and the number of input bytes consumed.
+fn unfilter_scanlines(
+    decompressed: &[u8],
+    width: usize,
+    height: usize,
+    channels: usize,
+) -> Option<(Vec<u8>, usize)> {
+    let stride = width * channels;
+    let expected = (stride + 1) * height; // +1 for filter byte per row
+    if decompressed.len() < expected {
+        return None;
+    }
+
+    let mut unfiltered = vec![0u8; stride * height];
+    let mut prev_row = vec![0u8; stride];
+
+    for y in 0..height {
+        let row_start = y * (stride + 1);
+        let filter_type = decompressed[row_start];
+        let raw = &decompressed[row_start + 1..row_start + 1 + stride];
+
+        let out_start = y * stride;
+        let out = &mut unfiltered[out_start..out_start + stride];
+
+        match filter_type {
+            0 => {
+                // None
+                out.copy_from_slice(raw);
+            }
+            1 => {
+                // Sub
+                for i in 0..stride {
+                    let a = if i >= channels { out[i - channels] } else { 0 };
+                    out[i] = raw[i].wrapping_add(a);
+                }
+            }
+            2 => {
+                // Up
+                for i in 0..stride {
+                    out[i] = raw[i].wrapping_add(prev_row[i]);
+                }
+            }
+            3 => {
+                // Average
+                for i in 0..stride {
+                    let a = if i >= channels {
+                        out[i - channels] as u16
+                    } else {
+                        0
+                    };
+                    let b = prev_row[i] as u16;
+                    out[i] = raw[i].wrapping_add(((a + b) / 2) as u8);
+                }
+            }
+            4 => {
+                // Paeth
+                for i in 0..stride {
+                    let a = if i >= channels {
+                        out[i - channels] as i32
+                    } else {
+                        0
+                    };
+                    let b = prev_row[i] as i32;
+                    let c = if i >= channels {
+                        prev_row[i - channels] as i32
+                    } else {
+                        0
+                    };
+                    out[i] = raw[i].wrapping_add(paeth_predictor(a, b, c));
+                }
+            }
+            _ => {
+                out.copy_from_slice(raw);
+            }
+        }
+
+        prev_row.copy_from_slice(out);
+    }
+
+    Some((unfiltered, expected))
+}
+
 fn paeth_predictor(a: i32, b: i32, c: i32) -> u8 {
     let p = a + b - c;
     let pa = (p - a).abs();
@@ -409,6 +464,51 @@ mod tests {
         out.extend_from_slice(&png_chunk(b"IDAT", &idat));
         out.extend_from_slice(&png_chunk(b"IEND", &[]));
         out
+    }
+
+    /// An interlaced PNG was read as if its seven passes were the rows of a
+    /// plain image, so it was drawn as stripes of wrong colours.
+    #[test]
+    fn interlaced_png_decodes_like_its_plain_copy() {
+        let (width, height) = (11usize, 9usize);
+        let pixel = |x: usize, y: usize| [(x * 20) as u8, (y * 25) as u8, 7];
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&(width as u32).to_be_bytes());
+        ihdr.extend_from_slice(&(height as u32).to_be_bytes());
+        ihdr.extend_from_slice(&[8, 2, 0, 0, 1]); // RGB, Adam7
+        // Each pass is its own sub-image, its rows filtered with Sub so the
+        // filter state is reset per pass.
+        let mut raw = Vec::new();
+        for (x0, y0, dx, dy) in ADAM7_PASSES {
+            for y in (y0..height).step_by(dy) {
+                let row: Vec<u8> = (x0..width).step_by(dx).flat_map(|x| pixel(x, y)).collect();
+                if row.is_empty() {
+                    continue;
+                }
+                raw.push(1);
+                raw.extend(
+                    (0..row.len())
+                        .map(|i| row[i].wrapping_sub(if i >= 3 { row[i - 3] } else { 0 })),
+                );
+            }
+        }
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&png_chunk(b"IHDR", &ihdr));
+        png.extend_from_slice(&png_chunk(
+            b"IDAT",
+            &miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6),
+        ));
+        png.extend_from_slice(&png_chunk(b"IEND", &[]));
+
+        let decoded = decode_image(&png, "image/png").expect("interlaced PNG decodes");
+        let expected: Vec<u8> = (0..height)
+            .flat_map(|y| (0..width).flat_map(move |x| pixel(x, y)))
+            .collect();
+        assert_eq!(
+            (decoded.width, decoded.height),
+            (width as u32, height as u32)
+        );
+        assert_eq!(decoded.data, expected);
     }
 
     /// Indexed PNGs used to fall into the catch-all and be dropped, so any

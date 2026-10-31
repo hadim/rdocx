@@ -29153,12 +29153,33 @@ fn render_media_within_decode_bounds(
     if format != ImageFormat::Png {
         return Ok(true);
     }
-    let Some(expected) = usize::try_from(info.width_px)
-        .ok()
-        .and_then(|width| width.checked_mul(info.channels as usize))
-        .and_then(|stride| stride.checked_add(1))
-        .and_then(|row| row.checked_mul(info.height_px as usize))
-    else {
+    // An interlaced (Adam7) PNG stores seven filtered sub-images, each with
+    // its own filter byte per row.
+    let passes: &[(u32, u32, u32, u32)] = if bytes.get(28) == Some(&1) {
+        &[
+            (0, 0, 8, 8),
+            (4, 0, 8, 8),
+            (0, 4, 4, 8),
+            (2, 0, 4, 4),
+            (0, 2, 2, 4),
+            (1, 0, 2, 2),
+            (0, 1, 1, 2),
+        ]
+    } else {
+        &[(0, 0, 1, 1)]
+    };
+    let Some(expected) = passes.iter().try_fold(0usize, |total, &(x0, y0, dx, dy)| {
+        let columns = info.width_px.saturating_sub(x0).div_ceil(dx) as usize;
+        let rows = info.height_px.saturating_sub(y0).div_ceil(dy) as usize;
+        if columns == 0 || rows == 0 {
+            return Some(total);
+        }
+        columns
+            .checked_mul(info.channels as usize)
+            .and_then(|stride| stride.checked_add(1))
+            .and_then(|row| row.checked_mul(rows))
+            .and_then(|pass| total.checked_add(pass))
+    }) else {
         return Err("has dimensions that overflow the decoded-image size");
     };
     if expected > MAX_RENDER_PREVIEW_DECODED_BYTES {
