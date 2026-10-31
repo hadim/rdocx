@@ -9297,6 +9297,32 @@ fn detect_heading_level(para: &CT_P, styles: &CT_Styles) -> Option<u32> {
     None
 }
 
+/// Whether `style_id` names a table of contents level, "toc 1" to "toc 9".
+fn is_toc_paragraph_style(style_id: &str, styles: &CT_Styles) -> bool {
+    let level = |name: &str| {
+        name.get(..3)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("toc"))
+            && name[3..]
+                .trim_start()
+                .parse::<u32>()
+                .is_ok_and(|n| (1..=9).contains(&n))
+    };
+    level(style_id)
+        || styles
+            .get_by_id(style_id)
+            .and_then(|style| style.name.as_deref())
+            .is_some_and(level)
+}
+
+/// Whether `style_id` is the Hyperlink character style.
+fn is_hyperlink_character_style(style_id: &str, styles: &CT_Styles) -> bool {
+    style_id == "Hyperlink"
+        || styles
+            .get_by_id(style_id)
+            .and_then(|style| style.name.as_deref())
+            .is_some_and(|name| name.eq_ignore_ascii_case("Hyperlink"))
+}
+
 /// Lay out a single paragraph into a ParagraphBlock.
 pub fn layout_paragraph(
     para: &CT_P,
@@ -9348,6 +9374,7 @@ pub(crate) fn layout_paragraph_with_grid(
         None,
         None,
         None,
+        None,
         doc_grid,
         false,
     )
@@ -9375,6 +9402,7 @@ pub(crate) fn layout_paragraph_with_source(
         diagnostics,
         source_node,
         source_node,
+        None,
         None,
         None,
         None,
@@ -9411,6 +9439,7 @@ pub(crate) fn layout_paragraph_with_source_and_direction(
         navigation_node,
         None,
         None,
+        None,
         Some(&mut direction),
         doc_grid,
         false,
@@ -9431,6 +9460,7 @@ pub(crate) fn layout_paragraph_with_source_in_table(
     source_node: Option<SourceNodeId>,
     table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
     table_run_properties: Option<&rdocx_oxml::properties::CT_RPr>,
+    cell_shading: Option<Color>,
     doc_grid: Option<&CT_DocGrid>,
 ) -> Result<(ParagraphBlock, TextDirection)> {
     let mut direction = TextDirection::Auto;
@@ -9447,6 +9477,7 @@ pub(crate) fn layout_paragraph_with_source_in_table(
         source_node,
         table_properties,
         table_run_properties,
+        cell_shading,
         Some(&mut direction),
         doc_grid,
         true,
@@ -9468,6 +9499,7 @@ fn layout_paragraph_with_source_and_table(
     navigation_node: Option<SourceNodeId>,
     table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
     table_run_properties: Option<&rdocx_oxml::properties::CT_RPr>,
+    cell_shading: Option<Color>,
     reflow_direction_out: Option<&mut TextDirection>,
     doc_grid: Option<&CT_DocGrid>,
     in_table_cell: bool,
@@ -9578,6 +9610,11 @@ fn layout_paragraph_with_source_and_table(
         .and_then(|shd| shd.fill.as_ref())
         .filter(|f| f != &"auto")
         .map(|f| Color::from_hex(f));
+    // Text in the automatic colour contrasts with the fill behind it, the
+    // paragraph's own or else the cell's.
+    let automatic_color = automatic_text_color(shading.or(cell_shading));
+    let toc_paragraph =
+        para_style_id.is_some_and(|style_id| is_toc_paragraph_style(style_id, styles));
 
     // Convert runs to inline items
     let mut inline_items = Vec::new();
@@ -9666,8 +9703,9 @@ fn layout_paragraph_with_source_and_table(
                 let color = marker_rpr
                     .color
                     .as_ref()
+                    .filter(|c| c.as_str() != "auto")
                     .map(|c| Color::from_hex(c))
-                    .unwrap_or(Color::BLACK);
+                    .unwrap_or(automatic_color);
 
                 // The level's run properties affect numbering ink, not the
                 // counter or paragraph heading. The suffix keeps its normal
@@ -9854,7 +9892,27 @@ fn layout_paragraph_with_source_and_table(
                     .and_then(|rel_id| input.hyperlink_urls.get(rel_id).cloned())
             });
 
-        let run_style_id = run.properties.as_ref().and_then(|p| p.style_id.as_deref());
+        // Word writes each entry of a table of contents as a hyperlink to a
+        // `_Toc` bookmark whose runs carry the Hyperlink character style, and
+        // draws the entry in its TOC paragraph style without that style's
+        // colour and underline. LibreOffice does the same.
+        let toc_entry = toc_paragraph
+            && projected
+                .hyperlink_index
+                .and_then(|index| para.hyperlinks.get(index))
+                .or_else(|| {
+                    let run_index = projected.ordinary_run_index?;
+                    para.hyperlinks.iter().find(|hyperlink| {
+                        (hyperlink.run_start..hyperlink.run_end).contains(&run_index)
+                    })
+                })
+                .and_then(|hyperlink| hyperlink.anchor.as_deref())
+                .is_some_and(|anchor| anchor.starts_with("_Toc"));
+        let run_style_id = run
+            .properties
+            .as_ref()
+            .and_then(|p| p.style_id.as_deref())
+            .filter(|style_id| !(toc_entry && is_hyperlink_character_style(style_id, styles)));
 
         let resolved_rpr = style_resolver::resolve_run_properties(
             para_style_id,
@@ -9877,7 +9935,7 @@ fn layout_paragraph_with_source_and_table(
             &mut inline_items,
             fm,
             effective_rpr.sz.map(|hp| hp.to_pt()).unwrap_or(11.0),
-            resolve_run_color(&effective_rpr, input.theme.as_ref()),
+            resolve_run_color(&effective_rpr, input.theme.as_ref(), automatic_color),
             available_width,
             input.math_properties.as_ref(),
             diagnostics,
@@ -9902,6 +9960,7 @@ fn layout_paragraph_with_source_and_table(
                         input,
                         para_style_id,
                         table_run_properties,
+                        automatic_color,
                     },
                     fm,
                 )?
@@ -9932,7 +9991,7 @@ fn layout_paragraph_with_source_and_table(
         let (color, underline) = tracked_marks(
             &projected,
             input.revision_style,
-            resolve_run_color(&effective_rpr, input.theme.as_ref()),
+            resolve_run_color(&effective_rpr, input.theme.as_ref(), automatic_color),
             convert::underline(effective_rpr.underline),
         );
         let strike = projected.force_strike || effective_rpr.strike.unwrap_or(false);
@@ -10317,8 +10376,11 @@ fn layout_paragraph_with_source_and_table(
                                 _ => None,
                             }
                         };
-                        let segment_style_id =
-                            stored_properties.and_then(|properties| properties.style_id.as_deref());
+                        let segment_style_id = stored_properties
+                            .and_then(|properties| properties.style_id.as_deref())
+                            .filter(|style_id| {
+                                !(toc_entry && is_hyperlink_character_style(style_id, styles))
+                            });
                         let mut segment_rpr = if stored_properties.is_some() {
                             style_resolver::resolve_run_properties(
                                 para_style_id,
@@ -10347,7 +10409,7 @@ fn layout_paragraph_with_source_and_table(
                         let (segment_color, segment_underline) = tracked_marks(
                             &projected,
                             input.revision_style,
-                            resolve_run_color(&segment_rpr, input.theme.as_ref()),
+                            resolve_run_color(&segment_rpr, input.theme.as_ref(), automatic_color),
                             convert::underline(segment_rpr.underline),
                         );
                         let segment_strike =
@@ -10677,7 +10739,7 @@ fn layout_paragraph_with_source_and_table(
         &mut inline_items,
         fm,
         equation_rpr.sz.map(|hp| hp.to_pt()).unwrap_or(11.0),
-        resolve_run_color(&equation_rpr, input.theme.as_ref()),
+        resolve_run_color(&equation_rpr, input.theme.as_ref(), automatic_color),
         available_width,
         input.math_properties.as_ref(),
         diagnostics,
@@ -10728,7 +10790,7 @@ fn layout_paragraph_with_source_and_table(
             ascent: metrics.ascent,
             descent: metrics.descent,
             line_gap: 0.0,
-            color: resolve_run_color(&caret_rpr, input.theme.as_ref()),
+            color: resolve_run_color(&caret_rpr, input.theme.as_ref(), automatic_color),
             bold,
             italic,
             underline: None,
@@ -11952,10 +12014,10 @@ fn merge_direct_ppr(effective: &mut CT_PPr, direct: &CT_PPr) {
     if direct.ind_end.is_some() {
         effective.ind_end = direct.ind_end;
     }
-    if direct.ind_first_line.is_some() {
+    // `w:firstLine` and `w:hanging` are one property, the first-line indent,
+    // so a level that sets either replaces both.
+    if direct.ind_first_line.is_some() || direct.ind_hanging.is_some() {
         effective.ind_first_line = direct.ind_first_line;
-    }
-    if direct.ind_hanging.is_some() {
         effective.ind_hanging = direct.ind_hanging;
     }
     if direct.keep_next.is_some() {
@@ -13728,6 +13790,8 @@ struct AnnotationContext<'a> {
     input: &'a LayoutInput,
     para_style_id: Option<&'a str>,
     table_run_properties: Option<&'a CT_RPr>,
+    /// The colour of text in the automatic colour, black or white.
+    automatic_color: Color,
 }
 
 /// Shape a sequence of runs onto one baseline.
@@ -13794,7 +13858,11 @@ fn measure_annotation_line(
             advances: shaped.advances,
             text,
             source: None,
-            color: resolve_run_color(&effective_rpr, context.input.theme.as_ref()),
+            color: resolve_run_color(
+                &effective_rpr,
+                context.input.theme.as_ref(),
+                context.automatic_color,
+            ),
             bold,
             italic,
             field_kind: None,
@@ -13917,10 +13985,13 @@ fn ruby_inline_item(
 
 /// Resolve the effective color for a run, considering theme colors.
 ///
-/// Priority: literal color (non-auto) > theme color > black.
+/// Priority: literal color (non-auto) > theme color > `automatic`, the
+/// automatic colour that [`automatic_text_color`] gives for the fill behind
+/// the text.
 fn resolve_run_color(
     rpr: &rdocx_oxml::properties::CT_RPr,
     theme: Option<&rdocx_oxml::theme::Theme>,
+    automatic: Color,
 ) -> Color {
     if let Some((hex, alpha)) = rpr.solid_text_fill() {
         let mut color = Color::from_hex(&hex);
@@ -13953,7 +14024,24 @@ fn resolve_run_color(
         .as_ref()
         .filter(|c| c.as_str() != "auto")
         .map(|c| Color::from_hex(c))
-        .unwrap_or(Color::BLACK)
+        .unwrap_or(automatic)
+}
+
+/// The automatic text colour on `fill`: white on a dark fill, black on a
+/// light one or on none. Word draws automatic text in whichever contrasts
+/// with the shading behind it. The threshold is LibreOffice's, which turns
+/// white up to a luminance of 156 in 255, weighted 76, 151 and 29 in 256.
+fn automatic_text_color(fill: Option<Color>) -> Color {
+    let Some(fill) = fill else {
+        return Color::BLACK;
+    };
+    let byte = |channel: f64| (channel.clamp(0.0, 1.0) * 255.0).round();
+    let luminance = (76.0 * byte(fill.r) + 151.0 * byte(fill.g) + 29.0 * byte(fill.b)) / 256.0;
+    if luminance.floor() <= 156.0 {
+        Color::WHITE
+    } else {
+        Color::BLACK
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23462,6 +23550,259 @@ mod tests {
     }
 
     #[test]
+    fn issue433_direct_table_borders_override_the_style_grid() {
+        // A bordered table style with all six edges single. The first table
+        // keeps its grid, the second turns every edge off in its own
+        // `w:tblBorders`, the third turns off only the inside edges.
+        let edges = |value: &str| {
+            ["top", "left", "bottom", "right", "insideH", "insideV"]
+                .iter()
+                .map(|edge| {
+                    format!(r#"<w:{edge} w:val="{value}" w:sz="4" w:space="0" w:color="auto"/>"#)
+                })
+                .collect::<String>()
+        };
+        let table = |borders: &str| {
+            format!(
+                r#"<w:tbl><w:tblPr><w:tblStyle w:val="Grid"/><w:tblW w:w="4000" w:type="dxa"/>{borders}</w:tblPr><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>b</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>c</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>d</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#
+            )
+        };
+        let mut input = make_input_with_text("");
+        input.styles = CT_Styles::from_xml(
+            format!(
+                r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="table" w:styleId="Grid"><w:name w:val="Grid"/><w:tblPr><w:tblBorders>{}</w:tblBorders></w:tblPr></w:style></w:styles>"#,
+                edges("single")
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let inside_none = r#"<w:tblBorders><w:insideH w:val="none" w:sz="0" w:space="0" w:color="auto"/><w:insideV w:val="none" w:sz="0" w:space="0" w:color="auto"/></w:tblBorders>"#;
+        let mut lines = Vec::new();
+        for borders in [
+            String::new(),
+            format!("<w:tblBorders>{}</w:tblBorders>", edges("none")),
+            inside_none.to_owned(),
+        ] {
+            input.document = CT_Document::from_xml(
+                format!(
+                    r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{}<w:p/></w:body></w:document>"#,
+                    table(&borders)
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            let output = deterministic_layout(&input);
+            let (mut horizontal, mut vertical) = (0, 0);
+            oxml_layout::walk(&output.pages[0].elements, &mut |element, _| {
+                if let PositionedElement::Line { start, end, .. } = element {
+                    if (start.y - end.y).abs() < 1e-6 {
+                        horizontal += 1;
+                    } else if (start.x - end.x).abs() < 1e-6 {
+                        vertical += 1;
+                    }
+                }
+            });
+            lines.push((horizontal, vertical));
+        }
+        // Each cell paints its own edges, so a 2 x 2 grid paints more than
+        // three segments per direction. Only the zero and the ordering matter.
+        assert!(lines[0].0 >= 3 && lines[0].1 >= 3, "{lines:?}");
+        assert_eq!(lines[1], (0, 0), "{lines:?}");
+        assert!(
+            lines[2].0 > 0 && lines[2].0 < lines[0].0 && lines[2].1 < lines[0].1,
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn issue433_toc_entries_drop_the_hyperlink_character_style() {
+        // Word writes a TOC entry as a hyperlink to a `_Toc` bookmark whose
+        // run carries the Hyperlink style. In a TOC paragraph the entry keeps
+        // the paragraph style's look. The same run in a body paragraph keeps
+        // the Hyperlink colour and underline.
+        let layout = |paragraph_style: &str| {
+            let mut input = make_input_with_text("");
+            input.styles = CT_Styles::from_xml(br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="TOC1"><w:name w:val="toc 1"/></w:style><w:style w:type="paragraph" w:styleId="BodyText"><w:name w:val="Body Text"/></w:style><w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style></w:styles>"#).unwrap();
+            input.document = CT_Document::from_xml(
+                format!(
+                    r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="{paragraph_style}"/></w:pPr><w:hyperlink w:anchor="_Toc1"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr><w:t>Introduction</w:t></w:r></w:hyperlink></w:p></w:body></w:document>"#
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            let output = deterministic_layout(&input);
+            let (mut color, mut lines) = (None, 0);
+            oxml_layout::walk(&output.pages[0].elements, &mut |element, _| match element {
+                PositionedElement::Text(run) if run.text == "Introduction" => {
+                    color = Some(run.color);
+                }
+                PositionedElement::Line { .. } => lines += 1,
+                _ => {}
+            });
+            (color, lines)
+        };
+        assert_eq!(layout("TOC1"), (Some(Color::BLACK), 0));
+        assert_eq!(layout("BodyText"), (Some(Color::from_hex("0563C1")), 1));
+    }
+
+    #[test]
+    fn issue433_automatic_text_colour_contrasts_with_the_fill_behind_it() {
+        let cell = |fill: &str, color: &str, text: &str| {
+            let shading = if fill.is_empty() {
+                String::new()
+            } else {
+                format!(r#"<w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="{fill}"/></w:tcPr>"#)
+            };
+            format!(
+                r#"<w:tc>{shading}<w:p><w:r><w:rPr>{color}</w:rPr><w:t>{text}</w:t></w:r></w:p></w:tc>"#
+            )
+        };
+        let auto = r#"<w:color w:val="auto"/>"#;
+        let black = r#"<w:color w:val="000000"/>"#;
+        let cells = [
+            cell("000000", "", "OnBlack"),
+            cell("1F3864", auto, "OnNavy"),
+            cell("BFBFBF", "", "OnLightGrey"),
+            cell("", "", "OnNothing"),
+            cell("000000", black, "ExplicitBlack"),
+        ]
+        .concat();
+        let mut input = make_input_with_text("");
+        input.document = CT_Document::from_xml(
+            format!(
+                r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tblPr><w:tblW w:w="9000" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="1800"/><w:gridCol w:w="1800"/><w:gridCol w:w="1800"/><w:gridCol w:w="1800"/><w:gridCol w:w="1800"/></w:tblGrid><w:tr>{cells}</w:tr></w:tbl><w:p><w:pPr><w:shd w:val="clear" w:color="auto" w:fill="000000"/></w:pPr><w:r><w:t>DarkParagraph</w:t></w:r></w:p></w:body></w:document>"#
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let output = deterministic_layout(&input);
+        let mut colors = HashMap::new();
+        oxml_layout::walk(&output.pages[0].elements, &mut |element, _| {
+            if let PositionedElement::Text(run) = element {
+                colors.insert(run.text.clone(), run.color);
+            }
+        });
+        for (text, expected) in [
+            ("OnBlack", Color::WHITE),
+            ("OnNavy", Color::WHITE),
+            ("OnLightGrey", Color::BLACK),
+            ("OnNothing", Color::BLACK),
+            ("ExplicitBlack", Color::BLACK),
+            ("DarkParagraph", Color::WHITE),
+        ] {
+            assert_eq!(colors.get(text), Some(&expected), "{text}: {colors:?}");
+        }
+    }
+
+    #[test]
+    fn issue433_wingdings_2_bullets_map_to_unicode_or_report_the_code() {
+        // U+F0A1 in Wingdings 2 is Word's black square bullet. U+F0A7 has no
+        // bounded mapping and keeps its code with a diagnostic.
+        let mut input = make_input_with_text("");
+        input.document = CT_Document::from_xml(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Square item</w:t></w:r></w:p><w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>Unmapped item</w:t></w:r></w:p></w:body></w:document>"#).unwrap();
+        input.numbering = Some(rdocx_oxml::numbering::CT_Numbering::from_xml(br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="&#xF0A1;"/><w:rPr><w:rFonts w:ascii="Wingdings 2" w:hAnsi="Wingdings 2" w:hint="default"/></w:rPr></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="&#xF0A7;"/><w:rPr><w:rFonts w:ascii="Wingdings 2" w:hAnsi="Wingdings 2" w:hint="default"/></w:rPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="2"/></w:num></w:numbering>"#).unwrap());
+        let output = deterministic_layout(&input);
+        let text = output_text(&output);
+        assert!(
+            text.iter().any(|text| text.trim() == "\u{25a0}"),
+            "{text:?}"
+        );
+        assert!(
+            !text.iter().any(|text| text.contains('\u{f0a1}')),
+            "{text:?}"
+        );
+        assert!(
+            text.iter().any(|text| text.contains('\u{f0a7}')),
+            "{text:?}"
+        );
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .filter(|fact| fact.message.starts_with("Unknown "))
+                .map(|fact| fact.message.as_str())
+                .collect::<Vec<_>>(),
+            ["Unknown Wingdings 2 symbol U+F0A7: original code retained"]
+        );
+    }
+
+    #[test]
+    fn issue433_cell_vertical_alignment_does_not_stop_a_row_from_splitting() {
+        // Fifteen filler paragraphs, then a one-cell row of 40 paragraphs
+        // that does not fit in the rest of page 1 and has no w:cantSplit.
+        let row_lines_per_page = |valign: &str| {
+            let mut input = make_input_with_text("");
+            let fillers = (1..=15)
+                .map(|i| format!("<w:p><w:r><w:t>Filler {i}</w:t></w:r></w:p>"))
+                .collect::<String>();
+            let lines = (1..=40)
+                .map(|i| format!("<w:p><w:r><w:t>Row line {i}</w:t></w:r></w:p>"))
+                .collect::<String>();
+            input.document = CT_Document::from_xml(
+                format!(
+                    r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{fillers}<w:tbl><w:tblPr><w:tblW w:w="4000" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:tcPr>{valign}</w:tcPr>{lines}</w:tc></w:tr></w:tbl><w:p/></w:body></w:document>"#
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            let output = deterministic_layout(&input);
+            output
+                .pages
+                .iter()
+                .map(|page| {
+                    let mut count = 0;
+                    oxml_layout::walk(&page.elements, &mut |element, _| {
+                        if let PositionedElement::Text(run) = element
+                            && run.text.starts_with("Row")
+                        {
+                            count += 1;
+                        }
+                    });
+                    count
+                })
+                .collect::<Vec<_>>()
+        };
+        let plain = row_lines_per_page("");
+        assert_eq!(plain.len(), 2, "{plain:?}");
+        assert!(plain[0] > 0 && plain[1] > 0, "{plain:?}");
+        for valign in ["top", "center", "bottom"] {
+            assert_eq!(
+                row_lines_per_page(&format!(r#"<w:vAlign w:val="{valign}"/>"#)),
+                plain,
+                "w:vAlign {valign}"
+            );
+        }
+    }
+
+    #[test]
+    fn issue433_first_line_indent_is_one_property_across_levels() {
+        // BaseInd hangs 720 twips. Derived sets firstLine over it, DerivedH
+        // sets hanging 0, and the third paragraph sets firstLine directly.
+        // Each first line starts at the margin, where the first paragraph's
+        // first line (left 720 less hanging 720) starts.
+        let mut input = make_input_with_text("");
+        input.styles = CT_Styles::from_xml(br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="BaseInd"><w:name w:val="Base Ind"/><w:pPr><w:ind w:left="720" w:hanging="720"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="Derived"><w:name w:val="Derived"/><w:basedOn w:val="BaseInd"/><w:pPr><w:ind w:left="0" w:firstLine="0"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="DerivedH"><w:name w:val="Derived H"/><w:basedOn w:val="BaseInd"/><w:pPr><w:ind w:left="0" w:hanging="0"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="FirstLine"><w:name w:val="First Line"/><w:pPr><w:ind w:left="0" w:firstLine="360"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="HangOver"><w:name w:val="Hang Over"/><w:basedOn w:val="FirstLine"/><w:pPr><w:ind w:left="720" w:hanging="720"/></w:pPr></w:style></w:styles>"#).unwrap();
+        input.document = CT_Document::from_xml(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="BaseInd"/></w:pPr><w:r><w:t>Case0</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Derived"/></w:pPr><w:r><w:t>Case1</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="BaseInd"/><w:ind w:left="0" w:firstLine="0"/></w:pPr><w:r><w:t>Case2</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="DerivedH"/></w:pPr><w:r><w:t>Case3</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="HangOver"/></w:pPr><w:r><w:t>Case4</w:t></w:r></w:p></w:body></w:document>"#).unwrap();
+        let output = deterministic_layout(&input);
+        let mut starts = Vec::new();
+        oxml_layout::walk(&output.pages[0].elements, &mut |element, _| {
+            if let PositionedElement::Text(run) = element
+                && run.text.starts_with("Case")
+            {
+                starts.push((run.text.clone(), run.origin.x));
+            }
+        });
+        assert_eq!(starts.len(), 5, "{starts:?}");
+        for (text, x) in &starts {
+            assert!(
+                (x - starts[0].1).abs() < 1e-6,
+                "{text} starts at {x}, expected the margin at {}",
+                starts[0].1
+            );
+        }
+    }
+
+    #[test]
     fn fx195_cache_trace_final_symbol_marker_field_and_ruby_requests() {
         let mut input = make_input_with_text("");
         input.document = CT_Document::from_xml(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Body Requested" w:hAnsi="Body Requested"/></w:rPr><w:t>item</w:t></w:r><w:r><w:sym w:font="Symbol Requested" w:char="0041"/></w:r><w:fldSimple w:instr="FOO"><w:r><w:rPr><w:rFonts w:ascii="Field Requested" w:hAnsi="Field Requested"/></w:rPr><w:t>field</w:t></w:r></w:fldSimple><w:ruby><w:rubyPr/><w:rt><w:r><w:rPr><w:rFonts w:ascii="Ruby Requested" w:hAnsi="Ruby Requested"/></w:rPr><w:t>ruby</w:t></w:r></w:rt><w:rubyBase><w:r><w:rPr><w:rFonts w:ascii="Base Requested" w:hAnsi="Base Requested"/></w:rPr><w:t>base</w:t></w:r></w:rubyBase></w:ruby></w:p></w:body></w:document>"#).unwrap();
@@ -27856,22 +28197,22 @@ mod tests {
         let inherited = fill("w14", namespace, "123456", 50_000);
         let mut effective = CT_RPr::default();
         effective.merge_from(&inherited);
-        assert_eq!(resolve_run_color(&effective, None).a, 0.5);
+        assert_eq!(resolve_run_color(&effective, None, Color::BLACK).a, 0.5);
         assert_eq!(
-            resolve_run_color(&effective, None).r,
+            resolve_run_color(&effective, None, Color::BLACK).r,
             Color::from_hex("123456").r
         );
         let direct = fill("alias", namespace, "AABBCC", 25_000);
         effective.merge_from(&direct);
-        assert_eq!(resolve_run_color(&effective, None).a, 0.25);
+        assert_eq!(resolve_run_color(&effective, None, Color::BLACK).a, 0.25);
         assert_eq!(
-            resolve_run_color(&effective, None).r,
+            resolve_run_color(&effective, None, Color::BLACK).r,
             Color::from_hex("AABBCC").r
         );
         let foreign = fill("w14", "urn:foreign", "FF0000", 0);
         let original = foreign.revision_xml.clone();
         effective.merge_from(&foreign);
-        assert_eq!(resolve_run_color(&effective, None).a, 0.25);
+        assert_eq!(resolve_run_color(&effective, None, Color::BLACK).a, 0.25);
         assert_eq!(foreign.revision_xml, original);
         assert!(
             fill("w14", namespace, "123456", 100_001)

@@ -1766,6 +1766,26 @@ impl FontManager {
                         }
                         _ => None,
                     }
+                } else if family.is_some_and(|name| name.eq_ignore_ascii_case("Wingdings 2")) {
+                    // Wingdings 2 bullets and check boxes. The Unicode 7.0
+                    // mapping of each code, or the nearest shape the bundled
+                    // fonts draw where they lack that mapping's character.
+                    match code {
+                        0x4f => Some('\u{2717}'),
+                        0x50 => Some('\u{2713}'),
+                        0x52 => Some('\u{2611}'),
+                        0x54 => Some('\u{2612}'),
+                        0x96 | 0x98 => Some('\u{25cf}'),
+                        0x97 => Some('\u{2022}'),
+                        0x99..=0x9c => Some('\u{25cb}'),
+                        0x9f | 0xa0 => Some('\u{25aa}'),
+                        0xa1 | 0xa2 => Some('\u{25a0}'),
+                        0xa3 => Some('\u{25a1}'),
+                        0xad => Some('\u{25c6}'),
+                        0xae => Some('\u{2b25}'),
+                        0xb7 => Some('\u{2b27}'),
+                        _ => None,
+                    }
                 } else if family.is_some_and(|name| name.eq_ignore_ascii_case("Symbol"))
                     && code == 0xb7
                 {
@@ -1808,6 +1828,7 @@ impl FontManager {
         }
         let family = match requested {
             Some(name) if name.eq_ignore_ascii_case("Wingdings") => "Wingdings",
+            Some(name) if name.eq_ignore_ascii_case("Wingdings 2") => "Wingdings 2",
             Some(name) if name.eq_ignore_ascii_case("Symbol") => "Symbol",
             _ => return Vec::new(),
         };
@@ -5710,6 +5731,23 @@ for feature in ['smcp=0','smcp=1']:
             ("Wingdings", 0x6e, '\u{25a0}'),
             ("Wingdings", 0xfe, '\u{2611}'),
             ("Symbol", 0xb7, '\u{2022}'),
+            ("Wingdings 2", 0x4f, '\u{2717}'),
+            ("Wingdings 2", 0x50, '\u{2713}'),
+            ("Wingdings 2", 0x52, '\u{2611}'),
+            ("Wingdings 2", 0x54, '\u{2612}'),
+            ("Wingdings 2", 0x96, '\u{25cf}'),
+            ("Wingdings 2", 0x97, '\u{2022}'),
+            ("Wingdings 2", 0x98, '\u{25cf}'),
+            ("Wingdings 2", 0x99, '\u{25cb}'),
+            ("Wingdings 2", 0x9c, '\u{25cb}'),
+            ("Wingdings 2", 0x9f, '\u{25aa}'),
+            ("Wingdings 2", 0xa0, '\u{25aa}'),
+            ("Wingdings 2", 0xa1, '\u{25a0}'),
+            ("Wingdings 2", 0xa2, '\u{25a0}'),
+            ("Wingdings 2", 0xa3, '\u{25a1}'),
+            ("Wingdings 2", 0xad, '\u{25c6}'),
+            ("Wingdings 2", 0xae, '\u{2b25}'),
+            ("Wingdings 2", 0xb7, '\u{2b27}'),
         ] {
             for code in [code, code + 0xf000] {
                 let original = char::from_u32(code).unwrap().to_string();
