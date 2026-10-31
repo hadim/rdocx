@@ -15251,3 +15251,89 @@ def test_fx268_picture_normalization_reuses_actual_checked_rounds(publisher, par
     assert staging[5] <= 3 * pieces + 20, staging
     assert picture.bytes == _one_pixel_png()
     assert len(rdocx.Document.from_bytes(document.to_bytes()).pictures()) == 1
+
+
+def _issue436_red_emf(width=200, height=100):
+    records = [
+        struct.pack("<IIIIII", 39, 24, 1, 0, 0x001E1EC8, 0),
+        struct.pack("<III", 37, 12, 1),
+        struct.pack("<II4i", 43, 24, 10, 10, width - 10, height - 10),
+        struct.pack("<IIIII", 14, 20, 0, 16, 20),
+    ]
+    body = b"".join(records)
+    header = struct.pack("<II4i4iIIIIHHIIIiiii", 1, 88, 0, 0, width - 1, height - 1, 0, 0,
+                         width * 2645 // 100, height * 2645 // 100, 0x464D4520, 0x10000,
+                         88 + len(body), 1 + len(records), 2, 0, 0, 0, 0, 1024, 768, 270, 203)
+    return header + body
+
+
+def _issue436_red_png(interlaced, width=64, height=48):
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    passes = ((0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2),
+              (0, 1, 1, 2)) if interlaced else ((0, 0, 1, 1),)
+    raw = b""
+    for x0, y0, dx, dy in passes:
+        columns, rows = len(range(x0, width, dx)), len(range(y0, height, dy))
+        if columns and rows:
+            raw += (b"\x00" + bytes((200, 30, 30)) * columns) * rows
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, int(interlaced))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(raw))
+            + chunk(b"IEND", b""))
+
+
+def test_issue436_emf_and_interlaced_png_pictures_are_drawn():
+    import rdocx
+    from PIL import Image
+    counts = {}
+    for name, picture in (("emf", _issue436_red_emf()), ("plain", _issue436_red_png(False)),
+                          ("interlaced", _issue436_red_png(True))):
+        doc = rdocx.Document()
+        doc.add_picture(picture, f"picture.{'emf' if name == 'emf' else 'png'}",
+                        width=rdocx.Inches(2), height=rdocx.Inches(1))
+        png, diagnostics = doc.render_page_to_png_with_diagnostics(0, 30)
+        pixels = Image.open(io.BytesIO(png)).convert("RGB").getdata()
+        counts[name] = (sum(1 for r, g, b in pixels if r > 150 and g < 80 and b < 80),
+                        sum(1 for r, g, b in pixels if max(r, g, b) - min(r, g, b) > 80))
+    # The picture covers 2 x 1 in, 1800 pixels at 30 dpi.
+    assert counts["emf"][0] > 1200, counts
+    assert counts["interlaced"] == counts["plain"], counts
+
+
+def test_issue436_charts_with_a_third_axis_id_or_a_grouped_number_format_are_drawn():
+    import rdocx
+    for number_format, third_axis_id in (("#,##0", False), ("$#,##0", False), ("General", True)):
+        doc = rdocx.Document()
+        data = rdocx.CategoryChartData(number_format=number_format)
+        data.categories = ["x", "y"]
+        data.add_series("A", (1820, 1910))
+        doc.add_chart(rdocx.XL_CHART_TYPE.COLUMN_CLUSTERED, data, rdocx.Inches(5), rdocx.Inches(3))
+        package = doc.to_bytes()
+        if third_axis_id:
+            out = io.BytesIO()
+            with zipfile.ZipFile(io.BytesIO(package)) as source, zipfile.ZipFile(out, "w") as target:
+                for member in source.infolist():
+                    xml = source.read(member.filename)
+                    if member.filename == "word/charts/chart1.xml":
+                        xml, count = re.subn(rb"(<c:axId val=\"\d+\"/>)(</c:barChart>)",
+                                             rb'\1<c:axId val="99999"/>\2', xml)
+                        assert count == 1
+                    target.writestr(member, xml)
+            package = out.getvalue()
+        doc = rdocx.Document.from_bytes(package)
+        assert tuple(doc.charts[0].categories) == ("x", "y")
+        diagnostics = doc.to_pdf_with_diagnostics()[1]
+        assert not [d for d in diagnostics if "chart" in str(d)], (number_format, diagnostics)
+
+
+def test_issue436_exports_hold_a_chart_as_a_table():
+    import rdocx
+    doc = rdocx.Document()
+    doc.add_paragraph("Revenue")
+    data = rdocx.CategoryChartData()
+    data.categories = ["Q1", "Q2"]
+    data.add_series("Zeta region", (1150, 1190))
+    doc.add_chart(rdocx.XL_CHART_TYPE.COLUMN_CLUSTERED, data, rdocx.Inches(5), rdocx.Inches(3))
+    assert "| Q1 | 1150 |" in doc.to_markdown()
+    html = doc.to_html()
+    assert "<th>Zeta region</th>" in html and "<td>1150</td>" in html
