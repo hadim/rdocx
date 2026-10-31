@@ -10126,7 +10126,8 @@ def test_form_protection_and_permission_composition():
     note = _story_paragraph(document, "footnote")
     note_run = next(run for run in note.runs if run.text == "note held")
     comment = _story_paragraph(document, "comment")
-    comment_run = comment.runs[0]
+    # A new comment opens with its annotation reference mark run.
+    comment_run = next(run for run in comment.runs if run.text == "comment held")
     text_box = _story_paragraph(document, "text_box")
     text_box_run = text_box.runs[0]
     held = (
@@ -15746,3 +15747,130 @@ def test_issue436_exports_hold_a_chart_as_a_table():
     assert "| Q1 | 1150 |" in doc.to_markdown()
     html = doc.to_html()
     assert "<th>Zeta region</th>" in html and "<td>1150</td>" in html
+
+
+def test_issue434_reply_takes_its_author_initials():
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph('Pay within thirty days.')
+    root = document.add_comment_on_text('thirty', author='Ann', initials='A', text='Why thirty?')
+    reply = document.reply_to(root, author='Bob', initials='B', text='Agreed')
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [(comment.id, comment.parent_id, comment.initials) for comment in reopened.comments] == [
+        (root, None, 'A'),
+        (reply, root, 'B'),
+    ]
+
+
+def test_issue434_new_comments_part_uses_word_comment_markup():
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph('Pay within thirty days.')
+    root = document.add_comment_on_text('thirty', author='Ann', text='Why thirty?')
+    document.reply_to(root, author='Bob', text='Agreed')
+    xml = document.part_xml('word/comments.xml')
+    start = re.search(r'<w:comments\b[^>]*>', xml).group(0)
+    assert 'xmlns:mc=' in start and 'mc:Ignorable="w14"' in start, start
+    mark = '<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:annotationRef/></w:r>'
+    assert xml.count(mark) == 2, xml
+    assert xml.count('<w:pStyle w:val="CommentText"/>') == 2, xml
+    styles = document.part_xml('word/styles.xml')
+    assert 'w:styleId="CommentText"' in styles and 'w:styleId="CommentReference"' in styles
+    assert [comment.text for comment in document.comments] == ['Why thirty?', 'Agreed']
+
+
+@pytest.mark.parametrize('granularity', ['run', 'word', 'character'])
+def test_issue434_compare_ignores_where_runs_of_one_formatting_split(granularity):
+    import rdocx
+    original = rdocx.Document()
+    original.add_paragraph('Each invoice is paid within thirty days.')
+    data = original.to_bytes()
+
+    def edited(tail):
+        document = rdocx.Document()
+        document.add_paragraph('Each invoi').add_run(tail)
+        return document
+
+    redline = rdocx.Document.from_bytes(data)
+    redline.compare(edited('ce is paid within thirty days.'), 'R', '2026-10-30T12:00:00Z',
+                    granularity=granularity)
+    assert redline.revisions == ()
+    redline = rdocx.Document.from_bytes(data)
+    redline.compare(edited('ce is paid within sixty days.'), 'R', '2026-10-30T12:00:00Z',
+                    granularity=granularity)
+    texts = [(revision.kind, revision.text) for revision in redline.revisions]
+    if granularity == 'word':
+        assert texts == [('deletion', 'thirty'), ('insertion', 'sixty')]
+    else:
+        assert texts
+
+
+def test_issue434_revisions_carry_their_text():
+    import rdocx
+    original = rdocx.Document()
+    original.add_paragraph('Pay within thirty days.')
+    original.add_paragraph('Late fees apply.')
+    edited = rdocx.Document()
+    edited.add_paragraph('Pay within sixty days.')
+    edited.add_paragraph('Late fees apply.').runs[0].font.bold = True
+    original.compare(edited, 'Reviewer', '2026-10-30T12:00:00Z', granularity='word')
+    assert [(revision.kind, revision.text) for revision in original.revisions] == [
+        ('deletion', 'thirty'),
+        ('insertion', 'sixty'),
+        ('run_property_change', 'Late fees apply.'),
+    ]
+    revision = original.revisions[0]
+    assert rdocx.Revision(id=revision.id, author=revision.author, timestamp=revision.timestamp,
+                          kind=revision.kind, text='thirty').text == 'thirty'
+
+
+def _issue434_font(document, text):
+    styles = document.part_xml('word/styles.xml')
+    paragraph = re.search(
+        rf'<w:p\b(?:(?!</w:p>).)*{re.escape(text)}.*?</w:p>', document.part_xml('word/document.xml'), re.S
+    ).group(0)
+    named = re.search(r'<w:pStyle w:val="([^"]+)"/>', paragraph)
+    style_id = named.group(1) if named else 'Normal'
+    style = re.search(rf'<w:style [^>]*w:styleId="{style_id}".*?</w:style>', styles, re.S).group(0)
+    font = re.search(r'<w:rFonts [^>]*w:ascii="([^"]+)"', style)
+    if font:
+        return font.group(1)
+    return re.search(r'<w:rPrDefault>.*?<w:rFonts [^>]*w:ascii="([^"]+)"', styles, re.S).group(1)
+
+
+@pytest.mark.parametrize('case', ['defaults', 'normal', 'named'])
+def test_issue434_insert_document_keeps_the_inserted_default_formatting(case):
+    import rdocx
+    a = rdocx.Document()
+    a.add_paragraph('A body text.')
+    b = rdocx.Document()
+    if case == 'defaults':
+        b.default_font_name = 'Georgia'
+        b.default_font_size = rdocx.Pt(14)
+    else:
+        b.set_style('Normal', font_name='Georgia')
+    b.add_paragraph('B body text.')
+    if case == 'named':
+        b.paragraphs[0].style = 'Normal'
+    out = rdocx.Document.from_bytes(a.to_bytes())
+    out.insert_document(b, at=1)
+    assert _issue434_font(out, 'B body text.') == 'Georgia'
+    assert _issue434_font(out, 'A body text.') != 'Georgia'
+
+
+def test_issue434_insert_document_keeps_each_inserted_list_on_its_own():
+    import rdocx
+
+    def chapter(title):
+        document = rdocx.Document()
+        document.add_heading(title, 1)
+        for step in range(2):
+            document.add_numbered_list_item(f'{title}, step {step + 1}')
+        return document
+
+    document = chapter('Chapter A')
+    for title in ('Chapter B', 'Chapter C'):
+        document.insert_document(chapter(title), at=len(document.paragraphs) + len(document.tables))
+    numbers = re.findall(r'>(\d+\.)<', document.render_page_to_svg(0).svg)
+    assert numbers == ['1.', '2.'] * 3
+    assert len({paragraph.numbering[0] for paragraph in document.paragraphs if paragraph.numbering}) == 3

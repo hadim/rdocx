@@ -3391,6 +3391,7 @@ fn cli_collaboration_commands_are_schema_stable_and_atomic() {
                         "part_name": "/word/document.xml",
                         "owner_index": 0,
                     },
+                    "text": "Comment target",
                 },
                 {
                     "id": 1,
@@ -3402,6 +3403,7 @@ fn cli_collaboration_commands_are_schema_stable_and_atomic() {
                         "part_name": "/word/document.xml",
                         "owner_index": 0,
                     },
+                    "text": "Edited target",
                 },
             ],
         })
@@ -7480,4 +7482,84 @@ fn issue390_comment_resolution_preserves_unknown_state() {
     let value: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
     assert_eq!(value["comments"][0]["resolved"], json!(false));
     assert_eq!(value["comments"][0]["id"], json!(id));
+}
+
+#[test]
+fn issue434_comment_reply_takes_initials() {
+    let temp = TempWorkspace::new("issue434-reply");
+    let input = temp.path.join("input.docx");
+    let replied = temp.path.join("replied.docx");
+    let mut document = fixture_document(&["Pay within thirty days."]);
+    let root = document
+        .add_comment_on_text("thirty", 0, "Ann", Some("A"), "Why thirty?", None)
+        .unwrap();
+    document.save(&input).unwrap();
+    let root = root.to_string();
+    let output = cli(&[
+        "comment",
+        "reply",
+        path_text(&input),
+        "--id",
+        &root,
+        "--author",
+        "Bob",
+        "--initials",
+        "B",
+        "--text",
+        "Agreed",
+        "--output",
+        path_text(&replied),
+    ]);
+    assert_success(&output, "comment reply with initials");
+    let reopened = Document::open(&replied).unwrap();
+    let reply = reopened
+        .comments()
+        .into_iter()
+        .find(|comment| comment.parent_id().is_some())
+        .unwrap();
+    assert_eq!(reply.initials(), Some("B"));
+}
+
+#[test]
+fn issue434_revision_list_json_gives_each_revision_its_text() {
+    let temp = TempWorkspace::new("issue434-revision-text");
+    let original = temp.path.join("original.docx");
+    let edited = temp.path.join("edited.docx");
+    let redline = temp.path.join("redline.docx");
+    fixture_document(&["Pay within thirty days."])
+        .save(&original)
+        .unwrap();
+    fixture_document(&["Pay within sixty days."])
+        .save(&edited)
+        .unwrap();
+    let compared = cli(&[
+        "compare",
+        path_text(&original),
+        path_text(&edited),
+        "--author",
+        "R",
+        "--timestamp",
+        "2026-10-30T12:00:00Z",
+        "--granularity",
+        "word",
+        "--output",
+        path_text(&redline),
+    ]);
+    assert_success(&compared, "compare");
+    let listed = cli(&["revision", "list", path_text(&redline), "--json"]);
+    assert_success(&listed, "revision list JSON");
+    let value: Value = serde_json::from_slice(&listed.stdout).unwrap();
+    let records = value["revisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| (record["kind"].clone(), record["text"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        records,
+        [
+            (json!("deletion"), json!("thirty")),
+            (json!("insertion"), json!("sixty")),
+        ]
+    );
 }

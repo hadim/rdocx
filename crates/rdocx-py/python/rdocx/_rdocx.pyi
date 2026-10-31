@@ -406,6 +406,7 @@ class Revision:
         timestamp: str | None,
         kind: str,
         story: Story | None = None,
+        text: str = "",
     ) -> Revision: ...
     @property
     def id(self) -> int: ...
@@ -417,6 +418,8 @@ class Revision:
     def kind(self) -> str: ...
     @property
     def story(self) -> Story | None: ...
+    @property
+    def text(self) -> str: ...
 
 
 @_final
@@ -1465,7 +1468,13 @@ class Document:
         """Move an existing root thread onto a literal main-story occurrence."""
         ...
     def reply_to(
-        self, parent_id: int, *, author: str, text: str, date: str | None = None
+        self,
+        parent_id: int,
+        *,
+        author: str,
+        text: str,
+        date: str | None = None,
+        initials: str | None = None,
     ) -> int: ...
     def resolve_comment(self, id: int, *, resolved: bool = True) -> bool: ...
     def remove_comment(self, id: int) -> bool: ...

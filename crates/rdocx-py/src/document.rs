@@ -1031,18 +1031,20 @@ pub struct PyRevision {
     pub timestamp: Option<String>,
     pub kind: String,
     pub story: Option<PyStory>,
+    pub text: String,
 }
 
 #[pymethods]
 impl PyRevision {
     #[new]
-    #[pyo3(signature = (*, id, author, timestamp, kind, story=None))]
+    #[pyo3(signature = (*, id, author, timestamp, kind, story=None, text=String::new()))]
     fn new(
         id: i32,
         author: String,
         timestamp: Option<String>,
         kind: String,
         story: Option<PyRef<'_, PyStory>>,
+        text: String,
     ) -> Self {
         Self {
             id,
@@ -1050,6 +1052,7 @@ impl PyRevision {
             timestamp,
             kind,
             story: story.map(|story| story.clone()),
+            text,
         }
     }
 }
@@ -13217,7 +13220,11 @@ impl PyDocument {
             .import_fragment(
                 &destination,
                 &fragment,
-                policy.map(|p| p.inner).unwrap_or_default(),
+                // The lists of a whole inserted document restart, as its own.
+                policy
+                    .map(|p| p.inner)
+                    .unwrap_or_default()
+                    .with_list_instance_reuse(false),
             )
             .map_err(|e| rdocx_to_pyerr(py, e))?;
         self.publish_api_candidate(py, candidate, "Document.insert_document")
@@ -15670,18 +15677,19 @@ impl PyDocument {
         Ok(())
     }
 
-    #[pyo3(signature = (parent_id, *, author, text, date = None))]
+    #[pyo3(signature = (parent_id, *, author, text, date = None, initials = None))]
     fn reply_to(
         &mut self,
         parent_id: i32,
         author: &str,
         text: &str,
         date: Option<&str>,
+        initials: Option<&str>,
         py: Python<'_>,
     ) -> PyResult<i32> {
         let mut candidate = self.inner.clone_for_staging();
         let id = candidate
-            .reply_to_with_date(parent_id, author, text, date)
+            .reply_to_with_initials(parent_id, author, initials, text, date)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         let prepared = self.prepare_word_revision(
             py,
@@ -15899,6 +15907,7 @@ impl PyDocument {
                         timestamp: revision.timestamp().map(str::to_owned),
                         kind: revision_kind_name(revision.kind()).to_owned(),
                         story: Some(self.owned_story_snapshot(revision.story())?),
+                        text: revision.text().to_owned(),
                     })
                 })
                 .collect::<PyResult<Vec<_>>>()?,

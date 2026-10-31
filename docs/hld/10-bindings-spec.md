@@ -2330,6 +2330,13 @@ Native Word callers can inspect comments through `Document::comments` and
 author threads through `add_comment`, `reply_to`, `resolve_comment`, and
 `remove_comment`. The additive native `add_comment_with_date` and
 `reply_to_with_date` methods accept an optional validated RFC 3339 timestamp.
+`reply_to_with_initials` also takes optional author initials, which Python
+exposes as the `initials` keyword of `reply_to` and `rdocx comment reply` as
+`--initials`. A comments part that rdocx creates declares the `mc` namespace
+and lists `w14` in `mc:Ignorable` with the paragraph ids. A new comment's
+paragraphs use the CommentText style, and the first opens with an
+`w:annotationRef` run in the CommentReference style. Both styles are defined,
+first in the styles part, when the document lacks them.
 The additive native `add_comment_on_text` anchors a comment on the zero-based,
 non-overlapping, case-sensitive occurrence of a literal text in main-story
 paragraphs, through tables and block content controls. It splits the runs at
@@ -2725,8 +2732,15 @@ the list has one entry per resolved revision. A compared comment package
 change uses one private package revision, reported under the main story,
 because its added or removed comment may have no surviving comment owner.
 The list length equals the count from `accept_all` and `reject_all`.
+`StoryRevision::text` gives the text a revision inserts, deletes or moves, and
+for a run, paragraph or table property change the text of the run, paragraph
+or table it reformats, with tabs as `\t` and breaks as `\n`. It is empty for a
+paragraph mark, a section property change and the comment package revision.
 `rdocx-cli revision list` and Python `Document.revisions` expose this all-story
-listing. WASM load and save paths preserve the revision XML without a revision
+listing, the text as the `text` field of each `--json` record and the
+`Revision.text` attribute. Each surface keeps its own spelling of the kind, the
+CLI in kebab case like its other JSON values (`run-property-change`) and Python
+in snake case (`run_property_change`). WASM load and save paths preserve the revision XML without a revision
 inspection method.
 
 Native Word paragraph handles expose
@@ -4407,7 +4421,7 @@ Table exposes signed removable indent, autofit, actual table style ID or display
 
 PictureOptions exposes checked metadata, crop and the supported inline and floating placement vocabulary. Document.add_picture, Run.add_picture and Cell.add_picture import path or bytes and return frozen factory-created Picture snapshots. Document.pictures returns physical source order across admitted stories. Snapshots carry document origin, revision, physical owner and unchanged source identity. Document.set_picture_size accepts one snapshot and resizes that occurrence only. The former relationship-wide Python operation is explicitly named set_picture_sizes_for_relationship. Native relationship-wide sizing and replace_image retain their separate compatibility contracts. Foreign, stale, malformed and unsupported inputs refuse before publication.
 
-Python Document.insert_document(other, at=..., policy=...) publishes through native import_fragment. Native Document.insert_document(index, other) is the existing body, style and numbering route and does not take that policy. It does not import source media relationships. Its unchanged control uses a source and a destination that already share the intended media graph. Inserted picture bytes stay with their drawings for both orders, the default policy and related-part reuse turned off, through save and reopen. Unused relationship bytes are not a preservation promise.
+Python Document.insert_document(other, at=..., policy=...) publishes through native import_fragment. Native Document.insert_document(index, other) is the existing body, style and numbering route and does not take that policy. Python insert_document turns list instance reuse off on the policy, so each list that the inserted paragraphs number directly keeps a list instance and a definition of its own and restarts, while numbering that a style links still reuses an equivalent instance. `FragmentConflictPolicy::with_list_instance_reuse` is that switch for native `import_fragment`, on by default. A fragment's document defaults, when they differ from the destination's, go into its default paragraph style, which is then copied under a new id, and every fragment paragraph that names no style names that copy. It does not import source media relationships. Its unchanged control uses a source and a destination that already share the intended media graph. Inserted picture bytes stay with their drawings for both orders, the default policy and related-part reuse turned off, through save and reopen. Unused relationship bytes are not a preservation promise.
 
 Paragraph.add_internal_hyperlink and first-character # URLs use the same checked bookmark provider. Ordinary URL fragments remain external links. Tooltips retain native hyperlink formatting. Document.add_heading_hyperlink stages a suitable existing or unique valid supported heading bookmark and its source link together. Supported related-story source paragraphs use their actual owner. Bookmark grammar, owner origin and revision are validated before mutation. No external relationship is allocated for internal links.
 

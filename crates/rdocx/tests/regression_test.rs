@@ -409537,3 +409537,360 @@ fn markdown_and_html_exports_hold_a_chart_as_a_table_of_its_data() {
         "{html}"
     );
 }
+
+#[test]
+fn issue434_a_reply_takes_its_author_initials() {
+    let mut document = Document::new();
+    document.add_paragraph("Pay within thirty days.");
+    let root = document
+        .add_comment_on_text("thirty", 0, "Ann", Some("A"), "Why thirty?", None)
+        .unwrap();
+    let reply = document
+        .reply_to_with_initials(root, "Bob", Some("B"), "Agreed", None)
+        .unwrap();
+    let plain = document.reply_to(root, "Cy", "Me too").unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let initials = reopened
+        .comments()
+        .iter()
+        .map(|comment| {
+            (
+                comment.id(),
+                comment.parent_id(),
+                comment.initials().map(str::to_owned),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        initials,
+        [
+            (root, None, Some("A".to_owned())),
+            (reply, Some(root), Some("B".to_owned())),
+            (plain, Some(root), None),
+        ]
+    );
+    assert!(
+        document
+            .reply_to_with_initials(root, "Bob", Some("\u{1}"), "Agreed", None)
+            .is_err()
+    );
+}
+
+#[test]
+fn issue434_new_comments_part_holds_word_comment_markup() {
+    let mut document = Document::new();
+    document.add_paragraph("Pay within thirty days.");
+    let root = document
+        .add_comment_on_text(
+            "thirty",
+            0,
+            "Ann",
+            Some("A"),
+            "Why thirty?\nSecond line",
+            None,
+        )
+        .unwrap();
+    document.reply_to(root, "Bob", "Agreed").unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let comments = reopened.part_xml("word/comments.xml").unwrap();
+    let start = &comments[comments.find("<w:comments ").unwrap()..];
+    let start = &start[..start.find('>').unwrap()];
+    assert!(
+        start.contains(r#"xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006""#),
+        "{start}"
+    );
+    assert!(start.contains(r#"mc:Ignorable="w14""#), "{start}");
+    assert_eq!(
+        comments
+            .matches(r#"<w:pStyle w:val="CommentText"/>"#)
+            .count(),
+        3,
+        "{comments}"
+    );
+    let mark =
+        r#"<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:annotationRef/></w:r>"#;
+    assert_eq!(comments.matches(mark).count(), 2, "{comments}");
+    let styles = reopened.part_xml("word/styles.xml").unwrap();
+    for id in ["CommentText", "CommentReference"] {
+        assert!(styles.contains(&format!(r#"w:styleId="{id}""#)), "{id}");
+    }
+    let texts = reopened
+        .comments()
+        .iter()
+        .map(|comment| comment.text())
+        .collect::<Vec<_>>();
+    assert_eq!(texts, ["Why thirty?\nSecond line", "Agreed"]);
+}
+
+fn issue434_redline(
+    original: &[u8],
+    edited: &Document,
+    granularity: rdocx::ComparisonGranularity,
+) -> (usize, Vec<String>, Vec<String>) {
+    let mut redline = Document::from_bytes(original).unwrap();
+    redline
+        .compare_with_options(
+            edited,
+            "Reviewer",
+            "2026-10-30T12:00:00Z",
+            &rdocx::ComparisonOptions {
+                granularity,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let xml = redline.part_xml("word/document.xml").unwrap();
+    let texts = |open: &str, close: &str| {
+        xml.split(open)
+            .skip(1)
+            .map(|rest| {
+                let inner = &rest[rest.find('>').unwrap() + 1..rest.find(close).unwrap()];
+                let mut text = String::new();
+                let mut in_tag = false;
+                for character in inner.chars() {
+                    match character {
+                        '<' => in_tag = true,
+                        '>' => in_tag = false,
+                        _ if !in_tag => text.push(character),
+                        _ => {}
+                    }
+                }
+                text
+            })
+            .collect::<Vec<_>>()
+    };
+    (
+        redline.story_revisions().unwrap().len(),
+        texts("<w:del ", "</w:del>"),
+        texts("<w:ins ", "</w:ins>"),
+    )
+}
+
+#[test]
+fn issue434_compare_reads_text_split_over_runs_of_one_formatting_as_one() {
+    let mut original = Document::new();
+    original.add_paragraph("Each invoice is paid within thirty days.");
+    let edited = |tail: &str| {
+        let mut document = Document::new();
+        document.add_paragraph("Each invoi").add_run(tail);
+        document
+    };
+    let mut same = edited("ce is paid within thirty days.");
+    let (original_bytes, same_bytes) = (original.to_bytes().unwrap(), same.to_bytes().unwrap());
+    for granularity in [
+        rdocx::ComparisonGranularity::Run,
+        rdocx::ComparisonGranularity::Word,
+        rdocx::ComparisonGranularity::Character,
+    ] {
+        assert_eq!(
+            issue434_redline(&original_bytes, &same, granularity).0,
+            0,
+            "{granularity:?}"
+        );
+        // The other direction, a split original, compares equal too.
+        assert_eq!(
+            issue434_redline(&same_bytes, &original, granularity).0,
+            0,
+            "{granularity:?}"
+        );
+    }
+    let changed = edited("ce is paid within sixty days.");
+    let (count, deleted, inserted) = issue434_redline(
+        &original_bytes,
+        &changed,
+        rdocx::ComparisonGranularity::Word,
+    );
+    assert_eq!(
+        (count, deleted, inserted),
+        (2, vec!["thirty".to_owned()], vec!["sixty".to_owned()])
+    );
+    // A run of other formatting is still a change.
+    let mut bold = Document::new();
+    let mut paragraph = bold.add_paragraph("Each invoi");
+    paragraph
+        .add_run("ce is paid within thirty days.")
+        .bold(true);
+    assert!(issue434_redline(&original_bytes, &bold, rdocx::ComparisonGranularity::Word).0 > 0);
+}
+
+#[test]
+fn issue434_story_revisions_carry_their_text() {
+    let mut original = Document::new();
+    original.add_paragraph("Pay within thirty days.");
+    original.add_paragraph("Late fees apply.");
+    let mut edited = Document::new();
+    edited.add_paragraph("Pay within sixty days.");
+    edited
+        .add_paragraph("")
+        .add_run("Late fees apply.")
+        .bold(true);
+    original
+        .compare_with_options(
+            &edited,
+            "Reviewer",
+            "2026-10-30T12:00:00Z",
+            &rdocx::ComparisonOptions {
+                granularity: rdocx::ComparisonGranularity::Word,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let revisions = original
+        .story_revisions()
+        .unwrap()
+        .iter()
+        .map(|revision| (revision.kind(), revision.text().to_owned()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        revisions,
+        [
+            (RevisionKind::Deletion, "thirty".to_owned()),
+            (RevisionKind::Insertion, "sixty".to_owned()),
+            (
+                RevisionKind::RunPropertyChange,
+                "Late fees apply.".to_owned()
+            ),
+        ]
+    );
+}
+
+fn issue434_insert(
+    destination: &[u8],
+    source: &Document,
+    policy: FragmentConflictPolicy,
+) -> Document {
+    let mut output = Document::from_bytes(destination).unwrap();
+    let body = f254_story(source, StoryKind::Body);
+    let items = source.story_items(&body).unwrap();
+    let fragment = DocumentFragment::from_range(
+        source,
+        items[0].location(),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    let target = f254_story(&output, StoryKind::Body);
+    output
+        .import_fragment(&ContentLocation::end(target), &fragment, policy)
+        .unwrap();
+    Document::from_bytes(&output.to_bytes().unwrap()).unwrap()
+}
+
+#[test]
+fn issue434_inserted_lists_keep_their_own_numbering() {
+    let chapter = |title: &str| {
+        let mut document = Document::new();
+        document.add_paragraph(title);
+        document.add_numbered_list_item(&format!("{title} one"), 0);
+        document.add_numbered_list_item(&format!("{title} two"), 0);
+        document
+    };
+    let insert_chapters = |policy: FragmentConflictPolicy| {
+        let mut output = chapter("A");
+        for title in ["B", "C"] {
+            output = issue434_insert(&output.to_bytes().unwrap(), &chapter(title), policy);
+        }
+        let numbering = output
+            .paragraphs()
+            .iter()
+            .filter_map(|paragraph| paragraph.numbering())
+            .map(|(num_id, _)| num_id)
+            .collect::<Vec<_>>();
+        let definitions = output
+            .part_xml("word/numbering.xml")
+            .unwrap()
+            .matches("<w:abstractNum ")
+            .count();
+        (numbering, definitions)
+    };
+    let (numbering, definitions) =
+        insert_chapters(FragmentConflictPolicy::reuse_equivalent().with_list_instance_reuse(false));
+    assert_eq!(numbering.len(), 6);
+    assert_eq!(
+        numbering.iter().collect::<HashSet<_>>().len(),
+        3,
+        "{numbering:?}"
+    );
+    assert_eq!(numbering[0], numbering[1]);
+    assert_eq!(numbering[2], numbering[3]);
+    // Each list has its own definition, which Word does not join.
+    assert_eq!(definitions, 3);
+    // A fragment import keeps reusing an equivalent list by default.
+    let (numbering, definitions) = insert_chapters(FragmentConflictPolicy::reuse_equivalent());
+    assert_eq!(
+        (numbering.iter().collect::<HashSet<_>>().len(), definitions),
+        (1, 1)
+    );
+}
+
+#[test]
+fn issue434_inserted_document_keeps_its_default_formatting() {
+    let mut destination = Document::new();
+    destination.add_paragraph("A body text.");
+    let destination_bytes = destination.to_bytes().unwrap();
+    let font = |document: &Document, text: &str| {
+        let paragraph = document
+            .paragraphs()
+            .into_iter()
+            .find(|paragraph| paragraph.text() == text)
+            .unwrap();
+        let style_id = paragraph
+            .style_id()
+            .map(str::to_owned)
+            .unwrap_or_else(|| "Normal".to_owned());
+        let style = document.style(&style_id).unwrap();
+        let run = style.run_properties().cloned().unwrap_or_default();
+        (run.font_ascii, run.sz.map(|size| size.0))
+    };
+    let mut defaults = Document::new();
+    defaults
+        .set_default_font_name_value(Some("Georgia"))
+        .unwrap();
+    defaults
+        .set_default_font_size_value(Some(Length::pt(14.0)))
+        .unwrap();
+    defaults.add_paragraph("B body text.");
+    let output = issue434_insert(
+        &destination_bytes,
+        &defaults,
+        FragmentConflictPolicy::reuse_equivalent(),
+    );
+    assert_eq!(
+        font(&output, "B body text."),
+        (Some("Georgia".to_owned()), Some(28))
+    );
+    assert_ne!(font(&output, "A body text.").0.as_deref(), Some("Georgia"));
+
+    let mut normal = Document::new();
+    normal
+        .set_style(StyleBuilder::paragraph("Normal", "Normal").font("Georgia"))
+        .unwrap();
+    normal.add_paragraph("B body text.");
+    for policy in [
+        FragmentConflictPolicy::reuse_equivalent(),
+        FragmentConflictPolicy::rename_all(),
+    ] {
+        let output = issue434_insert(&destination_bytes, &normal, policy);
+        assert_eq!(
+            font(&output, "B body text.").0.as_deref(),
+            Some("Georgia"),
+            "{policy:?}"
+        );
+        assert_ne!(font(&output, "A body text.").0.as_deref(), Some("Georgia"));
+    }
+
+    // An equal default style leaves the inserted paragraphs as they were.
+    let mut plain = Document::new();
+    plain.add_paragraph("B body text.");
+    let output = issue434_insert(
+        &destination_bytes,
+        &plain,
+        FragmentConflictPolicy::reuse_equivalent(),
+    );
+    assert!(
+        !output
+            .part_xml("word/document.xml")
+            .unwrap()
+            .contains("Merge1")
+    );
+}
