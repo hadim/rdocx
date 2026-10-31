@@ -408533,3 +408533,78 @@ fn issue432_notes_write_the_mark_run_properties_first_with_separators_and_a_spac
         "{xml}"
     );
 }
+
+#[test]
+fn issue432_links_written_by_rdocx_take_the_hyperlink_character_style() {
+    let link_runs = |document: &Document| {
+        let xml = document.part_xml("/word/document.xml").unwrap();
+        xml.match_indices("<w:hyperlink ")
+            .map(|(at, _)| {
+                let link = &xml[at..];
+                link[..link.find("</w:hyperlink>").unwrap()].to_owned()
+            })
+            .collect::<Vec<_>>()
+    };
+    let styled = r#"<w:rStyle w:val="Hyperlink"/>"#;
+
+    // A heading link adds the built-in style the document lacks.
+    let mut document = Document::new();
+    document.add_paragraph("Target").style("Heading1");
+    document.add_paragraph("See ");
+    let heading = document.paragraph_story_location(0).unwrap().unwrap();
+    let source = document.paragraph_story_location(1).unwrap().unwrap();
+    document
+        .add_heading_hyperlink_at(&source, &heading, "Target", None)
+        .unwrap();
+    let links = link_runs(&document);
+    assert!(links.len() == 1 && links[0].contains(styled), "{links:?}");
+    let style = document
+        .style("Hyperlink")
+        .expect("built-in Hyperlink style");
+    assert_eq!(style.style_type(), StyleType::Character);
+    let styles = document.part_xml("/word/styles.xml").unwrap();
+    assert!(
+        styles.contains(r#"<w:color w:val="0563C1"/>"#)
+            && styles.contains(r#"<w:u w:val="single"/>"#),
+        "{styles}"
+    );
+
+    // Markdown and HTML links, with a template whose style is kept, and an
+    // external link appended to a story.
+    let mut template = Document::new();
+    template
+        .add_style(StyleBuilder::character("Hyperlink", "Hyperlink").color("FF0000"))
+        .unwrap();
+    let markdown = Document::from_markdown_with_options(
+        "See [the site](https://example.com).",
+        Some(&template),
+        &[],
+    )
+    .unwrap()
+    .document;
+    let html =
+        Document::from_html(r#"<p>See <a href="https://example.com">the site</a>.</p>"#).unwrap();
+    let mut story = Document::new();
+    let body = f254_story(&story, StoryKind::Body);
+    story
+        .add_hyperlink_to_story(&body, "the site", "https://example.com")
+        .unwrap();
+    for (label, document) in [
+        ("markdown", &markdown),
+        ("html", &html.document),
+        ("story", &story),
+    ] {
+        let links = link_runs(document);
+        assert!(
+            !links.is_empty() && links.iter().all(|link| link.contains(styled)),
+            "{label}: {links:?}"
+        );
+    }
+    let styles = markdown.part_xml("/word/styles.xml").unwrap();
+    assert_eq!(
+        styles.matches(r#"w:styleId="Hyperlink""#).count(),
+        1,
+        "{styles}"
+    );
+    assert!(styles.contains(r#"<w:color w:val="FF0000"/>"#), "{styles}");
+}

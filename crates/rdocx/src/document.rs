@@ -29749,9 +29749,12 @@ impl Document {
             .ok_or_else(|| Error::Other("hyperlink story disappeared".into()))?;
         let refreshed =
             ContentLocation::new(story, location.item_kind, location.index_path.clone());
+        let link_style = self.ensure_hyperlink_style()?;
         let run_index = self.edit_story_paragraph(&refreshed, |paragraph| {
             let index = paragraph.run_count();
-            paragraph.add_internal_hyperlink(text, bookmark, tooltip);
+            paragraph
+                .add_internal_hyperlink(text, bookmark, tooltip)
+                .set_style(&link_style);
             Ok(index)
         })?;
         let story = self
@@ -29973,11 +29976,13 @@ impl Document {
         let owner = story.part_name.clone();
         let relationship_id =
             candidate.add_external_relationship_checked(&owner, rel_types::HYPERLINK, url)?;
+        let link_style = candidate.ensure_hyperlink_style()?;
         let mut paragraph = CT_P::new();
         crate::Paragraph {
             inner: &mut paragraph,
         }
-        .add_hyperlink(text, &relationship_id);
+        .add_hyperlink(text, &relationship_id)
+        .set_style(&link_style);
         paragraph
             .hyperlinks
             .last_mut()
@@ -32732,6 +32737,46 @@ impl Document {
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(())
+    }
+
+    /// The ID of the character style that marks hyperlink text, which links
+    /// rdocx writes take, as Word gives the runs of a link it inserts.
+    ///
+    /// A character style with the ID `Hyperlink`, or else one named
+    /// `Hyperlink`, is used as it is. Without one, Word's built-in Hyperlink
+    /// style (colour `0563C1`, single underline) is added.
+    pub fn ensure_hyperlink_style(&mut self) -> Result<String> {
+        let character = |style: &&rdocx_oxml::styles::CT_Style| {
+            style.style_type == StyleType::Character && !style.style_id.is_empty()
+        };
+        let existing = self
+            .styles
+            .styles
+            .iter()
+            .filter(character)
+            .find(|style| style.style_id == "Hyperlink")
+            .or_else(|| {
+                self.styles.styles.iter().filter(character).find(|style| {
+                    style
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| name.trim().eq_ignore_ascii_case("Hyperlink"))
+                })
+            });
+        if let Some(style) = existing {
+            return Ok(style.style_id.clone());
+        }
+        self.add_style(
+            StyleBuilder::character("Hyperlink", "Hyperlink")
+                .priority(99)
+                .unhide_when_used(true)
+                .run_properties(CT_RPr {
+                    color: Some("0563C1".into()),
+                    underline: Some(rdocx_oxml::shared::ST_Underline::Single),
+                    ..Default::default()
+                }),
+        )?;
+        Ok("Hyperlink".to_owned())
     }
 
     /// The character style IDs that mark hyperlink text: the built-in

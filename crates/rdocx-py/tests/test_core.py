@@ -15252,3 +15252,35 @@ def test_fx268_picture_normalization_reuses_actual_checked_rounds(publisher, par
     assert staging[5] <= 3 * pieces + 20, staging
     assert picture.bytes == _one_pixel_png()
     assert len(rdocx.Document.from_bytes(document.to_bytes()).pictures()) == 1
+
+
+def test_issue432_python_links_take_the_hyperlink_character_style():
+    import rdocx
+
+    def link_runs(document):
+        xml = document.part_xml("word/document.xml")
+        return re.findall(r"<w:hyperlink\b.*?</w:hyperlink>", xml, re.S)
+
+    styled = '<w:rStyle w:val="Hyperlink"/>'
+    document = rdocx.Document()
+    document.add_paragraph("See ").add_hyperlink("the site", "https://example.com")
+    document.add_heading("Target", 1)
+    document.add_paragraph("And ")
+    document.add_heading_hyperlink(document.paragraphs[2], document.paragraphs[1], "Target")
+    links = link_runs(document)
+    assert len(links) == 2 and all(styled in link for link in links), links
+    styles = document.part_xml("word/styles.xml")
+    assert styles.count('w:styleId="Hyperlink"') == 1, styles
+
+    template = rdocx.Document()
+    template.add_style("Hyperlink", style_type="character", color="FF0000", underline=True)
+    for document in (
+        rdocx.Document.from_markdown("See [the site](https://example.com).", template=template)[0],
+        rdocx.Document.from_html('<p>See <a href="https://example.com">the site</a>.</p>')[0],
+    ):
+        links = link_runs(document)
+        assert links and all(styled in link for link in links), links
+    # The run of a plain add_run is left alone.
+    document = rdocx.Document()
+    document.add_paragraph("plain").add_run(" text")
+    assert "Hyperlink" not in document.part_xml("word/document.xml")

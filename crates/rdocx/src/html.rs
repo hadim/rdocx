@@ -4146,6 +4146,19 @@ impl Importer<'_> {
                 hyperlink_ids.insert(url.clone(), relationship_id);
             }
         }
+        let link_style = if hyperlink_ids.is_empty() {
+            None
+        } else {
+            Some(self.document.ensure_hyperlink_style()?)
+        };
+        let link_run_style = |run: &mut Run<'_>, style: &ComputedStyle| {
+            apply_run_style(run, style);
+            if style.character_style.is_none()
+                && let Some(id) = &link_style
+            {
+                run.set_style(id);
+            }
+        };
         let mut output = CT_P::new();
         {
             let mut paragraph = Paragraph { inner: &mut output };
@@ -4211,24 +4224,25 @@ impl Importer<'_> {
                                 run.set_text(&format!("{} ", run.text()));
                             } else {
                                 self.bump_runs()?;
-                                let mut run = if let Some(url) = &space.hyperlink {
-                                    paragraph.add_hyperlink(" ", &hyperlink_ids[url])
+                                if let Some(url) = &space.hyperlink {
+                                    let mut run = paragraph.add_hyperlink(" ", &hyperlink_ids[url]);
+                                    link_run_style(&mut run, &space);
                                 } else {
-                                    paragraph.add_run(" ")
-                                };
-                                apply_run_style(&mut run, &space);
+                                    apply_run_style(&mut paragraph.add_run(" "), &space);
+                                }
                             }
                         }
                         let mut lines = text.split('\n').peekable();
                         while let Some(line) = lines.next() {
                             if !line.is_empty() {
                                 self.bump_runs()?;
-                                let mut run = if let Some(url) = &style.hyperlink {
-                                    paragraph.add_hyperlink(line, &hyperlink_ids[url])
+                                if let Some(url) = &style.hyperlink {
+                                    let mut run =
+                                        paragraph.add_hyperlink(line, &hyperlink_ids[url]);
+                                    link_run_style(&mut run, &style);
                                 } else {
-                                    paragraph.add_run(line)
-                                };
-                                apply_run_style(&mut run, &style);
+                                    apply_run_style(&mut paragraph.add_run(line), &style);
+                                }
                                 emitted = true;
                             }
                             if lines.peek().is_some() {
@@ -4257,12 +4271,12 @@ impl Importer<'_> {
                                 run.set_text(&format!("{} ", run.text()));
                             } else {
                                 self.bump_runs()?;
-                                let mut run = if let Some(url) = &space.hyperlink {
-                                    paragraph.add_hyperlink(" ", &hyperlink_ids[url])
+                                if let Some(url) = &space.hyperlink {
+                                    let mut run = paragraph.add_hyperlink(" ", &hyperlink_ids[url]);
+                                    link_run_style(&mut run, &space);
                                 } else {
-                                    paragraph.add_run(" ")
-                                };
-                                apply_run_style(&mut run, &space);
+                                    apply_run_style(&mut paragraph.add_run(" "), &space);
+                                }
                             }
                             pending_space = false;
                             text = text.trim_start_matches(|character: char| {
@@ -4273,12 +4287,13 @@ impl Importer<'_> {
                         let normalized = collapse_text(text, &mut pending_space, emitted);
                         if !normalized.is_empty() {
                             self.bump_runs()?;
-                            let mut run = if let Some(url) = &style.hyperlink {
-                                paragraph.add_hyperlink(&normalized, &hyperlink_ids[url])
+                            if let Some(url) = &style.hyperlink {
+                                let mut run =
+                                    paragraph.add_hyperlink(&normalized, &hyperlink_ids[url]);
+                                link_run_style(&mut run, &style);
                             } else {
-                                paragraph.add_run(&normalized)
-                            };
-                            apply_run_style(&mut run, &style);
+                                apply_run_style(&mut paragraph.add_run(&normalized), &style);
+                            }
                             emitted = true;
                         }
                         if pending_space && (!was_pending || !normalized.is_empty()) {
