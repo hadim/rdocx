@@ -6073,7 +6073,7 @@ fn remap_fragment_style_collisions(
             .is_none_or(|existing| existing.rpr != defaults.rpr || existing.ppr != defaults.ppr)
     {
         let (rpr, ppr) = (defaults.rpr.clone(), defaults.ppr.clone());
-        let style = &mut fragment.styles.styles[index];
+        let style = &mut std::sync::Arc::make_mut(&mut fragment.styles).styles[index];
         if let Some(mut merged) = rpr {
             if let Some(own) = &style.rpr {
                 merged.merge_from(own);

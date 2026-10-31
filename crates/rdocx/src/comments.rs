@@ -1978,7 +1978,9 @@ impl Document {
         self.reserve_styles_bundle()?;
         let before = self.styles.clone();
         for style in missing {
-            self.styles.styles.insert(0, style.build().0);
+            std::sync::Arc::make_mut(&mut self.styles)
+                .styles
+                .insert(0, style.build().0);
         }
         crate::style::validate_style_graph_change(&before, &self.styles)?;
         self.invalidate_layout();
