@@ -5357,7 +5357,8 @@ def test_fx201_note_reference_creation_uses_checked_paragraph():
     reference = document.add_paragraph("reference")
     retired_run = reference.runs[0]
     note = document.add_footnote(reference, "note content")
-    assert note.paragraphs[0].text == "note content"
+    # The space run Word writes after the note's reference mark.
+    assert note.paragraphs[0].text == " note content"
     assert reference.text == "reference"
     with pytest.raises(rdocx.StaleElementError):
         _ = retired_run.text
@@ -5787,7 +5788,7 @@ def test_fx201_checked_note_cell_boundary_preserves_other_owners_and_refuses_sta
     table.cell(0, 0).text = "cell reference"
     reference = document.tables[0].cell(0, 0).paragraphs[0].runs[0]
     note = getattr(document, "add_" + family)(reference, family + " content")
-    assert note.paragraphs[0].text == family + " content"
+    assert note.paragraphs[0].text == " " + family + " content"
     before = document.to_bytes()
     with pytest.raises(rdocx.StaleElementError):
         getattr(document, "add_" + family)(reference, "stale refused")
@@ -10140,7 +10141,7 @@ def test_form_protection_and_permission_composition():
         (cell_run, "cell held"),
         (header, "header held"),
         (header_run, "header held"),
-        (note, "note held"),
+        (note, " note held"),
         (note_run, "note held"),
     )
     before = document.to_bytes()
@@ -10186,7 +10187,7 @@ def test_form_protection_and_permission_composition():
     assert document.paragraphs[0].text == body.text == "body held"
     assert document.tables[0].cell(0, 0).text == cell.text == "cell held"
     assert document.section(0).header.paragraphs[0].text == header.text == "header held"
-    assert _story_paragraph(document, "footnote").text == note.text == "note held"
+    assert _story_paragraph(document, "footnote").text == note.text == " note held"
     removed = document.remove_document_protection()
     assert removed is not None and _protection_fields(removed) == _protection_fields(full)
     with pytest.raises(AttributeError):
@@ -15434,3 +15435,35 @@ def test_issue435_bookmarks_sharing_an_id_open(across_parts):
     assert [paragraph.text for paragraph in document.paragraphs] == ['First heading', 'Some text']
     document.add_paragraph('New')
     assert rdocx.Document.from_bytes(document.to_bytes()).paragraphs[-1].text == 'New'
+
+
+def test_issue432_python_links_take_the_hyperlink_character_style():
+    import rdocx
+
+    def link_runs(document):
+        xml = document.part_xml("word/document.xml")
+        return re.findall(r"<w:hyperlink\b.*?</w:hyperlink>", xml, re.S)
+
+    styled = '<w:rStyle w:val="Hyperlink"/>'
+    document = rdocx.Document()
+    document.add_paragraph("See ").add_hyperlink("the site", "https://example.com")
+    document.add_heading("Target", 1)
+    document.add_paragraph("And ")
+    document.add_heading_hyperlink(document.paragraphs[2], document.paragraphs[1], "Target")
+    links = link_runs(document)
+    assert len(links) == 2 and all(styled in link for link in links), links
+    styles = document.part_xml("word/styles.xml")
+    assert styles.count('w:styleId="Hyperlink"') == 1, styles
+
+    template = rdocx.Document()
+    template.add_style("Hyperlink", style_type="character", color="FF0000", underline=True)
+    for document in (
+        rdocx.Document.from_markdown("See [the site](https://example.com).", template=template)[0],
+        rdocx.Document.from_html('<p>See <a href="https://example.com">the site</a>.</p>')[0],
+    ):
+        links = link_runs(document)
+        assert links and all(styled in link for link in links), links
+    # The run of a plain add_run is left alone.
+    document = rdocx.Document()
+    document.add_paragraph("plain").add_run(" text")
+    assert "Hyperlink" not in document.part_xml("word/document.xml")

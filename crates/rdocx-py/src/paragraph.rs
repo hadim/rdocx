@@ -621,11 +621,23 @@ impl PyParagraph {
                 }
                 None => None,
             };
+            let link_style = match url {
+                Some(_) => Some(
+                    candidate
+                        .ensure_hyperlink_style()
+                        .map_err(|error| crate::rdocx_to_pyerr(py, error))?,
+                ),
+                None => None,
+            };
             let append = |paragraph: &mut rdocx::Paragraph<'_>| {
                 let run_index = paragraph.run_count();
                 match &relationship_id {
                     Some(relationship_id) => {
-                        paragraph.add_hyperlink_with_tooltip(text, relationship_id, tooltip)?;
+                        let mut run =
+                            paragraph.add_hyperlink_with_tooltip(text, relationship_id, tooltip)?;
+                        if let Some(link_style) = &link_style {
+                            run.set_style(link_style);
+                        }
                     }
                     None => {
                         paragraph.add_run(text);

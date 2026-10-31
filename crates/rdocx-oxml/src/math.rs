@@ -1028,7 +1028,7 @@ impl MathRadical {
             degree: MathArgument::default(),
             base,
             hide_degree: true,
-            degree_present: false,
+            degree_present: true,
             preservation: Preservation::default(),
         }
     }

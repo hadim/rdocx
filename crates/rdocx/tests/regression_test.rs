@@ -48146,7 +48146,8 @@ fn footnote_removal_clears_references_atomically() {
     let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
     assert!(!body.contains(&format!("footnoteReference w:id=\"{first}\"")));
     assert!(body.contains(&format!("footnoteReference w:id=\"{second}\"")));
-    assert_eq!(document.footnotes(), vec![(second, "second".to_owned())]);
+    // The space run Word writes after the note's reference mark.
+    assert_eq!(document.footnotes(), vec![(second, " second".to_owned())]);
 }
 
 #[test]
@@ -48671,9 +48672,11 @@ fn f276_complete_dependency_source() -> Document {
         );
     package.set_part("/word/styles.xml", styles.into_bytes());
     let binding = r#"<w:sdt><w:sdtPr><w:dataBinding w:storeItemID="{11111111-1111-1111-1111-111111111111}" w:xpath="/root"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>combined binding</w:t></w:r></w:p></w:sdtContent></w:sdt>"#;
-    let notes = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap())
-        .unwrap()
-        .replacen("</w:footnote>", &format!("{binding}</w:footnote>"), 1);
+    let notes = replace_in_first_note(
+        std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap(),
+        "</w:footnote>",
+        &format!("{binding}</w:footnote>"),
+    );
     package.set_part("/word/footnotes.xml", notes.into_bytes());
     package.set_part(
         "/customXml/item276.xml",
@@ -49220,6 +49223,21 @@ fn fragment_import_preserves_nested_block_control_content() {
     }
 }
 
+/// Replace the first `pattern` from the first normal note on, past the
+/// separator notes a notes part rdocx creates starts with. A comments part,
+/// which has no note, is searched from its start.
+fn replace_in_first_note(xml: &str, pattern: &str, replacement: &str) -> String {
+    let start = xml
+        .find("<w:footnote w:id=")
+        .or_else(|| xml.find("<w:endnote w:id="))
+        .unwrap_or(0);
+    format!(
+        "{}{}",
+        &xml[..start],
+        xml[start..].replacen(pattern, replacement, 1)
+    )
+}
+
 #[test]
 fn fragment_import_remaps_nested_note_references_and_companion_bindings() {
     let mut source = Document::new();
@@ -49283,9 +49301,21 @@ fn fragment_import_remaps_nested_note_references_and_companion_bindings() {
         .unwrap()
         .replacen("</w:comment>", &format!("{comment_binding}</w:comment>"), 1);
     package.set_part("/word/comments.xml", comments.into_bytes());
-    let footnotes = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap()
-        .replacen("<w:p>", &format!("<w:p><w:pPr><w:pStyle w:val=\"NoteOnly\"/><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"{list}\"/></w:numPr></w:pPr>"), 1)
-        .replacen("</w:footnote>", &format!("<w:p><w:r><w:footnoteReference w:id=\"{second}\"/><w:endnoteReference w:id=\"{endnote}\"/></w:r></w:p>{binding}{marker}<w:p>{anchors}</w:p></w:footnote>"), 1);
+    let footnotes = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap();
+    let footnotes = replace_in_first_note(
+        footnotes,
+        "<w:p>",
+        &format!(
+            "<w:p><w:pPr><w:pStyle w:val=\"NoteOnly\"/><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"{list}\"/></w:numPr></w:pPr>"
+        ),
+    );
+    let footnotes = replace_in_first_note(
+        &footnotes,
+        "</w:footnote>",
+        &format!(
+            "<w:p><w:r><w:footnoteReference w:id=\"{second}\"/><w:endnoteReference w:id=\"{endnote}\"/></w:r></w:p>{binding}{marker}<w:p>{anchors}</w:p></w:footnote>"
+        ),
+    );
     let offset = footnotes.find("second companion").unwrap();
     let footnotes = format!(
         "{}{}",
@@ -49659,9 +49689,11 @@ fn fragment_import_numbering_maps_do_not_cascade_across_companions() {
         ("/word/footnotes.xml", "</w:footnote>"),
         ("/word/comments.xml", "</w:comment>"),
     ] {
-        let xml = std::str::from_utf8(package.get_part(part).unwrap())
-            .unwrap()
-            .replacen(end, &format!("{numbered}{end}"), 1);
+        let xml = replace_in_first_note(
+            std::str::from_utf8(package.get_part(part).unwrap()).unwrap(),
+            end,
+            &format!("{numbered}{end}"),
+        );
         package.set_part(part, xml.into_bytes());
     }
     let mut bytes = std::io::Cursor::new(Vec::new());
@@ -49848,16 +49880,14 @@ fn fragment_import_store_allocation_reserves_incoming_companion_identities() {
             1,
         );
     package.set_part("/word/document.xml", xml.into_bytes());
-    let xml = std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap())
-        .unwrap()
-        .replacen(
-            "</w:footnote>",
-            &format!(
-                "{}</w:footnote>",
-                binding("f2760000-0000-4000-8000-000000000001", "second store")
-            ),
-            1,
-        );
+    let xml = replace_in_first_note(
+        std::str::from_utf8(package.get_part("/word/footnotes.xml").unwrap()).unwrap(),
+        "</w:footnote>",
+        &format!(
+            "{}</w:footnote>",
+            binding("f2760000-0000-4000-8000-000000000001", "second store")
+        ),
+    );
     package.set_part("/word/footnotes.xml", xml.into_bytes());
     for (ordinal, id) in [(1, original), (2, companion)] {
         let item = format!("/customXml/itemF276{ordinal}.xml");
@@ -49982,7 +50012,13 @@ fn rich_merge_rejects_companion_external_edges_while_fragment_import_preserves_t
             oxml_opc::relationship::rel_types::HYPERLINK,
             "https://example.test/companion",
         );
-        let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap().replacen("</w:p>", &format!(r#"<w:hyperlink xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="{id}"><w:r><w:t>companion link</w:t></w:r></w:hyperlink></w:p>"#), 1);
+        let xml = replace_in_first_note(
+            std::str::from_utf8(package.get_part(part).unwrap()).unwrap(),
+            "</w:p>",
+            &format!(
+                r#"<w:hyperlink xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="{id}"><w:r><w:t>companion link</w:t></w:r></w:hyperlink></w:p>"#
+            ),
+        );
         package.set_part(part, xml.into_bytes());
         let mut bytes = std::io::Cursor::new(Vec::new());
         package.write_to(&mut bytes).unwrap();
@@ -401728,7 +401764,8 @@ fn fx201_rich_related_paragraphs_and_note_boundaries_publish_atomically() {
             "checked note",
         )
         .unwrap();
-    assert_eq!(document.footnotes(), vec![(id, "checked note".to_owned())]);
+    // The space run Word writes after the note's reference mark.
+    assert_eq!(document.footnotes(), vec![(id, " checked note".to_owned())]);
     assert_eq!(document.paragraphs()[0].text(), "body");
     let before = document.to_bytes().unwrap();
     let body = document.paragraph_story_location(0).unwrap().unwrap();
@@ -401745,7 +401782,7 @@ fn fx201_rich_related_paragraphs_and_note_boundaries_publish_atomically() {
     );
     assert_eq!(document.to_bytes().unwrap(), before);
     let mut reopened = Document::from_bytes(&before).unwrap();
-    assert_eq!(reopened.footnotes(), vec![(id, "checked note".to_owned())]);
+    assert_eq!(reopened.footnotes(), vec![(id, " checked note".to_owned())]);
     reopened.remove_footnote(id).unwrap();
     assert!(reopened.footnotes().is_empty());
     assert_eq!(reopened.paragraphs()[0].text(), "body");
@@ -409103,5 +409140,363 @@ fn issue435_bookmarks_sharing_an_id_open_and_render() {
         opened.add_paragraph("New");
         let reopened = Document::from_bytes(&opened.to_bytes().unwrap()).unwrap();
         assert!(reopened.text().contains("New"));
+    }
+}
+
+#[test]
+fn issue432_a_square_root_equation_writes_the_degree_its_schema_requires() {
+    let mut document = Document::new();
+    let sources = [
+        rdocx::equation_from_latex(r"\sqrt{x}").unwrap().value,
+        rdocx::equation_from_latex(r"\sqrt[3]{x}").unwrap().value,
+        rdocx::equation_from_mathml(
+            r#"<math xmlns="http://www.w3.org/1998/Math/MathML"><msqrt><mi>x</mi></msqrt></math>"#,
+        )
+        .unwrap()
+        .value,
+    ];
+    for source in sources {
+        document
+            .add_paragraph("")
+            .add_equation(rdocx::OfficeMath::inline(source.expressions))
+            .unwrap();
+    }
+    let xml = document.part_xml("/word/document.xml").unwrap();
+    let radicals = xml
+        .match_indices("<m:rad>")
+        .map(|(at, _)| &xml[at..])
+        .collect::<Vec<_>>();
+    assert_eq!(radicals.len(), 3, "{xml}");
+    for (index, radical) in radicals.into_iter().enumerate() {
+        let radical = &radical[..radical.find("</m:rad>").unwrap()];
+        let properties_end = radical.find("</m:radPr>").unwrap() + "</m:radPr>".len();
+        assert!(
+            radical[properties_end..].starts_with("<m:deg"),
+            "radical {index}: {radical}"
+        );
+    }
+    let square = &xml[xml.find("<m:rad>").unwrap()..];
+    assert!(
+        square.contains(r#"<m:degHide m:val="1"/></m:radPr><m:deg></m:deg><m:e>"#),
+        "{square}"
+    );
+}
+
+#[test]
+fn issue432_notes_write_the_mark_run_properties_first_with_separators_and_a_space() {
+    let mut document = Document::new();
+    document.add_paragraph("Body text");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    assert_eq!(
+        document.create_footnote(&location, "Source note").unwrap(),
+        2
+    );
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    assert_eq!(document.create_endnote(&location, "End note").unwrap(), 2);
+    for (part, tag) in [
+        ("/word/footnotes.xml", "footnote"),
+        ("/word/endnotes.xml", "endnote"),
+    ] {
+        let xml = document.part_xml(part).unwrap();
+        let reference = if tag == "footnote" {
+            "FootnoteReference"
+        } else {
+            "EndnoteReference"
+        };
+        let note = &xml[xml.find(&format!(r#"<w:{tag} w:id="2""#)).expect("note 2")..];
+        let note = &note[..note.find(&format!("</w:{tag}>")).unwrap()];
+        let mark = format!(
+            r#"<w:p><w:r><w:rPr><w:rStyle w:val="{reference}"/></w:rPr><w:{tag}Ref/></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r>"#
+        );
+        assert!(note.contains(&mark), "{xml}");
+        assert!(
+            xml.contains(&format!(r#"<w:{tag} w:type="separator" w:id="-1""#))
+                && xml.contains("<w:separator/>"),
+            "{xml}"
+        );
+        assert!(
+            xml.contains(&format!(
+                r#"<w:{tag} w:type="continuationSeparator" w:id="0""#
+            )) && xml.contains("<w:continuationSeparator/>"),
+            "{xml}"
+        );
+    }
+    // A second note neither adds separators again nor moves the first.
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    assert_eq!(document.create_footnote(&location, "Second").unwrap(), 3);
+    let xml = document.part_xml("/word/footnotes.xml").unwrap();
+    assert_eq!(xml.matches(r#"w:type="separator""#).count(), 1, "{xml}");
+    assert_eq!(
+        xml.matches(r#"w:type="continuationSeparator""#).count(),
+        1,
+        "{xml}"
+    );
+}
+
+#[test]
+fn issue432_links_written_by_rdocx_take_the_hyperlink_character_style() {
+    let link_runs = |document: &Document| {
+        let xml = document.part_xml("/word/document.xml").unwrap();
+        xml.match_indices("<w:hyperlink ")
+            .map(|(at, _)| {
+                let link = &xml[at..];
+                link[..link.find("</w:hyperlink>").unwrap()].to_owned()
+            })
+            .collect::<Vec<_>>()
+    };
+    let styled = r#"<w:rStyle w:val="Hyperlink"/>"#;
+
+    // A heading link adds the built-in style the document lacks.
+    let mut document = Document::new();
+    document.add_paragraph("Target").style("Heading1");
+    document.add_paragraph("See ");
+    let heading = document.paragraph_story_location(0).unwrap().unwrap();
+    let source = document.paragraph_story_location(1).unwrap().unwrap();
+    document
+        .add_heading_hyperlink_at(&source, &heading, "Target", None)
+        .unwrap();
+    let links = link_runs(&document);
+    assert!(links.len() == 1 && links[0].contains(styled), "{links:?}");
+    let style = document
+        .style("Hyperlink")
+        .expect("built-in Hyperlink style");
+    assert_eq!(style.style_type(), StyleType::Character);
+    let styles = document.part_xml("/word/styles.xml").unwrap();
+    assert!(
+        styles.contains(r#"<w:color w:val="0563C1"/>"#)
+            && styles.contains(r#"<w:u w:val="single"/>"#),
+        "{styles}"
+    );
+
+    // Markdown and HTML links, with a template whose style is kept, and an
+    // external link appended to a story.
+    let mut template = Document::new();
+    template
+        .add_style(StyleBuilder::character("Hyperlink", "Hyperlink").color("FF0000"))
+        .unwrap();
+    let markdown = Document::from_markdown_with_options(
+        "See [the site](https://example.com).",
+        Some(&template),
+        &[],
+    )
+    .unwrap()
+    .document;
+    let html =
+        Document::from_html(r#"<p>See <a href="https://example.com">the site</a>.</p>"#).unwrap();
+    let mut story = Document::new();
+    let body = f254_story(&story, StoryKind::Body);
+    story
+        .add_hyperlink_to_story(&body, "the site", "https://example.com")
+        .unwrap();
+    for (label, document) in [
+        ("markdown", &markdown),
+        ("html", &html.document),
+        ("story", &story),
+    ] {
+        let links = link_runs(document);
+        assert!(
+            !links.is_empty() && links.iter().all(|link| link.contains(styled)),
+            "{label}: {links:?}"
+        );
+    }
+    let styles = markdown.part_xml("/word/styles.xml").unwrap();
+    assert_eq!(
+        styles.matches(r#"w:styleId="Hyperlink""#).count(),
+        1,
+        "{styles}"
+    );
+    assert!(styles.contains(r#"<w:color w:val="FF0000"/>"#), "{styles}");
+}
+
+#[test]
+fn issue432_merging_with_an_empty_cell_keeps_no_blank_paragraph() {
+    let cases = [
+        (
+            "second cell empty",
+            (1, 2),
+            Some("Total"),
+            None,
+            vec!["Total"],
+        ),
+        ("first cell empty", (1, 2), None, Some("Sum"), vec!["Sum"]),
+        (
+            "both with text",
+            (1, 2),
+            Some("Total"),
+            Some("Sum"),
+            vec!["Total", "Sum"],
+        ),
+        ("both empty", (1, 2), None, None, vec![""]),
+        (
+            "vertical, second cell empty",
+            (2, 1),
+            Some("Total"),
+            None,
+            vec!["Total"],
+        ),
+    ];
+    for (label, (rows, columns), first, second, expected) in cases {
+        let mut document = Document::new();
+        let other = if columns == 2 { (0, 1) } else { (1, 0) };
+        {
+            let mut table = document.add_table(rows, columns);
+            if let Some(text) = first {
+                table.cell(0, 0).unwrap().set_text(text);
+            }
+            if let Some(text) = second {
+                table.cell(other.0, other.1).unwrap().set_text(text);
+            }
+            table.merge_cells((0, 0), other).unwrap();
+        }
+        let table = document.table(0).unwrap();
+        let cell = table.cell(0, 0).unwrap();
+        let texts = cell.paragraphs().map(|p| p.text()).collect::<Vec<_>>();
+        assert_eq!(texts, expected, "{label}");
+    }
+}
+
+#[test]
+fn issue432_cells_added_by_insert_column_and_add_row_keep_paragraph_formatting() {
+    let mut document = Document::new();
+    {
+        let mut table = document.add_table(2, 2);
+        for row in 0..2 {
+            for column in 0..2 {
+                let mut cell = table.cell(row, column).unwrap();
+                cell.set_text(&format!("r{row}c{column}"));
+                cell.set_shading("D9E2F3");
+                let mut paragraph = cell.paragraph_mut(0).unwrap();
+                paragraph.set_alignment(Alignment::Center);
+                paragraph.run_mut(0).unwrap().set_bold(true);
+            }
+        }
+        table.insert_column(1, false, None).unwrap();
+        table.add_row().unwrap();
+    }
+    let xml = document.part_xml("/word/document.xml").unwrap();
+    let cells = xml
+        .match_indices("<w:tc>")
+        .map(|(at, _)| {
+            let cell = &xml[at..];
+            &cell[..cell.find("</w:tc>").unwrap()]
+        })
+        .collect::<Vec<_>>();
+    // Three columns and three rows: (0, 2) comes from the column, (2, 1) from the row.
+    assert_eq!(cells.len(), 9, "{xml}");
+    for (label, cell) in [("inserted column", cells[2]), ("added row", cells[7])] {
+        assert!(cell.contains(r#"w:fill="D9E2F3""#), "{label}: {cell}");
+        assert!(
+            cell.contains(r#"<w:pPr><w:jc w:val="center"/><w:rPr><w:b/><w:bCs/></w:rPr></w:pPr>"#),
+            "{label}: {cell}"
+        );
+        assert!(!cell.contains("<w:r>"), "{label} holds no text: {cell}");
+    }
+}
+
+#[test]
+fn issue432_a_numbering_definition_id_names_its_definition_after_a_republishing_edit() {
+    let mut document = Document::new();
+    let bullets = document
+        .add_numbering_definition(&[ListLevel::bullet()])
+        .unwrap();
+    let numbers = document
+        .add_numbering_definition(&[ListLevel::decimal()])
+        .unwrap();
+    let numbered = document.add_numbering_instance(numbers, &[]).unwrap();
+    document
+        .add_paragraph("numbered item")
+        .numbering(numbered, 0);
+    let bulleted = document.add_numbering_instance(bullets, &[]).unwrap();
+    document.add_paragraph("bullet item").numbering(bulleted, 0);
+    // A footnote publishes the package again, as a picture does.
+    document.add_paragraph("text");
+    let location = document.paragraph_story_location(2).unwrap().unwrap();
+    document.create_footnote(&location, "a note").unwrap();
+    let later = document.add_numbering_instance(bullets, &[]).unwrap();
+    let definition = |instance: u32| {
+        document
+            .numbering_instance(instance)
+            .expect("numbering instance")
+            .definition_id
+    };
+    assert_eq!(definition(bulleted), bullets);
+    assert_eq!(definition(numbered), numbers);
+    assert_eq!(definition(later), bullets);
+    // The saved package renumbers by first use, and each list keeps its format.
+    document.add_paragraph("later bullet").numbering(later, 0);
+    let body = document.part_xml("/word/document.xml").unwrap();
+    let numbering = document.part_xml("/word/numbering.xml").unwrap();
+    let attribute = |xml: &str, from: usize, name: &str| {
+        let at = from + xml[from..].find(name).unwrap() + name.len();
+        xml[at..at + xml[at..].find('"').unwrap()].to_owned()
+    };
+    let format = |text: &str| {
+        let paragraph = body[..body.find(&format!("<w:t>{text}</w:t>")).unwrap()]
+            .rfind("<w:p>")
+            .unwrap();
+        let num = attribute(&body, paragraph, r#"<w:numId w:val=""#);
+        let instance = numbering
+            .find(&format!(r#"<w:num w:numId="{num}">"#))
+            .unwrap();
+        let definition = attribute(&numbering, instance, r#"<w:abstractNumId w:val=""#);
+        let start = numbering
+            .find(&format!(r#"<w:abstractNum w:abstractNumId="{definition}""#))
+            .unwrap();
+        attribute(&numbering, start, r#"<w:numFmt w:val=""#)
+    };
+    assert_eq!(format("numbered item"), "decimal", "{numbering}");
+    assert_eq!(format("bullet item"), "bullet", "{numbering}");
+    assert_eq!(format("later bullet"), "bullet", "{numbering}");
+}
+
+#[test]
+fn issue432_a_toc_inserted_before_any_heading_rebuilds_once_headings_exist() {
+    let mut document = Document::new();
+    document.add_paragraph("Contents");
+    document.insert_toc(1, 3).unwrap();
+    document.add_paragraph("Introduction").style("Heading1");
+    document.add_paragraph("Body text.");
+    document.add_paragraph("Methods").style("Heading1");
+    let report = document.rebuild_toc().unwrap();
+    assert_eq!(report.entry_count, 2, "{report:?}");
+    let xml = document.part_xml("/word/document.xml").unwrap();
+    let introduction = xml.find(r#"<w:t>Introduction</w:t>"#).unwrap();
+    let methods = xml.find(r#"<w:t>Methods</w:t>"#).unwrap();
+    assert!(xml[..introduction].contains(r#"w:anchor="_Toc"#), "{xml}");
+    assert!(introduction < methods, "{xml}");
+}
+
+#[test]
+fn issue432_literal_replacement_leaves_chart_labels_to_their_workbook() {
+    let mut document = Document::new();
+    document.add_paragraph("Sales in the North region rose.");
+    document
+        .add_chart(
+            ChartKind::Bar,
+            Length::inches(4.0),
+            Length::inches(3.0),
+            &ChartData {
+                categories: vec!["North".to_owned(), "South".to_owned()],
+                series: vec![("Sales".to_owned(), vec![3.0, 4.0])],
+                number_format: None,
+                ..ChartData::default()
+            },
+        )
+        .unwrap();
+    let charts_before = document
+        .part_names()
+        .unwrap()
+        .into_iter()
+        .filter(|name| name.starts_with("/word/charts/"))
+        .map(|name| (name.clone(), document.part_xml(&name).unwrap()))
+        .collect::<Vec<_>>();
+    assert!(!charts_before.is_empty());
+    assert_eq!(document.try_replace_text("North", "NORTH").unwrap(), 1);
+    assert_eq!(
+        document.paragraph(0).unwrap().text(),
+        "Sales in the NORTH region rose."
+    );
+    for (name, before) in charts_before {
+        assert_eq!(document.part_xml(&name).unwrap(), before, "{name}");
     }
 }

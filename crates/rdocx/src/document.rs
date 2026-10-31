@@ -15222,6 +15222,39 @@ pub(crate) fn set_story_source_xml(
     Ok(())
 }
 
+/// The separator and continuation separator a new notes part starts with, at
+/// the ids Word 2010 and later write. Ids from 2 stay free for notes, as before.
+fn word_note_separators() -> [rdocx_oxml::footnotes::CT_Footnote; 2] {
+    use rdocx_oxml::footnotes::{CT_Footnote, NoteType};
+    let entry = |id, note_type, mark: &[u8]| {
+        let mut run = CT_R::new("");
+        run.content.clear();
+        run.extra_xml.push(mark.to_vec());
+        run.extra_xml_positions.push(0);
+        let mut paragraph = CT_P::new();
+        paragraph.properties = Some(CT_PPr {
+            space_after: Some(Twips(0)),
+            line_spacing: Some(Twips(240)),
+            line_rule: Some("auto".into()),
+            ..Default::default()
+        });
+        paragraph.runs.push(run);
+        CT_Footnote {
+            id,
+            note_type,
+            paragraphs: vec![paragraph],
+        }
+    };
+    [
+        entry(-1, NoteType::Separator, b"<w:separator/>"),
+        entry(
+            0,
+            NoteType::ContinuationSeparator,
+            b"<w:continuationSeparator/>",
+        ),
+    ]
+}
+
 fn serialized_note_fragment(
     note: &rdocx_oxml::footnotes::CT_Footnote,
     kind: StoryKind,
@@ -22566,7 +22599,6 @@ impl Document {
 
     fn canonicalize_typed_identifiers(&mut self) -> Result<()> {
         self.canonicalize_bookmark_ids()?;
-        self.canonicalize_numbering_ids()?;
         Ok(())
     }
 
@@ -22680,6 +22712,12 @@ impl Document {
         Ok(())
     }
 
+    /// Renumber authored numbering definitions and instances by first use in
+    /// the body, for a package that equivalent construction orders write
+    /// identically. Only the output paths run it, on their staged copy: the
+    /// ids `add_numbering_definition` and `add_numbering_instance` return
+    /// are handles the caller holds, and a mutation that publishes its
+    /// reopened candidate must not renumber them under the caller.
     fn canonicalize_numbering_ids(&mut self) -> Result<()> {
         let Some(numbering) = self.numbering.as_ref() else {
             return Ok(());
@@ -25061,6 +25099,7 @@ impl Document {
                 .as_ref()
                 != Some(comments);
         }
+        self.canonicalize_numbering_ids()?;
         self.prepare_staged_package()
     }
 
@@ -29749,9 +29788,12 @@ impl Document {
             .ok_or_else(|| Error::Other("hyperlink story disappeared".into()))?;
         let refreshed =
             ContentLocation::new(story, location.item_kind, location.index_path.clone());
+        let link_style = self.ensure_hyperlink_style()?;
         let run_index = self.edit_story_paragraph(&refreshed, |paragraph| {
             let index = paragraph.run_count();
-            paragraph.add_internal_hyperlink(text, bookmark, tooltip);
+            paragraph
+                .add_internal_hyperlink(text, bookmark, tooltip)
+                .set_style(&link_style);
             Ok(index)
         })?;
         let story = self
@@ -29973,11 +30015,13 @@ impl Document {
         let owner = story.part_name.clone();
         let relationship_id =
             candidate.add_external_relationship_checked(&owner, rel_types::HYPERLINK, url)?;
+        let link_style = candidate.ensure_hyperlink_style()?;
         let mut paragraph = CT_P::new();
         crate::Paragraph {
             inner: &mut paragraph,
         }
-        .add_hyperlink(text, &relationship_id);
+        .add_hyperlink(text, &relationship_id)
+        .set_style(&link_style);
         paragraph
             .hyperlinks
             .last_mut()
@@ -32734,6 +32778,46 @@ impl Document {
         Ok(())
     }
 
+    /// The ID of the character style that marks hyperlink text, which links
+    /// rdocx writes take, as Word gives the runs of a link it inserts.
+    ///
+    /// A character style with the ID `Hyperlink`, or else one named
+    /// `Hyperlink`, is used as it is. Without one, Word's built-in Hyperlink
+    /// style (colour `0563C1`, single underline) is added.
+    pub fn ensure_hyperlink_style(&mut self) -> Result<String> {
+        let character = |style: &&rdocx_oxml::styles::CT_Style| {
+            style.style_type == StyleType::Character && !style.style_id.is_empty()
+        };
+        let existing = self
+            .styles
+            .styles
+            .iter()
+            .filter(character)
+            .find(|style| style.style_id == "Hyperlink")
+            .or_else(|| {
+                self.styles.styles.iter().filter(character).find(|style| {
+                    style
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| name.trim().eq_ignore_ascii_case("Hyperlink"))
+                })
+            });
+        if let Some(style) = existing {
+            return Ok(style.style_id.clone());
+        }
+        self.add_style(
+            StyleBuilder::character("Hyperlink", "Hyperlink")
+                .priority(99)
+                .unhide_when_used(true)
+                .run_properties(CT_RPr {
+                    color: Some("0563C1".into()),
+                    underline: Some(rdocx_oxml::shared::ST_Underline::Single),
+                    ..Default::default()
+                }),
+        )?;
+        Ok("Hyperlink".to_owned())
+    }
+
     /// The character style IDs that mark hyperlink text: the built-in
     /// Hyperlink and FollowedHyperlink styles, by ID and by name.
     fn hyperlink_character_style_ids(&self) -> HashSet<String> {
@@ -33330,10 +33414,15 @@ impl Document {
             ..Default::default()
         });
         note_marker.content.clear();
+        // After the typed `w:rPr`, which `CT_R` wants first.
         note_marker.extra_xml.push(b"<w:footnoteRef/>".to_vec());
-        note_marker.extra_xml_positions.push(0);
+        note_marker.extra_xml_positions.push(1);
         paragraph.runs.push(note_marker);
+        paragraph.add_run(" ");
         paragraph.add_run(text);
+        if candidate.footnotes.footnotes.is_empty() {
+            candidate.footnotes.footnotes = word_note_separators().to_vec();
+        }
         candidate
             .footnotes
             .footnotes
@@ -33438,18 +33527,25 @@ impl Document {
             ..Default::default()
         });
         note_marker.content.clear();
+        // After the typed `w:rPr`, which `CT_R` wants first.
         note_marker.extra_xml.push(b"<w:endnoteRef/>".to_vec());
-        note_marker.extra_xml_positions.push(0);
+        note_marker.extra_xml_positions.push(1);
         paragraph.runs.push(note_marker);
+        paragraph.add_run(" ");
         paragraph.add_run(text);
         let note = rdocx_oxml::footnotes::CT_Footnote {
             id,
             note_type: rdocx_oxml::footnotes::NoteType::Normal,
             paragraphs: vec![paragraph],
         };
-        let fragment = serialized_note_fragment(&note, StoryKind::Endnote)?;
-        let updated =
-            append_story_fragments_to_root(&source, b"endnotes", b"endnote", &[fragment])?;
+        let mut fragments = Vec::new();
+        if existing.footnotes.is_empty() {
+            for separator in &word_note_separators() {
+                fragments.push(serialized_note_fragment(separator, StoryKind::Endnote)?);
+            }
+        }
+        fragments.push(serialized_note_fragment(&note, StoryKind::Endnote)?);
+        let updated = append_story_fragments_to_root(&source, b"endnotes", b"endnote", &fragments)?;
         set_story_source_xml(&mut candidate, &part_name, updated)?;
         candidate.invalidate_layout();
         let mut run = CT_R::new("");
@@ -43788,6 +43884,11 @@ impl Document {
 
             toc_paragraphs.push(p);
         }
+        if headings.is_empty() {
+            // The field still ends in a paragraph of its own, an empty one
+            // here, so `rebuild_toc` can fill it once headings exist.
+            toc_paragraphs.push(CT_P::new());
+        }
 
         let field_run = |xml: String| {
             let mut run = CT_R::new("");
@@ -43878,8 +43979,9 @@ impl Document {
     ///
     /// Searches body paragraphs, tables (including nested), headers, footers,
     /// footnotes, endnotes, the text boxes of the body, headers and footers,
-    /// and the chart labels of the body, and the content controls at every
-    /// level of them, inline controls included. It reads the text
+    /// and the content controls at every level of them, inline controls
+    /// included. Chart labels are not searched: they are a cache of the
+    /// chart's embedded workbook, which `rdocx text` does not show. It reads the text
     /// [`crate::Paragraph::text`] reads: the text of a tracked insertion or
     /// move destination, replaced inside that revision, and not deleted or
     /// moved-away text. A text box inside a deleted run is the exception, as
@@ -44951,8 +45053,8 @@ impl Document {
     /// Replace all regex matches with `replacement` throughout the document.
     ///
     /// The `replacement` string supports capture groups: `$1`, `$2`, etc.
-    /// Searches the stories [`Self::replace_text`] searches, except chart
-    /// labels: body paragraphs, tables (including nested), headers, footers,
+    /// Searches the stories [`Self::replace_text`] searches: body
+    /// paragraphs, tables (including nested), headers, footers,
     /// footnotes, endnotes and text boxes, the content controls at every level
     /// of them and the text of tracked insertions. Returns the total number of replacements made, or an error if the
     /// regex is invalid.
@@ -45282,12 +45384,11 @@ impl Document {
     }
 
     /// Run raw XML replacement on the text boxes of the body, header and footer
-    /// parts, on the chart parts, and on the notes of the footnotes and
-    /// endnotes parts.
+    /// parts, and on the notes of the footnotes and endnotes parts.
     ///
     /// This is called after the typed-model replacement and flush_to_package.
     fn replace_in_xml_parts(&mut self, pairs: &[(&str, &str)]) -> usize {
-        use rdocx_oxml::placeholder::{replace_many_in_chart_xml, replace_many_in_xml_part};
+        use rdocx_oxml::placeholder::replace_many_in_xml_part;
 
         let mut count = 0;
         let mut changed = false;
@@ -45301,20 +45402,6 @@ impl Document {
                 // writes twice.
                 if let Ok((new_xml, n)) = replace_many_in_xml_part(&xml, pairs)
                     && (n > 0 || new_xml != xml)
-                {
-                    self.package.set_part(&part_name, new_xml);
-                    count += n;
-                    changed = true;
-                }
-            }
-        }
-
-        // Collect chart part names
-        for part_name in self.chart_part_names() {
-            if let Some(xml) = self.package.get_part(&part_name) {
-                let xml = xml.to_vec();
-                if let Ok((new_xml, n)) = replace_many_in_chart_xml(&xml, pairs)
-                    && n > 0
                 {
                     self.package.set_part(&part_name, new_xml);
                     count += n;
