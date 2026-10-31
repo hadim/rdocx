@@ -20859,6 +20859,350 @@ fn relationship_requires_xml_reference(relationship_type: &str) -> bool {
         || relationship_type.ends_with("/diagramData")
 }
 
+/// Validates a presentation file: the package as stored, which a save keeps
+/// for every part it does not change, then [`Presentation::validate`].
+///
+/// The stored package is checked for XML parts that are not well-formed,
+/// slide parts whose content type is not their own, `presentation.xml`
+/// children out of the schema's order, unknown shape tree children, a
+/// `p:cNvPr` without its required `id` or `name`, and table rows that hold
+/// another number of cells than the grid has columns. A package that does
+/// not open returns its error, unless these checks explain it.
+pub fn validate_presentation_file(path: impl AsRef<Path>) -> Result<Vec<ValidationIssue>> {
+    let bytes = std::fs::read(path).map_err(OpcError::from)?;
+    let package = OpcPackage::from_reader(Cursor::new(bytes.as_slice()))?;
+    let mut issues = stored_package_issues(&package);
+    match Presentation::from_read_package(package) {
+        Ok(presentation) => {
+            for issue in presentation.validate() {
+                if !issues.contains(&issue) {
+                    issues.push(issue);
+                }
+            }
+            Ok(issues)
+        }
+        Err(_) if !issues.is_empty() => Ok(issues),
+        Err(error) => Err(error),
+    }
+}
+
+/// The content type each PresentationML relationship's target must have.
+const STORED_PART_CONTENT_TYPES: [(&str, &str); 6] = [
+    (rel_types::SLIDE, content_types::SLIDE),
+    (rel_types::SLIDE_LAYOUT, content_types::SLIDE_LAYOUT),
+    (rel_types::SLIDE_MASTER, content_types::SLIDE_MASTER),
+    (rel_types::NOTES_SLIDE, content_types::NOTES_SLIDE),
+    (rel_types::NOTES_MASTER, content_types::NOTES_MASTER),
+    (rel_types::HANDOUT_MASTER, content_types::HANDOUT_MASTER),
+];
+
+/// The `p:` children of `p:presentation`, in `CT_Presentation` order.
+const PRESENTATION_CHILD_ORDER: [&str; 15] = [
+    "sldMasterIdLst",
+    "notesMasterIdLst",
+    "handoutMasterIdLst",
+    "sldIdLst",
+    "sldSz",
+    "notesSz",
+    "smartTags",
+    "embeddedFontLst",
+    "custShowLst",
+    "photoAlbum",
+    "custDataLst",
+    "kinsoku",
+    "defaultTextStyle",
+    "modifyVerifier",
+    "extLst",
+];
+
+/// The `p:` children a shape tree or a group admits (`CT_GroupShape`).
+const SHAPE_TREE_CHILDREN: [&str; 9] = [
+    "nvGrpSpPr",
+    "grpSpPr",
+    "sp",
+    "grpSp",
+    "graphicFrame",
+    "cxnSp",
+    "pic",
+    "contentPart",
+    "extLst",
+];
+
+fn stored_package_issues(package: &OpcPackage) -> Vec<ValidationIssue> {
+    let mut issues = Vec::new();
+    let mut part_names = package.parts.keys().collect::<Vec<_>>();
+    part_names.sort_unstable();
+    let mut malformed = HashSet::new();
+    for part_name in part_names {
+        let is_xml = package
+            .content_types
+            .content_type_for(part_name)
+            .is_some_and(|content_type| content_type.to_ascii_lowercase().ends_with("xml"));
+        let Some(xml) = package.get_part(part_name).filter(|_| is_xml) else {
+            continue;
+        };
+        if let Some(message) = stored_xml_fault(xml) {
+            malformed.insert(part_name.as_str());
+            issues.push(ValidationIssue::InvalidXmlChild {
+                part: part_name.clone(),
+                path: "/".to_owned(),
+                message: format!("the part is not well-formed XML: {message}"),
+            });
+        }
+    }
+
+    let mut slide_parts = Vec::new();
+    let mut owners = package.part_rels.iter().collect::<Vec<_>>();
+    owners.sort_unstable_by_key(|(owner, _)| owner.as_str());
+    for (owner, relationships) in owners {
+        for relationship in &relationships.items {
+            let Some((_, expected)) = STORED_PART_CONTENT_TYPES
+                .iter()
+                .find(|(rel_type, _)| relationship.rel_type == *rel_type)
+            else {
+                continue;
+            };
+            if relationship_is_external(relationship) {
+                continue;
+            }
+            let target = OpcPackage::resolve_rel_target(owner, &relationship.target);
+            if package.get_part(&target).is_none() {
+                continue;
+            }
+            if package.content_types.content_type_for(&target) != Some(*expected) {
+                let issue = ValidationIssue::MissingContentTypeOverride {
+                    part: target.clone(),
+                };
+                if !issues.contains(&issue) {
+                    issues.push(issue);
+                }
+            }
+            if !slide_parts.contains(&target) {
+                slide_parts.push(target);
+            }
+        }
+    }
+
+    if let Some(part) = package
+        .main_document_part()
+        .filter(|part| !malformed.contains(part.as_str()))
+        && let Some(xml) = package.get_part(&part)
+    {
+        stored_presentation_order(&part, xml, &mut issues);
+    }
+    slide_parts.sort_unstable();
+    for part in slide_parts {
+        if let Some(xml) = package
+            .get_part(&part)
+            .filter(|_| !malformed.contains(part.as_str()))
+        {
+            stored_slide_part_issues(&part, xml, &mut issues);
+        }
+    }
+    issues
+}
+
+/// Why a stored XML part is not well-formed, if it is not: a parser error,
+/// more or fewer than one root element, an element left open, or a literal
+/// character XML 1.0 forbids. A UTF-16 part is only parsed.
+fn stored_xml_fault(xml: &[u8]) -> Option<String> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut depth = 0usize;
+    let mut roots = 0usize;
+    loop {
+        match reader.read_event() {
+            Err(error) => return Some(format!("{error} at byte {}", reader.error_position())),
+            Ok(XmlEvent::Start(_)) => {
+                roots += usize::from(depth == 0);
+                depth += 1;
+            }
+            Ok(XmlEvent::Empty(_)) => roots += usize::from(depth == 0),
+            Ok(XmlEvent::End(_)) => depth = depth.saturating_sub(1),
+            Ok(XmlEvent::Eof) => break,
+            Ok(_) => {}
+        }
+    }
+    if roots != 1 {
+        return Some(format!("the part has {roots} root elements"));
+    }
+    if depth != 0 {
+        return Some(format!("the part ends inside {depth} unclosed element(s)"));
+    }
+    if xml.starts_with(&[0xFF, 0xFE]) || xml.starts_with(&[0xFE, 0xFF]) {
+        return None;
+    }
+    let error = oxml_core::xml::validate_strict_xml_1_0(xml).err()?;
+    let text = String::from_utf8_lossy(xml);
+    Some(
+        match text
+            .char_indices()
+            .find(|(_, character)| !oxml_core::xml::is_xml_1_0_character(*character))
+        {
+            Some((offset, character)) => format!(
+                "it holds U+{:04X}, a character XML 1.0 forbids, at byte {offset}",
+                u32::from(character)
+            ),
+            None => format!("{error:?}"),
+        },
+    )
+}
+
+/// Reports `p:presentation` children out of the `CT_Presentation` order.
+fn stored_presentation_order(part: &str, xml: &[u8], issues: &mut Vec<ValidationIssue>) {
+    let mut reader = NsReader::from_reader(xml);
+    let mut depth = 0usize;
+    let mut last: Option<(usize, String)> = None;
+    let mut buffer = Vec::new();
+    while let Ok((namespace, event)) = reader.read_resolved_event_into(&mut buffer) {
+        let is_presentation = matches!(namespace, XmlResolveResult::Bound(XmlNamespace(uri)) if uri == P_NS.as_bytes());
+        match event {
+            XmlEvent::Start(ref element) | XmlEvent::Empty(ref element) => {
+                if depth == 1 && is_presentation {
+                    let local = String::from_utf8_lossy(element.local_name().as_ref()).into_owned();
+                    match PRESENTATION_CHILD_ORDER
+                        .iter()
+                        .position(|name| *name == local)
+                    {
+                        Some(rank) => {
+                            if let Some((last_rank, last_name)) = &last
+                                && rank < *last_rank
+                            {
+                                issues.push(ValidationIssue::InvalidXmlChild {
+                                    part: part.to_owned(),
+                                    path: "/p:presentation".to_owned(),
+                                    message: format!(
+                                        "p:{local} follows p:{last_name}, out of the schema's order"
+                                    ),
+                                });
+                            }
+                            last = Some((rank, local));
+                        }
+                        None => issues.push(ValidationIssue::InvalidXmlChild {
+                            part: part.to_owned(),
+                            path: "/p:presentation".to_owned(),
+                            message: format!("p:{local} is not allowed in p:presentation"),
+                        }),
+                    }
+                }
+                if matches!(event, XmlEvent::Start(_)) {
+                    depth += 1;
+                }
+            }
+            XmlEvent::End(_) => depth = depth.saturating_sub(1),
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+/// One open element of a stored slide part.
+struct StoredElement {
+    name: String,
+    presentation: bool,
+    /// For an `a:tbl`, the `a:gridCol` count and the rows read so far.
+    table: Option<(usize, usize)>,
+    /// For an `a:tr`, the `a:tc` read so far.
+    cells: usize,
+}
+
+/// Reports unknown shape tree children, a `p:cNvPr` without its `id` or
+/// `name`, and a table row whose cell count differs from the grid's column
+/// count, in one stored slide, layout, master or notes part.
+fn stored_slide_part_issues(part: &str, xml: &[u8], issues: &mut Vec<ValidationIssue>) {
+    let mut stack: Vec<StoredElement> = Vec::new();
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let path = |stack: &[StoredElement]| {
+        stack
+            .iter()
+            .map(|element| format!("/{}", element.name))
+            .collect::<String>()
+    };
+    let mut issue = |stack: &[StoredElement], message: String| {
+        issues.push(ValidationIssue::InvalidXmlChild {
+            part: part.to_owned(),
+            path: path(stack),
+            message,
+        });
+    };
+    while let Ok((namespace, event)) = reader.read_resolved_event_into(&mut buffer) {
+        let presentation = matches!(namespace, XmlResolveResult::Bound(XmlNamespace(uri)) if uri == P_NS.as_bytes());
+        let drawing = matches!(namespace, XmlResolveResult::Bound(XmlNamespace(uri)) if uri == A_NS.as_bytes());
+        match event {
+            XmlEvent::Start(ref element) | XmlEvent::Empty(ref element) => {
+                let local = String::from_utf8_lossy(element.local_name().as_ref()).into_owned();
+                let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                let in_shape_tree = stack.last().is_some_and(|parent| {
+                    parent.presentation && matches!(local_part(&parent.name), "spTree" | "grpSp")
+                });
+                if presentation && in_shape_tree && !SHAPE_TREE_CHILDREN.contains(&local.as_str()) {
+                    issue(&stack, format!("{name} is not allowed in a shape tree"));
+                }
+                if presentation && local == "cNvPr" {
+                    for required in ["id", "name"] {
+                        if !element
+                            .attributes()
+                            .flatten()
+                            .any(|attribute| attribute.key.as_ref() == required.as_bytes())
+                        {
+                            issue(
+                                &stack,
+                                format!("{name} has no {required}, which the schema requires"),
+                            );
+                        }
+                    }
+                }
+                let table = stack.iter_mut().rev().find_map(|open| open.table.as_mut());
+                match (drawing, local.as_str(), table) {
+                    (true, "gridCol", Some(table)) => table.0 += 1,
+                    (true, "tr", Some(table)) => table.1 += 1,
+                    _ => {}
+                }
+                if drawing
+                    && local == "tc"
+                    && let Some(row) = stack
+                        .last_mut()
+                        .filter(|open| local_part(&open.name) == "tr")
+                {
+                    row.cells += 1;
+                }
+                if matches!(event, XmlEvent::Start(_)) {
+                    stack.push(StoredElement {
+                        name,
+                        presentation,
+                        table: (drawing && local == "tbl").then_some((0, 0)),
+                        cells: 0,
+                    });
+                }
+            }
+            XmlEvent::End(_) => {
+                if let Some(row) = stack.pop().filter(|open| local_part(&open.name) == "tr")
+                    && let Some((columns, rows)) = stack.iter().rev().find_map(|open| open.table)
+                    && row.cells != columns
+                {
+                    issue(
+                        &stack,
+                        format!(
+                            "table row {rows} holds {} a:tc for {columns} a:gridCol",
+                            row.cells
+                        ),
+                    );
+                }
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+fn local_part(qualified: &str) -> &str {
+    qualified
+        .rsplit_once(':')
+        .map_or(qualified, |(_, local)| local)
+}
+
 fn part_has_content_type(package: &OpcPackage, part_name: &str) -> bool {
     package.content_types.content_type_for(part_name).is_some()
         || part_name.rsplit_once('.').is_some_and(|(_, extension)| {
@@ -22463,7 +22807,7 @@ fn textbox_member(id: u32, left: Emu, top: Emu, width: Emu, height: Emu) -> Resu
     CT_Shape::new_textbox(
         id,
         &format!("TextBox {id}"),
-        positioned_transform(left, top, width, height),
+        sized_transform("add textbox", left, top, width, height)?,
     )
     .map(ShapeTreeChild::Shape)
     .map_err(|error| invalid_shape_construction("add textbox", error))
@@ -22481,7 +22825,7 @@ fn preset_member(
         id,
         &format!("Shape {id}"),
         preset,
-        positioned_transform(left, top, width, height),
+        sized_transform("add shape", left, top, width, height)?,
     )
     .map_err(|error| invalid_shape_construction("add shape", error))?;
     shape
@@ -22502,7 +22846,7 @@ fn unstyled_preset_member(
         id,
         &format!("Shape {id}"),
         preset,
-        positioned_transform(left, top, width, height),
+        sized_transform("add shape", left, top, width, height)?,
     )
     .map(ShapeTreeChild::Shape)
     .map_err(|error| invalid_shape_construction("add shape", error))
@@ -22840,6 +23184,27 @@ impl ConnectorType {
             Self::Curve => "curvedConnector3",
         }
     }
+}
+
+/// The transform of a new shape, refusing a negative width or height, which
+/// `a:ext` cannot carry (`ST_PositiveCoordinate`), as a new table refuses it.
+fn sized_transform(
+    operation: &'static str,
+    left: Emu,
+    top: Emu,
+    width: Emu,
+    height: Emu,
+) -> Result<CT_Transform2D> {
+    if width.0 < 0 || height.0 < 0 {
+        return Err(Error::InvalidShapeMutation {
+            operation,
+            message: format!(
+                "shape width and height must not be negative, got {} by {} EMU",
+                width.0, height.0
+            ),
+        });
+    }
+    Ok(positioned_transform(left, top, width, height))
 }
 
 fn positioned_transform(left: Emu, top: Emu, width: Emu, height: Emu) -> CT_Transform2D {

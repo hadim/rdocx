@@ -12526,3 +12526,21 @@ def test_issue389_empty_body_removal_has_no_ghost_owner_or_resurrection():
     assert len(fresh.text_frame.paragraphs) == 1
     with pytest.raises(rpptx.StaleElementError):
         _ = held_body.text
+
+
+def test_issue435_add_textbox_and_add_shape_refuse_a_negative_size():
+    import rpptx
+    from rpptx.enum.shapes import MSO_SHAPE
+    from rpptx.util import Inches
+
+    deck = rpptx.Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    before = deck.to_bytes()
+    with pytest.raises(rpptx.RpptxError, match="must not be negative"):
+        slide.shapes.add_textbox(Inches(1), Inches(1), -Inches(3), Inches(1))
+    with pytest.raises(rpptx.RpptxError, match="must not be negative"):
+        slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(1), Inches(1), Inches(3), -Inches(1))
+    assert deck.to_bytes() == before
+    assert len(slide.shapes) == 0
+    line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(1), Inches(1), Inches(3), 0)
+    assert line.height == 0

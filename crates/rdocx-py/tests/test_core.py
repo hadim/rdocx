@@ -15401,3 +15401,36 @@ def test_fx268_picture_normalization_reuses_actual_checked_rounds(publisher, par
     assert staging[5] <= 3 * pieces + 20, staging
     assert picture.bytes == _one_pixel_png()
     assert len(rdocx.Document.from_bytes(document.to_bytes()).pictures()) == 1
+
+
+@pytest.mark.parametrize('across_parts', [False, True])
+def test_issue435_bookmarks_sharing_an_id_open(across_parts):
+    import rdocx
+    source = rdocx.Document()
+    source.add_paragraph('First heading')
+    source.add_paragraph('Some text')
+    source.set_header('Header text')
+    base = source.to_bytes()
+    names = zipfile.ZipFile(io.BytesIO(base)).namelist()
+    header = next(name for name in names if name.startswith('word/header'))
+    second = (header, 'Header text') if across_parts else ('word/document.xml', 'Some text')
+    edits = [('word/document.xml', 'First heading', '_Toc1'), (*second, '_GoBack')]
+    output = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(base)) as zin, zipfile.ZipFile(output, 'w') as zout:
+        for item in zin.infolist():
+            data = zin.read(item)
+            for part, text, name in edits:
+                run = f'<w:r><w:t>{text}</w:t></w:r>'.encode()
+                if item.filename == part:
+                    assert run in data
+                    data = data.replace(
+                        run,
+                        f'<w:bookmarkStart w:id="2" w:name="{name}"/>'.encode() + run
+                        + b'<w:bookmarkEnd w:id="2"/>',
+                        1,
+                    )
+            zout.writestr(item, data)
+    document = rdocx.Document.from_bytes(output.getvalue())
+    assert [paragraph.text for paragraph in document.paragraphs] == ['First heading', 'Some text']
+    document.add_paragraph('New')
+    assert rdocx.Document.from_bytes(document.to_bytes()).paragraphs[-1].text == 'New'
