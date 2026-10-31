@@ -2245,10 +2245,52 @@ fn tick_label_origin(
 
 fn format_axis_value(format: Option<&NumberFormat>, value: f64) -> Result<String> {
     if let Some(format) = format {
+        format_or_general(format, value)
+    } else {
+        NumberFormat::new("General".to_owned(), false)?.format_value(value)
+    }
+}
+
+/// Formats through `format`, or through `General` when its code is outside
+/// the subset `NumberFormat::format_value` projects. The caller reports such
+/// codes from `unsupported_number_formats`.
+fn format_or_general(format: &NumberFormat, value: f64) -> Result<String> {
+    if format.is_supported() {
         format.format_value(value)
     } else {
         NumberFormat::new("General".to_owned(), false)?.format_value(value)
     }
+}
+
+/// The number format codes of a chart that `render_chart` draws through
+/// `General` because they are outside the supported subset, each once, in
+/// document order.
+pub fn unsupported_number_formats(chart: &CT_Chart) -> Result<Vec<String>> {
+    let mut codes = Vec::new();
+    let mut note = |format: &NumberFormat| {
+        if !format.is_supported() && !codes.contains(&format.format_code) {
+            codes.push(format.format_code.clone());
+        }
+    };
+    for plot in chart.plot_area.plots()? {
+        let mut label_sets: Vec<&CT_DLbls> = plot_data_labels(&plot).into_iter().collect();
+        for series in plot_series(&plot) {
+            if let Some(AxisData::Numeric(data)) = &series.categories {
+                note(&NumberFormat::new(data.format_code.clone(), false)?);
+            }
+            label_sets.extend(series.data_labels.as_ref());
+        }
+        for labels in label_sets {
+            labels.number_format.iter().for_each(&mut note);
+            for point in point_label_overrides(labels)?.values() {
+                point.number_format.iter().for_each(&mut note);
+            }
+        }
+    }
+    for axis in chart.plot_area.axes()? {
+        axis.number_format.iter().for_each(&mut note);
+    }
+    Ok(codes)
 }
 
 fn shape_label(fonts: &mut FontManager, text: &str, origin: Point) -> Result<GlyphRun> {
@@ -2392,7 +2434,7 @@ fn series_categories(
                         element: "c:cat/c:pt/@idx".to_owned(),
                         value: index.to_string(),
                     })?;
-                    let text = format.format_value(*value)?;
+                    let text = format_or_general(format, *value)?;
                     Ok((index, text))
                 })
                 .collect()
@@ -2480,7 +2522,7 @@ fn render_data_labels(
                 };
                 if total > 0.0 {
                     let text = if let Some(format) = &labels.number_format {
-                        format.format_value(value / total)?
+                        format_or_general(format, value / total)?
                     } else {
                         NumberFormat::new("0%".to_owned(), false)?.format_value(value / total)?
                     };
@@ -8864,6 +8906,14 @@ impl NumberFormat {
     }
 
     /// Projects one cached value through the supported deterministic subset.
+    ///
+    /// The subset covers `General` and up to three numeric sections
+    /// (positive, negative, zero; a fourth, text, section is ignored) built
+    /// from the `0`, `#` and `?` digit placeholders, a decimal point, the
+    /// thousands separator and trailing scaling commas, `%`, quoted and
+    /// escaped literals, `_x` spacing, `*x` fill, `[$sym-locale]` currency
+    /// and colour brackets. Dates, times, fractions, scientific notation and
+    /// conditions are refused.
     pub fn format_value(&self, value: f64) -> Result<String> {
         if !value.is_finite() {
             return Err(ChartError::InvalidValue {
@@ -8874,40 +8924,40 @@ impl NumberFormat {
         if self.format_code == "General" {
             return Ok(value.to_string());
         }
-
-        let (numeric_code, percentage) = self
-            .format_code
-            .strip_suffix('%')
-            .map(|code| (code, true))
-            .unwrap_or((&self.format_code, false));
-        let precision = if numeric_code == "0" {
-            Some(0)
-        } else if let Some(decimals) = numeric_code.strip_prefix("0.")
-            && !decimals.is_empty()
-            && decimals.bytes().all(|byte| byte == b'0')
-        {
-            Some(decimals.len())
-        } else {
-            None
-        };
-        let Some(precision) = precision else {
+        let Some(sections) = parse_number_format_sections(&self.format_code) else {
             return Err(ChartError::InvalidValue {
                 element: "c:numFmt/@formatCode projection".to_owned(),
                 value: self.format_code.clone(),
             });
         };
-        let projected = if percentage { value * 100.0 } else { value };
+        let (section, sign) = if value < 0.0 && sections.len() >= 2 {
+            (&sections[1], "")
+        } else if value == 0.0 && sections.len() >= 3 {
+            (&sections[2], "")
+        } else if value < 0.0 {
+            (&sections[0], "-")
+        } else {
+            (&sections[0], "")
+        };
+        let mut projected = value.abs();
+        for token in &section.tokens {
+            if matches!(token, NumberFormatToken::Percent) {
+                projected *= 100.0;
+            }
+        }
+        projected /= 1000f64.powi(section.scale);
         if !projected.is_finite() {
             return Err(ChartError::InvalidValue {
                 element: "c:numFmt value".to_owned(),
                 value: projected.to_string(),
             });
         }
-        let mut formatted = format!("{projected:.precision$}");
-        if percentage {
-            formatted.push('%');
-        }
-        Ok(formatted)
+        Ok(format!("{sign}{}", section.format(projected)))
+    }
+
+    /// Whether `format_value` projects this code, rather than refusing it.
+    pub fn is_supported(&self) -> bool {
+        self.format_code == "General" || parse_number_format_sections(&self.format_code).is_some()
     }
 
     fn validate(&self) -> Result<()> {
@@ -8918,6 +8968,259 @@ impl NumberFormat {
             });
         }
         validate_xml_text(&self.format_code, "c:numFmt/@formatCode")
+    }
+}
+
+/// One token of a numeric number-format section.
+#[derive(Clone, Debug, PartialEq)]
+enum NumberFormatToken {
+    Literal(String),
+    /// `0`, `#` or `?`.
+    Digit(u8),
+    Point,
+    Percent,
+    Comma,
+}
+
+/// One numeric section of a number format code.
+#[derive(Debug)]
+struct NumberFormatSection {
+    tokens: Vec<NumberFormatToken>,
+    thousands: bool,
+    scale: i32,
+}
+
+/// Splits a format code into its numeric sections, or `None` when a section
+/// leaves the supported subset of `NumberFormat::format_value`.
+fn parse_number_format_sections(code: &str) -> Option<Vec<NumberFormatSection>> {
+    let mut sections = vec![String::new()];
+    let mut chars = code.chars();
+    while let Some(c) = chars.next() {
+        let current = sections.last_mut().expect("one section");
+        match c {
+            ';' => sections.push(String::new()),
+            '"' => {
+                current.push(c);
+                for quoted in chars.by_ref() {
+                    current.push(quoted);
+                    if quoted == '"' {
+                        break;
+                    }
+                }
+            }
+            '\\' | '_' | '*' => {
+                current.push(c);
+                current.push(chars.next()?);
+            }
+            '[' => {
+                current.push(c);
+                for bracketed in chars.by_ref() {
+                    current.push(bracketed);
+                    if bracketed == ']' {
+                        break;
+                    }
+                }
+            }
+            _ => current.push(c),
+        }
+    }
+    if sections.len() > 4 {
+        return None;
+    }
+    // The fourth section formats text and never applies to a number.
+    sections.truncate(3);
+    sections
+        .iter()
+        .map(|section| parse_number_format_section(section))
+        .collect()
+}
+
+fn parse_number_format_section(section: &str) -> Option<NumberFormatSection> {
+    const COLOURS: [&str; 8] = [
+        "black", "blue", "cyan", "green", "magenta", "red", "white", "yellow",
+    ];
+    let mut tokens = Vec::new();
+    let mut chars = section.chars().peekable();
+    while let Some(c) = chars.next() {
+        let token = match c {
+            '"' => {
+                let literal: String = chars.by_ref().take_while(|&quoted| quoted != '"').collect();
+                NumberFormatToken::Literal(literal)
+            }
+            '\\' => NumberFormatToken::Literal(chars.next()?.to_string()),
+            '_' => {
+                chars.next()?;
+                NumberFormatToken::Literal(" ".to_owned())
+            }
+            '*' => {
+                chars.next()?;
+                continue;
+            }
+            '[' => {
+                let content: String = chars.by_ref().take_while(|&inner| inner != ']').collect();
+                let lower = content.to_ascii_lowercase();
+                if let Some(currency) = content.strip_prefix('$') {
+                    let symbol = currency.split('-').next().unwrap_or_default();
+                    NumberFormatToken::Literal(symbol.to_owned())
+                } else if COLOURS.contains(&lower.as_str()) || lower.starts_with("color") {
+                    continue;
+                } else {
+                    return None;
+                }
+            }
+            '0' | '#' | '?' => NumberFormatToken::Digit(c as u8),
+            '.' if !tokens.contains(&NumberFormatToken::Point) => NumberFormatToken::Point,
+            ',' => NumberFormatToken::Comma,
+            '%' => NumberFormatToken::Percent,
+            '/' if matches!(tokens.last(), Some(NumberFormatToken::Digit(_))) => return None,
+            ' ' | '$' | '-' | '+' | '(' | ')' | ':' | '!' | '^' | '&' | '\'' | '~' | '{' | '}'
+            | '<' | '>' | '=' | '.' | '/' => NumberFormatToken::Literal(c.to_string()),
+            c if !c.is_ascii() => NumberFormatToken::Literal(c.to_string()),
+            _ => return None,
+        };
+        tokens.push(token);
+    }
+
+    // A comma between two integer placeholders groups thousands, one after the
+    // last integer placeholder divides by 1000, any other comma is literal.
+    let point = tokens
+        .iter()
+        .position(|token| *token == NumberFormatToken::Point)
+        .unwrap_or(tokens.len());
+    let is_digit = |token: &NumberFormatToken| matches!(token, NumberFormatToken::Digit(_));
+    let mut thousands = false;
+    let mut scale = 0;
+    for index in 0..tokens.len() {
+        if tokens[index] != NumberFormatToken::Comma {
+            continue;
+        }
+        let digit_before = tokens[..index].iter().any(is_digit);
+        let digit_after = tokens[index + 1..point.max(index + 1)].iter().any(is_digit);
+        tokens[index] = if index < point && digit_before && digit_after {
+            thousands = true;
+            NumberFormatToken::Literal(String::new())
+        } else if index < point && digit_before {
+            scale += 1;
+            NumberFormatToken::Literal(String::new())
+        } else {
+            NumberFormatToken::Literal(",".to_owned())
+        };
+    }
+    Some(NumberFormatSection {
+        tokens,
+        thousands,
+        scale,
+    })
+}
+
+impl NumberFormatSection {
+    /// Writes a finite, non-negative, already scaled value.
+    fn format(&self, value: f64) -> String {
+        let point = self
+            .tokens
+            .iter()
+            .position(|token| *token == NumberFormatToken::Point);
+        let integer_end = point.unwrap_or(self.tokens.len());
+        let placeholders = |range: std::ops::Range<usize>| -> Vec<(usize, u8)> {
+            self.tokens[range.clone()]
+                .iter()
+                .zip(range)
+                .filter_map(|(token, index)| match token {
+                    NumberFormatToken::Digit(kind) => Some((index, *kind)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let integer_places = placeholders(0..integer_end);
+        let fraction_places =
+            point.map_or_else(Vec::new, |point| placeholders(point + 1..self.tokens.len()));
+        let decimals = fraction_places.len();
+        let rounded = format!("{value:.decimals$}");
+        let (integer, fraction) = rounded.split_once('.').unwrap_or((&rounded, ""));
+        let integer = if integer == "0" { "" } else { integer };
+
+        // Integer digits fill the placeholders from the right, the leftmost
+        // placeholder takes any digits left over.
+        let mut out_by_token = vec![String::new(); self.tokens.len()];
+        let digits: Vec<char> = integer.chars().collect();
+        let count = integer_places.len();
+        for (from_right, (index, kind)) in integer_places.iter().rev().enumerate() {
+            let text = &mut out_by_token[*index];
+            if from_right + 1 == count && digits.len() > count {
+                text.extend(&digits[..digits.len() - count + 1]);
+            } else if from_right < digits.len() {
+                text.push(digits[digits.len() - 1 - from_right]);
+            } else if *kind == b'0' {
+                text.push('0');
+            } else if *kind == b'?' {
+                text.push(' ');
+            }
+        }
+        if count == 0 && !integer.is_empty() {
+            let at = point.unwrap_or(self.tokens.len());
+            if at < self.tokens.len() {
+                out_by_token[at].push_str(integer);
+            }
+        }
+        let fraction: Vec<char> = fraction.chars().collect();
+        let mut keep = fraction_places.len();
+        while keep > 0 && fraction[keep - 1] == '0' && fraction_places[keep - 1].1 != b'0' {
+            keep -= 1;
+        }
+        for (position, (index, kind)) in fraction_places.iter().enumerate() {
+            if position < keep {
+                out_by_token[*index].push(fraction[position]);
+            } else if *kind == b'?' {
+                out_by_token[*index].push(' ');
+            }
+        }
+
+        let first_integer = integer_places.first().map(|place| place.0);
+        let last_integer = integer_places.last().map(|place| place.0);
+        let total_digits = integer_places
+            .iter()
+            .map(|(index, _)| {
+                out_by_token[*index]
+                    .chars()
+                    .filter(char::is_ascii_digit)
+                    .count()
+            })
+            .sum::<usize>();
+        let mut written_digits = 0usize;
+        let mut integer_started = false;
+        let mut out = String::new();
+        for (index, token) in self.tokens.iter().enumerate() {
+            match token {
+                NumberFormatToken::Digit(_) if index < integer_end => {
+                    for c in out_by_token[index].chars() {
+                        out.push(c);
+                        integer_started = true;
+                        if c.is_ascii_digit() {
+                            written_digits += 1;
+                            let left = total_digits - written_digits;
+                            if self.thousands && left > 0 && left % 3 == 0 {
+                                out.push(',');
+                            }
+                        }
+                    }
+                }
+                NumberFormatToken::Digit(_) => out.push_str(&out_by_token[index]),
+                NumberFormatToken::Point => {
+                    out.push_str(&out_by_token[index]);
+                    out.push('.');
+                }
+                NumberFormatToken::Percent => out.push('%'),
+                NumberFormatToken::Literal(text) => {
+                    let inside = first_integer.is_some_and(|first| index > first)
+                        && last_integer.is_some_and(|last| index < last);
+                    if !inside || integer_started {
+                        out.push_str(text);
+                    }
+                }
+                NumberFormatToken::Comma => {}
+            }
+        }
+        out
     }
 }
 
@@ -14742,7 +15045,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_numeric_category_formats_return_projection_errors() {
+    fn unsupported_numeric_category_formats_fall_back_to_general_labels() {
         let mut chart = CT_ChartSpace::from_xml(chart_with_plot(&bar_plot("")).as_bytes()).unwrap();
         let Plot::Bar { series, .. } = &mut chart.chart.plot_area.plots_mut().unwrap()[0] else {
             panic!("expected bar plot");
@@ -14784,24 +15087,25 @@ mod tests {
             .collect();
         assert_eq!(text, vec!["1.00", "2.00"]);
 
-        category_axis.number_format = Some(NumberFormat::new("#,##0".to_owned(), false).unwrap());
-        let result = super::render_axes_and_labels(
+        category_axis.number_format =
+            Some(NumberFormat::new("yyyy-mm-dd".to_owned(), false).unwrap());
+        let annotations = super::render_axes_and_labels(
             plot,
             &[category_axis],
             chart_bounds(),
             DispBlanksAs::Gap,
             &mut fonts,
-        );
-        let error = match result {
-            Err(error) => error,
-            Ok(_) => panic!("unsupported category-axis format rendered"),
-        };
-        assert!(
-            error
-                .to_string()
-                .contains("c:numFmt/@formatCode projection")
-        );
-        assert!(error.to_string().contains("#,##0"));
+        )
+        .unwrap();
+        let text: Vec<_> = annotations
+            .labels
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Text(run) => Some(run.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, vec!["1", "2"]);
     }
 
     #[test]
@@ -15485,6 +15789,27 @@ mod tests {
             ("0%", 0.25, "25%"),
             ("0.0%", 0.256, "25.6%"),
             ("0.00%", 0.256, "25.60%"),
+            ("#,##0", 1820.0, "1,820"),
+            ("#,##0", 1234567.4, "1,234,567"),
+            ("#,##0", 0.4, "0"),
+            ("#,##0", -1820.0, "-1,820"),
+            ("#,##0.0", 1910.26, "1,910.3"),
+            ("$#,##0", 1820.0, "$1,820"),
+            ("\"EUR \"#,##0", 1820.0, "EUR 1,820"),
+            ("# ##0", 1820.0, "1 820"),
+            ("# ##0", 182.0, "182"),
+            ("#,##0,", 1820000.0, "1,820"),
+            ("0.0#", 1.5, "1.5"),
+            ("0.0#", 1.25, "1.25"),
+            ("#,##0;(#,##0)", -1820.0, "(1,820)"),
+            ("#,##0;[Red]-#,##0;\"-\"", 0.0, "-"),
+            ("[$\u{20ac}-407]#,##0.00", 12.5, "\u{20ac}12.50"),
+            (
+                "_-* #,##0_-;-* #,##0_-;_-* \"-\"_-;_-@_-",
+                1820.0,
+                " 1,820 ",
+            ),
+            ("0\\ \"pts\"", 3.0, "3 pts"),
         ] {
             let format = NumberFormat::new(code.to_owned(), false).unwrap();
             assert_eq!(format.format_value(value).unwrap(), expected, "{code}");
@@ -15514,7 +15839,7 @@ mod tests {
 
         let invalid_code = NumberFormat::new("bad\u{0}code".to_owned(), false);
         assert!(invalid_code.is_err());
-        let unsupported = NumberFormat::new("#,##0".to_owned(), false).unwrap();
+        let unsupported = NumberFormat::new("0.00E+00".to_owned(), false).unwrap();
         assert!(unsupported.format_value(12.0).is_err());
         let general = NumberFormat::new("General".to_owned(), false).unwrap();
         for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
@@ -17305,6 +17630,52 @@ mod tests {
                 "{written}"
             );
             assert_eq!(chart, CT_ChartSpace::from_xml(written.as_bytes()).unwrap());
+        }
+    }
+
+    fn text_runs(group: &oxml_layout::GroupElement) -> Vec<String> {
+        let mut texts = Vec::new();
+        for element in &group.children {
+            match element {
+                PositionedElement::Text(run) => texts.push(run.text.clone()),
+                PositionedElement::Group(inner) => texts.extend(text_runs(inner)),
+                _ => {}
+            }
+        }
+        texts
+    }
+
+    #[test]
+    fn number_formats_outside_the_subset_draw_the_chart_through_general() {
+        let value_axis = r#"<q:axPos val="l"/>"#;
+        for (code, expected_label, unsupported) in [
+            ("#,##0", Some("1"), false),
+            ("$#,##0.00", Some("$1.00"), false),
+            ("0.00E+00", Some("1"), true),
+        ] {
+            let xml = chart_with_plot(&bar_plot("")).replace(
+                value_axis,
+                &format!(r#"{value_axis}<q:numFmt formatCode="{code}" sourceLinked="0"/>"#),
+            );
+            let chart = CT_ChartSpace::from_xml(xml.as_bytes()).unwrap();
+            let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+            let group = render_chart(&chart.chart, chart_bounds(), &mut fonts).unwrap();
+            let texts = text_runs(&group);
+            assert!(
+                texts
+                    .iter()
+                    .any(|text| Some(text.as_str()) == expected_label),
+                "{code}: {texts:?}"
+            );
+            assert_eq!(
+                super::unsupported_number_formats(&chart.chart).unwrap(),
+                if unsupported {
+                    vec![code.to_owned()]
+                } else {
+                    Vec::new()
+                },
+                "{code}"
+            );
         }
     }
 

@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 
-use oxml_chart::{render_chart, render_chart_placeholder};
+use oxml_chart::{render_chart, render_chart_placeholder, unsupported_number_formats};
 use oxml_drawing::color::{ColorChoice, ColorMap, ColorMapSlot, RgbColor, resolve_color};
 use oxml_drawing::effect::CT_OuterShadowEffect;
 use oxml_drawing::fill::{
@@ -1311,6 +1311,15 @@ impl<'a> ResolveCtx<'a> {
                     fonts,
                 ) {
                     Ok(group) => {
+                        for code in
+                            unsupported_number_formats(&chart_space.chart).unwrap_or_default()
+                        {
+                            diagnostics.push(Diagnostic {
+                                message: format!(
+                                    "chart number format `{code}` is not supported, its labels are drawn as General"
+                                ),
+                            });
+                        }
                         return Ok((ResolvedContent::Group(group), None, false));
                     }
                     Err(error) => error.to_string(),
