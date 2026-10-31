@@ -10094,7 +10094,12 @@ fn parse_remaining_plot_child(
         }
         b"axId" if property_first => {
             if axis_ids.len() == 2 {
-                return Err(ChartError::DuplicateElement("c:axId".to_owned()));
+                // A third id in a 2-D plot is outside the schema, but some
+                // generators write one that names no axis. Keep it verbatim
+                // after the second id and plot against the first two, as
+                // LibreOffice does.
+                raw_children.push(*boundary, raw);
+                return Ok(());
             }
             axis_ids.push(parse_axis_id_scalar(&raw, "axId")?);
             *boundary = (*boundary).max(base + series.len() + 1 + axis_ids.len());
@@ -10331,7 +10336,12 @@ fn parse_bar_child(
         }
         b"axId" => {
             if axis_ids.len() == 2 {
-                return Err(ChartError::DuplicateElement("c:axId".to_owned()));
+                // A third id in a 2-D plot is outside the schema, but some
+                // generators write one that names no axis. Keep it verbatim
+                // after the second id and plot against the first two, as
+                // LibreOffice does.
+                raw_children.push(*boundary, raw);
+                return Ok(());
             }
             axis_ids.push(parse_axis_id_scalar(&raw, "axId")?);
             *boundary = (*boundary).max(series.len() + 5 + axis_ids.len());
@@ -10521,7 +10531,12 @@ fn parse_line_child(
         }
         b"axId" => {
             if axis_ids.len() == 2 {
-                return Err(ChartError::DuplicateElement("c:axId".to_owned()));
+                // A third id in a 2-D plot is outside the schema, but some
+                // generators write one that names no axis. Keep it verbatim
+                // after the second id and plot against the first two, as
+                // LibreOffice does.
+                raw_children.push(*boundary, raw);
+                return Ok(());
             }
             axis_ids.push(parse_axis_id_scalar(&raw, "axId")?);
             *boundary = (*boundary).max(series.len() + 4 + axis_ids.len());
@@ -17265,6 +17280,31 @@ mod tests {
         }
         if let Some(corpus) = require_or_skip_corpus() {
             verify_bar_and_line_viewer_gate(&corpus);
+        }
+    }
+
+    #[test]
+    fn a_third_axis_id_naming_no_axis_does_not_refuse_a_two_axis_plot() {
+        let third = r#"<q:axId val="99999"/>"#;
+        let series = plot_series(0);
+        let area = format!(
+            r#"<q:areaChart><q:grouping val="standard"/>{series}<q:axId val="-1884094432"/><q:axId val="-1884097184"/>{third}</q:areaChart>"#
+        );
+        for plot in [bar_plot(third), line_plot(third), area] {
+            let chart = CT_ChartSpace::from_xml(chart_with_plot(&plot).as_bytes()).unwrap();
+            let plots = chart.chart.plot_area.plots().unwrap();
+            assert_eq!(
+                plots[0].axis_ids().unwrap().map(|id| id.0),
+                [-1884094432, -1884097184]
+            );
+            let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+            render_chart(&chart.chart, chart_bounds(), &mut fonts).unwrap();
+            let written = String::from_utf8(chart.to_xml().unwrap()).unwrap();
+            assert!(
+                written.contains(r#"<c:axId val="-1884097184"/><q:axId val="99999"/>"#),
+                "{written}"
+            );
+            assert_eq!(chart, CT_ChartSpace::from_xml(written.as_bytes()).unwrap());
         }
     }
 
