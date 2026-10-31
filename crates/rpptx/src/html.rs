@@ -1144,21 +1144,53 @@ fn semantic_escape(text: &str) -> String {
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
 }
+/// Escapes `text` for Markdown inline content. Marks that are syntax anywhere in a line are always escaped.
+/// `text` may start a line, so a list, heading or setext mark at its start or after a line break is
+/// escaped there, and so is the `.` or `)` that would end an ordered list number. Elsewhere `-`, `+`,
+/// `=`, `.` and `)` are plain text.
 fn semantic_md_text(text: &str) -> String {
     let mut out = String::new();
+    // `Some(n)` while the current line holds only `n` digits.
+    let mut line_digits = Some(0usize);
     for character in text.chars() {
-        if "\\`*_{}[]<>()#!|+-=~&.".contains(character) {
+        let escape = "\\`*_[]<>#|~&".contains(character)
+            || (line_digits == Some(0) && "-+=".contains(character))
+            || (line_digits.is_some() && ".)".contains(character));
+        if escape {
             out.push('\\');
         }
         out.push(character);
+        line_digits = if matches!(character, '\n' | '\r' | '\u{000b}') {
+            Some(0)
+        } else {
+            line_digits
+                .filter(|_| character.is_ascii_digit())
+                .map(|n| n + 1)
+        };
     }
     out
 }
+/// Escapes `text` like [`semantic_md_text`] and keeps its whitespace exact. A space stays a space between
+/// two other characters and becomes `&#32;` where Markdown would drop or merge it: at either end of
+/// `text`, which may start or end a line, and next to other whitespace.
 fn semantic_md_preserved(text: &str) -> String {
-    semantic_md_text(text)
-        .replace(' ', "&#32;")
-        .replace('\t', "&#9;")
-        .replace('\r', "&#13;")
+    let escaped: Vec<char> = semantic_md_text(text).chars().collect();
+    let mut out = String::new();
+    for (index, &character) in escaped.iter().enumerate() {
+        let lone = |neighbour: Option<&char>| neighbour.is_some_and(|c| !c.is_whitespace());
+        match character {
+            ' ' if lone(index.checked_sub(1).and_then(|i| escaped.get(i)))
+                && lone(escaped.get(index + 1)) =>
+            {
+                out.push(' ')
+            }
+            ' ' => out.push_str("&#32;"),
+            '\t' => out.push_str("&#9;"),
+            '\r' => out.push_str("&#13;"),
+            other => out.push(other),
+        }
+    }
+    out
 }
 fn semantic_base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

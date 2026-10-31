@@ -4529,6 +4529,12 @@ current owner handles and presentation revisions, including on complete-body
 image validation failure. Package exports and stubs
 include the result type and every method.
 
+Markdown text keeps a single space between two characters as a space. A
+leading, trailing or repeated space becomes `&#32;`, where Markdown would drop
+or merge it. Marks that are syntax anywhere in a line are always escaped. A
+list, heading or setext mark, and the `.` or `)` after a leading number, are
+escaped only where a text run or a line inside it starts.
+
 `rpptx convert --to html` and `--to md` use semantic source order. `--notes`
 includes notes, `--skip-hidden` omits hidden slides and
 `--embed-images=false` writes adjacent resources. Images embed by default.
