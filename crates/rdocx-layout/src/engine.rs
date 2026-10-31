@@ -23481,6 +23481,38 @@ mod tests {
     }
 
     #[test]
+    fn issue433_wingdings_2_bullets_map_to_unicode_or_report_the_code() {
+        // U+F0A1 in Wingdings 2 is Word's black square bullet. U+F0A7 has no
+        // bounded mapping and keeps its code with a diagnostic.
+        let mut input = make_input_with_text("");
+        input.document = CT_Document::from_xml(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>Square item</w:t></w:r></w:p><w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>Unmapped item</w:t></w:r></w:p></w:body></w:document>"#).unwrap();
+        input.numbering = Some(rdocx_oxml::numbering::CT_Numbering::from_xml(br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="&#xF0A1;"/><w:rPr><w:rFonts w:ascii="Wingdings 2" w:hAnsi="Wingdings 2" w:hint="default"/></w:rPr></w:lvl></w:abstractNum><w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="&#xF0A7;"/><w:rPr><w:rFonts w:ascii="Wingdings 2" w:hAnsi="Wingdings 2" w:hint="default"/></w:rPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num><w:num w:numId="2"><w:abstractNumId w:val="2"/></w:num></w:numbering>"#).unwrap());
+        let output = deterministic_layout(&input);
+        let text = output_text(&output);
+        assert!(
+            text.iter().any(|text| text.trim() == "\u{25a0}"),
+            "{text:?}"
+        );
+        assert!(
+            !text.iter().any(|text| text.contains('\u{f0a1}')),
+            "{text:?}"
+        );
+        assert!(
+            text.iter().any(|text| text.contains('\u{f0a7}')),
+            "{text:?}"
+        );
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .filter(|fact| fact.message.starts_with("Unknown "))
+                .map(|fact| fact.message.as_str())
+                .collect::<Vec<_>>(),
+            ["Unknown Wingdings 2 symbol U+F0A7: original code retained"]
+        );
+    }
+
+    #[test]
     fn issue433_cell_vertical_alignment_does_not_stop_a_row_from_splitting() {
         // Fifteen filler paragraphs, then a one-cell row of 40 paragraphs
         // that does not fit in the rest of page 1 and has no w:cantSplit.
