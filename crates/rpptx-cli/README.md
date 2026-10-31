@@ -181,7 +181,10 @@ provider cannot assess is reported with `status=unsupported`,
 `reason=cannot-assess` and its cause in `diagnostics`, and counts as an
 overflow. Exit0 means all admitted frames were assessed without overflow,
 exit1 means overflow or a frame that could not be assessed, and exit2 means a
-checked error. The command does not modify autofit or save.
+checked error. The command does not modify autofit or save. Without
+`--json`, each frame prints one line with its owner part, child path such as
+`1/0`, shape name, table cell and, for a shared frame, the slide it is
+measured on, then its status, overflow and needed scale.
 
 Core metadata get includes every native core field. Set accepts title, author,
 subject, keywords, description and category, preserving all unspecified fields

@@ -2996,6 +2996,66 @@ fn fit_reports_every_supported_overflow_and_needed_scale() {
 }
 
 #[test]
+fn issue431_fit_text_output_names_each_frame_once() {
+    let temp = TempWorkspace::new("issue431-fit-text");
+    let input = temp.path.join("deck.pptx");
+    let mut presentation = Presentation::new().unwrap();
+    for _ in 0..3 {
+        presentation.add_slide(5).unwrap();
+    }
+    {
+        let mut slide = presentation.slide_mut(2).unwrap();
+        let mut shape = slide
+            .add_table(
+                2,
+                2,
+                Emu(914_400),
+                Emu(1_828_800),
+                Emu(7_315_200),
+                Emu(914_400),
+            )
+            .unwrap();
+        let mut table = shape.table_mut().unwrap();
+        for (row, column) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            table
+                .cell_mut(row, column)
+                .unwrap()
+                .set_text(&format!("r{row}c{column}"));
+        }
+    }
+    presentation.save(&input).unwrap();
+    let result = cli(&["fit", input.to_str().unwrap()]);
+    assert_eq!(
+        result.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let stdout = String::from_utf8(result.stdout).unwrap();
+    let lines = stdout
+        .lines()
+        .filter(|line| !line.starts_with("Diagnostic: "))
+        .collect::<Vec<_>>();
+    let native = presentation.fit_report(&[]).unwrap();
+    assert_eq!(lines.len(), native.frames.len());
+    let unique = lines.iter().collect::<std::collections::HashSet<_>>();
+    assert_eq!(unique.len(), lines.len(), "{stdout}");
+    for (row, column) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+        let cell = format!(
+            "/ppt/slides/slide3.xml 1 \"Table 3\" cell {row},{column}: status=unchanged, \
+             overflow=false, needed_scale=100000"
+        );
+        assert!(lines.contains(&cell.as_str()), "{cell} in {stdout}");
+    }
+    let layout_title = lines
+        .iter()
+        .filter(|line| line.starts_with("/ppt/slideLayouts/slideLayout6.xml 0 \"Title 1\" in "))
+        .count();
+    assert_eq!(layout_title, 3, "{stdout}");
+    assert!(!stdout.contains("Array ["), "{stdout}");
+}
+
+#[test]
 fn every_new_command_has_help_and_reference_contract() {
     for command in [
         vec!["replace"],

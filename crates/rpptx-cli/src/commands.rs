@@ -1841,16 +1841,8 @@ pub fn fit(file: &Path, as_json: bool, font_dir: Option<&Path>) -> Result<bool> 
         )?;
     } else {
         let mut stdout = io::stdout().lock();
-        for frame in &frames {
-            writeln!(
-                stdout,
-                "{} {:?}: status={}, overflow={}, needed_scale={}",
-                frame["owner_part"],
-                frame["child_path"],
-                frame["status"],
-                frame["overflow"],
-                frame["needed_scale"]
-            )?;
+        for frame in &report.frames {
+            writeln!(stdout, "{}", fit_text_line(frame))?;
         }
         for diagnostic in diagnostics {
             writeln!(stdout, "Diagnostic: {diagnostic}")?;
@@ -1858,6 +1850,48 @@ pub fn fit(file: &Path, as_json: bool, font_dir: Option<&Path>) -> Result<bool> 
     }
     io::stdout().flush()?;
     Ok(overflow)
+}
+
+/// One frame of the plain-text fit report: owner part, child path, shape
+/// name, table cell and, for a shared frame, the slide it is measured on.
+fn fit_text_line(frame: &rpptx::FitFrameReport) -> String {
+    let update = &frame.update;
+    let location = &update.location;
+    let mut line = format!(
+        "{} {}",
+        location.owner_part,
+        location
+            .child_path
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join("/")
+    );
+    if let Some(name) = &update.name {
+        line.push_str(&format!(" {name:?}"));
+    }
+    if let Some((row, column)) = location.cell {
+        line.push_str(&format!(" cell {row},{column}"));
+    }
+    if frame.context != location.owner_part {
+        line.push_str(&format!(" in {}", frame.context));
+    }
+    let needed_scale = frame
+        .needed_scale
+        .map_or_else(|| "none".to_owned(), |scale| scale.to_string());
+    line.push_str(&format!(
+        ": status={}, overflow={}, needed_scale={needed_scale}",
+        update.status, frame.overflow
+    ));
+    if update.status == "unsupported" {
+        let reasons = update
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>();
+        line.push_str(&format!(", cannot assess: {}", reasons.join("; ")));
+    }
+    line
 }
 
 /// Inputs for one explicitly licensed embedded font face.
