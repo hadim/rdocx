@@ -122,17 +122,32 @@ impl OpcPackage {
         mut reader: R,
         limits: PackageReadLimits,
     ) -> Result<Self> {
-        if limits.max_entries != usize::MAX {
-            let entry_count = pre_index_entry_count(&mut reader)?;
-            if entry_count > limits.max_entries as u64 {
-                return Err(OpcError::PackageLimitExceeded {
-                    kind: "entry count",
-                    limit: limits.max_entries as u64,
-                });
-            }
+        // Without an entry limit, an end record this scan cannot read is left
+        // to the ZIP reader, as before, and the repeated-name check is skipped.
+        let entry_count = match pre_index_entry_count(&mut reader) {
+            Ok(count) => Some(count),
+            Err(error) if limits.max_entries != usize::MAX => return Err(error),
+            Err(_) => None,
+        };
+        if let Some(count) = entry_count
+            && count > limits.max_entries as u64
+        {
+            return Err(OpcError::PackageLimitExceeded {
+                kind: "entry count",
+                limit: limits.max_entries as u64,
+            });
         }
 
         let mut archive = ZipArchive::new(reader)?;
+        // The ZIP reader keeps the last of two entries that share a name, and
+        // other readers keep the first, so a package that holds a name twice
+        // is refused rather than read as one of its copies.
+        if let Some(count) = entry_count.filter(|count| *count > archive.len() as u64) {
+            let directory_start = archive.central_directory_start();
+            let name = repeated_entry_name(&mut archive.into_inner(), directory_start, count)
+                .unwrap_or_else(|| "an entry stored twice".to_owned());
+            return Err(OpcError::DuplicatePartName(name));
+        }
         if archive.len() > limits.max_entries {
             return Err(OpcError::PackageLimitExceeded {
                 kind: "entry count",
@@ -985,6 +1000,31 @@ fn validate_zip_entry_identities(
         }
     }
     Ok(())
+}
+
+/// The first entry name the central directory at `start` holds twice, read
+/// from its `count` file headers, compared as part names are.
+fn repeated_entry_name<R: Read + Seek>(reader: &mut R, start: u64, count: u64) -> Option<String> {
+    const CENTRAL_HEADER_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x01, 0x02];
+    reader.seek(SeekFrom::Start(start)).ok()?;
+    let mut seen = HashSet::new();
+    for _ in 0..count {
+        let mut header = [0; 46];
+        reader.read_exact(&mut header).ok()?;
+        if header[..4] != CENTRAL_HEADER_SIGNATURE {
+            return None;
+        }
+        let mut name = vec![0; usize::from(read_u16(&header, 28)?)];
+        reader.read_exact(&mut name).ok()?;
+        let skipped = i64::from(read_u16(&header, 30)?) + i64::from(read_u16(&header, 32)?);
+        reader.seek(SeekFrom::Current(skipped)).ok()?;
+        let name = normalize_part_name(&String::from_utf8_lossy(&name));
+        let name = name.strip_prefix('/').unwrap_or(&name).to_owned();
+        if !seen.insert(name.to_ascii_lowercase()) {
+            return Some(name);
+        }
+    }
+    None
 }
 
 fn pre_index_entry_count<R: Read + Seek>(reader: &mut R) -> Result<u64> {
@@ -2743,6 +2783,41 @@ mod tests {
             Some(b"not a real password file".as_slice())
         );
         assert!(package.parts.keys().all(|name| !name.contains("..")));
+    }
+
+    #[test]
+    fn issue435_an_entry_name_stored_twice_is_refused_naming_the_part() {
+        // The ZIP writer refuses a repeated name, so the second entry is
+        // written under another name of the same length and renamed.
+        let mut archive = package_zip(&[
+            ("[Content_Types].xml", MINIMAL_CONTENT_TYPES),
+            ("word/document.xml", b"<first/>"),
+            ("word/documenX.xml", b"<second/>"),
+        ])
+        .into_inner();
+        replace_zip_name(
+            &mut archive,
+            b"word/documenX.xml",
+            b"word/document.xml",
+            true,
+        );
+        for limits in [
+            PackageReadLimits::UNBOUNDED,
+            PackageReadLimits {
+                max_entries: 10,
+                ..PackageReadLimits::UNBOUNDED
+            },
+        ] {
+            let result = OpcPackage::from_reader_with_limits(
+                std::io::Cursor::new(archive.as_slice()),
+                limits,
+            );
+            assert!(
+                matches!(result, Err(OpcError::DuplicatePartName(ref name)) if name == "word/document.xml"),
+                "{:?}",
+                result.map(|package| package.get_part("/word/document.xml").map(<[u8]>::to_vec))
+            );
+        }
     }
 
     #[test]
