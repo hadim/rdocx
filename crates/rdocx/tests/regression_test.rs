@@ -30820,29 +30820,32 @@ fn dense_form_matches_reviewed_one_page_geometry() {
         306.0,
         91.5 + word_line_shift
     ));
+    // Inner edges take the style's half-point insideH and insideV, the outer
+    // edges its one-point top, left, bottom and right, so each inner band is
+    // half a point and the rows below move up by as much.
     assert!(has_line(
         72.0,
-        109.5 + word_line_shift,
+        109.25 + word_line_shift,
         306.0,
-        109.5 + word_line_shift
+        109.25 + word_line_shift
     ));
     assert!(has_line(
         306.0,
-        92.375 + word_line_shift,
+        91.875 + word_line_shift,
         416.0,
-        92.375 + word_line_shift
+        91.875 + word_line_shift
     ));
     assert!(has_line(
         416.0,
-        105.125 + word_line_shift,
+        104.625 + word_line_shift,
         526.0,
-        105.125 + word_line_shift
+        104.625 + word_line_shift
     ));
     assert!(has_line(
         306.0,
-        128.5 + word_line_shift,
+        128.0 + word_line_shift,
         540.0,
-        128.5 + word_line_shift
+        128.0 + word_line_shift
     ));
 
     let pdf = document.to_pdf_deterministic().expect("dense form PDF");
@@ -30877,15 +30880,17 @@ fn dense_form_matches_reviewed_one_page_geometry() {
         .filter(|pixel| *pixel == [255, 215, 215, 255])
         .count();
     // F-X183 reviewed zero side padding changes cell and nested content geometry.
-    assert_eq!(checksum, 12_522_878_329_634_332_671);
-    assert_eq!(non_white_pixels, 32_421);
+    // The inner edges are the style's half-point insideH and insideV (#433).
+    assert_eq!(checksum, 6_411_604_583_604_515_250);
+    assert_eq!(non_white_pixels, 32_118);
     assert_eq!(
         behind_pixels, 0,
         "page-behind stamp is covered by cell shading"
     );
-    // The 58 pixel wide stamp moved 1 point down with the border band above
-    // its row, which leaves 28 whole pixel rows at 96 dpi rather than 29.
-    assert_eq!(foreground_pixels, 1_624);
+    // The 58 pixel wide stamp sits below the border band above its row. That
+    // band is the half-point insideH, which leaves 29 whole pixel rows at
+    // 96 dpi (28 when it was the one-point outer edge).
+    assert_eq!(foreground_pixels, 1_682);
 }
 
 #[test]

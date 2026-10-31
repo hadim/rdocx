@@ -23416,6 +23416,71 @@ mod tests {
     }
 
     #[test]
+    fn issue433_direct_table_borders_override_the_style_grid() {
+        // A bordered table style with all six edges single. The first table
+        // keeps its grid, the second turns every edge off in its own
+        // `w:tblBorders`, the third turns off only the inside edges.
+        let edges = |value: &str| {
+            ["top", "left", "bottom", "right", "insideH", "insideV"]
+                .iter()
+                .map(|edge| {
+                    format!(r#"<w:{edge} w:val="{value}" w:sz="4" w:space="0" w:color="auto"/>"#)
+                })
+                .collect::<String>()
+        };
+        let table = |borders: &str| {
+            format!(
+                r#"<w:tbl><w:tblPr><w:tblStyle w:val="Grid"/><w:tblW w:w="4000" w:type="dxa"/>{borders}</w:tblPr><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>b</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>c</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>d</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#
+            )
+        };
+        let mut input = make_input_with_text("");
+        input.styles = CT_Styles::from_xml(
+            format!(
+                r#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="table" w:styleId="Grid"><w:name w:val="Grid"/><w:tblPr><w:tblBorders>{}</w:tblBorders></w:tblPr></w:style></w:styles>"#,
+                edges("single")
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let inside_none = r#"<w:tblBorders><w:insideH w:val="none" w:sz="0" w:space="0" w:color="auto"/><w:insideV w:val="none" w:sz="0" w:space="0" w:color="auto"/></w:tblBorders>"#;
+        let mut lines = Vec::new();
+        for borders in [
+            String::new(),
+            format!("<w:tblBorders>{}</w:tblBorders>", edges("none")),
+            inside_none.to_owned(),
+        ] {
+            input.document = CT_Document::from_xml(
+                format!(
+                    r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{}<w:p/></w:body></w:document>"#,
+                    table(&borders)
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            let output = deterministic_layout(&input);
+            let (mut horizontal, mut vertical) = (0, 0);
+            oxml_layout::walk(&output.pages[0].elements, &mut |element, _| {
+                if let PositionedElement::Line { start, end, .. } = element {
+                    if (start.y - end.y).abs() < 1e-6 {
+                        horizontal += 1;
+                    } else if (start.x - end.x).abs() < 1e-6 {
+                        vertical += 1;
+                    }
+                }
+            });
+            lines.push((horizontal, vertical));
+        }
+        // Each cell paints its own edges, so a 2 x 2 grid paints more than
+        // three segments per direction. Only the zero and the ordering matter.
+        assert!(lines[0].0 >= 3 && lines[0].1 >= 3, "{lines:?}");
+        assert_eq!(lines[1], (0, 0), "{lines:?}");
+        assert!(
+            lines[2].0 > 0 && lines[2].0 < lines[0].0 && lines[2].1 < lines[0].1,
+            "{lines:?}"
+        );
+    }
+
+    #[test]
     fn issue433_first_line_indent_is_one_property_across_levels() {
         // BaseInd hangs 720 twips. Derived sets firstLine over it, DerivedH
         // sets hanging 0, and the third paragraph sets firstLine directly.
