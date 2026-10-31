@@ -752,6 +752,7 @@ fn layout_table_inner(
                     cell_path,
                     style_cell.paragraph_properties.as_ref(),
                     style_cell.run_properties.as_ref(),
+                    cell_shading,
                     doc_grid,
                 )?
             };
@@ -1507,6 +1508,8 @@ fn autofit_column_widths(
                             cell_path,
                             style_cell.paragraph_properties.as_ref(),
                             style_cell.run_properties.as_ref(),
+                            // Text colour does not change a measured width.
+                            None,
                             doc_grid,
                         )?;
                         Ok(if rotated {
@@ -1704,6 +1707,7 @@ fn layout_cell_content(
     cell_path: &[usize],
     table_style_ppr: Option<&rdocx_oxml::properties::CT_PPr>,
     table_style_rpr: Option<&rdocx_oxml::properties::CT_RPr>,
+    cell_shading: Option<Color>,
     doc_grid: Option<&CT_DocGrid>,
 ) -> Result<(Vec<CellBlock>, Vec<CellBlockSemantics>)> {
     use crate::engine;
@@ -1729,6 +1733,7 @@ fn layout_cell_content(
                     source,
                     table_style_ppr,
                     table_style_rpr,
+                    cell_shading,
                     doc_grid,
                 )?;
                 if let Some(registry) = sources {
@@ -1779,6 +1784,7 @@ fn layout_cell_content(
                 &source_path,
                 table_style_ppr,
                 table_style_rpr,
+                cell_shading,
                 doc_grid,
                 &mut blocks,
                 &mut semantics,
@@ -1832,6 +1838,7 @@ fn layout_control_cell_content(
     path: &[usize],
     table_style_ppr: Option<&rdocx_oxml::properties::CT_PPr>,
     table_style_rpr: Option<&rdocx_oxml::properties::CT_RPr>,
+    cell_shading: Option<Color>,
     doc_grid: Option<&CT_DocGrid>,
     blocks: &mut Vec<CellBlock>,
     semantics: &mut Vec<CellBlockSemantics>,
@@ -1856,6 +1863,7 @@ fn layout_control_cell_content(
                     source,
                     table_style_ppr,
                     table_style_rpr,
+                    cell_shading,
                     doc_grid,
                 )?;
                 if let Some(registry) = sources {
@@ -1905,6 +1913,7 @@ fn layout_control_cell_content(
                 &source_path,
                 table_style_ppr,
                 table_style_rpr,
+                cell_shading,
                 doc_grid,
                 blocks,
                 semantics,

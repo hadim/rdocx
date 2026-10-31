@@ -9302,6 +9302,7 @@ pub(crate) fn layout_paragraph_with_grid(
         None,
         None,
         None,
+        None,
         doc_grid,
         false,
     )
@@ -9329,6 +9330,7 @@ pub(crate) fn layout_paragraph_with_source(
         diagnostics,
         source_node,
         source_node,
+        None,
         None,
         None,
         None,
@@ -9365,6 +9367,7 @@ pub(crate) fn layout_paragraph_with_source_and_direction(
         navigation_node,
         None,
         None,
+        None,
         Some(&mut direction),
         doc_grid,
         false,
@@ -9385,6 +9388,7 @@ pub(crate) fn layout_paragraph_with_source_in_table(
     source_node: Option<SourceNodeId>,
     table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
     table_run_properties: Option<&rdocx_oxml::properties::CT_RPr>,
+    cell_shading: Option<Color>,
     doc_grid: Option<&CT_DocGrid>,
 ) -> Result<(ParagraphBlock, TextDirection)> {
     let mut direction = TextDirection::Auto;
@@ -9401,6 +9405,7 @@ pub(crate) fn layout_paragraph_with_source_in_table(
         source_node,
         table_properties,
         table_run_properties,
+        cell_shading,
         Some(&mut direction),
         doc_grid,
         true,
@@ -9422,6 +9427,7 @@ fn layout_paragraph_with_source_and_table(
     navigation_node: Option<SourceNodeId>,
     table_properties: Option<&rdocx_oxml::properties::CT_PPr>,
     table_run_properties: Option<&rdocx_oxml::properties::CT_RPr>,
+    cell_shading: Option<Color>,
     reflow_direction_out: Option<&mut TextDirection>,
     doc_grid: Option<&CT_DocGrid>,
     in_table_cell: bool,
@@ -9532,6 +9538,9 @@ fn layout_paragraph_with_source_and_table(
         .and_then(|shd| shd.fill.as_ref())
         .filter(|f| f != &"auto")
         .map(|f| Color::from_hex(f));
+    // Text in the automatic colour contrasts with the fill behind it, the
+    // paragraph's own or else the cell's.
+    let automatic_color = automatic_text_color(shading.or(cell_shading));
 
     // Convert runs to inline items
     let mut inline_items = Vec::new();
@@ -9620,8 +9629,9 @@ fn layout_paragraph_with_source_and_table(
                 let color = marker_rpr
                     .color
                     .as_ref()
+                    .filter(|c| c.as_str() != "auto")
                     .map(|c| Color::from_hex(c))
-                    .unwrap_or(Color::BLACK);
+                    .unwrap_or(automatic_color);
 
                 // The level's run properties affect numbering ink, not the
                 // counter or paragraph heading. The suffix keeps its normal
@@ -9831,7 +9841,7 @@ fn layout_paragraph_with_source_and_table(
             &mut inline_items,
             fm,
             effective_rpr.sz.map(|hp| hp.to_pt()).unwrap_or(11.0),
-            resolve_run_color(&effective_rpr, input.theme.as_ref()),
+            resolve_run_color(&effective_rpr, input.theme.as_ref(), automatic_color),
             available_width,
             input.math_properties.as_ref(),
             diagnostics,
@@ -9856,6 +9866,7 @@ fn layout_paragraph_with_source_and_table(
                         input,
                         para_style_id,
                         table_run_properties,
+                        automatic_color,
                     },
                     fm,
                 )?
@@ -9886,7 +9897,7 @@ fn layout_paragraph_with_source_and_table(
         let (color, underline) = tracked_marks(
             &projected,
             input.revision_style,
-            resolve_run_color(&effective_rpr, input.theme.as_ref()),
+            resolve_run_color(&effective_rpr, input.theme.as_ref(), automatic_color),
             convert::underline(effective_rpr.underline),
         );
         let strike = projected.force_strike || effective_rpr.strike.unwrap_or(false);
@@ -10301,7 +10312,7 @@ fn layout_paragraph_with_source_and_table(
                         let (segment_color, segment_underline) = tracked_marks(
                             &projected,
                             input.revision_style,
-                            resolve_run_color(&segment_rpr, input.theme.as_ref()),
+                            resolve_run_color(&segment_rpr, input.theme.as_ref(), automatic_color),
                             convert::underline(segment_rpr.underline),
                         );
                         let segment_strike =
@@ -10631,7 +10642,7 @@ fn layout_paragraph_with_source_and_table(
         &mut inline_items,
         fm,
         equation_rpr.sz.map(|hp| hp.to_pt()).unwrap_or(11.0),
-        resolve_run_color(&equation_rpr, input.theme.as_ref()),
+        resolve_run_color(&equation_rpr, input.theme.as_ref(), automatic_color),
         available_width,
         input.math_properties.as_ref(),
         diagnostics,
@@ -10682,7 +10693,7 @@ fn layout_paragraph_with_source_and_table(
             ascent: metrics.ascent,
             descent: metrics.descent,
             line_gap: 0.0,
-            color: resolve_run_color(&caret_rpr, input.theme.as_ref()),
+            color: resolve_run_color(&caret_rpr, input.theme.as_ref(), automatic_color),
             bold,
             italic,
             underline: None,
@@ -13682,6 +13693,8 @@ struct AnnotationContext<'a> {
     input: &'a LayoutInput,
     para_style_id: Option<&'a str>,
     table_run_properties: Option<&'a CT_RPr>,
+    /// The colour of text in the automatic colour, black or white.
+    automatic_color: Color,
 }
 
 /// Shape a sequence of runs onto one baseline.
@@ -13748,7 +13761,11 @@ fn measure_annotation_line(
             advances: shaped.advances,
             text,
             source: None,
-            color: resolve_run_color(&effective_rpr, context.input.theme.as_ref()),
+            color: resolve_run_color(
+                &effective_rpr,
+                context.input.theme.as_ref(),
+                context.automatic_color,
+            ),
             bold,
             italic,
             field_kind: None,
@@ -13871,10 +13888,13 @@ fn ruby_inline_item(
 
 /// Resolve the effective color for a run, considering theme colors.
 ///
-/// Priority: literal color (non-auto) > theme color > black.
+/// Priority: literal color (non-auto) > theme color > `automatic`, the
+/// automatic colour that [`automatic_text_color`] gives for the fill behind
+/// the text.
 fn resolve_run_color(
     rpr: &rdocx_oxml::properties::CT_RPr,
     theme: Option<&rdocx_oxml::theme::Theme>,
+    automatic: Color,
 ) -> Color {
     if let Some((hex, alpha)) = rpr.solid_text_fill() {
         let mut color = Color::from_hex(&hex);
@@ -13907,7 +13927,24 @@ fn resolve_run_color(
         .as_ref()
         .filter(|c| c.as_str() != "auto")
         .map(|c| Color::from_hex(c))
-        .unwrap_or(Color::BLACK)
+        .unwrap_or(automatic)
+}
+
+/// The automatic text colour on `fill`: white on a dark fill, black on a
+/// light one or on none. Word draws automatic text in whichever contrasts
+/// with the shading behind it. The threshold is LibreOffice's, which turns
+/// white up to a luminance of 156 in 255, weighted 76, 151 and 29 in 256.
+fn automatic_text_color(fill: Option<Color>) -> Color {
+    let Some(fill) = fill else {
+        return Color::BLACK;
+    };
+    let byte = |channel: f64| (channel.clamp(0.0, 1.0) * 255.0).round();
+    let luminance = (76.0 * byte(fill.r) + 151.0 * byte(fill.g) + 29.0 * byte(fill.b)) / 256.0;
+    if luminance.floor() <= 156.0 {
+        Color::WHITE
+    } else {
+        Color::BLACK
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23481,6 +23518,55 @@ mod tests {
     }
 
     #[test]
+    fn issue433_automatic_text_colour_contrasts_with_the_fill_behind_it() {
+        let cell = |fill: &str, color: &str, text: &str| {
+            let shading = if fill.is_empty() {
+                String::new()
+            } else {
+                format!(r#"<w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="{fill}"/></w:tcPr>"#)
+            };
+            format!(
+                r#"<w:tc>{shading}<w:p><w:r><w:rPr>{color}</w:rPr><w:t>{text}</w:t></w:r></w:p></w:tc>"#
+            )
+        };
+        let auto = r#"<w:color w:val="auto"/>"#;
+        let black = r#"<w:color w:val="000000"/>"#;
+        let cells = [
+            cell("000000", "", "OnBlack"),
+            cell("1F3864", auto, "OnNavy"),
+            cell("BFBFBF", "", "OnLightGrey"),
+            cell("", "", "OnNothing"),
+            cell("000000", black, "ExplicitBlack"),
+        ]
+        .concat();
+        let mut input = make_input_with_text("");
+        input.document = CT_Document::from_xml(
+            format!(
+                r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tblPr><w:tblW w:w="9000" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="1800"/><w:gridCol w:w="1800"/><w:gridCol w:w="1800"/><w:gridCol w:w="1800"/><w:gridCol w:w="1800"/></w:tblGrid><w:tr>{cells}</w:tr></w:tbl><w:p><w:pPr><w:shd w:val="clear" w:color="auto" w:fill="000000"/></w:pPr><w:r><w:t>DarkParagraph</w:t></w:r></w:p></w:body></w:document>"#
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let output = deterministic_layout(&input);
+        let mut colors = HashMap::new();
+        oxml_layout::walk(&output.pages[0].elements, &mut |element, _| {
+            if let PositionedElement::Text(run) = element {
+                colors.insert(run.text.clone(), run.color);
+            }
+        });
+        for (text, expected) in [
+            ("OnBlack", Color::WHITE),
+            ("OnNavy", Color::WHITE),
+            ("OnLightGrey", Color::BLACK),
+            ("OnNothing", Color::BLACK),
+            ("ExplicitBlack", Color::BLACK),
+            ("DarkParagraph", Color::WHITE),
+        ] {
+            assert_eq!(colors.get(text), Some(&expected), "{text}: {colors:?}");
+        }
+    }
+
+    #[test]
     fn issue433_wingdings_2_bullets_map_to_unicode_or_report_the_code() {
         // U+F0A1 in Wingdings 2 is Word's black square bullet. U+F0A7 has no
         // bounded mapping and keeps its code with a diagnostic.
@@ -27824,22 +27910,22 @@ mod tests {
         let inherited = fill("w14", namespace, "123456", 50_000);
         let mut effective = CT_RPr::default();
         effective.merge_from(&inherited);
-        assert_eq!(resolve_run_color(&effective, None).a, 0.5);
+        assert_eq!(resolve_run_color(&effective, None, Color::BLACK).a, 0.5);
         assert_eq!(
-            resolve_run_color(&effective, None).r,
+            resolve_run_color(&effective, None, Color::BLACK).r,
             Color::from_hex("123456").r
         );
         let direct = fill("alias", namespace, "AABBCC", 25_000);
         effective.merge_from(&direct);
-        assert_eq!(resolve_run_color(&effective, None).a, 0.25);
+        assert_eq!(resolve_run_color(&effective, None, Color::BLACK).a, 0.25);
         assert_eq!(
-            resolve_run_color(&effective, None).r,
+            resolve_run_color(&effective, None, Color::BLACK).r,
             Color::from_hex("AABBCC").r
         );
         let foreign = fill("w14", "urn:foreign", "FF0000", 0);
         let original = foreign.revision_xml.clone();
         effective.merge_from(&foreign);
-        assert_eq!(resolve_run_color(&effective, None).a, 0.25);
+        assert_eq!(resolve_run_color(&effective, None, Color::BLACK).a, 0.25);
         assert_eq!(foreign.revision_xml, original);
         assert!(
             fill("w14", namespace, "123456", 100_001)
