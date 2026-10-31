@@ -408608,3 +408608,50 @@ fn issue432_links_written_by_rdocx_take_the_hyperlink_character_style() {
     );
     assert!(styles.contains(r#"<w:color w:val="FF0000"/>"#), "{styles}");
 }
+
+#[test]
+fn issue432_merging_with_an_empty_cell_keeps_no_blank_paragraph() {
+    let cases = [
+        (
+            "second cell empty",
+            (1, 2),
+            Some("Total"),
+            None,
+            vec!["Total"],
+        ),
+        ("first cell empty", (1, 2), None, Some("Sum"), vec!["Sum"]),
+        (
+            "both with text",
+            (1, 2),
+            Some("Total"),
+            Some("Sum"),
+            vec!["Total", "Sum"],
+        ),
+        ("both empty", (1, 2), None, None, vec![""]),
+        (
+            "vertical, second cell empty",
+            (2, 1),
+            Some("Total"),
+            None,
+            vec!["Total"],
+        ),
+    ];
+    for (label, (rows, columns), first, second, expected) in cases {
+        let mut document = Document::new();
+        let other = if columns == 2 { (0, 1) } else { (1, 0) };
+        {
+            let mut table = document.add_table(rows, columns);
+            if let Some(text) = first {
+                table.cell(0, 0).unwrap().set_text(text);
+            }
+            if let Some(text) = second {
+                table.cell(other.0, other.1).unwrap().set_text(text);
+            }
+            table.merge_cells((0, 0), other).unwrap();
+        }
+        let table = document.table(0).unwrap();
+        let cell = table.cell(0, 0).unwrap();
+        let texts = cell.paragraphs().map(|p| p.text()).collect::<Vec<_>>();
+        assert_eq!(texts, expected, "{label}");
+    }
+}

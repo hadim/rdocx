@@ -1114,11 +1114,18 @@ impl<'a> Table<'a> {
             selected.push((first, last));
         }
         let mut candidate = self.inner.clone();
+        // As Word does, an empty cell adds nothing to the merged content, so
+        // its lone empty paragraph does not stay as a blank line.
         let mut content = Vec::new();
         for (offset, (first, last)) in selected.iter().enumerate() {
             for cell in &candidate.rows[top + offset].cells[*first..=*last] {
-                content.extend(cell.content.clone());
+                if !holds_one_empty_paragraph(cell) {
+                    content.extend(cell.content.clone());
+                }
             }
+        }
+        if content.is_empty() {
+            content = candidate.rows[top].cells[selected[0].0].content.clone();
         }
         let width = candidate
             .grid
@@ -3251,6 +3258,20 @@ impl<'a> CellRef<'a> {
             .and_then(|pr| pr.v_align)
             .map(VerticalAlignment::from_st)
     }
+}
+
+/// Whether a cell holds nothing but one paragraph without content, which is
+/// what an empty cell is. Paragraph properties and the paragraph's own root
+/// attributes do not count as content.
+fn holds_one_empty_paragraph(cell: &CT_Tc) -> bool {
+    let [CellContent::Paragraph(paragraph)] = cell.content.as_slice() else {
+        return false;
+    };
+    let mut bare = paragraph.clone();
+    bare.properties = None;
+    bare.extra_xml
+        .retain(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw));
+    bare == CT_P::new()
 }
 
 #[cfg(test)]
