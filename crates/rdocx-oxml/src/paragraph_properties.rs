@@ -1634,10 +1634,10 @@ impl CT_PPr {
         if other.ind_end.is_some() {
             self.ind_end = other.ind_end;
         }
-        if other.ind_first_line.is_some() {
+        // `w:firstLine` and `w:hanging` are one property, the first-line
+        // indent, so a level that sets either replaces both.
+        if other.ind_first_line.is_some() || other.ind_hanging.is_some() {
             self.ind_first_line = other.ind_first_line;
-        }
-        if other.ind_hanging.is_some() {
             self.ind_hanging = other.ind_hanging;
         }
         if other.keep_next.is_some() {

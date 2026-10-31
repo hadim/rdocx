@@ -11906,10 +11906,10 @@ fn merge_direct_ppr(effective: &mut CT_PPr, direct: &CT_PPr) {
     if direct.ind_end.is_some() {
         effective.ind_end = direct.ind_end;
     }
-    if direct.ind_first_line.is_some() {
+    // `w:firstLine` and `w:hanging` are one property, the first-line indent,
+    // so a level that sets either replaces both.
+    if direct.ind_first_line.is_some() || direct.ind_hanging.is_some() {
         effective.ind_first_line = direct.ind_first_line;
-    }
-    if direct.ind_hanging.is_some() {
         effective.ind_hanging = direct.ind_hanging;
     }
     if direct.keep_next.is_some() {
@@ -23413,6 +23413,34 @@ mod tests {
             input.numbering.as_ref().unwrap().to_xml().unwrap(),
             numbering
         );
+    }
+
+    #[test]
+    fn issue433_first_line_indent_is_one_property_across_levels() {
+        // BaseInd hangs 720 twips. Derived sets firstLine over it, DerivedH
+        // sets hanging 0, and the third paragraph sets firstLine directly.
+        // Each first line starts at the margin, where the first paragraph's
+        // first line (left 720 less hanging 720) starts.
+        let mut input = make_input_with_text("");
+        input.styles = CT_Styles::from_xml(br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="BaseInd"><w:name w:val="Base Ind"/><w:pPr><w:ind w:left="720" w:hanging="720"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="Derived"><w:name w:val="Derived"/><w:basedOn w:val="BaseInd"/><w:pPr><w:ind w:left="0" w:firstLine="0"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="DerivedH"><w:name w:val="Derived H"/><w:basedOn w:val="BaseInd"/><w:pPr><w:ind w:left="0" w:hanging="0"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="FirstLine"><w:name w:val="First Line"/><w:pPr><w:ind w:left="0" w:firstLine="360"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="HangOver"><w:name w:val="Hang Over"/><w:basedOn w:val="FirstLine"/><w:pPr><w:ind w:left="720" w:hanging="720"/></w:pPr></w:style></w:styles>"#).unwrap();
+        input.document = CT_Document::from_xml(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="BaseInd"/></w:pPr><w:r><w:t>Case0</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Derived"/></w:pPr><w:r><w:t>Case1</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="BaseInd"/><w:ind w:left="0" w:firstLine="0"/></w:pPr><w:r><w:t>Case2</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="DerivedH"/></w:pPr><w:r><w:t>Case3</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="HangOver"/></w:pPr><w:r><w:t>Case4</w:t></w:r></w:p></w:body></w:document>"#).unwrap();
+        let output = deterministic_layout(&input);
+        let mut starts = Vec::new();
+        oxml_layout::walk(&output.pages[0].elements, &mut |element, _| {
+            if let PositionedElement::Text(run) = element
+                && run.text.starts_with("Case")
+            {
+                starts.push((run.text.clone(), run.origin.x));
+            }
+        });
+        assert_eq!(starts.len(), 5, "{starts:?}");
+        for (text, x) in &starts {
+            assert!(
+                (x - starts[0].1).abs() < 1e-6,
+                "{text} starts at {x}, expected the margin at {}",
+                starts[0].1
+            );
+        }
     }
 
     #[test]
