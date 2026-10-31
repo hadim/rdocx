@@ -39276,8 +39276,11 @@ fn imported_and_preserved_collisions_fail_before_mutation() {
     );
     assert_ne!(xml, collided, "second bookmark id must be present");
     package.set_part("/word/document.xml", collided.into_bytes());
-    let error = f249_open_error("bookmark", package);
-    assert!(error.contains("duplicate bookmark id 0"), "{error}");
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    // Two bookmarks may share an id, as Word has saved them. It opens, and
+    // `issue435_bookmarks_sharing_an_id_open_and_render` covers it.
+    Document::from_bytes(&output.into_inner()).unwrap();
 
     let mut package = f249_package(&bytes);
     let xml = String::from_utf8(package.get_part("/word/comments.xml").unwrap().to_vec()).unwrap();
@@ -408629,4 +408632,66 @@ fn issue435_validate_reports_a_character_xml_forbids() {
         )),
         "{errors:?}"
     );
+}
+
+#[test]
+fn issue435_bookmarks_sharing_an_id_open_and_render() {
+    let mut document = Document::new();
+    document.add_paragraph("First heading");
+    document.add_paragraph("Some text");
+    document.set_header("Header text");
+    let base = document.to_bytes().unwrap();
+    let bookmark = |xml: &str, text: &str, name: &str| {
+        let run = format!("<w:r><w:t>{text}</w:t></w:r>");
+        assert!(xml.contains(&run), "{text}");
+        xml.replacen(
+            &run,
+            &format!(
+                r#"<w:bookmarkStart w:id="2" w:name="{name}"/>{run}<w:bookmarkEnd w:id="2"/>"#
+            ),
+            1,
+        )
+    };
+    let same_part = issue435_edit(&base, "word/document.xml", |xml| {
+        bookmark(
+            &bookmark(xml, "First heading", "_Toc1"),
+            "Some text",
+            "_GoBack",
+        )
+    });
+    let body = issue435_edit(&base, "word/document.xml", |xml| {
+        bookmark(xml, "First heading", "_Toc1")
+    });
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(base.as_slice())).unwrap();
+    let header_part = (0..archive.len())
+        .map(|index| {
+            archive
+                .by_index(index)
+                .unwrap()
+                .name()
+                .unwrap()
+                .into_owned()
+        })
+        .find(|name| name.starts_with("word/header"))
+        .unwrap();
+    let across_parts = issue435_edit(&body, &header_part, |xml| {
+        bookmark(xml, "Header text", "_GoBack")
+    });
+    for bytes in [same_part, across_parts] {
+        let mut opened = Document::from_bytes(&bytes).unwrap();
+        assert!(opened.text().contains("Some text"));
+        assert!(!opened.layout().unwrap().layout.pages.is_empty());
+        let report = rdocx::validate_document_bytes(&bytes).unwrap();
+        assert!(report.is_valid(), "{:?}", report.findings);
+        assert!(
+            report.findings.iter().any(|finding| finding
+                .message
+                .starts_with("bookmark id 2 is used by 2 bookmarks")),
+            "{:?}",
+            report.findings
+        );
+        opened.add_paragraph("New");
+        let reopened = Document::from_bytes(&opened.to_bytes().unwrap()).unwrap();
+        assert!(reopened.text().contains("New"));
+    }
 }

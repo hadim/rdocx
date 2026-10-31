@@ -5020,6 +5020,11 @@ pub(crate) struct DocumentIdentifiers {
     /// or ignore them, so a scan accepts them. A staged edit keeps the counts
     /// of the opened document and may not exceed them.
     repeated_drawing_ids: HashMap<String, HashMap<u32, usize>>,
+    /// The `w:bookmarkStart/@w:id` values the opened XML repeats across the
+    /// document, with their occurrence count. The id only pairs a start with
+    /// its end, and Word has saved files where two bookmarks share one, so a
+    /// scan accepts them. A staged edit may not exceed the opened counts.
+    repeated_bookmark_ids: HashMap<i32, usize>,
     abstract_numbering_ids: HashSet<u32>,
     numbering_instance_ids: HashSet<u32>,
     part_names: HashSet<String>,
@@ -5086,6 +5091,7 @@ impl DocumentIdentifiers {
             comment_ids: HashSet::new(),
             drawing_ids: HashSet::new(),
             repeated_drawing_ids: HashMap::new(),
+            repeated_bookmark_ids: HashMap::new(),
             abstract_numbering_ids: HashSet::new(),
             numbering_instance_ids: HashSet::new(),
             part_names: package
@@ -5313,7 +5319,9 @@ impl DocumentIdentifiers {
                 *part_drawing_ids.entry(value).or_default() += 1;
             }
             IdentifierDefinition::Bookmark(value) => {
-                Self::insert_unique(&mut self.bookmark_ids, value, "bookmark")?;
+                if !self.bookmark_ids.insert(value) {
+                    *self.repeated_bookmark_ids.entry(value).or_insert(1) += 1;
+                }
             }
             IdentifierDefinition::Comment(value) => {
                 Self::insert_unique(&mut self.comment_ids, value, "comment")?;
@@ -5477,6 +5485,26 @@ impl DocumentIdentifiers {
         match added.first() {
             Some((part_name, id)) => Err(Error::Other(format!(
                 "duplicate drawing id {id} in authored XML of part {part_name}"
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// Refuse a `w:bookmarkStart/@w:id` occurrence that a staged edit added
+    /// to an id the document already uses. Repetitions the source had are kept.
+    fn reject_new_repeated_bookmark_ids(&self, source: &Self) -> Result<()> {
+        let mut added = self
+            .repeated_bookmark_ids
+            .iter()
+            .filter(|(id, count)| {
+                **count > source.repeated_bookmark_ids.get(id).copied().unwrap_or(1)
+            })
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        added.sort_unstable();
+        match added.first() {
+            Some(id) => Err(Error::Other(format!(
+                "duplicate bookmark id {id} in authored XML"
             ))),
             None => Ok(()),
         }
@@ -5937,6 +5965,8 @@ impl DocumentIdentifiers {
     fn reconcile_provenance(&mut self, source: &Self) {
         self.repeated_drawing_ids
             .clone_from(&source.repeated_drawing_ids);
+        self.repeated_bookmark_ids
+            .clone_from(&source.repeated_bookmark_ids);
         self.preserved_relationship_ids = intersect_relationship_registry(
             &source.preserved_relationship_ids,
             &self.relationship_ids,
@@ -25149,6 +25179,9 @@ impl Document {
         reopened
             .identifiers
             .reject_new_repeated_drawing_ids(&provenance)?;
+        reopened
+            .identifiers
+            .reject_new_repeated_bookmark_ids(&provenance)?;
         reopened.identifiers.reconcile_provenance(&provenance);
         reopened.custom_properties_owned = custom_properties_owned;
         reopened.settings_owned = settings_owned;
@@ -75177,7 +75210,7 @@ mod tests {
         }
         duplicated.prepare_staged_package().unwrap();
         let header =
-            format!(r#"<w:hdr xmlns:w="{W_NS}"><w:p><w:bookmarkStart w:id="x"/></w:p></w:hdr>"#);
+            format!(r#"<w:hdr xmlns:w="{W_NS}"><w:p><w:bookmarkStart w:id="9"/></w:p></w:hdr>"#);
         duplicated
             .package
             .set_part("/word/header1.xml", header.into_bytes());
@@ -75200,13 +75233,10 @@ mod tests {
             Ok(_) => panic!("duplicate bookmark reopened on the old path"),
         };
         assert_eq!(fast_error.to_string(), slow_error.to_string());
-        assert!(
-            fast_error.to_string().contains("duplicate bookmark id 1"),
-            "{fast_error}"
-        );
-        assert!(
-            !fast_error.to_string().contains("invalid bookmark id"),
-            "{fast_error}"
+        assert_eq!(
+            fast_error.to_string(),
+            "duplicate bookmark id 1 in authored XML",
+            "an edit may not add a bookmark id the document already uses"
         );
     }
 
@@ -75268,11 +75298,12 @@ mod tests {
             r#"<w:bookmarkStart w:id="1"/><w:bookmarkStart w:id="1"/><w:bookmarkStart w:id="x"/>"#;
         let invalid_then_duplicate =
             r#"<w:bookmarkStart w:id="x"/><w:bookmarkStart w:id="1"/><w:bookmarkStart w:id="1"/>"#;
-        let duplicate_message = "cannot scan identifiers in XML part /word/header1.xml: duplicate bookmark id 1 in imported or preserved XML";
+        // A repeated bookmark id is accepted, so the invalid one is reported
+        // wherever it stands.
         let invalid_message =
             "cannot scan identifiers in XML part /word/header1.xml: invalid bookmark id x";
         for (header, message) in [
-            (duplicate_then_invalid, duplicate_message),
+            (duplicate_then_invalid, invalid_message),
             (invalid_then_duplicate, invalid_message),
         ] {
             let mut edited = package.clone();
@@ -75297,11 +75328,8 @@ mod tests {
 
         let mut second = package.clone();
         second.set_part("/word/header2.xml", story(r#"<w:bookmarkStart w:id="2"/>"#));
-        let error = DocumentIdentifiers::scan(&second).unwrap_err();
-        assert!(
-            matches!(error, Error::Other(ref text) if text == "cannot scan identifiers in XML part /word/header2.xml: duplicate bookmark id 2 in imported or preserved XML"),
-            "{error}"
-        );
+        let scanned = DocumentIdentifiers::scan(&second).unwrap();
+        assert_eq!(scanned.repeated_bookmark_ids, HashMap::from([(2, 2)]));
 
         let mut retyped = package.clone();
         retyped
