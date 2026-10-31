@@ -2273,8 +2273,8 @@ pub fn unsupported_number_formats(chart: &CT_Chart) -> Result<Vec<String>> {
         }
     };
     for plot in chart.plot_area.plots()? {
-        let mut label_sets: Vec<&CT_DLbls> = plot_data_labels(&plot).into_iter().collect();
-        for series in plot_series(&plot) {
+        let mut label_sets: Vec<&CT_DLbls> = plot_data_labels(plot).into_iter().collect();
+        for series in plot_series(plot) {
             if let Some(AxisData::Numeric(data)) = &series.categories {
                 note(&NumberFormat::new(data.format_code.clone(), false)?);
             }
@@ -9198,7 +9198,7 @@ impl NumberFormatSection {
                         if c.is_ascii_digit() {
                             written_digits += 1;
                             let left = total_digits - written_digits;
-                            if self.thousands && left > 0 && left % 3 == 0 {
+                            if self.thousands && left > 0 && left.is_multiple_of(3) {
                                 out.push(',');
                             }
                         }
