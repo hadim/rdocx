@@ -58,6 +58,19 @@ pub(crate) fn emit_markdown(input: &HtmlInput) -> String {
         match block {
             Block::Paragraph(p, boundaries) => {
                 emit_paragraph(&mut out, &p, &boundaries, input, &mut list_levels);
+                for id in crate::paragraph_chart_ids(&p) {
+                    if let Some(chart) = input.charts.get(id) {
+                        leave_list(&mut out, &mut list_levels);
+                        // The chart's own paragraph is often otherwise empty.
+                        while out.ends_with("\n\n\n") {
+                            out.pop();
+                        }
+                        if !out.is_empty() && !out.ends_with("\n\n") {
+                            out.push('\n');
+                        }
+                        emit_chart_table(&mut out, chart);
+                    }
+                }
             }
             Block::Table(tbl) => {
                 let mut table = String::new();
@@ -1091,6 +1104,28 @@ fn delimiters_hold(
 }
 
 /// Emit a table as a GFM pipe table.
+/// Writes a chart's data as a pipe table: series names across, categories
+/// down.
+fn emit_chart_table(out: &mut String, chart: &crate::ChartTable) {
+    for (index, row) in chart.rows().iter().enumerate() {
+        out.push('|');
+        for cell in row {
+            let mut text = String::new();
+            for character in cell.chars() {
+                push_escaped(&mut text, character);
+            }
+            out.push_str(&format!(" {} |", text.replace('|', "\\|")));
+        }
+        out.push('\n');
+        if index == 0 {
+            out.push('|');
+            out.push_str(&" --- |".repeat(row.len()));
+            out.push('\n');
+        }
+    }
+    out.push('\n');
+}
+
 fn emit_table(
     out: &mut String,
     tbl: &CT_Tbl,

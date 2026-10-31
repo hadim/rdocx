@@ -408406,3 +408406,35 @@ fn body_range_across_table_includes_cell_text() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+#[test]
+fn markdown_and_html_exports_hold_a_chart_as_a_table_of_its_data() {
+    let mut document = Document::new();
+    document.add_paragraph("Revenue");
+    document
+        .add_chart(
+            ChartKind::Bar,
+            Length::inches(5.0),
+            Length::inches(3.0),
+            &ChartData {
+                categories: vec!["Q1".to_owned(), "Q2".to_owned()],
+                series: vec![("Zeta region".to_owned(), vec![1150.0, 1190.5])],
+                ..ChartData::default()
+            },
+        )
+        .unwrap();
+    document.add_paragraph("After");
+
+    let markdown = document.to_markdown();
+    assert!(
+        markdown.contains(
+            "Revenue\n\n|  | Zeta region |\n| --- | --- |\n| Q1 | 1150 |\n| Q2 | 1190.5 |\n\nAfter"
+        ),
+        "{markdown:?}"
+    );
+    let html = document.to_html();
+    assert!(
+        html.contains("<table class=\"chart-data\">\n<tr><th></th><th>Zeta region</th></tr>\n<tr><th>Q1</th><td>1150</td></tr>\n<tr><th>Q2</th><td>1190.5</td></tr>\n</table>"),
+        "{html}"
+    );
+}

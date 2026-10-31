@@ -45814,6 +45814,7 @@ impl Document {
 
         let mut images: HashMap<String, rdocx_html::ImageData> = HashMap::new();
         let mut hyperlink_urls: HashMap<String, String> = HashMap::new();
+        let mut charts: HashMap<String, rdocx_html::ChartTable> = HashMap::new();
 
         if let Some(rels) = self.package.get_part_rels(&self.doc_part_name) {
             for rel in &rels.items {
@@ -45842,6 +45843,23 @@ impl Document {
                     {
                         hyperlink_urls.insert(rel.id.clone(), rel.target.clone());
                     }
+                    t if t == rel_types::CHART && relationship_is_internal(rel) => {
+                        let part_name =
+                            OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
+                        if let Some((_, data)) = self
+                            .package
+                            .get_part(&part_name)
+                            .and_then(|xml| oxml_chart::read_chart_data(xml).ok())
+                        {
+                            charts.insert(
+                                rel.id.clone(),
+                                rdocx_html::ChartTable {
+                                    categories: data.categories,
+                                    series: data.series,
+                                },
+                            );
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -45853,6 +45871,7 @@ impl Document {
             numbering: self.numbering.clone(),
             images,
             hyperlink_urls,
+            charts,
         }
     }
 

@@ -18,6 +18,7 @@ fn input_from(doc: CT_Document, hyperlink_urls: HashMap<String, String>) -> Html
         numbering: None,
         images: HashMap::new(),
         hyperlink_urls,
+        charts: HashMap::new(),
     }
 }
 

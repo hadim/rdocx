@@ -37227,3 +37227,58 @@ fn a_picture_the_renderer_cannot_decode_is_not_reported_as_a_missing_relationshi
         "{messages:?}"
     );
 }
+
+#[test]
+fn markdown_and_html_exports_hold_a_chart_as_a_table_of_its_data() {
+    use rpptx::{Emu, Presentation};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    let data = ChartData {
+        categories: vec!["Q1".into(), "Q2".into()],
+        series: vec![("Zeta region".into(), vec![1150.0, 1190.5])],
+        ..ChartData::default()
+    };
+    deck.add_chart(
+        0,
+        ChartKind::Bar,
+        Emu(0),
+        Emu(0),
+        Emu(3_000_000),
+        Emu(2_000_000),
+        &data,
+    )
+    .unwrap();
+
+    let markdown = deck.to_markdown().unwrap();
+    assert!(
+        markdown
+            .text
+            .contains("| | Zeta region |\n| --- | --- |\n| Q1 | 1150 |\n| Q2 | 1190\\.5 |\n"),
+        "{}",
+        markdown.text
+    );
+    assert!(
+        !markdown
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("chart")),
+        "{:?}",
+        markdown.diagnostics
+    );
+    let html = deck.to_html().unwrap();
+    assert!(
+        html.text.contains(
+            "<table><thead><tr><th></th><th>Zeta region</th></tr></thead><tbody>\n<tr><th>Q1</th><td>1150</td></tr>\n<tr><th>Q2</th><td>1190.5</td></tr>\n</tbody></table>"
+        ),
+        "{}",
+        html.text
+    );
+    assert!(
+        !html
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("chart")),
+        "{:?}",
+        html.diagnostics
+    );
+}
