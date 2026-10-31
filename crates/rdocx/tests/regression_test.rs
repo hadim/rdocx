@@ -408406,3 +408406,42 @@ fn body_range_across_table_includes_cell_text() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+#[test]
+fn issue432_a_square_root_equation_writes_the_degree_its_schema_requires() {
+    let mut document = Document::new();
+    let sources = [
+        rdocx::equation_from_latex(r"\sqrt{x}").unwrap().value,
+        rdocx::equation_from_latex(r"\sqrt[3]{x}").unwrap().value,
+        rdocx::equation_from_mathml(
+            r#"<math xmlns="http://www.w3.org/1998/Math/MathML"><msqrt><mi>x</mi></msqrt></math>"#,
+        )
+        .unwrap()
+        .value,
+    ];
+    for source in sources {
+        document
+            .add_paragraph("")
+            .add_equation(rdocx::OfficeMath::inline(source.expressions))
+            .unwrap();
+    }
+    let xml = document.part_xml("/word/document.xml").unwrap();
+    let radicals = xml
+        .match_indices("<m:rad>")
+        .map(|(at, _)| &xml[at..])
+        .collect::<Vec<_>>();
+    assert_eq!(radicals.len(), 3, "{xml}");
+    for (index, radical) in radicals.into_iter().enumerate() {
+        let radical = &radical[..radical.find("</m:rad>").unwrap()];
+        let properties_end = radical.find("</m:radPr>").unwrap() + "</m:radPr>".len();
+        assert!(
+            radical[properties_end..].starts_with("<m:deg"),
+            "radical {index}: {radical}"
+        );
+    }
+    let square = &xml[xml.find("<m:rad>").unwrap()..];
+    assert!(
+        square.contains(r#"<m:degHide m:val="1"/></m:radPr><m:deg></m:deg><m:e>"#),
+        "{square}"
+    );
+}
