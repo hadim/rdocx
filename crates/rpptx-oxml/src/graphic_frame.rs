@@ -277,6 +277,16 @@ impl CT_GraphicFrame {
             .ok_or_else(|| OxmlError::MissingElement("p:cNvPr".to_owned()))
     }
 
+    /// Reports the explicit `p:cNvPr/@hidden` flag without changing source.
+    pub fn hidden(&self) -> bool {
+        matches!(
+            self.accessibility_xml()
+                .and_then(|xml| non_visual_drawing_text(xml, "hidden"))
+                .as_deref(),
+            Some("true" | "1")
+        )
+    }
+
     /// Returns the direct accessibility description.
     pub fn alt_text(&self) -> Option<String> {
         non_visual_drawing_text(self.accessibility_xml()?, "descr")

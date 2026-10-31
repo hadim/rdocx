@@ -4087,6 +4087,11 @@ fn emit_tree_inner<'a>(
         .map(|c| (c, parent_transform, parent_issues))
         .collect::<Vec<_>>();
     while let Some((child, parent, inherited_issues)) = pending.pop() {
+        // PowerPoint leaves a hidden shape or group out of the show, print and
+        // export, on slides, layouts and masters alike.
+        if child.hidden() {
+            continue;
+        }
         match child {
             ShapeTreeChild::GroupShape(group) => {
                 let (transform, issues) = group
@@ -5654,6 +5659,34 @@ mod tests {
             texts.iter().filter(|text| *text == "Master logo").count(),
             1
         );
+    }
+
+    #[test]
+    fn flattener_leaves_out_hidden_shapes_and_groups_on_slides_and_masters() {
+        let hide = |xml: String| xml.replacen("<p:cNvPr/>", r#"<p:cNvPr hidden="1"/>"#, 1);
+        let hidden_group = format!(
+            r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="9" name="Group" hidden="true"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{}</p:grpSp>"#,
+            shape_with_text(None, None, "in hidden group")
+        );
+        let fixture = Fixture::new(
+            &[
+                hide(shape_with_text(None, None, "hidden slide shape")),
+                hidden_group,
+                shape_with_text(None, None, "visible"),
+            ]
+            .join(""),
+            "",
+            &hide(shape_with_text(None, None, "hidden master shape")),
+        );
+
+        let texts: Vec<_> = fixture
+            .context()
+            .flatten()
+            .iter()
+            .filter_map(item_text)
+            .collect();
+
+        assert_eq!(texts, ["visible"]);
     }
 
     #[test]

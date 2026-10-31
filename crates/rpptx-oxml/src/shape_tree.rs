@@ -63,6 +63,21 @@ impl ShapeTreeChild {
         }
     }
 
+    /// Returns whether the child's `p:cNvPr/@hidden` keeps it out of the
+    /// slide show, print and export.
+    pub fn hidden(&self) -> bool {
+        match self {
+            Self::Shape(shape) => shape.hidden(),
+            Self::Picture(picture) => picture.hidden(),
+            Self::GraphicFrame(frame) => frame.hidden(),
+            Self::GroupShape(group) => group.hidden(),
+            Self::Connector(connector) => connector.hidden(),
+            Self::AlternateContent(alternate) => alternate
+                .chart_choice()
+                .is_some_and(CT_GraphicFrame::hidden),
+        }
+    }
+
     /// Returns the decoded producer-facing non-visual shape name.
     pub fn non_visual_name(&self) -> Option<String> {
         match self {
@@ -1365,6 +1380,14 @@ impl CT_Shape {
         self.raw.non_visual_name.as_deref()
     }
 
+    /// Reports the explicit `p:cNvPr/@hidden` flag without changing source.
+    pub fn hidden(&self) -> bool {
+        matches!(
+            non_visual_drawing_text(&self.raw.non_visual_drawing_properties, "hidden").as_deref(),
+            Some("true" | "1")
+        )
+    }
+
     /// Returns the direct accessibility description, including an explicit empty value.
     pub fn alt_text(&self) -> Option<String> {
         non_visual_drawing_text(&self.raw.non_visual_drawing_properties, "descr")
@@ -2534,6 +2557,16 @@ impl CT_GroupShape {
             .raw_children
             .get_mut(index)
             .ok_or_else(|| OxmlError::MissingElement("p:cNvPr".to_owned()))
+    }
+
+    /// Reports the explicit `p:cNvPr/@hidden` flag without changing source.
+    pub fn hidden(&self) -> bool {
+        matches!(
+            self.accessibility_xml()
+                .and_then(|xml| non_visual_drawing_text(xml, "hidden"))
+                .as_deref(),
+            Some("true" | "1")
+        )
     }
 
     /// Returns the direct accessibility description.
