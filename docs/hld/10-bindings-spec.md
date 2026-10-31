@@ -2108,9 +2108,10 @@ method as `Document.try_replace_text`. The WASM binding keeps its infallible
 `replacePlaceholder`, which calls `replace_text`.
 
 Literal replacement reaches the body, tables, content controls at every level,
-headers, footers, footnotes, endnotes, the text boxes of the body, headers, and
-footers, and the labels of the charts in the body. Regex replacement reaches
-the same stories except chart labels. Every normal note of the
+headers, footers, footnotes, endnotes, and the text boxes of the body, headers,
+and footers. Regex replacement reaches the same stories. Chart labels are not
+searched, as they cache the chart's embedded workbook and `rdocx text` does not
+show them, so the counts match the extracted text. Every normal note of the
 relationship-resolved footnotes and endnotes parts is searched, its tables and
 block controls included. The separator, continuation separator, and
 continuation notice entries are not, and neither is an untyped entry at id 0 or
@@ -2126,8 +2127,8 @@ and `replace_all_regex`, the WASM replacement method, and
 `rdocx replace --expect` share these counts.
 
 Literal replacement reaches the body, tables, content controls at every level,
-headers, footers, footnotes, endnotes, text boxes, and chart labels. Regex
-replacement reaches the same stories except chart labels. Every normal note of
+headers, footers, footnotes, endnotes, and text boxes, not chart labels. Regex
+replacement reaches the same stories. Every normal note of
 the relationship-resolved footnotes and endnotes parts is searched, its tables
 and block controls included. The separator, continuation
 separator, and continuation notice entries are not, and neither is an untyped

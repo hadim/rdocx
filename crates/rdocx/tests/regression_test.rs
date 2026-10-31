@@ -408766,3 +408766,38 @@ fn issue432_a_toc_inserted_before_any_heading_rebuilds_once_headings_exist() {
     assert!(xml[..introduction].contains(r#"w:anchor="_Toc"#), "{xml}");
     assert!(introduction < methods, "{xml}");
 }
+
+#[test]
+fn issue432_literal_replacement_leaves_chart_labels_to_their_workbook() {
+    let mut document = Document::new();
+    document.add_paragraph("Sales in the North region rose.");
+    document
+        .add_chart(
+            ChartKind::Bar,
+            Length::inches(4.0),
+            Length::inches(3.0),
+            &ChartData {
+                categories: vec!["North".to_owned(), "South".to_owned()],
+                series: vec![("Sales".to_owned(), vec![3.0, 4.0])],
+                number_format: None,
+                ..ChartData::default()
+            },
+        )
+        .unwrap();
+    let charts_before = document
+        .part_names()
+        .unwrap()
+        .into_iter()
+        .filter(|name| name.starts_with("/word/charts/"))
+        .map(|name| (name.clone(), document.part_xml(&name).unwrap()))
+        .collect::<Vec<_>>();
+    assert!(!charts_before.is_empty());
+    assert_eq!(document.try_replace_text("North", "NORTH").unwrap(), 1);
+    assert_eq!(
+        document.paragraph(0).unwrap().text(),
+        "Sales in the NORTH region rose."
+    );
+    for (name, before) in charts_before {
+        assert_eq!(document.part_xml(&name).unwrap(), before, "{name}");
+    }
+}
