@@ -408655,3 +408655,41 @@ fn issue432_merging_with_an_empty_cell_keeps_no_blank_paragraph() {
         assert_eq!(texts, expected, "{label}");
     }
 }
+
+#[test]
+fn issue432_cells_added_by_insert_column_and_add_row_keep_paragraph_formatting() {
+    let mut document = Document::new();
+    {
+        let mut table = document.add_table(2, 2);
+        for row in 0..2 {
+            for column in 0..2 {
+                let mut cell = table.cell(row, column).unwrap();
+                cell.set_text(&format!("r{row}c{column}"));
+                cell.set_shading("D9E2F3");
+                let mut paragraph = cell.paragraph_mut(0).unwrap();
+                paragraph.set_alignment(Alignment::Center);
+                paragraph.run_mut(0).unwrap().set_bold(true);
+            }
+        }
+        table.insert_column(1, false, None).unwrap();
+        table.add_row().unwrap();
+    }
+    let xml = document.part_xml("/word/document.xml").unwrap();
+    let cells = xml
+        .match_indices("<w:tc>")
+        .map(|(at, _)| {
+            let cell = &xml[at..];
+            &cell[..cell.find("</w:tc>").unwrap()]
+        })
+        .collect::<Vec<_>>();
+    // Three columns and three rows: (0, 2) comes from the column, (2, 1) from the row.
+    assert_eq!(cells.len(), 9, "{xml}");
+    for (label, cell) in [("inserted column", cells[2]), ("added row", cells[7])] {
+        assert!(cell.contains(r#"w:fill="D9E2F3""#), "{label}: {cell}");
+        assert!(
+            cell.contains(r#"<w:pPr><w:jc w:val="center"/><w:rPr><w:b/><w:bCs/></w:rPr></w:pPr>"#),
+            "{label}: {cell}"
+        );
+        assert!(!cell.contains("<w:r>"), "{label} holds no text: {cell}");
+    }
+}

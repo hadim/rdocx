@@ -2,7 +2,7 @@
 
 use rdocx_oxml::borders::CT_BorderEdge;
 use rdocx_oxml::drawing::AnchorAlignH;
-use rdocx_oxml::properties::CT_Shd;
+use rdocx_oxml::properties::{CT_PPr, CT_RPr, CT_Shd};
 use rdocx_oxml::shared::ST_Jc;
 pub use rdocx_oxml::table::VMerge;
 use rdocx_oxml::table::{
@@ -709,7 +709,9 @@ fn empty_grid_cell(width: i32) -> CT_Tc {
 ///
 /// Shading, borders, alignment, margins, wrapping, text direction and the
 /// conditional-format cache are copied. Merge state is not copied. Unmodelled formatting refuses before a new
-/// owner can be created, and the cell holds one empty paragraph.
+/// owner can be created, and the cell holds one empty paragraph. As in Word,
+/// that paragraph takes the formatting of `source`'s last paragraph, see
+/// [`new_cell_paragraph_properties`].
 fn formatted_empty_cell(source: &CT_Tc, width: Option<CT_TblWidth>) -> Result<CT_Tc> {
     if source
         .properties
@@ -729,7 +731,59 @@ fn formatted_empty_cell(source: &CT_Tc, width: Option<CT_TblWidth>) -> Result<CT
     if properties != CT_TcPr::default() {
         cell.properties = Some(properties);
     }
+    if let Some(paragraph_properties) = new_cell_paragraph_properties(source)
+        && let Some(CellContent::Paragraph(paragraph)) = cell.content.first_mut()
+    {
+        paragraph.properties = Some(paragraph_properties);
+    }
     Ok(cell)
+}
+
+/// The paragraph formatting of a cell added from `source`, which Word takes
+/// from the last paragraph of `source` so that text typed into the new cell
+/// matches its row or column.
+///
+/// The paragraph properties are copied without list numbering and tracked
+/// changes. The paragraph mark takes the mark's run properties, or else those
+/// of the paragraph's last run, which text typed at its end would continue.
+fn new_cell_paragraph_properties(source: &CT_Tc) -> Option<CT_PPr> {
+    let paragraph = source
+        .content
+        .iter()
+        .rev()
+        .find_map(|content| match content {
+            CellContent::Paragraph(paragraph) => Some(paragraph),
+            _ => None,
+        })?;
+    let mut properties = paragraph.properties.clone().unwrap_or_default();
+    properties.sect_pr = None;
+    properties.num_id = None;
+    properties.num_id_raw = None;
+    properties.num_ilvl = None;
+    properties.num_ilvl_raw = None;
+    properties.num_pr_extra_attributes.clear();
+    properties.num_pr_extra_xml.clear();
+    properties.numbering_revision = None;
+    properties.numbering_revision_xml.clear();
+    properties.numbering_revision_xml_positions.clear();
+    properties.numbering_revision_position = None;
+    properties.change = None;
+    properties.revision_xml.clear();
+    properties.revision_xml_positions.clear();
+    let mark = properties
+        .rpr
+        .take()
+        .or_else(|| paragraph.runs.last().and_then(|run| run.properties.clone()))
+        .map(|mut mark| {
+            mark.revision_markers.clear();
+            mark.change = None;
+            mark.revision_xml.clear();
+            mark.revision_xml_positions.clear();
+            mark
+        })
+        .filter(|mark| *mark != CT_RPr::default());
+    properties.rpr = mark;
+    (properties != CT_PPr::default()).then_some(properties)
 }
 
 /// Add `amount` twips to a fixed width, never below zero, leaving `auto` and
