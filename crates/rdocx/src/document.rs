@@ -43851,6 +43851,11 @@ impl Document {
 
             toc_paragraphs.push(p);
         }
+        if headings.is_empty() {
+            // The field still ends in a paragraph of its own, an empty one
+            // here, so `rebuild_toc` can fill it once headings exist.
+            toc_paragraphs.push(CT_P::new());
+        }
 
         let field_run = |xml: String| {
             let mut run = CT_R::new("");

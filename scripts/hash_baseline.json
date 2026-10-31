@@ -8,10 +8,10 @@
     "contract:word/numbering.xml": "831dc1977beaa48b4f2999f50751dc3b075418daabe1307cc7b3242267b7f1b4",
     "contract:word/styles.xml": "49687b10d19688bf634d4967a488eca42eec85ee54c4730af334e5fb1107a7f4",
     "feature_showcase:page1.png": "e1d30437e2618cff6da70163038427c32e1cd6523b0b58c5cd6376594ee742eb",
-    "feature_showcase:pdf/bytes": "bf88f82c69089f50449a578c58badf6fa0bfc8058484295ff5ad9d0a453974aa",
+    "feature_showcase:pdf/bytes": "ccd65f799e3b7bc7c67e8366b64d7c677819d93bfef8a488d91f6772f6fe0b5a",
     "feature_showcase:pdf/pages": "8a9ca895ba6e9ea3e81a999351c984bf3af9831aedebd99fb1ab9eabb2cea93d",
     "feature_showcase:pdf/resources": "3573cc6e7183b5e912bfde97f11edea4ec44bb40e1b8f066eeb9b4e5e7726d62",
-    "feature_showcase:word/document.xml": "9d3418ef8ef11cbcd64acb40b6f2d54648f985050138181bfb32531c8eecf48f",
+    "feature_showcase:word/document.xml": "ad275d2e793fadbea37ca8c4a8d02890cae85caa0ff4326432e61f582ec148d0",
     "feature_showcase:word/numbering.xml": "59283ab7d3fbd70ab110b2c9aa4b9f7f41443ef7c24bc6db3c248ee908e44232",
     "feature_showcase:word/styles.xml": "36e2057c493e6695e41dc5b96a369c72a31bc1f271f6bbafdd58899352450033",
     "invoice:page1.png": "7571c097759e08aa8239c188a979606bdb60228941b78d0b987b5db382bd7d97",
@@ -43,12 +43,12 @@
     "quote:word/numbering.xml": "7b1d7268c595b24ecd1ba22f9f48ed10266219a32f32058dfd45c0fcb204bb92",
     "quote:word/styles.xml": "49687b10d19688bf634d4967a488eca42eec85ee54c4730af334e5fb1107a7f4",
     "report:page1.png": "1f54ecad3bd19d8c7eb923c00a9f7cefd4760cbad489e7b9089a997d04646753",
-    "report:pdf/bytes": "bfcd417c614353041bb6a1af3167f83c07e1f9854b55566e435946da9f22d2c6",
+    "report:pdf/bytes": "4a8474f56091c60a6a3bb41a2a459bd5e221da6ebad101fb58da6d83fe326df6",
     "report:pdf/pages": "2f3bb9e62c5c9bb235d4a4191986b6b1ae14b9db5ec82c743c3034aaf297dc0c",
     "report:pdf/resources": "5010450bb7ad7cdb168bb355dc49ba50fc520faade505e391048c44f34d0bb00",
-    "report:word/document.xml": "8df95515887d2b7c7f5604db9c99f5cf2dcbce6a2ea2e202799adf6885c68ec4",
+    "report:word/document.xml": "33c069df26f72df9963e86ff8e050a57bd25c38ae05061098020a210d1c32824",
     "report:word/numbering.xml": "59283ab7d3fbd70ab110b2c9aa4b9f7f41443ef7c24bc6db3c248ee908e44232",
     "report:word/styles.xml": "49687b10d19688bf634d4967a488eca42eec85ee54c4730af334e5fb1107a7f4"
   },
-  "reason": "F-X233 intentional paragraph border geometry and owned flow: exact18 reviewed entries, seven PDF bytes/page hashes and contract invoice proposal quote page1 PNGs. Native Word16.113.2 geometry, unchanged XML/resources and byte-identical unbordered Base control justify the delta."
+  "reason": "#432 case 7: insert_toc with no heading ends the TOC field in an empty paragraph after its title (feature_showcase, report)"
 }

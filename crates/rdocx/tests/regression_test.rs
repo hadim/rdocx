@@ -408749,3 +408749,20 @@ fn issue432_a_numbering_definition_id_names_its_definition_after_a_republishing_
     assert_eq!(format("bullet item"), "bullet", "{numbering}");
     assert_eq!(format("later bullet"), "bullet", "{numbering}");
 }
+
+#[test]
+fn issue432_a_toc_inserted_before_any_heading_rebuilds_once_headings_exist() {
+    let mut document = Document::new();
+    document.add_paragraph("Contents");
+    document.insert_toc(1, 3).unwrap();
+    document.add_paragraph("Introduction").style("Heading1");
+    document.add_paragraph("Body text.");
+    document.add_paragraph("Methods").style("Heading1");
+    let report = document.rebuild_toc().unwrap();
+    assert_eq!(report.entry_count, 2, "{report:?}");
+    let xml = document.part_xml("/word/document.xml").unwrap();
+    let introduction = xml.find(r#"<w:t>Introduction</w:t>"#).unwrap();
+    let methods = xml.find(r#"<w:t>Methods</w:t>"#).unwrap();
+    assert!(xml[..introduction].contains(r#"w:anchor="_Toc"#), "{xml}");
+    assert!(introduction < methods, "{xml}");
+}
