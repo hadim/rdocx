@@ -9251,6 +9251,32 @@ fn detect_heading_level(para: &CT_P, styles: &CT_Styles) -> Option<u32> {
     None
 }
 
+/// Whether `style_id` names a table of contents level, "toc 1" to "toc 9".
+fn is_toc_paragraph_style(style_id: &str, styles: &CT_Styles) -> bool {
+    let level = |name: &str| {
+        name.get(..3)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("toc"))
+            && name[3..]
+                .trim_start()
+                .parse::<u32>()
+                .is_ok_and(|n| (1..=9).contains(&n))
+    };
+    level(style_id)
+        || styles
+            .get_by_id(style_id)
+            .and_then(|style| style.name.as_deref())
+            .is_some_and(level)
+}
+
+/// Whether `style_id` is the Hyperlink character style.
+fn is_hyperlink_character_style(style_id: &str, styles: &CT_Styles) -> bool {
+    style_id == "Hyperlink"
+        || styles
+            .get_by_id(style_id)
+            .and_then(|style| style.name.as_deref())
+            .is_some_and(|name| name.eq_ignore_ascii_case("Hyperlink"))
+}
+
 /// Lay out a single paragraph into a ParagraphBlock.
 pub fn layout_paragraph(
     para: &CT_P,
@@ -9541,6 +9567,8 @@ fn layout_paragraph_with_source_and_table(
     // Text in the automatic colour contrasts with the fill behind it, the
     // paragraph's own or else the cell's.
     let automatic_color = automatic_text_color(shading.or(cell_shading));
+    let toc_paragraph =
+        para_style_id.is_some_and(|style_id| is_toc_paragraph_style(style_id, styles));
 
     // Convert runs to inline items
     let mut inline_items = Vec::new();
@@ -9818,7 +9846,27 @@ fn layout_paragraph_with_source_and_table(
                     .and_then(|rel_id| input.hyperlink_urls.get(rel_id).cloned())
             });
 
-        let run_style_id = run.properties.as_ref().and_then(|p| p.style_id.as_deref());
+        // Word writes each entry of a table of contents as a hyperlink to a
+        // `_Toc` bookmark whose runs carry the Hyperlink character style, and
+        // draws the entry in its TOC paragraph style without that style's
+        // colour and underline. LibreOffice does the same.
+        let toc_entry = toc_paragraph
+            && projected
+                .hyperlink_index
+                .and_then(|index| para.hyperlinks.get(index))
+                .or_else(|| {
+                    let run_index = projected.ordinary_run_index?;
+                    para.hyperlinks.iter().find(|hyperlink| {
+                        (hyperlink.run_start..hyperlink.run_end).contains(&run_index)
+                    })
+                })
+                .and_then(|hyperlink| hyperlink.anchor.as_deref())
+                .is_some_and(|anchor| anchor.starts_with("_Toc"));
+        let run_style_id = run
+            .properties
+            .as_ref()
+            .and_then(|p| p.style_id.as_deref())
+            .filter(|style_id| !(toc_entry && is_hyperlink_character_style(style_id, styles)));
 
         let resolved_rpr = style_resolver::resolve_run_properties(
             para_style_id,
@@ -10282,8 +10330,11 @@ fn layout_paragraph_with_source_and_table(
                                 _ => None,
                             }
                         };
-                        let segment_style_id =
-                            stored_properties.and_then(|properties| properties.style_id.as_deref());
+                        let segment_style_id = stored_properties
+                            .and_then(|properties| properties.style_id.as_deref())
+                            .filter(|style_id| {
+                                !(toc_entry && is_hyperlink_character_style(style_id, styles))
+                            });
                         let mut segment_rpr = if stored_properties.is_some() {
                             style_resolver::resolve_run_properties(
                                 para_style_id,
@@ -23515,6 +23566,37 @@ mod tests {
             lines[2].0 > 0 && lines[2].0 < lines[0].0 && lines[2].1 < lines[0].1,
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn issue433_toc_entries_drop_the_hyperlink_character_style() {
+        // Word writes a TOC entry as a hyperlink to a `_Toc` bookmark whose
+        // run carries the Hyperlink style. In a TOC paragraph the entry keeps
+        // the paragraph style's look. The same run in a body paragraph keeps
+        // the Hyperlink colour and underline.
+        let layout = |paragraph_style: &str| {
+            let mut input = make_input_with_text("");
+            input.styles = CT_Styles::from_xml(br#"<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="TOC1"><w:name w:val="toc 1"/></w:style><w:style w:type="paragraph" w:styleId="BodyText"><w:name w:val="Body Text"/></w:style><w:style w:type="character" w:styleId="Hyperlink"><w:name w:val="Hyperlink"/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style></w:styles>"#).unwrap();
+            input.document = CT_Document::from_xml(
+                format!(
+                    r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="{paragraph_style}"/></w:pPr><w:hyperlink w:anchor="_Toc1"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr><w:t>Introduction</w:t></w:r></w:hyperlink></w:p></w:body></w:document>"#
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+            let output = deterministic_layout(&input);
+            let (mut color, mut lines) = (None, 0);
+            oxml_layout::walk(&output.pages[0].elements, &mut |element, _| match element {
+                PositionedElement::Text(run) if run.text == "Introduction" => {
+                    color = Some(run.color);
+                }
+                PositionedElement::Line { .. } => lines += 1,
+                _ => {}
+            });
+            (color, lines)
+        };
+        assert_eq!(layout("TOC1"), (Some(Color::BLACK), 0));
+        assert_eq!(layout("BodyText"), (Some(Color::from_hex("0563C1")), 1));
     }
 
     #[test]
