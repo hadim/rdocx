@@ -853,6 +853,9 @@ live `FillFormat` over the direct background fill that never changes the slide
 when read, and `follow_master_background` reports and sets whether the slide
 has no `p:bg`. `SlideCollection.remove` and `SlideCollection.move(from_, to)`
 use the native staged slide operations and advance the revision once.
+`SlideCollection.index(slide)` returns the slide's zero-based position, like
+python-pptx `Slides.index`, and raises `ValueError` for a slide of another
+presentation.
 `SlideCollection.import_slide(slide, layout=None, index=None, *,
 keep_source_formatting=False)` returns one live imported Slide. Existing
 positional arguments and the destination-formatting default remain supported.
@@ -3947,8 +3950,10 @@ identity/name, contexts, empty/status facts, current measured/stored values,
 needed total scale/reduction, quantized/persisted trials and diagnostics.
 Trial dimensions/heights are points, stored bounds EMU and integer scales or
 reductions hundred-thousandths. No fitting permitted trial reports null needed
-scale and unfit-at-floor. Unsupported mandatory owners refuse. Fit does not
-save, exiting0 without overflow,1 for overflow and2 for checked error.
+scale and unfit-at-floor. An unsupported mandatory owner is reported with
+reason cannot-assess and its cause and counts as an overflow. Fit does not
+save, exiting0 without overflow,1 for overflow or an unassessed owner and2
+for checked error.
 
 `inspect` reports the file, slide and layout counts, slide size, core metadata,
 and each slide's identity, hidden state, and shape count. Its JSON form uses the
@@ -4531,6 +4536,12 @@ publication. Invalid option types refuse before output. All exports preserve
 current owner handles and presentation revisions, including on complete-body
 image validation failure. Package exports and stubs
 include the result type and every method.
+
+Markdown text keeps a single space between two characters as a space. A
+leading, trailing or repeated space becomes `&#32;`, where Markdown would drop
+or merge it. Marks that are syntax anywhere in a line are always escaped. A
+list, heading or setext mark, and the `.` or `)` after a leading number, are
+escaped only where a text run or a line inside it starts.
 
 `rpptx convert --to html` and `--to md` use semantic source order. `--notes`
 includes notes, `--skip-hidden` omits hidden slides and

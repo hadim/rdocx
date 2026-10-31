@@ -39,7 +39,7 @@ Signing publishes before reporting, so this error can leave a valid new output.
 
 | Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
 |---|---|---|---|---|---|---|---|---|
-| Crates.io archive: rpptx-cli | 67,536 compressed bytes, 310,592 member bytes, 8 members | 0.14.4 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo publish --workspace --dry-run --allow-dirty --locked` | Tracked `rpptx-cli` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-28 |
+| Crates.io archive: rpptx-cli | 68,387 compressed bytes, 313,502 member bytes, 8 members | 0.14.4 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo publish --workspace --dry-run --allow-dirty --locked` | Tracked `rpptx-cli` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-28 |
 
 ## Use it when
 
@@ -176,10 +176,15 @@ status, current stored values, overflow, needed total scale/reduction and the
 provider's quantized and persisted trials. Dimensions/heights are points,
 old/new bounds are EMU, and needed scale/reduction use hundred-thousandths.
 No permitted fitting trial means nullable needed_scale with
-`reason=unfit-at-floor`. Empty frames remain accounted for. Unsupported
-mandatory owners refuse with diagnostics instead of disappearing. Exit0 means
-all admitted frames were assessed without overflow, exit1 means overflow,
-and exit2 means a checked error. The command does not modify autofit or save.
+`reason=unfit-at-floor`. Empty frames remain accounted for. A frame the
+provider cannot assess is reported with `status=unsupported`,
+`reason=cannot-assess` and its cause in `diagnostics`, and counts as an
+overflow. Exit0 means all admitted frames were assessed without overflow,
+exit1 means overflow or a frame that could not be assessed, and exit2 means a
+checked error. The command does not modify autofit or save. Without
+`--json`, each frame prints one line with its owner part, child path such as
+`1/0`, shape name, table cell and, for a shared frame, the slide it is
+measured on, then its status, overflow and needed scale.
 
 Core metadata get includes every native core field. Set accepts title, author,
 subject, keywords, description and category, preserving all unspecified fields

@@ -95,7 +95,7 @@ fn fx218_export_source_and_resources_are_unchanged() {
     assert!(
         markdown
             .text
-            .contains("Semantic&#32;body&#32;\\<literal\\>&#32;\\&&#32;exact"),
+            .contains("Semantic body \\<literal\\> \\& exact"),
         "{}",
         markdown.text
     );
@@ -171,7 +171,13 @@ fn fx218_inline_escaping_and_qualified_image_links() {
         html.text
     );
     let markdown = deck.to_markdown().unwrap();
-    assert!(markdown.text.contains("<strong>&#32;inherited&#32;</strong><em>1\\.&#32;literal&#32;\\*&#32;\\<&#32;\\&&#32;</em>"),"{}",markdown.text);
+    assert!(
+        markdown
+            .text
+            .contains("<strong>&#32;inherited&#32;</strong><em>1\\. literal \\* \\< \\&&#32;</em>"),
+        "{}",
+        markdown.text
+    );
     assert_eq!(
         deck.to_bytes().unwrap(),
         Presentation::from_bytes(&deck.to_bytes().unwrap())
@@ -181,6 +187,44 @@ fn fx218_inline_escaping_and_qualified_image_links() {
     );
     if let Some(directory) = std::env::var_os("FX218_ORACLE_INPUT") {
         fs::write(PathBuf::from(directory).join("rich.md"), markdown.text).unwrap();
+    }
+}
+
+#[test]
+fn issue431_markdown_writes_plain_spaces_and_escapes_only_markdown_syntax() {
+    use rpptx::{Emu, Presentation};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(4_000_000), Emu(4_000_000))
+        .unwrap()
+        .set_text(
+            "North grew 12% (EUR 1.2m) - see table.\n- not a list\n12. not a list\n\
+             2024) not a list\n# not a heading\ntwo  spaces\n edges ",
+        )
+        .unwrap();
+    deck.set_notes_text(0, "Thank the team.").unwrap();
+    let options = rpptx::PresentationTextExportOptions {
+        include_notes: true,
+        skip_hidden: false,
+        inline_images: false,
+    };
+    let markdown = deck.to_markdown_with_options(&options).unwrap().text;
+    for line in [
+        "North grew 12% (EUR 1.2m) - see table.",
+        "\\- not a list",
+        "12\\. not a list",
+        "2024\\) not a list",
+        "\\# not a heading",
+        "two&#32;&#32;spaces",
+        "&#32;edges&#32;",
+        "> Thank the team.",
+    ] {
+        assert!(
+            markdown.lines().any(|candidate| candidate == line),
+            "{line:?} in {markdown}"
+        );
     }
 }
 
@@ -340,7 +384,7 @@ fn fx218_corpus_markdown_preserves_every_semantic_construct() {
     };
     let result = deck.to_markdown_with_options(&options).unwrap();
     let expected = format!(
-        "<a id=\"slide-1\"></a>\n\n# Slide 1\n\nSemantic&#32;body&#32;\\<literal\\>&#32;\\&&#32;exact\n\n| <strong>Head</strong> | <strong>Value</strong> |\n| --- | --- |\n| Cell | 1\\|2 |\n\n![](<{}> \"\")\n\n## Notes\n\n> Speaker&#32;note\n\n",
+        "<a id=\"slide-1\"></a>\n\n# Slide 1\n\nSemantic body \\<literal\\> \\& exact\n\n| <strong>Head</strong> | <strong>Value</strong> |\n| --- | --- |\n| Cell | 1\\|2 |\n\n![](<{}> \"\")\n\n## Notes\n\n> Speaker note\n\n",
         result.assets[0].0
     );
     assert_eq!(result.text, expected);
@@ -378,11 +422,7 @@ fn fx218_corpus_markdown_preserves_every_semantic_construct() {
         .unwrap();
     let mut expected = "# Title\n\n- Content\n".to_owned();
     for level in 1..9 {
-        expected.push_str(&format!(
-            "{}- Level&#32;{}\n",
-            "  ".repeat(level),
-            level + 1
-        ));
+        expected.push_str(&format!("{}- Level {}\n", "  ".repeat(level), level + 1));
     }
     expected.push('\n');
     assert_eq!(slide, expected);
@@ -485,13 +525,11 @@ fn fx218_ordered_labels_and_explicit_no_bullet() {
     assert!(html.text.contains("<p>item 2</p>"));
     let markdown = deck.to_markdown().unwrap();
     assert!(
-        markdown
-            .text
-            .contains("4. IV\\) item&#32;0\n5. V\\) item&#32;1"),
+        markdown.text.contains("4. IV) item 0\n5. V) item 1"),
         "{}",
         markdown.text
     );
-    assert!(markdown.text.contains("\n\nitem&#32;2\n\n"));
+    assert!(markdown.text.contains("\n\nitem 2\n\n"));
 }
 
 #[test]
@@ -889,9 +927,7 @@ fn fx218_qualified_picture_aliases_alt_and_byte_deduplication() {
     assert_eq!(html.text.matches("<img ").count(), 2);
     assert!(html.text.contains("alt=\"alt [x] &lt; &amp;\nnext\""));
     assert!(
-        markdown
-            .text
-            .contains("alt&#32;\\[x\\]&#32;\\<&#32;\\&&#10;next"),
+        markdown.text.contains("alt \\[x\\] \\< \\&&#10;next"),
         "{}",
         markdown.text
     );

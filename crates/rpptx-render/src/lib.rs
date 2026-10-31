@@ -608,6 +608,19 @@ pub fn authoring_table_cell(
     Ok((cell_shape, text))
 }
 
+/// The height of `table` as rendering draws it, each row grown to fit its cells' text.
+/// `directions` holds one entry per cell in row order, as rendering takes them.
+pub fn authoring_table_height(
+    table: &ResolvedTable,
+    fonts: &mut FontManager,
+    page_number: usize,
+    directions: &[Vec<oxml_layout::TextDirection>],
+) -> Result<f64, RenderInputError> {
+    Ok(grown_row_heights(table, fonts, page_number, directions)?
+        .iter()
+        .sum())
+}
+
 /// Runs independent Q native-informed and S persisted-render trials for one
 /// candidate. Every invocation re-shapes its own source clone. Q's rounding
 /// never changes the original nominal values or ordinary fractional rendering.
@@ -1118,13 +1131,14 @@ fn painted_row_text_extent(
     Ok(text_body.insets.top + content_extent + text_body.insets.bottom)
 }
 
-fn lower_table(
+/// The height of each table row once it has grown to fit its cells' text, as PowerPoint grows a row
+/// whose stored `a:tr/@h` is too short. A cell spanning rows grows its last row.
+fn grown_row_heights(
     table: &ResolvedTable,
     font_manager: &mut FontManager,
     page_number: usize,
     text_directions: &[Vec<oxml_layout::TextDirection>],
-    diagnostics: &mut Vec<String>,
-) -> Result<Vec<PositionedElement>, RenderInputError> {
+) -> Result<Vec<f64>, RenderInputError> {
     let mut physical_column_widths = table.column_widths.clone();
     if table.right_to_left {
         physical_column_widths.reverse();
@@ -1164,6 +1178,22 @@ fn lower_table(
             }
         }
     }
+    Ok(required_heights)
+}
+
+fn lower_table(
+    table: &ResolvedTable,
+    font_manager: &mut FontManager,
+    page_number: usize,
+    text_directions: &[Vec<oxml_layout::TextDirection>],
+    diagnostics: &mut Vec<String>,
+) -> Result<Vec<PositionedElement>, RenderInputError> {
+    let mut physical_column_widths = table.column_widths.clone();
+    if table.right_to_left {
+        physical_column_widths.reverse();
+    }
+    let column_offsets = cumulative_offsets(&physical_column_widths);
+    let required_heights = grown_row_heights(table, font_manager, page_number, text_directions)?;
     let row_offsets = cumulative_offsets(&required_heights);
     let mut fills = Vec::new();
     if let Some(background) = &table.background {
