@@ -5265,7 +5265,8 @@ def test_fx201_note_reference_creation_uses_checked_paragraph():
     reference = document.add_paragraph("reference")
     retired_run = reference.runs[0]
     note = document.add_footnote(reference, "note content")
-    assert note.paragraphs[0].text == "note content"
+    # The space run Word writes after the note's reference mark.
+    assert note.paragraphs[0].text == " note content"
     assert reference.text == "reference"
     with pytest.raises(rdocx.StaleElementError):
         _ = retired_run.text
@@ -5695,7 +5696,7 @@ def test_fx201_checked_note_cell_boundary_preserves_other_owners_and_refuses_sta
     table.cell(0, 0).text = "cell reference"
     reference = document.tables[0].cell(0, 0).paragraphs[0].runs[0]
     note = getattr(document, "add_" + family)(reference, family + " content")
-    assert note.paragraphs[0].text == family + " content"
+    assert note.paragraphs[0].text == " " + family + " content"
     before = document.to_bytes()
     with pytest.raises(rdocx.StaleElementError):
         getattr(document, "add_" + family)(reference, "stale refused")
@@ -10048,7 +10049,7 @@ def test_form_protection_and_permission_composition():
         (cell_run, "cell held"),
         (header, "header held"),
         (header_run, "header held"),
-        (note, "note held"),
+        (note, " note held"),
         (note_run, "note held"),
     )
     before = document.to_bytes()
@@ -10094,7 +10095,7 @@ def test_form_protection_and_permission_composition():
     assert document.paragraphs[0].text == body.text == "body held"
     assert document.tables[0].cell(0, 0).text == cell.text == "cell held"
     assert document.section(0).header.paragraphs[0].text == header.text == "header held"
-    assert _story_paragraph(document, "footnote").text == note.text == "note held"
+    assert _story_paragraph(document, "footnote").text == note.text == " note held"
     removed = document.remove_document_protection()
     assert removed is not None and _protection_fields(removed) == _protection_fields(full)
     with pytest.raises(AttributeError):

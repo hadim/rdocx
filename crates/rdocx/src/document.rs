@@ -15192,6 +15192,39 @@ pub(crate) fn set_story_source_xml(
     Ok(())
 }
 
+/// The separator and continuation separator a new notes part starts with, at
+/// the ids Word 2010 and later write. Ids from 2 stay free for notes, as before.
+fn word_note_separators() -> [rdocx_oxml::footnotes::CT_Footnote; 2] {
+    use rdocx_oxml::footnotes::{CT_Footnote, NoteType};
+    let entry = |id, note_type, mark: &[u8]| {
+        let mut run = CT_R::new("");
+        run.content.clear();
+        run.extra_xml.push(mark.to_vec());
+        run.extra_xml_positions.push(0);
+        let mut paragraph = CT_P::new();
+        paragraph.properties = Some(CT_PPr {
+            space_after: Some(Twips(0)),
+            line_spacing: Some(Twips(240)),
+            line_rule: Some("auto".into()),
+            ..Default::default()
+        });
+        paragraph.runs.push(run);
+        CT_Footnote {
+            id,
+            note_type,
+            paragraphs: vec![paragraph],
+        }
+    };
+    [
+        entry(-1, NoteType::Separator, b"<w:separator/>"),
+        entry(
+            0,
+            NoteType::ContinuationSeparator,
+            b"<w:continuationSeparator/>",
+        ),
+    ]
+}
+
 fn serialized_note_fragment(
     note: &rdocx_oxml::footnotes::CT_Footnote,
     kind: StoryKind,
@@ -33297,10 +33330,15 @@ impl Document {
             ..Default::default()
         });
         note_marker.content.clear();
+        // After the typed `w:rPr`, which `CT_R` wants first.
         note_marker.extra_xml.push(b"<w:footnoteRef/>".to_vec());
-        note_marker.extra_xml_positions.push(0);
+        note_marker.extra_xml_positions.push(1);
         paragraph.runs.push(note_marker);
+        paragraph.add_run(" ");
         paragraph.add_run(text);
+        if candidate.footnotes.footnotes.is_empty() {
+            candidate.footnotes.footnotes = word_note_separators().to_vec();
+        }
         candidate
             .footnotes
             .footnotes
@@ -33405,18 +33443,25 @@ impl Document {
             ..Default::default()
         });
         note_marker.content.clear();
+        // After the typed `w:rPr`, which `CT_R` wants first.
         note_marker.extra_xml.push(b"<w:endnoteRef/>".to_vec());
-        note_marker.extra_xml_positions.push(0);
+        note_marker.extra_xml_positions.push(1);
         paragraph.runs.push(note_marker);
+        paragraph.add_run(" ");
         paragraph.add_run(text);
         let note = rdocx_oxml::footnotes::CT_Footnote {
             id,
             note_type: rdocx_oxml::footnotes::NoteType::Normal,
             paragraphs: vec![paragraph],
         };
-        let fragment = serialized_note_fragment(&note, StoryKind::Endnote)?;
-        let updated =
-            append_story_fragments_to_root(&source, b"endnotes", b"endnote", &[fragment])?;
+        let mut fragments = Vec::new();
+        if existing.footnotes.is_empty() {
+            for separator in &word_note_separators() {
+                fragments.push(serialized_note_fragment(separator, StoryKind::Endnote)?);
+            }
+        }
+        fragments.push(serialized_note_fragment(&note, StoryKind::Endnote)?);
+        let updated = append_story_fragments_to_root(&source, b"endnotes", b"endnote", &fragments)?;
         set_story_source_xml(&mut candidate, &part_name, updated)?;
         candidate.invalidate_layout();
         let mut run = CT_R::new("");

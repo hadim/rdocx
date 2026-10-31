@@ -24368,7 +24368,8 @@ fn rich_footnotes_match_word_after_create_edit_reorder_and_remove() {
     assert!(notes.contains("rich continuation"));
     document.remove_footnote(first).unwrap();
     let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
-    assert_eq!(reopened.footnotes(), vec![(second, "second".to_owned())]);
+    // The space run Word writes after the note's reference mark.
+    assert_eq!(reopened.footnotes(), vec![(second, " second".to_owned())]);
     let package =
         OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap())).unwrap();
     let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
