@@ -1,5 +1,7 @@
 //! Image embedding for PDF output (JPEG pass-through, PNG decompression).
 
+use std::collections::HashMap;
+
 use oxml_media::{ImageFormat, probe};
 
 /// Decoded image data ready for PDF embedding.
@@ -28,6 +30,8 @@ pub(crate) fn decode_image(data: &[u8], content_type: &str) -> Option<DecodedIma
         || ImageFormat::sniff(data) == Some(ImageFormat::Jpeg)
     {
         decode_jpeg(data)
+    } else if ImageFormat::sniff(data) == Some(ImageFormat::Emf) {
+        decode_emf(data)
     } else {
         decode_png_or_other(data)
     }
@@ -370,6 +374,806 @@ fn unfilter_scanlines(
     Some((unfiltered, expected))
 }
 
+/// The longest side, in pixels, an EMF picture is rasterised at.
+const EMF_RASTER_TARGET: f64 = 1024.0;
+/// The largest factor an EMF's reference-device size is scaled up by.
+const EMF_RASTER_MAX_SCALE: f64 = 8.0;
+
+/// Rasterises an EMF picture ([MS-EMF]) through the records that line art,
+/// logos and simple diagrams use: the window, viewport, world transform and
+/// map mode, saved states, pens and solid brushes (stock objects included),
+/// rectangles, rounded rectangles, ellipses, poly lines, polygons and Bezier
+/// curves in their 16- and 32-bit forms, path brackets, and 1, 4, 8, 24 and
+/// 32-bit `EMR_STRETCHDIBITS` bitmaps. Text, clipping, hatches, dashes and
+/// EMF+ comments are not drawn. Returns `None` when no record of the subset
+/// draws anything.
+fn decode_emf(data: &[u8]) -> Option<DecodedImage> {
+    let info = probe(data)?;
+    let frame = [
+        emf_i32(data, 24)?,
+        emf_i32(data, 28)?,
+        emf_i32(data, 32)?,
+        emf_i32(data, 36)?,
+    ];
+    let device = (emf_i32(data, 72)?, emf_i32(data, 76)?);
+    let millimetres = (emf_i32(data, 80)?, emf_i32(data, 84)?);
+    // The frame in reference-device pixels: what the picture box shows.
+    let px_per_hundredth = (
+        f64::from(device.0) / (f64::from(millimetres.0) * 100.0),
+        f64::from(device.1) / (f64::from(millimetres.1) * 100.0),
+    );
+    let origin = (
+        f64::from(frame[0]) * px_per_hundredth.0,
+        f64::from(frame[1]) * px_per_hundredth.1,
+    );
+    let (width, height) = (f64::from(info.width_px), f64::from(info.height_px));
+    let scale = (EMF_RASTER_TARGET / width.max(height)).clamp(1.0, EMF_RASTER_MAX_SCALE);
+    let mut pixmap = tiny_skia::Pixmap::new(
+        (width * scale).ceil() as u32,
+        (height * scale).ceil() as u32,
+    )?;
+    let mut player = EmfPlayer {
+        state: EmfState::default(),
+        saved: Vec::new(),
+        objects: HashMap::new(),
+        path: None,
+        closed_path: None,
+        origin,
+        scale,
+        drew: false,
+    };
+    let mut offset = usize::try_from(emf_u32(data, 4)?).ok()?;
+    while offset + 8 <= data.len() {
+        let kind = emf_u32(data, offset)?;
+        let size = usize::try_from(emf_u32(data, offset + 4)?).ok()?;
+        if size < 8 || size % 4 != 0 {
+            break;
+        }
+        let record = data.get(offset..offset.checked_add(size)?)?;
+        if kind == 14 {
+            break; // EMR_EOF
+        }
+        player.play(kind, record, &mut pixmap);
+        offset += size;
+    }
+    if !player.drew {
+        return None;
+    }
+
+    let pixel_count = pixmap.width() as usize * pixmap.height() as usize;
+    let mut rgb = Vec::with_capacity(pixel_count * 3);
+    let mut alpha = Vec::with_capacity(pixel_count);
+    for pixel in pixmap.pixels() {
+        let colour = pixel.demultiply();
+        rgb.extend_from_slice(&[colour.red(), colour.green(), colour.blue()]);
+        alpha.push(colour.alpha());
+    }
+    let opaque = alpha.iter().all(|&value| value == 255);
+    Some(DecodedImage {
+        data: rgb,
+        alpha: (!opaque).then_some(alpha),
+        width: pixmap.width(),
+        height: pixmap.height(),
+        color_space: "DeviceRGB",
+        is_jpeg: false,
+    })
+}
+
+fn emf_u32(data: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(
+        data.get(offset..offset + 4)?.try_into().ok()?,
+    ))
+}
+
+fn emf_i32(data: &[u8], offset: usize) -> Option<i32> {
+    emf_u32(data, offset).map(|value| value as i32)
+}
+
+fn emf_i16(data: &[u8], offset: usize) -> Option<i16> {
+    Some(i16::from_le_bytes(
+        data.get(offset..offset + 2)?.try_into().ok()?,
+    ))
+}
+
+fn emf_f32(data: &[u8], offset: usize) -> Option<f32> {
+    emf_u32(data, offset).map(f32::from_bits)
+}
+
+/// A COLORREF is 0x00BBGGRR.
+fn emf_colour(value: u32) -> tiny_skia::Color {
+    tiny_skia::Color::from_rgba8(
+        (value & 0xff) as u8,
+        ((value >> 8) & 0xff) as u8,
+        ((value >> 16) & 0xff) as u8,
+        255,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum EmfObject {
+    /// A pen colour and logical width, or the null pen.
+    Pen(Option<(tiny_skia::Color, f64)>),
+    /// A solid brush colour, or the null brush.
+    Brush(Option<tiny_skia::Color>),
+    Other,
+}
+
+#[derive(Clone)]
+struct EmfState {
+    world: [f64; 6],
+    window_origin: (f64, f64),
+    window_extent: (f64, f64),
+    viewport_origin: (f64, f64),
+    viewport_extent: (f64, f64),
+    map_mode: u32,
+    pen: Option<(tiny_skia::Color, f64)>,
+    brush: Option<tiny_skia::Color>,
+    fill_rule: tiny_skia::FillRule,
+    current: (f64, f64),
+}
+
+impl Default for EmfState {
+    fn default() -> Self {
+        Self {
+            world: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            window_origin: (0.0, 0.0),
+            window_extent: (1.0, 1.0),
+            viewport_origin: (0.0, 0.0),
+            viewport_extent: (1.0, 1.0),
+            map_mode: 1,
+            pen: Some((tiny_skia::Color::BLACK, 0.0)),
+            brush: Some(tiny_skia::Color::WHITE),
+            fill_rule: tiny_skia::FillRule::EvenOdd,
+            current: (0.0, 0.0),
+        }
+    }
+}
+
+struct EmfPlayer {
+    state: EmfState,
+    saved: Vec<EmfState>,
+    objects: HashMap<u32, EmfObject>,
+    /// The figure being built inside BEGINPATH and ENDPATH.
+    path: Option<tiny_skia::PathBuilder>,
+    /// The path ENDPATH closed, for FILLPATH and STROKEPATH.
+    closed_path: Option<tiny_skia::Path>,
+    /// The picture frame's top-left corner in device pixels.
+    origin: (f64, f64),
+    scale: f64,
+    drew: bool,
+}
+
+impl EmfPlayer {
+    /// Logical coordinates to raster pixels: world transform, then the
+    /// window-to-viewport mapping, then the frame.
+    fn map(&self, (x, y): (f64, f64)) -> (f32, f32) {
+        let [m11, m12, m21, m22, dx, dy] = self.state.world;
+        let page = (m11 * x + m21 * y + dx, m12 * x + m22 * y + dy);
+        let state = &self.state;
+        let (sx, sy) = if matches!(state.map_mode, 7 | 8)
+            && state.window_extent.0 != 0.0
+            && state.window_extent.1 != 0.0
+        {
+            (
+                state.viewport_extent.0 / state.window_extent.0,
+                state.viewport_extent.1 / state.window_extent.1,
+            )
+        } else {
+            (1.0, 1.0)
+        };
+        let device = (
+            (page.0 - state.window_origin.0) * sx + state.viewport_origin.0,
+            (page.1 - state.window_origin.1) * sy + state.viewport_origin.1,
+        );
+        (
+            ((device.0 - self.origin.0) * self.scale) as f32,
+            ((device.1 - self.origin.1) * self.scale) as f32,
+        )
+    }
+
+    /// How many raster pixels one logical unit spans, averaged over x and y.
+    fn length_scale(&self) -> f64 {
+        let zero = self.map((0.0, 0.0));
+        let x = self.map((1.0, 0.0));
+        let y = self.map((0.0, 1.0));
+        let distance = |a: (f32, f32), b: (f32, f32)| f64::from((a.0 - b.0).hypot(a.1 - b.1));
+        (distance(zero, x) + distance(zero, y)) / 2.0
+    }
+
+    fn play(&mut self, kind: u32, record: &[u8], pixmap: &mut tiny_skia::Pixmap) {
+        let _ = self.play_record(kind, record, pixmap);
+    }
+
+    fn play_record(
+        &mut self,
+        kind: u32,
+        record: &[u8],
+        pixmap: &mut tiny_skia::Pixmap,
+    ) -> Option<()> {
+        let pair = |offset: usize| -> Option<(f64, f64)> {
+            Some((
+                f64::from(emf_i32(record, offset)?),
+                f64::from(emf_i32(record, offset + 4)?),
+            ))
+        };
+        match kind {
+            9 => self.state.window_extent = pair(8)?,
+            10 => self.state.window_origin = pair(8)?,
+            11 => self.state.viewport_extent = pair(8)?,
+            12 => self.state.viewport_origin = pair(8)?,
+            17 => self.state.map_mode = emf_u32(record, 8)?,
+            19 => {
+                self.state.fill_rule = if emf_u32(record, 8)? == 2 {
+                    tiny_skia::FillRule::Winding
+                } else {
+                    tiny_skia::FillRule::EvenOdd
+                }
+            }
+            33 => self.saved.push(self.state.clone()),
+            34 => {
+                let relative = emf_i32(record, 8)?;
+                for _ in 0..relative.unsigned_abs().max(1) {
+                    if let Some(state) = self.saved.pop() {
+                        self.state = state;
+                    }
+                }
+            }
+            35 | 36 => {
+                let mut xform = [0.0; 6];
+                for (index, value) in xform.iter_mut().enumerate() {
+                    *value = f64::from(emf_f32(record, 8 + index * 4)?);
+                }
+                let mode = if kind == 35 { 4 } else { emf_u32(record, 32)? };
+                self.state.world = match mode {
+                    1 => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                    2 => emf_multiply(xform, self.state.world),
+                    3 => emf_multiply(self.state.world, xform),
+                    _ => xform,
+                };
+            }
+            37 => {
+                let handle = emf_u32(record, 8)?;
+                let object = if handle & 0x8000_0000 != 0 {
+                    emf_stock_object(handle & 0x7fff_ffff)
+                } else {
+                    *self.objects.get(&handle)?
+                };
+                match object {
+                    EmfObject::Pen(pen) => self.state.pen = pen,
+                    EmfObject::Brush(brush) => self.state.brush = brush,
+                    EmfObject::Other => {}
+                }
+            }
+            38 => {
+                let style = emf_u32(record, 12)?;
+                let pen = (style & 0xf != 5).then(|| {
+                    (
+                        emf_colour(emf_u32(record, 24).unwrap_or(0)),
+                        f64::from(emf_i32(record, 16).unwrap_or(0)),
+                    )
+                });
+                self.objects
+                    .insert(emf_u32(record, 8)?, EmfObject::Pen(pen));
+            }
+            95 => {
+                let style = emf_u32(record, 28)?;
+                let brush_style = emf_u32(record, 36)?;
+                let pen = (style & 0xf != 5 && brush_style != 1).then(|| {
+                    (
+                        emf_colour(emf_u32(record, 40).unwrap_or(0)),
+                        f64::from(emf_u32(record, 32).unwrap_or(0)),
+                    )
+                });
+                self.objects
+                    .insert(emf_u32(record, 8)?, EmfObject::Pen(pen));
+            }
+            39 => {
+                let brush = (emf_u32(record, 12)? != 1)
+                    .then(|| emf_colour(emf_u32(record, 16).unwrap_or(0)));
+                self.objects
+                    .insert(emf_u32(record, 8)?, EmfObject::Brush(brush));
+            }
+            40 => {
+                self.objects.remove(&emf_u32(record, 8)?);
+            }
+            // Any other object creation still takes its handle slot.
+            82 | 93 | 94 => {
+                self.objects.insert(emf_u32(record, 8)?, EmfObject::Other);
+            }
+            27 => {
+                self.state.current = pair(8)?;
+                let (x, y) = self.map(self.state.current);
+                if let Some(path) = &mut self.path {
+                    path.move_to(x, y);
+                }
+            }
+            54 => {
+                let to = pair(8)?;
+                self.figure(&[self.state.current, to], false, false, pixmap);
+                self.state.current = to;
+            }
+            42..=44 => {
+                let (left, top) = pair(8)?;
+                let (right, bottom) = pair(16)?;
+                let corner = if kind == 44 { pair(24)? } else { (0.0, 0.0) };
+                let points = emf_box_outline(kind, left, top, right, bottom, corner);
+                self.bezier_figure(&points, pixmap);
+            }
+            2..=6 | 85..=89 => {
+                let wide = kind < 80;
+                let count = usize::try_from(emf_u32(record, 24)?).ok()?;
+                let points = emf_points(record, 28, count, wide)?;
+                let base = if wide { kind } else { kind - 83 };
+                match base {
+                    // POLYBEZIER, POLYBEZIERTO
+                    2 | 5 => {
+                        let mut all = Vec::with_capacity(points.len() + 1);
+                        if base == 5 {
+                            all.push(self.state.current);
+                        }
+                        all.extend(points);
+                        if let Some(last) = all.last() {
+                            self.state.current = *last;
+                        }
+                        self.curve(&all, pixmap);
+                    }
+                    // POLYGON, POLYLINE, POLYLINETO
+                    _ => {
+                        let mut all = Vec::with_capacity(points.len() + 1);
+                        if base == 6 {
+                            all.push(self.state.current);
+                        }
+                        all.extend(points);
+                        if base != 3
+                            && let Some(last) = all.last()
+                        {
+                            self.state.current = *last;
+                        }
+                        self.figure(&all, base == 3, base == 3, pixmap);
+                    }
+                }
+            }
+            7 | 8 | 90 | 91 => {
+                let wide = kind < 80;
+                let polygons = usize::try_from(emf_u32(record, 24)?).ok()?;
+                let total = usize::try_from(emf_u32(record, 28)?).ok()?;
+                let counts = (0..polygons)
+                    .map(|index| usize::try_from(emf_u32(record, 32 + index * 4)?).ok())
+                    .collect::<Option<Vec<_>>>()?;
+                let points = emf_points(record, 32 + polygons * 4, total, wide)?;
+                let closed = matches!(kind, 8 | 91);
+                let mut builder = tiny_skia::PathBuilder::new();
+                let mut start = 0usize;
+                for count in counts {
+                    let figure = points.get(start..start.checked_add(count)?)?;
+                    start += count;
+                    self.add_polyline(&mut builder, figure, closed);
+                }
+                self.finish(builder, closed, pixmap);
+            }
+            59 => {
+                self.path = Some(tiny_skia::PathBuilder::new());
+                self.closed_path = None;
+            }
+            60 => {
+                self.closed_path = self.path.take().and_then(tiny_skia::PathBuilder::finish);
+            }
+            61 => {
+                if let Some(path) = &mut self.path {
+                    path.close();
+                }
+            }
+            62..=64 => {
+                let path = self
+                    .closed_path
+                    .take()
+                    .or_else(|| self.path.take().and_then(tiny_skia::PathBuilder::finish))?;
+                let state = self.state.clone();
+                if kind != 64 {
+                    self.fill(&path, state.brush, pixmap);
+                }
+                if kind != 62 {
+                    self.stroke(&path, state.pen, pixmap);
+                }
+            }
+            81 => self.stretch_dib(record, pixmap)?,
+            _ => {}
+        }
+        Some(())
+    }
+
+    fn add_polyline(
+        &self,
+        builder: &mut tiny_skia::PathBuilder,
+        points: &[(f64, f64)],
+        closed: bool,
+    ) {
+        for (index, point) in points.iter().enumerate() {
+            let (x, y) = self.map(*point);
+            if index == 0 {
+                builder.move_to(x, y);
+            } else {
+                builder.line_to(x, y);
+            }
+        }
+        if closed && points.len() > 2 {
+            builder.close();
+        }
+    }
+
+    /// Draws or, inside a path bracket, adds a poly line or polygon.
+    fn figure(
+        &mut self,
+        points: &[(f64, f64)],
+        closed: bool,
+        filled: bool,
+        pixmap: &mut tiny_skia::Pixmap,
+    ) {
+        if points.len() < 2 {
+            return;
+        }
+        if let Some(mut path) = self.path.take() {
+            for (index, point) in points.iter().enumerate() {
+                let (x, y) = self.map(*point);
+                if index == 0 && path.last_point().is_none() {
+                    path.move_to(x, y);
+                } else if index > 0 {
+                    path.line_to(x, y);
+                }
+            }
+            if closed {
+                path.close();
+            }
+            self.path = Some(path);
+            return;
+        }
+        let mut builder = tiny_skia::PathBuilder::new();
+        self.add_polyline(&mut builder, points, closed);
+        self.finish(builder, filled, pixmap);
+    }
+
+    /// Draws or adds a run of cubic Bezier segments: a start point, then
+    /// three points per segment.
+    fn curve(&mut self, points: &[(f64, f64)], pixmap: &mut tiny_skia::Pixmap) {
+        let Some(first) = points.first() else {
+            return;
+        };
+        let in_path = self.path.is_some();
+        let mut builder = self.path.take().unwrap_or_default();
+        let (x, y) = self.map(*first);
+        if !in_path || builder.last_point().is_none() {
+            builder.move_to(x, y);
+        }
+        for segment in points[1..].chunks_exact(3) {
+            let [a, b, c] = [segment[0], segment[1], segment[2]].map(|point| self.map(point));
+            builder.cubic_to(a.0, a.1, b.0, b.1, c.0, c.1);
+        }
+        if in_path {
+            self.path = Some(builder);
+        } else {
+            self.finish(builder, false, pixmap);
+        }
+    }
+
+    /// A closed outline of Bezier segments (rectangle, ellipse, rounded
+    /// rectangle), drawn with the brush and the pen.
+    fn bezier_figure(&mut self, points: &[(f64, f64)], pixmap: &mut tiny_skia::Pixmap) {
+        let in_path = self.path.is_some();
+        let mut builder = self.path.take().unwrap_or_default();
+        let (x, y) = self.map(points[0]);
+        builder.move_to(x, y);
+        for segment in points[1..].chunks_exact(3) {
+            let [a, b, c] = [segment[0], segment[1], segment[2]].map(|point| self.map(point));
+            builder.cubic_to(a.0, a.1, b.0, b.1, c.0, c.1);
+        }
+        builder.close();
+        if in_path {
+            self.path = Some(builder);
+        } else {
+            self.finish(builder, true, pixmap);
+        }
+    }
+
+    fn finish(
+        &mut self,
+        builder: tiny_skia::PathBuilder,
+        filled: bool,
+        pixmap: &mut tiny_skia::Pixmap,
+    ) {
+        let Some(path) = builder.finish() else {
+            return;
+        };
+        let state = self.state.clone();
+        if filled {
+            self.fill(&path, state.brush, pixmap);
+        }
+        self.stroke(&path, state.pen, pixmap);
+    }
+
+    fn fill(
+        &mut self,
+        path: &tiny_skia::Path,
+        brush: Option<tiny_skia::Color>,
+        pixmap: &mut tiny_skia::Pixmap,
+    ) {
+        let Some(colour) = brush else {
+            return;
+        };
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color(colour);
+        paint.anti_alias = true;
+        pixmap.fill_path(
+            path,
+            &paint,
+            self.state.fill_rule,
+            tiny_skia::Transform::identity(),
+            None,
+        );
+        self.drew = true;
+    }
+
+    fn stroke(
+        &mut self,
+        path: &tiny_skia::Path,
+        pen: Option<(tiny_skia::Color, f64)>,
+        pixmap: &mut tiny_skia::Pixmap,
+    ) {
+        let Some((colour, width)) = pen else {
+            return;
+        };
+        // A zero width is one device pixel wide, whatever the transform.
+        let width = if width <= 0.0 {
+            self.scale
+        } else {
+            (width * self.length_scale()).max(1.0)
+        };
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color(colour);
+        paint.anti_alias = true;
+        let stroke = tiny_skia::Stroke {
+            width: width as f32,
+            ..tiny_skia::Stroke::default()
+        };
+        pixmap.stroke_path(
+            path,
+            &paint,
+            &stroke,
+            tiny_skia::Transform::identity(),
+            None,
+        );
+        self.drew = true;
+    }
+
+    /// EMR_STRETCHDIBITS: a device-independent bitmap stretched into a
+    /// logical rectangle.
+    fn stretch_dib(&mut self, record: &[u8], pixmap: &mut tiny_skia::Pixmap) -> Option<()> {
+        let destination = (
+            f64::from(emf_i32(record, 24)?),
+            f64::from(emf_i32(record, 28)?),
+        );
+        let size = (
+            f64::from(emf_i32(record, 72)?),
+            f64::from(emf_i32(record, 76)?),
+        );
+        let info_offset = usize::try_from(emf_u32(record, 48)?).ok()?;
+        let bits_offset = usize::try_from(emf_u32(record, 56)?).ok()?;
+        let bits_size = usize::try_from(emf_u32(record, 60)?).ok()?;
+        let info = record.get(info_offset..)?;
+        let bits = record.get(bits_offset..bits_offset.checked_add(bits_size)?)?;
+        let bitmap = emf_dib_pixmap(info, bits)?;
+        let a = self.map(destination);
+        let b = self.map((destination.0 + size.0, destination.1 + size.1));
+        let (left, top) = (a.0.min(b.0), a.1.min(b.1));
+        let (width, height) = ((a.0 - b.0).abs(), (a.1 - b.1).abs());
+        if width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+        let transform = tiny_skia::Transform::from_row(
+            width / bitmap.width() as f32,
+            0.0,
+            0.0,
+            height / bitmap.height() as f32,
+            left,
+            top,
+        );
+        let paint = tiny_skia::PixmapPaint {
+            quality: tiny_skia::FilterQuality::Bilinear,
+            ..tiny_skia::PixmapPaint::default()
+        };
+        pixmap.draw_pixmap(0, 0, bitmap.as_ref(), &paint, transform, None);
+        self.drew = true;
+        Some(())
+    }
+}
+
+/// `a` then `b`, as GDI XFORMs (eM11, eM12, eM21, eM22, eDx, eDy).
+fn emf_multiply(a: [f64; 6], b: [f64; 6]) -> [f64; 6] {
+    [
+        a[0] * b[0] + a[1] * b[2],
+        a[0] * b[1] + a[1] * b[3],
+        a[2] * b[0] + a[3] * b[2],
+        a[2] * b[1] + a[3] * b[3],
+        a[4] * b[0] + a[5] * b[2] + b[4],
+        a[4] * b[1] + a[5] * b[3] + b[5],
+    ]
+}
+
+fn emf_stock_object(index: u32) -> EmfObject {
+    let grey = |level: u8| tiny_skia::Color::from_rgba8(level, level, level, 255);
+    match index {
+        0 => EmfObject::Brush(Some(tiny_skia::Color::WHITE)),
+        1 => EmfObject::Brush(Some(grey(0xc0))),
+        2 => EmfObject::Brush(Some(grey(0x80))),
+        3 => EmfObject::Brush(Some(grey(0x40))),
+        4 => EmfObject::Brush(Some(tiny_skia::Color::BLACK)),
+        5 => EmfObject::Brush(None),
+        6 => EmfObject::Pen(Some((tiny_skia::Color::WHITE, 0.0))),
+        7 => EmfObject::Pen(Some((tiny_skia::Color::BLACK, 0.0))),
+        8 => EmfObject::Pen(None),
+        _ => EmfObject::Other,
+    }
+}
+
+fn emf_points(record: &[u8], offset: usize, count: usize, wide: bool) -> Option<Vec<(f64, f64)>> {
+    let step = if wide { 8 } else { 4 };
+    record.get(offset..offset.checked_add(count.checked_mul(step)?)?)?;
+    (0..count)
+        .map(|index| {
+            let at = offset + index * step;
+            Some(if wide {
+                (
+                    f64::from(emf_i32(record, at)?),
+                    f64::from(emf_i32(record, at + 4)?),
+                )
+            } else {
+                (
+                    f64::from(emf_i16(record, at)?),
+                    f64::from(emf_i16(record, at + 2)?),
+                )
+            })
+        })
+        .collect()
+}
+
+/// The outline of EMR_ELLIPSE (42), EMR_RECTANGLE (43) or EMR_ROUNDRECT (44)
+/// as a start point and cubic Bezier segments, in logical coordinates, so a
+/// rotating world transform keeps its shape.
+fn emf_box_outline(
+    kind: u32,
+    left: f64,
+    top: f64,
+    right: f64,
+    bottom: f64,
+    corner: (f64, f64),
+) -> Vec<(f64, f64)> {
+    const KAPPA: f64 = 0.552_284_749_830_793_4;
+    let line = |from: (f64, f64), to: (f64, f64)| {
+        [
+            (
+                from.0 + (to.0 - from.0) / 3.0,
+                from.1 + (to.1 - from.1) / 3.0,
+            ),
+            (
+                from.0 + (to.0 - from.0) * 2.0 / 3.0,
+                from.1 + (to.1 - from.1) * 2.0 / 3.0,
+            ),
+            to,
+        ]
+    };
+    let (rx, ry) = match kind {
+        42 => ((right - left) / 2.0, (bottom - top) / 2.0),
+        44 => (
+            (corner.0 / 2.0).min((right - left) / 2.0),
+            (corner.1 / 2.0).min((bottom - top) / 2.0),
+        ),
+        _ => (0.0, 0.0),
+    };
+    let (kx, ky) = (rx * KAPPA, ry * KAPPA);
+    let mut points = vec![(left + rx, top)];
+    let push_line = |points: &mut Vec<(f64, f64)>, to: (f64, f64)| {
+        let from = *points.last().expect("outline has a start");
+        points.extend(line(from, to));
+    };
+    push_line(&mut points, (right - rx, top));
+    points.extend([
+        (right - rx + kx, top),
+        (right, top + ry - ky),
+        (right, top + ry),
+    ]);
+    push_line(&mut points, (right, bottom - ry));
+    points.extend([
+        (right, bottom - ry + ky),
+        (right - rx + kx, bottom),
+        (right - rx, bottom),
+    ]);
+    push_line(&mut points, (left + rx, bottom));
+    points.extend([
+        (left + rx - kx, bottom),
+        (left, bottom - ry + ky),
+        (left, bottom - ry),
+    ]);
+    push_line(&mut points, (left, top + ry));
+    points.extend([
+        (left, top + ry - ky),
+        (left + rx - kx, top),
+        (left + rx, top),
+    ]);
+    points
+}
+
+/// Decodes an uncompressed (BI_RGB, or BI_BITFIELDS with the usual masks)
+/// 1, 4, 8, 24 or 32-bit device-independent bitmap.
+fn emf_dib_pixmap(info: &[u8], bits: &[u8]) -> Option<tiny_skia::Pixmap> {
+    let header_size = usize::try_from(emf_u32(info, 0)?).ok()?;
+    let width = emf_i32(info, 4)?;
+    let height = emf_i32(info, 8)?;
+    let bit_count = u16::from_le_bytes(info.get(14..16)?.try_into().ok()?);
+    let compression = emf_u32(info, 16)?;
+    let colours_used = emf_u32(info, 32).unwrap_or(0);
+    if width <= 0 || height == 0 || !matches!(compression, 0 | 3) {
+        return None;
+    }
+    let (width, rows) = (width as usize, height.unsigned_abs() as usize);
+    let palette_count = match bit_count {
+        1 | 4 | 8 if colours_used == 0 => 1usize << bit_count,
+        1 | 4 | 8 => colours_used as usize,
+        24 | 32 => 0,
+        _ => return None,
+    };
+    let palette = info.get(header_size..header_size + palette_count * 4)?;
+    let stride = (width * usize::from(bit_count)).div_ceil(32) * 4;
+    bits.get(..stride.checked_mul(rows)?)?;
+    let mut rgba = Vec::with_capacity(width * rows * 4);
+    let mut any_alpha = false;
+    for row in 0..rows {
+        // A positive height stores the bottom row first.
+        let source_row = if height > 0 { rows - 1 - row } else { row };
+        let line = &bits[source_row * stride..(source_row + 1) * stride];
+        for column in 0..width {
+            let (b, g, r, a) = match bit_count {
+                24 => (
+                    line[column * 3],
+                    line[column * 3 + 1],
+                    line[column * 3 + 2],
+                    255,
+                ),
+                32 => {
+                    let alpha = line[column * 4 + 3];
+                    any_alpha |= alpha != 0;
+                    (
+                        line[column * 4],
+                        line[column * 4 + 1],
+                        line[column * 4 + 2],
+                        alpha,
+                    )
+                }
+                _ => {
+                    let bit = column * usize::from(bit_count);
+                    let byte = line[bit / 8];
+                    let shift = 8 - usize::from(bit_count) - bit % 8;
+                    let index = usize::from(byte >> shift) & ((1 << bit_count) - 1);
+                    let entry = palette.get(index * 4..index * 4 + 3)?;
+                    (entry[0], entry[1], entry[2], 255)
+                }
+            };
+            rgba.extend_from_slice(&[r, g, b, a]);
+        }
+    }
+    // Most 32-bit DIBs in metafiles leave the fourth byte zero for opaque.
+    for pixel in rgba.chunks_exact_mut(4) {
+        if bit_count == 32 && !any_alpha {
+            pixel[3] = 255;
+        }
+        let colour =
+            tiny_skia::ColorU8::from_rgba(pixel[0], pixel[1], pixel[2], pixel[3]).premultiply();
+        pixel.copy_from_slice(&[colour.red(), colour.green(), colour.blue(), colour.alpha()]);
+    }
+    tiny_skia::Pixmap::from_vec(
+        rgba,
+        tiny_skia::IntSize::from_wh(width as u32, rows as u32)?,
+    )
+}
+
 fn paeth_predictor(a: i32, b: i32, c: i32) -> u8 {
     let p = a + b - c;
     let pa = (p - a).abs();
@@ -464,6 +1268,83 @@ mod tests {
         out.extend_from_slice(&png_chunk(b"IDAT", &idat));
         out.extend_from_slice(&png_chunk(b"IEND", &[]));
         out
+    }
+
+    /// The EMF the issue builds: a header, a solid red brush, one filled
+    /// rectangle and the end record, at 96 dpi on a 1024 x 768 px, 270 x 203
+    /// mm reference device.
+    fn red_rectangle_emf(width: i32, height: i32) -> Vec<u8> {
+        let mut records = Vec::new();
+        for words in [
+            vec![39, 24, 1, 0, 0x001E_1EC8, 0], // CREATEBRUSHINDIRECT, solid red
+            vec![37, 12, 1],                    // SELECTOBJECT
+            vec![43, 24, 10, 10, width - 10, height - 10], // RECTANGLE
+            vec![14, 20, 0, 16, 20],            // EOF
+        ] {
+            for word in words {
+                records.extend_from_slice(&(word as u32).to_le_bytes());
+            }
+        }
+        let mut header = Vec::new();
+        for word in [1, 88, 0, 0, width - 1, height - 1, 0, 0] {
+            header.extend_from_slice(&(word as u32).to_le_bytes());
+        }
+        for word in [
+            width * 2645 / 100,
+            height * 2645 / 100,
+            0x464D_4520,
+            0x10000,
+        ] {
+            header.extend_from_slice(&(word as u32).to_le_bytes());
+        }
+        header.extend_from_slice(&((88 + records.len()) as u32).to_le_bytes());
+        header.extend_from_slice(&5u32.to_le_bytes());
+        header.extend_from_slice(&2u16.to_le_bytes());
+        header.extend_from_slice(&0u16.to_le_bytes());
+        for word in [0, 0, 0, 1024, 768, 270, 203] {
+            header.extend_from_slice(&(word as u32).to_le_bytes());
+        }
+        header.extend(records);
+        header
+    }
+
+    /// EMF pictures were not decoded at all, so rdocx left their frame
+    /// empty and rpptx left them out.
+    #[test]
+    fn emf_rectangle_is_rasterised_with_its_brush() {
+        let decoded = decode_image(&red_rectangle_emf(200, 100), "image/x-emf")
+            .expect("the EMF subset draws a filled rectangle");
+        let (width, height) = (decoded.width as usize, decoded.height as usize);
+        // 200 x 100 px at the reference device's 3.79 px/mm, scaled to 1024.
+        assert_eq!(width, 1024);
+        assert!((505..=515).contains(&height), "{height}");
+        let alpha = decoded
+            .alpha
+            .expect("the margin around the rectangle is clear");
+        let pixel = |x: usize, y: usize| {
+            let at = y * width + x;
+            (&decoded.data[at * 3..at * 3 + 3], alpha[at])
+        };
+        // The rectangle spans (10, 10) to (190, 90) of 200 x 100 device px.
+        assert_eq!(pixel(width / 2, height / 2), (&[0xC8, 0x1E, 0x1E][..], 255));
+        assert_eq!(
+            pixel(width / 10, height / 4),
+            (&[0xC8, 0x1E, 0x1E][..], 255)
+        );
+        assert_eq!(pixel(width / 50, height / 2).1, 0);
+        assert_eq!(pixel(width / 2, height / 50).1, 0);
+        // The default pen outlines the rectangle in black.
+        let edge = pixel((10.0 * 1024.0 / 201.0) as usize, height / 2);
+        assert!(edge.0.iter().all(|&channel| channel < 0x40), "{edge:?}");
+    }
+
+    #[test]
+    fn emf_without_drawing_records_is_not_decoded() {
+        let mut emf = red_rectangle_emf(200, 100);
+        // Turn the rectangle into an unknown record of the same size.
+        let rectangle = 88 + 24 + 12;
+        emf[rectangle..rectangle + 4].copy_from_slice(&999u32.to_le_bytes());
+        assert!(decode_image(&emf, "image/x-emf").is_none());
     }
 
     /// An interlaced PNG was read as if its seven passes were the rows of a

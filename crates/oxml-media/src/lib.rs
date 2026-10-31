@@ -329,8 +329,41 @@ pub fn probe(data: &[u8]) -> Option<ImageInfo> {
         ImageFormat::Gif => probe_gif(data),
         ImageFormat::Bmp => probe_bmp(data),
         ImageFormat::Webp => probe_webp(data),
-        ImageFormat::Tiff | ImageFormat::Svg | ImageFormat::Emf | ImageFormat::Wmf => None,
+        ImageFormat::Emf => probe_emf(data),
+        ImageFormat::Tiff | ImageFormat::Svg | ImageFormat::Wmf => None,
     }
+}
+
+/// Reads an EMF header ([MS-EMF] 2.2.9): the picture frame, in 0.01 mm, gives
+/// the native size, and the reference device's pixels per millimetre give
+/// its pixel count and resolution.
+fn probe_emf(data: &[u8]) -> Option<ImageInfo> {
+    let frame_width = i64::from(read_le_i32(data, 32)?) - i64::from(read_le_i32(data, 24)?);
+    let frame_height = i64::from(read_le_i32(data, 36)?) - i64::from(read_le_i32(data, 28)?);
+    let device = (read_le_i32(data, 72)?, read_le_i32(data, 76)?);
+    let millimetres = (read_le_i32(data, 80)?, read_le_i32(data, 84)?);
+    if frame_width <= 0 || frame_height <= 0 || device.0 <= 0 || device.1 <= 0 {
+        return None;
+    }
+    if millimetres.0 <= 0 || millimetres.1 <= 0 {
+        return None;
+    }
+    let dpi_x = 25.4 * f64::from(device.0) / f64::from(millimetres.0);
+    let dpi_y = 25.4 * f64::from(device.1) / f64::from(millimetres.1);
+    let pixels = |hundredths: i64, dpi: f64| {
+        let value = (hundredths as f64 / 2540.0 * dpi).round();
+        (value >= 1.0 && value <= f64::from(u32::MAX)).then_some(value as u32)
+    };
+    Some(ImageInfo {
+        format: ImageFormat::Emf,
+        width_px: pixels(frame_width, dpi_x)?,
+        height_px: pixels(frame_height, dpi_y)?,
+        dpi_x: Some(dpi_x),
+        dpi_y: Some(dpi_y),
+        bit_depth: 8,
+        channels: 4,
+        has_alpha: true,
+    })
 }
 
 fn probe_png(data: &[u8]) -> Option<ImageInfo> {

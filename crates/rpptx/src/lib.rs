@@ -29061,6 +29061,12 @@ fn render_compatible_media(
         {
             ImageFormat::Jpeg
         }
+        Some(ImageFormat::Emf)
+            if content_type.eq_ignore_ascii_case("image/x-emf")
+                || content_type.eq_ignore_ascii_case("image/emf") =>
+        {
+            ImageFormat::Emf
+        }
         Some(ImageFormat::Png | ImageFormat::Jpeg) => return Ok(false),
         Some(_) => return Err("uses an image format the renderer does not draw"),
         None => return Err("is not an image format the renderer recognises"),
@@ -29077,7 +29083,7 @@ fn render_compatible_media(
     let width = f64::from(info.width_px);
     let height = f64::from(info.height_px);
     let media_id = MediaId::from_bytes(bytes);
-    Ok([Color::BLACK, Color::WHITE].into_iter().any(|background| {
+    let visible = [Color::BLACK, Color::WHITE].into_iter().any(|background| {
         let background_element = PositionedElement::FilledRect {
             rect: Rect {
                 x: 0.0,
@@ -29123,7 +29129,11 @@ fn render_compatible_media(
         oxml_pdf::render_page_to_png(&baseline, 0, 72.0)
             .zip(oxml_pdf::render_page_to_png(&candidate, 0, 72.0))
             .is_some_and(|(baseline, candidate)| baseline != candidate)
-    }))
+    });
+    if !visible && format == ImageFormat::Emf {
+        return Err("holds no EMF record the renderer draws");
+    }
+    Ok(visible)
 }
 
 #[cfg(feature = "render")]
