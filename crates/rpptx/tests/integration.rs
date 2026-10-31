@@ -37355,3 +37355,41 @@ fn issue435_validate_presentation_file_reports_a_character_xml_forbids() {
         "{issues:?}"
     );
 }
+
+#[test]
+fn issue435_new_shapes_refuse_a_negative_size() {
+    use rpptx::{Emu, Presentation};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    let before = deck.to_bytes().unwrap();
+    let mut slide = deck.slide_mut(0).unwrap();
+    let error = slide
+        .add_textbox(Emu(0), Emu(0), Emu(-2_743_200), Emu(914_400))
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("shape width and height must not be negative"),
+        "{error}"
+    );
+    let error = slide
+        .add_shape("rect", Emu(0), Emu(0), Emu(2_743_200), Emu(-914_400))
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("shape width and height must not be negative"),
+        "{error}"
+    );
+    let mut shapes = deck.shapes_mut(0, &[]).unwrap();
+    assert!(shapes.add_textbox(Emu(0), Emu(0), Emu(-1), Emu(1)).is_err());
+    // A zero extent stays allowed, as the schema allows it.
+    shapes
+        .add_shape("line", Emu(0), Emu(0), Emu(914_400), Emu(0))
+        .unwrap();
+    assert_ne!(deck.to_bytes().unwrap(), before);
+    let reopened = Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+    assert!(reopened.validate().is_empty());
+}

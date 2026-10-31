@@ -22698,7 +22698,7 @@ fn textbox_member(id: u32, left: Emu, top: Emu, width: Emu, height: Emu) -> Resu
     CT_Shape::new_textbox(
         id,
         &format!("TextBox {id}"),
-        positioned_transform(left, top, width, height),
+        sized_transform("add textbox", left, top, width, height)?,
     )
     .map(ShapeTreeChild::Shape)
     .map_err(|error| invalid_shape_construction("add textbox", error))
@@ -22716,7 +22716,7 @@ fn preset_member(
         id,
         &format!("Shape {id}"),
         preset,
-        positioned_transform(left, top, width, height),
+        sized_transform("add shape", left, top, width, height)?,
     )
     .map_err(|error| invalid_shape_construction("add shape", error))?;
     shape
@@ -22737,7 +22737,7 @@ fn unstyled_preset_member(
         id,
         &format!("Shape {id}"),
         preset,
-        positioned_transform(left, top, width, height),
+        sized_transform("add shape", left, top, width, height)?,
     )
     .map(ShapeTreeChild::Shape)
     .map_err(|error| invalid_shape_construction("add shape", error))
@@ -23075,6 +23075,27 @@ impl ConnectorType {
             Self::Curve => "curvedConnector3",
         }
     }
+}
+
+/// The transform of a new shape, refusing a negative width or height, which
+/// `a:ext` cannot carry (`ST_PositiveCoordinate`), as a new table refuses it.
+fn sized_transform(
+    operation: &'static str,
+    left: Emu,
+    top: Emu,
+    width: Emu,
+    height: Emu,
+) -> Result<CT_Transform2D> {
+    if width.0 < 0 || height.0 < 0 {
+        return Err(Error::InvalidShapeMutation {
+            operation,
+            message: format!(
+                "shape width and height must not be negative, got {} by {} EMU",
+                width.0, height.0
+            ),
+        });
+    }
+    Ok(positioned_transform(left, top, width, height))
 }
 
 fn positioned_transform(left: Emu, top: Emu, width: Emu, height: Emu) -> CT_Transform2D {
