@@ -15251,3 +15251,151 @@ def test_fx268_picture_normalization_reuses_actual_checked_rounds(publisher, par
     assert staging[5] <= 3 * pieces + 20, staging
     assert picture.bytes == _one_pixel_png()
     assert len(rdocx.Document.from_bytes(document.to_bytes()).pictures()) == 1
+
+
+def _issue433_text_fill(svg, text):
+    match = re.search(rf'<text [^>]*fill="(#[0-9A-Fa-f]{{6}})"[^>]*>{re.escape(text)}<', svg)
+    return match and match.group(1).upper()
+
+
+def test_issue433_word_toc_entries_drop_the_hyperlink_style():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_style("Hyperlink", style_type="character", color="0563C1", underline=True)
+    document.add_paragraph("Contents")
+    document.add_heading("Introduction", 1)
+    document.add_paragraph("Body text.")
+    document.insert_toc(1, 3)
+    document.rebuild_toc()
+
+    def word_runs(name, data):
+        if name != "word/document.xml":
+            return data
+        return re.sub(rb'(<w:hyperlink w:anchor="_Toc[^"]*"[^>]*>)<w:r>',
+                      rb'\1<w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr>', data)
+
+    word_like = _rewrite_package(document, word_runs)
+    assert 'w:rStyle w:val="Hyperlink"' in word_like.part_xml("word/document.xml")
+    svg = word_like.render_page_to_svg(0).svg
+    entry = re.search(r'<text [^>]*y="([\d.]+)"[^>]*fill="(#[0-9A-Fa-f]{6})"[^>]*x="([\d.]+)[^"]*"[^>]*>Introduction<',
+                      svg)
+    y, fill, x = float(entry.group(1)), entry.group(2).upper(), float(entry.group(3))
+    underlines = [(float(x1), float(y1)) for x1, y1 in re.findall(r'<line x1="([\d.]+)" y1="([\d.]+)"', svg)]
+    assert fill == "#000000"
+    assert not any(abs(lx - x) < 0.5 and 0 < ly - y < 3 for lx, ly in underlines)
+
+
+@pytest.mark.parametrize("own", ['<w:pStyle w:val="Derived"/>',
+                                 '<w:pStyle w:val="BaseInd"/><w:ind w:left="0" w:firstLine="0"/>'])
+def test_issue433_first_line_indent_replaces_an_inherited_hanging_indent(own):
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Reference text")
+    document.add_paragraph("Probe text")
+    styles = ('<w:style w:type="paragraph" w:styleId="BaseInd"><w:name w:val="Base Ind"/>'
+              '<w:pPr><w:ind w:left="720" w:hanging="720"/></w:pPr></w:style>'
+              '<w:style w:type="paragraph" w:styleId="Derived"><w:name w:val="Derived"/><w:basedOn w:val="BaseInd"/>'
+              '<w:pPr><w:ind w:left="0" w:firstLine="0"/></w:pPr></w:style>')
+
+    def rewrite(name, data):
+        if name == "word/styles.xml":
+            return data.replace(b"</w:styles>", styles.encode() + b"</w:styles>")
+        if name == "word/document.xml":
+            return data.replace(b"<w:p><w:r><w:t>Probe", f"<w:p><w:pPr>{own}</w:pPr><w:r><w:t>Probe".encode())
+        return data
+
+    svg = _rewrite_package(document, rewrite).render_page_to_svg(0).svg
+    starts = {word: float(re.search(rf'<text [^>]*x="([\d.]+)[^"]*">{word}', svg).group(1))
+              for word in ("Reference", "Probe")}
+    assert starts["Probe"] == pytest.approx(starts["Reference"])
+
+
+def test_issue433_direct_table_borders_none_override_the_style_grid():
+    import rdocx
+
+    def line_count(borders):
+        document = rdocx.Document()
+        document.add_table(2, 2).style = "TableGrid"
+        if borders:
+            xml = re.sub(r"(<w:tblPr>.*?)(</w:tblPr>)", r"\1" + borders + r"\2", document.tables[0].xml,
+                         count=1, flags=re.S)
+            document.tables[0].replace_xml(xml)
+        return document.render_page_to_svg(0).svg.count("<line ")
+
+    none = "".join(f'<w:{edge} w:val="none" w:sz="0" w:space="0" w:color="auto"/>'
+                   for edge in ("top", "left", "bottom", "right", "insideH", "insideV"))
+    assert line_count("") > 0
+    assert line_count(f"<w:tblBorders>{none}</w:tblBorders>") == 0
+
+
+@pytest.mark.parametrize("valign", ["TOP", "CENTER", "BOTTOM"])
+def test_issue433_row_with_vertical_alignment_splits_like_one_without(valign):
+    import rdocx
+    from rdocx.enum.table import WD_ALIGN_VERTICAL
+
+    def lines_per_page(alignment):
+        document = rdocx.Document()
+        for index in range(15):
+            document.add_paragraph(f"Filler paragraph {index + 1}.")
+        document.add_table(1, 1).style = "TableGrid"
+        document.tables[0].cell(0, 0).text = "Row line 1"
+        for index in range(2, 41):
+            document.tables[0].cell(0, 0).add_paragraph(f"Row line {index}")
+        if alignment is not None:
+            document.tables[0].cell(0, 0).vertical_alignment = alignment
+        return [len(re.findall(r">Row(?: |<)", document.render_page_to_svg(page).svg))
+                for page in range(document.page_count())]
+
+    plain = lines_per_page(None)
+    assert len(plain) == 2 and plain[0] > 0
+    assert lines_per_page(getattr(WD_ALIGN_VERTICAL, valign)) == plain
+
+
+def test_issue433_automatic_text_colour_contrasts_with_the_cell_fill():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_table(1, 3)
+    for column, (text, fill) in enumerate((("Auto on black", "000000"), ("Auto on navy", "1F3864"),
+                                           ("Auto on white", None))):
+        cell = document.tables[0].cell(0, column)
+        cell.text = text
+        if fill:
+            cell.shading = fill
+    svg = document.render_page_to_svg(0).svg
+    assert [_issue433_text_fill(svg, word) for word in ("black", "navy", "white")] == [
+        "#FFFFFF", "#FFFFFF", "#000000"]
+
+
+def test_issue433_wingdings_2_bullets_map_to_unicode_or_report_the_code():
+    import rdocx
+
+    bullets = (("Wingdings 2", "\uf0a1"), ("Wingdings 2", "\uf0a7"))
+    document = rdocx.Document()
+    for _ in bullets:
+        document.add_bullet_list_item("item")
+    levels = "".join(
+        f'<w:abstractNum w:abstractNumId="{900 + k}"><w:multiLevelType w:val="singleLevel"/><w:lvl w:ilvl="0">'
+        f'<w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="{ch}"/><w:lvlJc w:val="left"/>'
+        f'<w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr><w:rPr><w:rFonts w:ascii="{font}" '
+        f'w:hAnsi="{font}"/></w:rPr></w:lvl></w:abstractNum>' for k, (font, ch) in enumerate(bullets))
+    nums = "".join(f'<w:num w:numId="{900 + k}"><w:abstractNumId w:val="{900 + k}"/></w:num>'
+                   for k in range(len(bullets)))
+
+    def rewrite(name, data):
+        if name == "word/numbering.xml":
+            text = re.sub(r"(<w:numbering\b[^>]*>)", lambda m: m.group(1) + levels, data.decode(), count=1)
+            return text.replace("</w:numbering>", nums + "</w:numbering>").encode()
+        if name == "word/document.xml":
+            ids = iter(range(len(bullets)))
+            return re.sub(rb'<w:numId w:val="\d+"/>', lambda m: b'<w:numId w:val="%d"/>' % (900 + next(ids)), data)
+        return data
+
+    rewritten = _rewrite_package(document, rewrite)
+    markers = re.findall(r'<text [^>]*x="90">([^<]+)<', rewritten.render_page_to_svg(0).svg)
+    assert markers == ["\u25a0", "\uf0a7"]
+    _, diagnostics = rewritten.to_pdf_with_diagnostics()
+    assert [message for message in diagnostics if message.startswith("Unknown")] == [
+        "Unknown Wingdings 2 symbol U+F0A7: original code retained"]
