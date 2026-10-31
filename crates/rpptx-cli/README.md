@@ -16,6 +16,17 @@ replaces text, and produces deterministic fixed output.
 - Scriptable output covers slide order, notes, comments, recursive group
   content, relationship-backed media, and deterministic rendering diagnostics.
 
+## Validation
+
+`rpptx validate` exits 1 on an issue and names the part. It reads the package
+as stored, which a save keeps for every part it does not change, and reports a
+part stored twice, an XML part that is not well-formed XML 1.0, a slide,
+layout, master or notes part without its own content type, `presentation.xml`
+children out of the schema's order, unknown shape tree children, a `p:cNvPr`
+without its `id` or `name`, and a table row with another number of cells than
+the grid has columns. It then checks the deck as rpptx reads it: shape and
+slide ids, relationships, media, placeholders, and the layout and theme
+relationships. It is not a full schema validator.
 
 ## Package signatures
 

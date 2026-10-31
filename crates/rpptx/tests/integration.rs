@@ -37182,3 +37182,176 @@ fn native_scaled_preset_paints_all_expected_corners_at_parallel_phase() {
         );
     }
 }
+
+/// Rewrites one entry of a deck with `edit`, with no check of the result,
+/// so that a test can store a fault the package writer refuses.
+fn issue435_edit(bytes: &[u8], part: &str, edit: impl Fn(&str) -> String) -> Vec<u8> {
+    use std::io::{Read, Write};
+    let mut source = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let mut edited = false;
+    for index in 0..source.len() {
+        let mut entry = source.by_index(index).unwrap();
+        let name = entry.name().unwrap().into_owned();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).unwrap();
+        if name == part {
+            let changed = edit(std::str::from_utf8(&data).unwrap());
+            assert_ne!(changed.as_bytes(), data, "{part} must change");
+            data = changed.into_bytes();
+            edited = true;
+        }
+        output
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        output.write_all(&data).unwrap();
+    }
+    assert!(edited, "{part} must be in the deck");
+    output.finish().unwrap().into_inner()
+}
+
+/// The issues `validate_presentation_file` reports, as their debug text.
+fn issue435_issues(bytes: &[u8]) -> Vec<String> {
+    let path = std::env::temp_dir().join(format!(
+        "rpptx-issue435-{}-{}.pptx",
+        std::process::id(),
+        bytes.len()
+    ));
+    fs::write(&path, bytes).unwrap();
+    let issues = rpptx::validate_presentation_file(&path);
+    fs::remove_file(&path).unwrap();
+    issues
+        .unwrap()
+        .iter()
+        .map(|issue| format!("{issue:?}"))
+        .collect()
+}
+
+fn issue435_deck() -> Vec<u8> {
+    use rpptx::{Emu, Presentation};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(5).unwrap();
+    let mut slide = deck.slide_mut(0).unwrap();
+    slide
+        .add_textbox(Emu(0), Emu(0), Emu(3_000_000), Emu(500_000))
+        .unwrap()
+        .set_text("Hello")
+        .unwrap();
+    slide
+        .add_table(2, 2, Emu(0), Emu(1_000_000), Emu(3_000_000), Emu(900_000))
+        .unwrap();
+    deck.set_notes_text(0, "A note").unwrap();
+    deck.to_bytes().unwrap()
+}
+
+#[test]
+fn issue435_validate_presentation_file_reports_stored_faults() {
+    let base = issue435_deck();
+    assert_eq!(issue435_issues(&base), Vec::<String>::new());
+    let slide = "ppt/slides/slide1.xml";
+    let presentation = "ppt/presentation.xml";
+    /// Moves the element that starts with `second` in front of `first`.
+    fn move_before(xml: &str, first: &str, second: &str) -> String {
+        let start = xml.find(second).unwrap();
+        let end = if xml[start..].starts_with(&format!("{second}>")) {
+            let close = format!("</{}>", &second[1..]);
+            start + xml[start..].find(&close).unwrap() + close.len()
+        } else {
+            start + xml[start..].find("/>").unwrap() + 2
+        };
+        let element = &xml[start..end];
+        let without = format!("{}{}", &xml[..start], &xml[end..]);
+        let at = without.find(first).unwrap();
+        format!("{}{element}{}", &without[..at], &without[at..])
+    }
+    /// The part, its edit, and the issue text expected.
+    type Case = (&'static str, fn(&str) -> String, &'static str);
+    let cases: [Case; 6] = [
+        (
+            slide,
+            |xml| xml.replacen("</p:spTree>", "<p:bogus/></p:spTree>", 1),
+            "p:bogus is not allowed in a shape tree",
+        ),
+        (
+            slide,
+            |xml| xml.replacen(r#" name="TextBox"#, r#" title="TextBox"#, 1),
+            "p:cNvPr has no name, which the schema requires",
+        ),
+        (
+            presentation,
+            |xml| move_before(xml, "<p:notesMasterIdLst", "<p:sldIdLst"),
+            "p:notesMasterIdLst follows p:sldIdLst, out of the schema's order",
+        ),
+        (
+            presentation,
+            |xml| move_before(xml, "<p:sldIdLst", "<p:sldSz"),
+            "p:sldIdLst follows p:sldSz, out of the schema's order",
+        ),
+        (
+            "[Content_Types].xml",
+            |xml| {
+                let start = xml
+                    .find(r#"<Override PartName="/ppt/slides/slide1.xml""#)
+                    .unwrap();
+                let end = start + xml[start..].find("/>").unwrap() + 2;
+                format!("{}{}", &xml[..start], &xml[end..])
+            },
+            r#"MissingContentTypeOverride { part: "/ppt/slides/slide1.xml" }"#,
+        ),
+        (
+            slide,
+            |xml| {
+                let row = xml.find("<a:tr ").unwrap();
+                let cell = row + xml[row..].find("<a:tc>").unwrap();
+                let end = cell + xml[cell..].find("</a:tc>").unwrap() + "</a:tc>".len();
+                format!("{}{}", &xml[..cell], &xml[end..])
+            },
+            "table row 1 holds 1 a:tc for 2 a:gridCol",
+        ),
+    ];
+    for (part, edit, expected) in cases {
+        let issues = issue435_issues(&issue435_edit(&base, part, edit));
+        let named = if part.starts_with('[') { slide } else { part };
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains(expected)
+                    && issue.contains(&format!(r#"part: "/{named}""#))),
+            "{expected}: {issues:?}"
+        );
+    }
+}
+
+#[test]
+fn issue435_validate_presentation_file_reports_a_malformed_document_properties_part() {
+    let bytes = issue435_edit(&issue435_deck(), "docProps/app.xml", |xml| {
+        xml.replacen(
+            "</Properties>",
+            "<Company>Smith & Sons</Company></Properties>",
+            1,
+        )
+    });
+    let issues = issue435_issues(&bytes);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.contains(r#"part: "/docProps/app.xml""#)
+                && issue.contains("the part is not well-formed XML")),
+        "{issues:?}"
+    );
+}
+
+#[test]
+fn issue435_validate_presentation_file_reports_a_character_xml_forbids() {
+    let bytes = issue435_edit(&issue435_deck(), "ppt/slides/slide1.xml", |xml| {
+        xml.replacen(">Hello<", ">He\u{1}llo<", 1)
+    });
+    let issues = issue435_issues(&bytes);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.contains(r#"part: "/ppt/slides/slide1.xml""#)
+                && issue.contains("it holds U+0001, a character XML 1.0 forbids")),
+        "{issues:?}"
+    );
+}
