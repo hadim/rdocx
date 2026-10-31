@@ -37182,3 +37182,48 @@ fn native_scaled_preset_paints_all_expected_corners_at_parallel_phase() {
         );
     }
 }
+
+#[test]
+fn a_picture_the_renderer_cannot_decode_is_not_reported_as_a_missing_relationship() {
+    use rpptx::{Emu, Presentation};
+    // A valid header over too few pixel bytes: the part and its relationship
+    // are present, only the decode fails.
+    let mut png = png_header(4, 4);
+    let idat = miniz_oxide::deflate::compress_to_vec_zlib(&[0; 5], 6);
+    png.extend_from_slice(&(idat.len() as u32).to_be_bytes());
+    png.extend_from_slice(b"IDAT");
+    png.extend_from_slice(&idat);
+    png.extend_from_slice(&[0; 4]);
+    png.extend_from_slice(&0_u32.to_be_bytes());
+    png.extend_from_slice(b"IEND");
+    png.extend_from_slice(&[0; 4]);
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.add_picture(
+        0,
+        &png,
+        "short.png",
+        Emu(0),
+        Emu(0),
+        Some(Emu(914_400)),
+        Some(Emu(914_400)),
+    )
+    .unwrap();
+    let (_, diagnostics) = deck
+        .render_slide_to_png_with_diagnostics(0, 20.0, &[])
+        .unwrap();
+    let messages: Vec<_> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("picture image relationship")
+                && message.ends_with("could not be decoded")),
+        "{messages:?}"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.starts_with("missing")),
+        "{messages:?}"
+    );
+}

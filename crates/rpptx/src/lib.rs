@@ -29061,13 +29061,15 @@ fn render_compatible_media(
         {
             ImageFormat::Jpeg
         }
-        _ => return Ok(false),
+        Some(ImageFormat::Png | ImageFormat::Jpeg) => return Ok(false),
+        Some(_) => return Err("uses an image format the renderer does not draw"),
+        None => return Err("is not an image format the renderer recognises"),
     };
     if !render_media_within_decode_bounds(bytes, format)? {
-        return Ok(false);
+        return Err("could not be decoded");
     }
     let Some(info) = probe(bytes).filter(|info| info.width_px > 0 && info.height_px > 0) else {
-        return Ok(false);
+        return Err("could not be decoded");
     };
     if format == ImageFormat::Jpeg && (info.bit_depth != 8 || info.channels != 3) {
         return Ok(false);
